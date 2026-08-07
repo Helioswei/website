@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第14章：性能优化与内存管理 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="14" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第14章：性能优化与内存管理</h1>
+  <p class="chapter-subtitle">在有限的 RAM 里，运筹帷幄地榨出每一帧的流畅</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄，先度量再动刀</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「良将用兵，必先算而后战。调性能也是一样：先用量化工具把瓶颈测出来，再决定内存花在哪、功能砍哪些。不计量就动手，十次里有九次是在给错误的问题开药方。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 14.1 渲染引擎概览 ========== -->
+  <h2>14.1 渲染引擎概览：draw 子系统与 draw buffer</h2>
+
+  <p>LVGL 的渲染层集中在 <code>src/draw/</code>。打开这个目录你会发现，它不是一个"唯一的绘制实现"，而是一组可以互相切换的<strong>后端</strong>（backend）。默认且最通用的，是纯 CPU 的软件渲染器 <code>sw/</code>；旁边还并排躺着 <code>opengles/</code>（OpenGL ES）、<code>vg_lite/</code>（NXP VG-Lite GPU）、<code>nema_gfx/</code>（ThinkSilicon NemaGFX）、<code>nxp/</code>（NXP PXP）、<code>dma2d/</code>（STM32 DMA2D）等硬件加速后端，以及 <code>sdl/</code>、<code>espressif/</code>、<code>renesas/</code> 等平台相关后端。</p>
+
+  <p>后端的差异对你的 UI 代码是<strong>透明的</strong>：widgets 层调用统一的绘制接口，后端只负责"画得快一点还是慢一点"。切换后端几乎只动配置——<code>LV_USE_DRAW_SW</code> 控制软件渲染（默认 <span class="num">1</span>，开启），<code>LV_USE_DRAW_VG_LITE</code> 控制 VG-Lite GPU（默认 <span class="num">0</span>，需要硬件）。软件渲染内部还有若干可调项：<code>LV_DRAW_SW_DRAW_UNIT_CNT</code> 决定并行绘制单元数量，<code>LV_USE_DRAW_SW_COMPLEX_GRADIENTS</code> 决定是否启用复杂渐变，<code>LV_DRAW_SW_SHADOW_CACHE_SIZE</code> 缓存阴影计算。</p>
+
+<pre><code><span class="cmt">/* lv_conf.h —— 选择渲染后端 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_DRAW_SW</span> <span class="num">1</span>               <span class="cmt">/* 软件渲染，默认开启 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_DRAW_VG_LITE</span> <span class="num">0</span>           <span class="cmt">/* VG-Lite GPU，需对应硬件 */</span>
+<span class="kw">#if</span> <span class="kw">LV_USE_DRAW_SW</span>
+<span class="kw">#  define</span> <span class="kw">LV_DRAW_SW_DRAW_UNIT_CNT</span> <span class="num">1</span>  <span class="cmt">/* 并行绘制单元数量 */</span>
+<span class="kw">#endif</span></code></pre>
+
+  <p>渲染的"画布"叫 <strong>draw buffer</strong>。LVGL 9 里它由 <code>lv_draw_buf_t</code> 描述，配套 <code>lv_draw_buf_create()</code>、<code>lv_draw_buf_clear()</code> 等 API。而真正交给屏幕的显示缓冲挂在 display 对象上：<code>lv_display_create()</code> 创建一块屏幕，<code>lv_display_set_buffers()</code> 把一个或两个缓冲区交给它。下面这段来自官方 README 的经典写法——分辨率、1/10 屏幕缓冲、16 位色深下每像素 2 字节——就是嵌入式端最常见的样子：</p>
+
+<pre><code><span class="cmt">/* README 经典示例：320×240，1/10 屏缓冲 */</span>
+<span class="kw">static</span> <span class="type">uint8_t</span> buf[<span class="kw">TFT_HOR_RES</span> * <span class="kw">TFT_VER_RES</span> / <span class="num">10</span> * <span class="num">2</span>];
+<span class="cmt">/* x2 是因为 16-bit 色深每像素占 2 字节 */</span>
+
+<span class="type">lv_display_t</span> * disp = <span class="fn">lv_display_create</span>(<span class="kw">TFT_HOR_RES</span>, <span class="kw">TFT_VER_RES</span>);
+<span class="fn">lv_display_set_buffers</span>(disp, buf, <span class="kw">NULL</span>, <span class="kw">sizeof</span>(buf),
+                         <span class="kw">LV_DISPLAY_RENDER_MODE_PARTIAL</span>);</code></pre>
+
+  <p>除了直接的屏幕缓冲，每个显示对象还有一层"layer"机制：复杂的透明、模糊、3D 变换先在离屏 layer 上画好，再合成回主缓冲。配置宏 <code>LV_DRAW_LAYER_SIMPLE_BUF_SIZE</code>（默认 <span class="num">24576</span> 字节）决定简单 layer 的缓冲区大小——太小会被降级处理，太大则浪费 RAM，是"缓冲调优"最常见的入口之一。</p>
+
+  <table>
+    <tr><th>后端</th><th>目录</th><th>说明</th></tr>
+    <tr><td><code>sw</code></td><td><code>src/draw/sw/</code></td><td>纯 CPU 软件渲染，默认启用</td></tr>
+    <tr><td><code>opengles</code></td><td><code>src/draw/opengles/</code></td><td>OpenGL ES 后端</td></tr>
+    <tr><td><code>vg_lite</code></td><td><code>src/draw/vg_lite/</code></td><td>NXP VG-Lite GPU 加速</td></tr>
+    <tr><td><code>nema_gfx</code></td><td><code>src/draw/nema_gfx/</code></td><td>ThinkSilicon NemaGFX</td></tr>
+    <tr><td><code>nxp</code> / <code>dma2d</code></td><td><code>src/draw/nxp/</code> / <code>src/draw/dma2d/</code></td><td>NXP PXP / STM32 DMA2D</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>后端不是越"高级"越好：<code>LV_USE_DRAW_VG_LITE</code> 这类 GPU 后端只在有对应硬件时才成立，否则开了一样的代码反而多一层空转。先确认板子上有什么，再决定换不换后端——这就是"运筹帷幄"。</p>
+  </div>
+
+  <!-- ========== 14.2 内存管理 ========== -->
+  <h2>14.2 内存管理：从 lv_malloc 到 LV_MEM_SIZE</h2>
+
+  <p>LVGL 有自己的内存分配层，位于 <code>src/stdlib/lv_mem.*</code>。它把库里的所有动态分配统一收敛到 <code>lv_malloc()</code>、<code>lv_calloc()</code>、<code>lv_zalloc()</code>、<code>lv_realloc()</code>、<code>lv_free()</code> 这几个函数上，而不是直接调用 C 标准库的 <code>malloc</code>。这样做的两个直接好处：一是没有 libc 的裸机也能跑，二是内存可以精确统计、精确管控。</p>
+
+  <p>分配后端由 <code>LV_USE_STDLIB_MALLOC</code> 选择，可选值包括 <code>LV_STDLIB_BUILTIN</code>（内置内存池，默认）、<code>LV_STDLIB_CLIB</code>（标准库 <code>malloc</code>/<code>realloc</code>/<code>free</code>）、<code>LV_STDLIB_RTTHREAD</code>（RT-Thread）与 <code>LV_STDLIB_CUSTOM</code>（完全自己实现）。这里要提醒你：<strong>v9 里已经找不到 <code>LV_MEM_CUSTOM</code> 这个宏了</strong>——v8 时代的它在 v9 被拆成了更细的 <code>LV_USE_STDLIB_*</code> 系列。选 BUILTIN 时，<code>LV_MEM_SIZE</code>（默认 <span class="num">65536</span>，即 64&nbsp;kB，注释明确写着下限 <span class="num">2048</span>）决定内置池的大小，<code>LV_MEM_ADR</code> 可以把池子固定到某个地址。</p>
+
+<pre><code><span class="cmt">/* v8 的老名字 LV_MEM_CUSTOM 已废弃，v9 改用 LV_USE_STDLIB_MALLOC */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_STDLIB_MALLOC</span> <span class="kw">LV_STDLIB_BUILTIN</span>
+<span class="kw">#if</span> <span class="kw">LV_USE_STDLIB_MALLOC</span> == <span class="kw">LV_STDLIB_BUILTIN</span>
+<span class="kw">#  define</span> <span class="kw">LV_MEM_SIZE</span> <span class="num">65536</span>   <span class="cmt">/* 内置内存池：64 kB，下限 2048 */</span>
+<span class="kw">#  define</span> <span class="kw">LV_MEM_ADR</span> <span class="num">0x0</span>    <span class="cmt">/* 0：池子作为普通数组分配 */</span>
+<span class="kw">#endif</span></code></pre>
+
+  <p>每种后端都有独立的实现文件：内置池在 <code>src/stdlib/builtin/lv_mem_core_builtin.c</code>，其余分别放在 <code>clib/</code>、<code>rtthread/</code>、<code>micropython/</code>、<code>uefi/</code> 子目录下。切到 <code>LV_STDLIB_CLIB</code> 时，<code>lv_malloc</code> 就只是标准 <code>malloc</code> 的一层薄封装，内存由系统堆统一管理——适合已经有 OS 和堆的 MPU 平台。</p>
+
+  <p>要"算清楚账"，用 <code>lv_mem_monitor()</code>。它把堆的统计信息填进 <code>lv_mem_monitor_t</code> 结构体：总大小、可用大小、最大连续空闲块、使用率、碎片率等等。这些数字是判断"内存够不够、碎不碎"的第一手证据：</p>
+
+<pre><code><span class="type">lv_mem_monitor_t</span> mon;
+<span class="fn">lv_mem_monitor</span>(&mon);
+<span class="fn">LV_LOG_USER</span>(<span class="str">"used %d%% , frag %d%% , biggest free %d B"</span>,
+             mon.used_pct, mon.frag_pct, mon.free_biggest_size);</code></pre>
+
+  <table>
+    <tr><th>字段</th><th>含义</th></tr>
+    <tr><td><code>total_size</code></td><td>堆总大小（字节）</td></tr>
+    <tr><td><code>free_size</code> / <code>free_biggest_size</code></td><td>可用内存 / 最大连续空闲块（碎片敏感指标）</td></tr>
+    <tr><td><code>used_cnt</code> / <code>max_used</code></td><td>已用块数 / 历史峰值占用</td></tr>
+    <tr><td><code>used_pct</code> / <code>frag_pct</code></td><td>使用率 / 碎片率</td></tr>
+  </table>
+
+  <p>除了监控，<code>lv_mem_test()</code> 会做一次分配-释放自检来验证分配器健康；<code>lv_mem_add_pool()</code> / <code>lv_mem_remove_pool()</code> 则允许你向内置分配器追加或移除内存池——当某块内存区域（比如片外 SDRAM）不想被默认池覆盖时很有用。</p>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>网上的 v8 教程经常写 <code>#define LV_MEM_CUSTOM 1</code>，这在 v9（本仓库 <span class="num">9.6.0</span>-dev）里会编译失败。请改用 <code>LV_USE_STDLIB_MALLOC</code> 系列宏，并留意 <code>src/stdlib/</code> 下的实现文件。</p>
+  </div>
+
+  <!-- ========== 14.3 调优手段 ========== -->
+  <h2>14.3 调优手段：缓冲、色深与按需裁剪</h2>
+
+  <p>第一类手段是<strong>缓冲模式与大小</strong>。回顾 14.1 的 <code>lv_display_set_buffers()</code>，它的最后一个参数 <code>render_mode</code> 有三种取值：<code>LV_DISPLAY_RENDER_MODE_PARTIAL</code> 只重绘被标记为"脏"的区域，缓冲可以小到屏幕的 1/10；<code>LV_DISPLAY_RENDER_MODE_DIRECT</code> 直接画进屏幕自身的帧缓冲；<code>LV_DISPLAY_RENDER_MODE_FULL</code> 则需要一整块完整帧缓冲。传两个缓冲（buf1 + buf2）开启双缓冲，能缓解绘制过程中的画面撕裂——代价是 RAM 翻倍，需要权衡。</p>
+
+  <p>第二类手段是<strong>颜色深度</strong>。配置宏 <code>LV_COLOR_DEPTH</code> 支持 <span class="num">1</span>（I1 单色）、<span class="num">8</span>（L8）、<span class="num">16</span>（RGB565）、<span class="num">24</span>（RGB888）、<span class="num">32</span>（XRGB8888）五档。从 32 降到 16，每像素内存直接减半——对一块 800×480 的屏幕，整帧从约 1.5&nbsp;MB 降到约 0.75&nbsp;MB，效果立竿见影。大多数 TFT LCD 面板就用 RGB565。</p>
+
+<pre><code><span class="cmt">/* lv_conf.h —— 色深与双缓冲 */</span>
+<span class="kw">#define</span> <span class="kw">LV_COLOR_DEPTH</span> <span class="num">16</span>   <span class="cmt">/* 1/8/16/24/32 可选 */</span>
+
+<span class="kw">static</span> <span class="type">uint8_t</span> buf1[<span class="kw">HOR</span> * <span class="kw">VER</span> / <span class="num">10</span> * <span class="num">2</span>];
+<span class="kw">static</span> <span class="type">uint8_t</span> buf2[<span class="kw">HOR</span> * <span class="kw">VER</span> / <span class="num">10</span> * <span class="num">2</span>];
+<span class="fn">lv_display_set_buffers</span>(disp, buf1, buf2, <span class="kw">sizeof</span>(buf1),
+                         <span class="kw">LV_DISPLAY_RENDER_MODE_PARTIAL</span>);</code></pre>
+
+  <p>第三类手段是<strong>按需裁剪 <code>LV_USE_*</code> 开关</strong>。这是 LVGL 最大的开关族：<code>LV_USE_LOG</code>（日志，默认 <span class="num">0</span>）、<code>LV_USE_OBSERVER</code>、<code>LV_USE_FLEX</code> / <code>LV_USE_GRID</code>（布局引擎）、各种第三方库与字体……用不到的模块一律关掉，既省 Flash 也减运行时开销。想精确控制编译内容，就用 Kconfig：仓库根的 <code>Kconfig</code> 提供了完整配置菜单，而 <code>configs/defconfigs/</code> 目录里还躺着一批现成的"配方"——<code>sdl2.defconfig</code>、<code>wayland.defconfig</code>、<code>linux.defconfig</code>、<code>drm.defconfig</code> 以及各自的 <code>-3d</code> 变体。</p>
+
+<pre><code><span class="cmt"># configs/defconfigs/sdl2.defconfig（节选）</span>
+<span class="kw">CONFIG_LV_USE_SDL</span>=y
+<span class="kw">CONFIG_LV_COLOR_DEPTH_32</span>=y
+<span class="kw">CONFIG_LV_USE_LOG</span>=y
+<span class="kw">CONFIG_LV_DRAW_SW_SHADOW_CACHE_SIZE</span>=<span class="num">1024</span>
+<span class="kw">CONFIG_LV_OBJ_STYLE_CACHE</span>=y</code></pre>
+
+  <p>还要留意<strong>样式与动画的开销</strong>。运行时的大头往往不是绘制本身，而是样式对象的数量与动画对象：样式尽量用静态样式（<code>lv_style_init()</code> 一次、全局复用），动画避免在渲染路径里频繁创建销毁。像 <code>LV_DRAW_SW_SHADOW_CACHE_SIZE</code> 这类缓存宏，就是让重复的阴影计算只做一次——用"缓存"换"时间"，是低端 MCU 上最常见也最有效的调法。</p>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>裁剪的顺序很重要：先关"整块功能"（<code>LV_USE_*</code>），再缩"单一资源"（色深、缓冲），最后才上"缓存"这种局部优化。整块关掉的收益是线性的、可控的，缓存则是"优化局部、动全身"——切莫本末倒置。</p>
+  </div>
+
+  <!-- ========== 14.4 用 benchmark demo 量化 ========== -->
+  <h2>14.4 用 benchmark demo 量化你的优化</h2>
+
+  <p>没有量化就没有优化。LVGL 在 <code>demos/benchmark/</code> 目录里放了一个专门测性能的 demo：调用 <code>lv_demo_benchmark()</code>，它会把圆角矩形、阴影、文字、图像、渐变等典型绘制场景依次跑一遍，逐个测量每场景的渲染耗时与帧率，最后汇总成一张结果表。这是评估"板子到底能跑到多少帧"的最快路径。</p>
+
+  <p>启用它只需两步：在配置里打开 <code>LV_USE_DEMO_BENCHMARK</code>，然后在 <code>main</code> 里调用 <code>lv_demo_benchmark()</code>。官方 <code>demos/README.md</code> 还提到一种更省事的启动方式：如果把主程序命名为 <code>lv_demos</code>，那么直接运行 <code>lv_demos benchmark 1</code> 就能跑基准——不用改任何代码。</p>
+
+<pre><code><span class="cmt">/* lv_conf.h */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_DEMO_BENCHMARK</span> <span class="num">1</span>
+
+<span class="cmt">/* main.c */</span>
+<span class="fn">lv_demo_benchmark</span>();   <span class="cmt">/* 跑完整基准并打印汇总 */</span></code></pre>
+
+  <pre><code><span class="cmt"># 主程序命名为 lv_demos 时，可直接运行（demos/README.md）</span>
+lv_demos widgets
+lv_demos benchmark <span class="num">1</span></code></pre>
+
+  <p>基准结果里有个关键字段：<code>lv_demo_benchmark_summary_t</code> 的 <code>total_avg_fps</code>（平均帧率）、<code>total_avg_cpu</code>（平均 CPU 占用）、<code>total_avg_render_time</code>（平均渲染耗时）。你可以在优化前后各跑一次，把两个数字摆在一起对比。更严谨的做法是用 <code>lv_demo_benchmark_set_end_cb()</code> 挂一个"结束回调"，让每次构建自动记录成绩，方便回归时比对：</p>
+
+<pre><code><span class="kw">static</span> <span class="type">void</span> <span class="fn">on_bench_end</span>(<span class="kw">const</span> <span class="type">lv_demo_benchmark_summary_t</span> * s)
+{
+    <span class="fn">LV_LOG_USER</span>(<span class="str">"avg fps: %d , render: %d ms"</span>,
+                s-&gt;total_avg_fps, s-&gt;total_avg_render_time);
+}
+<span class="fn">lv_demo_benchmark_set_end_cb</span>(on_bench_end);</code></pre>
+
+  <p>还有一个容易被忽略的联动：跑 demo 时内存不够，<code>demos/README.md</code> 对 widgets demo 的注释写得直白——"<em>Show some widget. It might be required to increase <code>LV_MEM_SIZE</code></em>"。也就是说，benchmark 与内存配置是配套的两件事：先用 <code>lv_demo_benchmark()</code> 看帧率、用 <code>lv_mem_monitor()</code> 看占用，再决定把内存花在哪。这一章从头到尾的闭环，就是"度量 → 裁剪 → 复测"。</p>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：内存体检 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>写一个小函数，调用 <code>lv_mem_monitor()</code> 把堆的使用率、碎片率、最大连续空闲块打印出来。解释一下 <code>frag_pct</code>（碎片率）代表什么，以及为什么 <code>free_biggest_size</code> 往往比 <code>free_size</code> 更能说明"还能不能塞下一块大缓冲"。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 14.2 的示例：先声明 <code>lv_mem_monitor_t</code>，再 <code>lv_mem_monitor(&mon)</code>，字段就绪后用 <code>LV_LOG_USER</code> 打印。碎片率高的系统，即使"可用内存"还很多，也常常分配不出大块。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>示例实现：<code>lv_mem_monitor_t mon; lv_mem_monitor(&mon); LV_LOG_USER("used=%d%% frag=%d%% biggest=%d", mon.used_pct, mon.frag_pct, mon.free_biggest_size);</code>。<code>frag_pct</code> 反映内存被切碎的程度：多次分配/释放不同大小的对象后，空闲块之间夹杂着已占用块，导致大对象无法连续放置。<code>free_biggest_size</code> 是最大连续空闲块的字节数，它才真正决定"能不能再塞下一块 <code>LV_DRAW_LAYER_SIMPLE_BUF_SIZE</code> 大小的缓冲"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：色深对比实验 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在配置里把 <code>LV_COLOR_DEPTH</code> 从 <span class="num">32</span> 改到 <span class="num">16</span>，用 14.4 的 benchmark 跑一次，对比两次的 <code>total_avg_fps</code> 与渲染耗时。再想一想：为什么对一块很小的屏幕（比如 128×64），这个收益可能不明显？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>色深影响的是"每像素字节数"，进而影响缓冲大小与带宽。小屏总像素本来就少，数据量差异就小；同时部分渲染模式下瓶颈未必在拷贝带宽。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>32→16 后每像素从 4 字节降到 2 字节，缓冲减半、写屏带宽减半，大屏（如 800×480）上帧率提升明显。但对 128×64 的小屏，整帧只有 8192 像素，32 位时约 32&nbsp;kB、16 位约 16&nbsp;kB——绝对数据量小，带宽不再是瓶颈，帧率提升有限甚至没有。结论：色深降档是小屏优先压 RAM、大屏优先提帧率的工具，要结合屏幕实际分辨率权衡。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：裁剪前后复测 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你的产品只需要按钮、标签、滑块与单张图片，不需要网格布局、图表、动画和日志。请列出你会在 <code>lv_conf.h</code> 里关闭的一组 <code>LV_USE_*</code> 开关，用 <code>lv_mem_monitor()</code> 和 benchmark 量化裁剪前后的内存与帧率差异。解释为什么"整块关功能"通常比"一味加缓冲"更有效。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 14.3：日志 <code>LV_USE_LOG</code>、布局 <code>LV_USE_GRID</code>、图表等用不到的控件、以及动画相关的 <code>LV_USE_*</code> 都在候选清单里。跑基准前先用 <code>lv_mem_monitor</code> 记录基线。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>可以关闭的开关示例：<code>LV_USE_LOG</code>（省去日志字符串与开销）、<code>LV_USE_GRID</code>（只用 Flex）、图表/圆弧等不用的控件宏、用不到的第三方库宏。关闭后 Flash 显著下降，内置池 <code>LV_MEM_SIZE</code> 的占用与碎片率通常也会回落。为什么更有效：<strong>裁剪消除的是"整个子系统"，是乘法级别的收益</strong>——每个 widget 都有构造函数、样式、事件处理代码；而加缓冲只是"多买一块地"，不减少已有的开销。这也是 LVGL 用 <code>LV_USE_*</code> 做模块化、官方提供 <code>configs/defconfigs</code> 配方的原因。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

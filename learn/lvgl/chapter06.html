@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章：样式系统 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="6" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：样式系统</h1>
+  <p class="chapter-subtitle">属性、状态、部件、主题——把"好看"变成可以精确控制的工程</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程，美是可测量、可复用的</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「画家从不靠灵感碰运气调色——他先想清楚要什么颜色，再把它画上去。LVGL 的样式系统也是一样：每一个视觉细节都是一个'属性'，每一段交互状态都是一次'换脸'。把艺术翻译成可复用的规则，这正是工程师的浪漫。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 样式的本质：属性与选择器 ========== -->
+  <h2>6.1 样式的本质：属性与选择器</h2>
+
+  <p>样式（style）是 LVGL 里决定控件外观的唯一途径。一个样式本质上是一组「<strong>属性—值</strong>」的集合：属性（property）用枚举常量表示，例如 <code>LV_STYLE_BG_COLOR</code> 背景色、<code>LV_STYLE_RADIUS</code> 圆角、<code>LV_STYLE_TEXT_COLOR</code> 文字颜色、<code>LV_STYLE_BORDER_WIDTH</code> 边框宽度。一百多个样式属性覆盖了背景、边框、阴影、轮廓、文字、变换等几乎每一个视觉维度——第 1 章介绍 README 特性时提到的"100+ 样式属性"，指的就是这份清单。</p>
+
+  <p>用法分三步：先用 <code>lv_style_init()</code> 初始化一个 <code>lv_style_t</code> 变量，再用 <code>lv_style_set_bg_color()</code> 这类 API 逐个填属性，最后用 <code>lv_obj_add_style(obj, &amp;style, selector)</code> 把样式挂到对象上。其中第三个参数 <code>selector</code>（选择器）最值得留意——它是「部件 + 状态」的组合，<code>0</code> 表示 <code>LV_PART_MAIN | LV_STATE_DEFAULT</code>，即"主部件、默认状态"。同一个样式可以挂给任意多个对象，改一处、全局生效。</p>
+
+<pre><code><span class="cmt">/* 步骤一：初始化并填充一个样式 */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_btn;
+<span class="fn">lv_style_init</span>(&amp;style_btn);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_btn, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_GREEN</span>));
+<span class="fn">lv_style_set_border_color</span>(&amp;style_btn, <span class="fn">lv_palette_darken</span>(<span class="kw">LV_PALETTE_GREEN</span>, <span class="num">3</span>));
+<span class="fn">lv_style_set_border_width</span>(&amp;style_btn, <span class="num">3</span>);
+<span class="fn">lv_style_set_radius</span>(&amp;style_btn, <span class="num">10</span>);
+
+<span class="cmt">/* 步骤二：挂到对象上，selector 传 0 = 主部件 + 默认状态 */</span>
+<span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_add_style</span>(btn, &amp;style_btn, <span class="num">0</span>);</code></pre>
+
+<pre><code><span class="cmt">/* 选择器 = 部件 | 状态，可以按位组合，命中更精确的粒度 */</span>
+<span class="fn">lv_obj_add_style</span>(slider, &amp;style_indicator, <span class="kw">LV_PART_INDICATOR</span>);                    <span class="cmt">/* 滑块填充条 */</span>
+<span class="fn">lv_obj_add_style</span>(slider, &amp;style_indicator_pr, <span class="kw">LV_PART_INDICATOR</span> | <span class="kw">LV_STATE_PRESSED</span>); <span class="cmt">/* 按下时的填充条 */</span>
+
+<span class="cmt">/* 样式可复用：同一个 lv_style_t 挂给任意多个对象 */</span>
+<span class="fn">lv_obj_add_style</span>(btn_a, &amp;style_btn, <span class="num">0</span>);
+<span class="fn">lv_obj_add_style</span>(btn_b, &amp;style_btn, <span class="num">0</span>);</code></pre>
+
+  <table>
+    <tr><th>样式属性</th><th>含义</th><th>对应 lv_style_set_* 函数</th></tr>
+    <tr><td><code>LV_STYLE_BG_COLOR</code></td><td>背景颜色</td><td><code>lv_style_set_bg_color()</code></td></tr>
+    <tr><td><code>LV_STYLE_RADIUS</code></td><td>圆角半径</td><td><code>lv_style_set_radius()</code></td></tr>
+    <tr><td><code>LV_STYLE_BORDER_WIDTH</code></td><td>边框宽度</td><td><code>lv_style_set_border_width()</code></td></tr>
+    <tr><td><code>LV_STYLE_TEXT_COLOR</code></td><td>文字颜色</td><td><code>lv_style_set_text_color()</code></td></tr>
+    <tr><td><code>LV_STYLE_PAD_TOP / LEFT / RIGHT / BOTTOM</code></td><td>四个方向的单边内边距</td><td><code>lv_style_set_pad_all()</code> 一次设四边</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>样式是可复用的资产：想统一一组按钮的配色，只需维护一个 <code>lv_style_t</code>。改完样式后调用 <code>lv_obj_report_style_change(&amp;style)</code>，所有用到它的对象会自动刷新——这是"一处定义、全局同步"的关键一步。</p>
+  </div>
+
+  <!-- ========== 6.2 状态：让控件"换脸" ========== -->
+  <h2>6.2 状态：让控件"换脸"</h2>
+
+  <p>状态（state）描述一个对象当前处于什么交互阶段。LVGL 用位掩码枚举 <code>lv_state_t</code> 表达：<code>LV_STATE_DEFAULT = 0</code>、<code>LV_STATE_CHECKED = 1 &lt;&lt; 2</code>（勾选）、<code>LV_STATE_FOCUSED = 1 &lt;&lt; 3</code>（聚焦）、<code>LV_STATE_PRESSED = 1 &lt;&lt; 7</code>（按下）、<code>LV_STATE_DISABLED = 1 &lt;&lt; 9</code>（禁用）等。大多数状态由库自动维护——你按下按钮，库就给它加上 <code>LV_STATE_PRESSED</code>，松开再移除；但你也可以用 <code>lv_obj_add_state()</code> / <code>lv_obj_remove_state()</code> 手动加减，比如给复选框预置 <code>LV_STATE_CHECKED</code>。</p>
+
+  <p>状态的意义在于一个朴素的事实：<strong>同一个属性，不同状态可以有不同值</strong>。给同一个对象挂两份样式——一份给默认状态、一份给按下状态，按下的瞬间 <code>LV_STATE_PRESSED</code> 那套生效，控件就"换脸"了。这也是 <code>lvgl-master/examples/styles/lv_example_style_parts_states.c</code> 展示的核心：同一个部件既保留基础外观，又叠一层"状态专属的覆盖"。交互反馈不再靠你手写回调，样式系统替你完成。</p>
+
+<pre><code><span class="cmt">/* 默认态：蓝底；按下态：红底 + 粗边框 */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_normal;
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_pressed;
+
+<span class="fn">lv_style_init</span>(&amp;style_normal);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_normal, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_BLUE</span>));
+
+<span class="fn">lv_style_init</span>(&amp;style_pressed);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_pressed, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_RED</span>));
+<span class="fn">lv_style_set_border_color</span>(&amp;style_pressed, <span class="fn">lv_palette_darken</span>(<span class="kw">LV_PALETTE_RED</span>, <span class="num">3</span>));
+<span class="fn">lv_style_set_border_width</span>(&amp;style_pressed, <span class="num">6</span>);
+
+<span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_add_style</span>(btn, &amp;style_normal, <span class="num">0</span>);                   <span class="cmt">/* 默认外观 */</span>
+<span class="fn">lv_obj_add_style</span>(btn, &amp;style_pressed, <span class="kw">LV_STATE_PRESSED</span>);        <span class="cmt">/* 按下覆盖 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 手动操控状态位：加、减、查询 */</span>
+<span class="fn">lv_obj_add_state</span>(cb, <span class="kw">LV_STATE_CHECKED</span>);          <span class="cmt">/* 加上勾选态 */</span>
+<span class="fn">lv_obj_remove_state</span>(cb, <span class="kw">LV_STATE_CHECKED</span>);       <span class="cmt">/* 移除勾选态 */</span>
+<span class="kw">bool</span> checked = <span class="fn">lv_obj_has_state</span>(cb, <span class="kw">LV_STATE_CHECKED</span>);  <span class="cmt">/* 查询当前是否勾选 */</span>
+
+<span class="cmt">/* 状态可按位或叠加：聚焦 + 按下 同时生效 */</span>
+<span class="fn">lv_obj_add_state</span>(btn, <span class="kw">LV_STATE_FOCUSED</span> | <span class="kw">LV_STATE_PRESSED</span>);</code></pre>
+
+  <table>
+    <tr><th>状态</th><th>值</th><th>触发时机</th></tr>
+    <tr><td><code>LV_STATE_DEFAULT</code></td><td>0</td><td>默认态，几乎所有对象的基础状态</td></tr>
+    <tr><td><code>LV_STATE_PRESSED</code></td><td>1 &lt;&lt; 7</td><td>被按下/按住时</td></tr>
+    <tr><td><code>LV_STATE_FOCUSED</code></td><td>1 &lt;&lt; 3</td><td>获得焦点时（键盘/编码器导航）</td></tr>
+    <tr><td><code>LV_STATE_CHECKED</code></td><td>1 &lt;&lt; 2</td><td>勾选/打开（checkbox、switch 等）</td></tr>
+    <tr><td><code>LV_STATE_DISABLED</code></td><td>1 &lt;&lt; 9</td><td>禁用，不再响应交互</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>按下、聚焦这类状态是库自动维护的，你只管在对应选择器上挂"变化后的样式"。千万不要自己写回调去改颜色——那既是在重复造轮子，又容易漏掉状态切换的边界情况。样式系统就是让你"声明结果、不写过程"的。</p>
+  </div>
+
+  <!-- ========== 6.3 部件（Parts）：一个控件多种形态 ========== -->
+  <h2>6.3 部件（Parts）：一个控件多种形态</h2>
+
+  <p>状态回答"什么时候变"，部件（part）回答"变哪个部位"。许多控件不是一整块，而是由多个部件拼成：滑块的"身体"是 <code>LV_PART_MAIN</code>（背景矩形）、已填充的部分是 <code>LV_PART_INDICATOR</code>（指示条）、可拖拽的是 <code>LV_PART_KNOB</code>（旋钮）；进度条、开关、复选框同理。部件枚举 <code>lv_part_t</code> 里还有 <code>LV_PART_SCROLLBAR</code>（滚动条）、<code>LV_PART_SELECTED</code>（选中文本）、<code>LV_PART_ITEMS</code>（表格单元格）等，<code>LV_PART_MAIN = 0x000000</code>、<code>LV_PART_INDICATOR = 0x020000</code>、<code>LV_PART_KNOB = 0x030000</code>——它们的取值恰好与状态位错开，所以可以安全地按位或进同一个选择器。</p>
+
+  <p>选择器的完整形态因此是「部件 | 状态」。把两维组合起来，你能精确命中"滑块被按下时它的指示条"这种极细的颗粒度——<code>LV_PART_INDICATOR | LV_STATE_PRESSED</code>。这正是 <code>lv_example_style_parts_states.c</code> 的做法：默认给指示条一条紫到粉的渐变，按住时才叠加一圈发光阴影，松手即消失。</p>
+
+<pre><code><span class="cmt">/* 给滑块的"指示条"部件上妆：紫色渐变圆角条 */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_indicator;
+<span class="fn">lv_style_init</span>(&amp;style_indicator);
+<span class="fn">lv_style_set_bg_opa</span>(&amp;style_indicator, <span class="kw">LV_OPA_COVER</span>);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_indicator, <span class="fn">lv_color_hex</span>(<span class="num">0x8b5cf6</span>));
+<span class="fn">lv_style_set_bg_grad_color</span>(&amp;style_indicator, <span class="fn">lv_color_hex</span>(<span class="num">0xec4899</span>));
+<span class="fn">lv_style_set_bg_grad_dir</span>(&amp;style_indicator, <span class="kw">LV_GRAD_DIR_HOR</span>);
+<span class="fn">lv_style_set_radius</span>(&amp;style_indicator, <span class="num">10</span>);
+
+<span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_add_style</span>(slider, &amp;style_indicator, <span class="kw">LV_PART_INDICATOR</span>);</code></pre>
+
+<pre><code><span class="cmt">/* 按下时指示条叠加发光阴影：部件 × 状态 的组合选择器 */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_indicator_pressed;
+<span class="fn">lv_style_init</span>(&amp;style_indicator_pressed);
+<span class="fn">lv_style_set_shadow_color</span>(&amp;style_indicator_pressed, <span class="fn">lv_color_hex</span>(<span class="num">0xec4899</span>));
+<span class="fn">lv_style_set_shadow_width</span>(&amp;style_indicator_pressed, <span class="num">18</span>);
+<span class="fn">lv_style_set_shadow_spread</span>(&amp;style_indicator_pressed, <span class="num">2</span>);
+
+<span class="fn">lv_obj_add_style</span>(slider, &amp;style_indicator_pressed,
+                 <span class="kw">LV_PART_INDICATOR</span> | <span class="kw">LV_STATE_PRESSED</span>);
+
+<span class="cmt">/* 旋钮部件单独上妆：白底 + 阴影 */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_knob;
+<span class="fn">lv_style_init</span>(&amp;style_knob);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_knob, <span class="fn">lv_color_hex</span>(<span class="num">0xffffff</span>));
+<span class="fn">lv_obj_add_style</span>(slider, &amp;style_knob, <span class="kw">LV_PART_KNOB</span>);</code></pre>
+
+  <table>
+    <tr><th>部件</th><th>含义</th><th>典型控件</th></tr>
+    <tr><td><code>LV_PART_MAIN</code></td><td>主体/背景矩形</td><td>所有控件</td></tr>
+    <tr><td><code>LV_PART_INDICATOR</code></td><td>已填充/选中部分</td><td>slider、bar、switch、checkbox 勾选块</td></tr>
+    <tr><td><code>LV_PART_KNOB</code></td><td>可拖拽的旋钮</td><td>slider、arc</td></tr>
+    <tr><td><code>LV_PART_SCROLLBAR</code></td><td>滚动条</td><td>所有可滚动对象</td></tr>
+    <tr><td><code>LV_PART_SELECTED</code></td><td>被选中的文本</td><td>label、textarea</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p><code>LV_OPA_COVER</code> 是"完全不透明"的别名，值等于 <code>255</code>（源码里常写作 <code>255 * 100 / 100</code>）。想要半透明就写 <code>128</code>，完全透明用 <code>LV_OPA_TRANSP</code>。先想清楚要哪个部件变，再决定用哪个选择器——别一上来就 <code>LV_PART_MAIN</code> 一把梭。</p>
+  </div>
+
+  <!-- ========== 6.4 本地样式：lv_obj_set_style_* 与优先级 ========== -->
+  <h2>6.4 本地样式：lv_obj_set_style_* 与优先级</h2>
+
+  <p>除了"定义样式再挂"的标准流程，LVGL 还提供一条更直接的捷径：<code>lv_obj_set_style_xxx(obj, value, selector)</code>，把属性直接设为对象的<strong>本地样式</strong>（local style），连 <code>lv_style_t</code> 都不用定义。常用的几个：<code>lv_obj_set_style_bg_color()</code>、<code>lv_obj_set_style_radius()</code>、<code>lv_obj_set_style_text_color()</code>、<code>lv_obj_set_style_pad_all()</code>。注意最后一个参数依然是选择器——传 <code>0</code> 表示主部件默认态，传 <code>LV_STATE_PRESSED</code> 就变成"仅按下时生效的本地样式"。</p>
+
+  <p>本地样式值得单独讲，是因为它<strong>优先级最高</strong>：无论共享样式、主题样式怎么排，本地样式总是最后覆盖。源码 <code>lv_example_style_local.c</code> 用一组精确的实验证明了这一点——三个按钮共享同一份靛蓝样式，其中一个用 <code>lv_obj_set_style_bg_color(..., 0)</code> 加了本地背景色，它永远是粉色；另一个用 <code>LV_STATE_PRESSED</code> 加的是"按下态"的本地样式，平时不受影响、按住才变绿。而三个按钮的共享边框始终保留。</p>
+
+<pre><code><span class="cmt">/* 本地样式：不定义 lv_style_t，直接设属性 */</span>
+<span class="type">lv_obj_t</span> * card = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_style_bg_color</span>(card, <span class="fn">lv_color_hex</span>(<span class="num">0xec4899</span>), <span class="num">0</span>);   <span class="cmt">/* 0 = 主部件默认态 */</span>
+<span class="fn">lv_obj_set_style_radius</span>(card, <span class="num">12</span>, <span class="num">0</span>);
+<span class="fn">lv_obj_set_style_shadow_width</span>(card, <span class="num">10</span>, <span class="kw">LV_STATE_PRESSED</span>);    <span class="cmt">/* 仅按下时出现阴影 */</span>
+<span class="fn">lv_obj_set_style_pad_all</span>(card, <span class="num">16</span>, <span class="num">0</span>);</code></pre>
+
+<pre><code><span class="cmt">/* 共享样式 + 本地覆盖：优先级对比（参考 lv_example_style_local.c） */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_shared;
+<span class="fn">lv_style_init</span>(&amp;style_shared);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_shared, <span class="fn">lv_color_hex</span>(<span class="num">0x6366f1</span>));
+<span class="fn">lv_style_set_border_color</span>(&amp;style_shared, <span class="fn">lv_color_hex</span>(<span class="num">0x312e81</span>));
+<span class="fn">lv_style_set_border_width</span>(&amp;style_shared, <span class="num">3</span>);
+
+<span class="type">lv_obj_t</span> * btn_a = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());  <span class="cmt">/* 靛蓝 */</span>
+<span class="fn">lv_obj_add_style</span>(btn_a, &amp;style_shared, <span class="num">0</span>);
+
+<span class="type">lv_obj_t</span> * btn_b = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());  <span class="cmt">/* 本地粉色覆盖背景 */</span>
+<span class="fn">lv_obj_set_style_bg_color</span>(btn_b, <span class="fn">lv_color_hex</span>(<span class="num">0xec4899</span>), <span class="num">0</span>);
+<span class="fn">lv_obj_add_style</span>(btn_b, &amp;style_shared, <span class="num">0</span>);             <span class="cmt">/* 边框仍来自共享样式 */</span></code></pre>
+
+  <table>
+    <tr><th>便捷 API</th><th>作用</th></tr>
+    <tr><td><code>lv_obj_set_style_bg_color(obj, c, sel)</code></td><td>背景色</td></tr>
+    <tr><td><code>lv_obj_set_style_radius(obj, v, sel)</code></td><td>圆角半径</td></tr>
+    <tr><td><code>lv_obj_set_style_text_color(obj, c, sel)</code></td><td>文字颜色</td></tr>
+    <tr><td><code>lv_obj_set_style_border_width(obj, v, sel)</code></td><td>边框宽度</td></tr>
+    <tr><td><code>lv_obj_set_style_pad_all(obj, v, sel)</code></td><td>四周内边距</td></tr>
+    <tr><td><code>lv_obj_set_style_shadow_width(obj, v, sel)</code></td><td>阴影宽度</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>文字颜色、文字字体这类属性会<strong>继承</strong>给子对象，而背景色不会。把文字颜色设在父容器上，所有后代的 <code>lv_label</code> 都会跟着变色——这是做整页配色最快的方法，也是为什么主题只需要一套字体/前景色配置。</p>
+  </div>
+
+  <!-- ========== 6.5 主题：默认主题与主题定制 ========== -->
+  <h2>6.5 主题：默认主题与主题定制</h2>
+
+  <p>当你一个样式都不设，界面依然有模有样——因为有一个<strong>主题</strong>（theme）在背后兜底。LVGL 源码 <code>src/themes/</code> 下有三个内置主题：<code>default</code>、<code>simple</code>、<code>mono</code>。默认主题在创建显示器（<code>lv_display_create</code>）时自动初始化并挂到屏幕上：<code>src/display/lv_display.c</code> 里正是 <code>lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED), LV_THEME_DEFAULT_DARK, LV_FONT_DEFAULT)</code>——主色是蓝色调、强调色红色调、深浅模式与默认字体由配置宏决定。</p>
+
+  <p>主题的本质，是"把一批样式批量应用到整棵对象树"：它会自动给按钮、滑块、label 等各类控件套上默认外观，而你手动加的样式优先级永远在它之上。要定制时有两条路：一是<strong>重新初始化默认主题</strong>（换主色、切深浅色）；二是<strong>克隆当前主题并注册 apply 回调</strong>（<code>lv_theme_set_apply_cb()</code>），在对象创建时追加自定义样式。<code>lvgl-master/examples/styles/lv_example_style_theme.c</code> 是后一种的范本：克隆 → 设父主题 → 注册回调 → <code>lv_display_set_theme()</code> 挂回去。</p>
+
+<pre><code><span class="cmt">/* 方案一：重新初始化默认主题（换主色、切到浅色模式） */</span>
+<span class="fn">lv_theme_default_deinit</span>();
+<span class="fn">lv_theme_default_init</span>(<span class="fn">lv_display_get_default</span>(),
+                      <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_TEAL</span>),   <span class="cmt">/* 主色：青绿 */</span>
+                      <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_RED</span>),    <span class="cmt">/* 强调色 */</span>
+                      <span class="kw">false</span>,                            <span class="cmt">/* 浅色模式 */</span>
+                      <span class="kw">LV_FONT_DEFAULT</span>);
+<span class="fn">lv_obj_report_style_change</span>(<span class="kw">NULL</span>);   <span class="cmt">/* 通知所有对象按新主题重绘 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 方案二：克隆当前主题 + 自定义 apply 回调（参考 lv_example_style_theme.c） */</span>
+<span class="kw">static</span> <span class="type">lv_style_t</span> style_btn;
+<span class="fn">lv_style_init</span>(&amp;style_btn);
+<span class="fn">lv_style_set_bg_color</span>(&amp;style_btn, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_GREEN</span>));
+<span class="fn">lv_style_set_border_color</span>(&amp;style_btn, <span class="fn">lv_palette_darken</span>(<span class="kw">LV_PALETTE_GREEN</span>, <span class="num">3</span>));
+<span class="fn">lv_style_set_border_width</span>(&amp;style_btn, <span class="num">3</span>);
+
+<span class="kw">static</span> <span class="kw">void</span> my_apply_cb(<span class="type">lv_theme_t</span> * th, <span class="type">lv_obj_t</span> * obj)
+{
+    <span class="kw">if</span>(<span class="fn">lv_obj_check_type</span>(obj, &amp;<span class="kw">lv_button_class</span>)) {
+        <span class="fn">lv_obj_add_style</span>(obj, &amp;style_btn, <span class="num">0</span>);   <span class="cmt">/* 每个按钮都加绿色样式 */</span>
+    }
+}
+
+<span class="kw">void</span> set_my_theme(<span class="kw">void</span>)
+{
+    <span class="type">lv_theme_t</span> * base = <span class="fn">lv_theme_get_from_obj</span>(<span class="fn">lv_screen_active</span>());
+    <span class="type">lv_theme_t</span> * th_new = <span class="fn">lv_theme_create</span>();
+    <span class="fn">lv_theme_copy</span>(th_new, base);
+    <span class="fn">lv_theme_set_parent</span>(th_new, base);
+    <span class="fn">lv_theme_set_apply_cb</span>(th_new, my_apply_cb);
+    <span class="fn">lv_display_set_theme</span>(<span class="fn">lv_display_get_default</span>(), th_new);
+}</code></pre>
+
+  <table>
+    <tr><th>主题 API</th><th>作用</th></tr>
+    <tr><td><code>lv_theme_default_init()</code></td><td>初始化默认主题，返回主题句柄</td></tr>
+    <tr><td><code>lv_theme_default_get()</code> / <code>is_inited()</code></td><td>获取 / 查询默认主题</td></tr>
+    <tr><td><code>lv_theme_get_from_obj()</code></td><td>取某对象所在显示器的主题</td></tr>
+    <tr><td><code>lv_theme_set_apply_cb()</code></td><td>注册主题应用回调（对象创建时被调用）</td></tr>
+    <tr><td><code>lv_display_set_theme()</code></td><td>把主题挂到指定显示器</td></tr>
+    <tr><td><code>lv_theme_copy()</code> / <code>lv_theme_set_parent()</code></td><td>克隆主题 / 设置父主题，支持链式继承</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>主题句柄要自己管理：显示器被删除时，记得用 <code>lv_theme_delete()</code> 释放。官方示例就是给显示器注册一个 <code>LV_EVENT_DELETE</code> 回调来做清理——把主题的生命周期和显示器的生命周期绑在一起，才不会泄漏内存。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：做一张本地样式卡片 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建一个 <code>lv_obj</code> 作为卡片，用 <code>lv_obj_set_style_*</code> 系列 API 直接设置：背景色 <code>0xec4899</code>、圆角 <code>12</code>、四周内边距 <code>16</code>。写出完整代码，并说明最后一个参数传 <code>0</code> 的含义。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 6.4 的本地样式写法：<code>lv_obj_create</code> 后连续调用三个 <code>lv_obj_set_style_*</code>；参数 0 = <code>LV_PART_MAIN | LV_STATE_DEFAULT</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_obj_t * card = lv_obj_create(lv_screen_active()); lv_obj_set_style_bg_color(card, lv_color_hex(0xec4899), 0); lv_obj_set_style_radius(card, 12, 0); lv_obj_set_style_pad_all(card, 16, 0);</code>。第三个参数是选择器，<code>0</code> 表示"主部件 + 默认状态"，即对所有正常情况生效。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：按下变色的按钮 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>写一个按钮：默认是蓝色背景，按住时变成红色并加宽边框到 6px，松开还原。要求：不用任何回调函数，只用样式系统完成。写出完整代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 6.2：定义两份样式（正常态 + 按下态），分别用 <code>lv_obj_add_style(btn, ..., 0)</code> 和 <code>lv_obj_add_style(btn, ..., LV_STATE_PRESSED)</code> 挂上去。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>正常态样式设 <code>lv_palette_main(LV_PALETTE_BLUE)</code> 背景；按下态样式设 <code>lv_palette_main(LV_PALETTE_RED)</code> 背景、<code>lv_style_set_border_width(..., 6)</code> 与深红边框。创建按钮后把两份样式分别挂到 selector <code>0</code> 和 <code>LV_STATE_PRESSED</code>。库在按下时自动加/移除 <code>LV_STATE_PRESSED</code>，外观随之切换，全程无需回调。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：给滑块部件上妆 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>创建一根滑块，要求：指示条是紫色到粉色水平渐变、圆角 10；旋钮是白色圆形并带一圈淡淡的阴影；按住指示条时它再叠加一层发光阴影。参考 <code>lvgl-master/examples/styles/lv_example_style_parts_states.c</code>。请写出需要用到的选择器组合。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个部件/状态组合：指示条用 <code>LV_PART_INDICATOR</code>，旋钮用 <code>LV_PART_KNOB</code>，按下发光用 <code>LV_PART_INDICATOR | LV_STATE_PRESSED</code>。渐变用 <code>lv_style_set_bg_grad_color</code> + <code>lv_style_set_bg_grad_dir</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>三份样式三个选择器：<code>style_indicator</code>（渐变 + 圆角）挂 <code>LV_PART_INDICATOR</code>；<code>style_knob</code>（白底 + 阴影）挂 <code>LV_PART_KNOB</code>；<code>style_indicator_pressed</code>（shadow_width 18、spread 2）挂 <code>LV_PART_INDICATOR | LV_STATE_PRESSED</code>。关键点：部件与状态两维都要写对，才能精确命中"按住时的指示条"。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：定制一个自己的主题 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在默认主题的基础上做一个"子主题"：克隆当前主题，让所有按钮获得绿色背景 + 深绿边框，同时保留默认主题的其余外观。参考 <code>lv_example_style_theme.c</code>。请说明为什么用"克隆 + apply 回调"而不是直接改默认主题，并写出关键步骤。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>关键 API：<code>lv_theme_create</code> → <code>lv_theme_copy</code> → <code>lv_theme_set_parent</code> → <code>lv_theme_set_apply_cb</code> → <code>lv_display_set_theme</code>。apply 回调里用 <code>lv_obj_check_type(obj, &amp;lv_button_class)</code> 判断类型。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>直接改默认主题会让所有显示器的外观跟着变，而"克隆 + 父主题"只影响当前显示器，且父主题（基础外观）+ 子主题（覆盖样式）形成链式继承，可按需叠加。步骤：(1) <code>lv_theme_get_from_obj</code> 拿到当前主题作 base；(2) <code>lv_theme_create + lv_theme_copy(th_new, base) + lv_theme_set_parent(th_new, base)</code>；(3) apply 回调里对 <code>lv_button_class</code> 对象 <code>lv_obj_add_style</code> 绿色样式；(4) <code>lv_display_set_theme(lv_display_get_default(), th_new)</code>。最后记得在显示器 <code>LV_EVENT_DELETE</code> 时 <code>lv_theme_delete</code> 释放。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

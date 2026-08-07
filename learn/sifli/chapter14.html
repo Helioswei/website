@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第14章：已实现功能盘点 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="14" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第14章：已实现功能盘点</h1>
+  <p class="chapter-subtitle">「包青天断案，铁面无私」——这一章把 README 承诺的"当前功能"一条条摆上公堂，与源码逐一核对：书从哪来（14.1）、靠什么翻页（14.2）、界面能干什么（14.3）、没电了怎么办（14.4）。每一项都要求有据可查，有差异就如实标注——最后用一句话给整台阅读器下结论（14.5）。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私——盘点的每一条都以源码为准，README 与代码不符处如实标注，绝不和稀泥</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「本官断案，讲证据、看实情，绝不听一面之词。README 上的每一条"当前功能"，都要拿到源码里去对质：书从哪里来（14.1）、靠什么翻页（14.2）、界面能干什么（14.3）、没电了怎么办（14.4）。README 说主页面有 3 个入口，可源码里明明坐着 4 位——本官如实记录，不偏不倚。铁面无私，是对代码的忠诚，也是对读者的坦诚。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 14.1 电子书与文件系统：内置 + TF 卡，优先 TF 卡 ========== -->
+  <h2>14.1 电子书与文件系统：内置 + TF 卡，优先 TF 卡</h2>
+
+  <p>README「电子书与文件系统」第一条：<strong>支持从内置文件系统与 TF 卡读取 EPUB（优先使用 TF 卡）</strong>。这条"优先"在源码里有铁证——<code>SF32Paper.cpp</code> 的文件系统挂载循环：先尝试把 <code>sd0</code>（TF 卡，若检测到）挂到根目录 <code>"/"</code>，<code>dfs_mount</code> 成功就 <code>break</code>；只有 TF 卡不可用才轮到 <code>flash0</code>（内置 Flash 的 <code>FS_REGION</code> 分区）。挂载顺序决定了"谁先来、谁优先"，TF 卡在前，正是 README 那句话的落点。</p>
+
+  <p>书从哪扫？<code>handleEpubList</code> 创建书库时调 <code>epub_list-&gt;load("/")</code>——从<strong>根目录</strong>扫描所有 <code>.epub</code> 后缀文件：跳过 <code>.</code> 开头的隐藏文件与目录，每本加载成功就记入 <code>epub_list[]</code>（容量上限 <code>MAX_EPUB_LIST_SIZE = 20</code>，超出报 "Too many epubs" 并中断），最后按书名排序。书的来源一实一虚：TF 卡是实打实的文件系统；内置 Flash 里 <code>disk/</code> 目录的示例书（<code>oebps.epub</code>、<code>no_oebps.epub</code>、<code>pg43-images.epub</code>）打包进镜像后也会挂载进根目录，所以 <code>load("/")</code> 一并可见。README 二次开发也印证了分工：少量样书放 <code>disk/</code> 随镜像打包，大量书籍用 TF 卡。</p>
+
+  <p>一句话盘下来的真实边界：<strong>书库只扫根目录、最多 20 本</strong>。README 没写"最多 20 本"，这是源码里 <code>State.h</code> 的硬限制；子目录的书不会被发现（除非挂在根目录的某个子路径是单独的文件系统，如 TF 卡被整体挂到 <code>"/"</code> 时其根即书库根）。盘点章就该把这类"文档没说、代码存在"的边界如实补上。</p>
+
+<pre><code><span class="cmt">/* src/boards/SF32Paper.cpp：挂载顺序 → TF 卡优先于内置 Flash */</span>
+<span class="kw">#if defined(RT_USING_SDIO)</span>
+    <span class="kw">if</span> (SD_Card_detect() == SD_CARD_INSERT) {
+        LOG_I(<span class="str">"SD-Card plug in\n"</span>);
+        name[<span class="num">0</span>] = (<span class="type">char</span> *)<span class="str">"sd0"</span>;
+    }
+<span class="kw">#endif</span>
+
+    name[<span class="num">1</span>] = (<span class="type">char</span> *)<span class="str">"flash0"</span>;
+    register_mtd_device(FS_REGION_START_ADDR, FS_REGION_SIZE, name[<span class="num">1</span>]);
+
+    <span class="kw">for</span> (<span class="type">uint32_t</span> i = <span class="num">0</span>; i &lt; <span class="kw">sizeof</span>(name) / <span class="kw">sizeof</span>(name[<span class="num">0</span>]); i++)
+    {
+        <span class="kw">if</span> (NULL == name[i]) <span class="kw">continue</span>;
+        <span class="kw">if</span> (dfs_mount(name[i], <span class="str">"/"</span>, <span class="str">"elm"</span>, <span class="num">0</span>, <span class="num">0</span>) == <span class="num">0</span>) <span class="cmt">// fs exist</span>
+        {
+            LOG_I(<span class="str">"mount fs on %s to root success\n"</span>, name[i]);
+            <span class="kw">break</span>;  <span class="cmt">// 先挂上的优先 → sd0 在前</span>
+        }
+    }</code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/EpubList/EpubList.cpp：load("/") 扫描根目录 .epub 文件 */</span>
+<span class="kw">while</span> ((ent = readdir(dir)) != NULL)
+{
+    <span class="cmt">// ignore any hidden files starting with "." and any directories</span>
+    <span class="kw">if</span> (ent-&gt;d_name[<span class="num">0</span>] == <span class="str">'.'</span> || ent-&gt;d_type == DT_DIR)
+        <span class="kw">continue</span>;
+    <span class="type">int</span> name_length = strlen(ent-&gt;d_name);
+    <span class="kw">if</span> (name_length &lt; <span class="num">5</span> || strcmp(ent-&gt;d_name + name_length - <span class="num">5</span>, <span class="str">".epub"</span>) != <span class="num">0</span>)
+        <span class="kw">continue</span>;
+    Epub *epub = <span class="kw">new</span> Epub(std::string(<span class="str">"/"</span>) + ent-&gt;d_name);
+    <span class="kw">if</span> (epub-&gt;load())
+    {
+        <span class="cmt">/* 写入 path / title，num_epubs++ ... */</span>
+        <span class="kw">if</span> (state.num_epubs == MAX_EPUB_LIST_SIZE)
+        {
+            ulog_e(TAG, <span class="str">"Too many epubs, max is %d"</span>, MAX_EPUB_LIST_SIZE);
+            <span class="kw">break</span>;  <span class="cmt">// 上限 20 本</span>
+        }
+    }
+}</code></pre>
+
+  <table>
+    <tr><th>存储来源</th><th>挂载设备</th><th>优先级</th><th>用途</th></tr>
+    <tr><td>TF 卡</td><td><code>sd0</code>（SDIO / SPI MSD 检测）</td><td>1（先尝试）</td><td>大量书籍，用户自备</td></tr>
+    <tr><td>内置 Flash</td><td><code>flash0</code>（<code>FS_REGION</code> 分区）</td><td>2（后备）</td><td><code>disk/</code> 打包的少量示例 EPUB</td></tr>
+    <tr><td>书库扫描</td><td><code>EpubList::load("/")</code></td><td>—</td><td>根目录 <code>.epub</code>，上限 <code>MAX_EPUB_LIST_SIZE = 20</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>证据链完整。README 说"优先 TF 卡"，代码里是"先挂 sd0、失败才挂 flash0"，一句话对应一行 <code>break</code>。盘点时要练出这种"一句话 → 一段代码"的对质能力：功能描述能指到具体实现，才叫"确实实现"；指不到，就得标成存疑。</p>
+  </div>
+
+  <!-- ========== 14.2 输入与显示：按键 + 触控，中英文 ========== -->
+  <h2>14.2 输入与显示：按键 + 触控，中英文</h2>
+
+  <p>README「输入与显示」写了两条：<strong>支持按键与触控双输入</strong>、<strong>支持中文/英文显示</strong>。双输入在源码里是两套独立驱动，最终汇进同一个动作队列：<code>SF32_ButtonControls</code> 把 <code>BUTTON_CLICKED</code> 映射成 <code>UP/DOWN/SELECT</code>、把 <code>BUTTON_LONG_PRESSED</code> 映射成 <code>UPGLIDE</code>；<code>SF32_TouchControls</code> 把点击/上滑映射成区域命中后的动作（第 13 章那张区域表）。两条路径共用 <code>ActionCallback_t</code> 把动作塞进 <code>ui_queue</code> 消息队列，主循环 <code>rt_mq_recv</code> 统一消费——<strong>双输入单管道</strong>，这就是"支持按键与触控"的架构答案。</p>
+
+  <p>中英文显示靠 FreeType 字体栈：<code>font_ft.c</code> 封装 FreeType 光栅化，内置字体是 <code>font/DroidSansFallback.ttf</code>（README 明说编译时内置、存放于 Flash XIP，读写不占 PSRAM 缓存），它同时覆盖中英文；外挂字体由 <code>font_manager.c</code> 扫描 TF 卡 <code>/fonts</code> 目录（最多 <code>FONT_MAX_COUNT = 64</code> 个），<code>.ttf/.otf</code> 都能被 FreeType 直接从文件读取。阅读设置里的"字重"三档（正常/中粗/粗体）走 <code>epd_font_ft_set_bold</code>：若字体带可变字重轴就 <code>apply_variable_weight</code>，否则用 FreeType 的 <code>embolden</code> 合成（<code>strength = y_ppem * EMBOLDEN_STRENGTH[level]</code>）。</p>
+
+  <p>这正好解释 README 那句"<strong>为控制资源占用，默认未启用粗体/斜体中文字库</strong>"——它不是说"没有粗体功能"，而是说<strong>没有内置额外的粗体/斜体字体文件</strong>：粗体效果靠字重轴或合成实现，不占整套额外字库的存储。这是"能调出粗体"与"内置粗体字库"之间的微妙差异，盘点章要把话说明白。</p>
+
+<pre><code><span class="cmt">/* src/boards/controls/SF32_ButtonControls.cpp：按键点击 → 动作（部分板型） */</span>
+<span class="kw">if</span> (pin == EPD_KEY1)
+{
+    <span class="kw">if</span> (action == BUTTON_CLICKED)        action_cbk(UIAction::DOWN);
+}
+<span class="kw">else if</span> (pin == EPD_KEY2)
+{
+    <span class="kw">if</span> (action == BUTTON_CLICKED)        action_cbk(UIAction::SELECT);
+    <span class="kw">else if</span> (action == BUTTON_LONG_PRESSED) action_cbk(UIAction::UPGLIDE);
+}
+<span class="kw">else if</span> (pin == EPD_KEY3)
+{
+    <span class="kw">if</span> (action == BUTTON_CLICKED)        action_cbk(UIAction::UP);
+}</code></pre>
+
+<pre><code><span class="cmt">/* lib/epdiy/font_ft.c：粗体合成（无字重轴时用 embolden） */</span>
+<span class="kw">void</span> epd_font_ft_set_bold(<span class="type">int</span> level) {
+    <span class="kw">if</span> (level &lt; <span class="num">0</span>) level = <span class="num">0</span>; <span class="kw">if</span> (level &gt; <span class="num">2</span>) level = <span class="num">2</span>;
+    <span class="kw">if</span> (level == g_bold_level) <span class="kw">return</span>;
+    epd_font_ft_preheat_stop(); g_bold_level = level;
+    cache_clear(); cmap_cache_clear();
+    <span class="kw">if</span> (g_has_weight_axis) {
+        apply_variable_weight(BOLD_WEIGHT_MAP[level]);   <span class="cmt">// {400, 600, 700}</span>
+        recalc_metrics();
+    }
+}
+<span class="cmt">/* 光栅化时：g_bold_level &gt; 0 且无字重轴 → FT 合成加粗 */</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int</span> EMBOLDEN_STRENGTH[] = {<span class="num">0</span>, <span class="num">1</span>, <span class="num">2</span>};
+FT_Pos strength = (FT_Pos)(g_ft_face-&gt;size-&gt;metrics.y_ppem * EMBOLDEN_STRENGTH[g_bold_level]);</code></pre>
+
+  <table>
+    <tr><th>能力</th><th>实现</th><th>代码出处</th></tr>
+    <tr><td>按键输入</td><td><code>SF32_ButtonControls</code>：点击 → UP/DOWN/SELECT，长按 → UPGLIDE</td><td><code>SF32_ButtonControls.cpp</code></td></tr>
+    <tr><td>触控输入</td><td><code>SF32_TouchControls</code>：区域命中 + 上滑（<code>SWIPE_THRESHOLD=100</code>）</td><td><code>SF32_TouchControls.cpp</code></td></tr>
+    <tr><td>中文/英文显示</td><td>FreeType + 内置 <code>DroidSansFallback.ttf</code>（Flash XIP）</td><td><code>font_ft.c</code>、<code>font/</code></td></tr>
+    <tr><td>外部字体</td><td>TF 卡 <code>/fonts</code> 下 <code>.ttf/.otf</code>，最多 64 个</td><td><code>font_manager.c</code></td></tr>
+    <tr><td>字重三档</td><td>字重轴 <code>apply_variable_weight</code> 或 FT 合成加粗</td><td><code>epd_font_ft_set_bold</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>本官最看重"名实相符"。README 说"默认未启用粗体/斜体中文字库"，容易误读成"没有粗体"；一查代码，字重三档照常有，只是粗体靠合成而非额外字库。盘点的价值就在这：把"文档的模糊表述"翻译成"代码的精确事实"，再如实写出来。</p>
+  </div>
+
+  <!-- ========== 14.3 UI 与设置：主页面入口与三套设置 ========== -->
+  <h2>14.3 UI 与设置：主页面入口与三套设置</h2>
+
+  <p>这一节要办一桩"证词不符"的案子。README「主页面」白纸黑字写"<strong>主页面包含 3 个入口</strong>：打开书库 / 继续阅读 / 进入设置"。可一查 <code>epub_screen.h</code> 的 <code>MainOption</code> 枚举，源码里是 <strong>4 个</strong>：<code>OPTION_OPEN_LIBRARY = 0</code>、<code>OPTION_ENTER_SETTINGS</code>、<code>OPTION_WEATHER</code>、<code>OPTION_CONTINUE_READING</code>——多了一个<strong>「查看天气」</strong>。渲染主页面时四个选项都能切到（<code>case OPTION_WEATHER: opt_text = "查看天气"</code>），选中后 <code>handleUserInteraction</code> 会进 <code>WEATHER_PAGE</code>。所以"3 入口"是 README 写早了，代码早已是 4 入口。还有一桩：README 的"功能设置页面"列了 5 项（触控开关/超时策略/全刷周期/阅读设置/确认保存），而 <code>render_settings_page</code> 实际画了 <strong>6 行</strong>——多出第 4 行<strong>「蓝牙：开/关」</strong>（<code>SET_BLUETOOTH</code>）。两处都是"文档比代码旧"，盘点时照实记录。</p>
+
+  <p>撇开证词差异，UI 的三套设置是齐全的。<strong>功能设置页</strong>（<code>SETTINGS_PAGE</code>）：触控开关、超时关机（5/10/30/60 分钟、不关机）、全刷周期（5/10/20/每次）、蓝牙、阅读设置入口、确认返回。<strong>阅读设置页</strong>（<code>READING_SETTINGS</code>）：字体（Default + TF 卡 <code>/fonts</code>）、字号（24/28/32/36/40/44/48）、字重（正常/中粗/粗体）、行距（1.0x~2.0x）、边距（5~20px），<code>key=value</code> 文本持久化到 TF 卡 <code>/settings.cfg</code>，字体不可用自动回退内置。<strong>覆盖操作层</strong>：第 13 章那张 12 格面板，跳页/目录/书库/设置一步直达。</p>
+
+  <p>还有一个 README 没明说、但已在第 12 章验证过的架构事实：状态机里书库页、目录页、阅读页之外，还挂着 <code>WEATHER_PAGE / WEATHER_CITY_PAGE</code>（天气与城市选择）、<code>WELCOME_PAGE</code>（超时熄屏）、<code>LOW_POWER_PAGE / CHARGING_PAGE / SHUTDOWN_PAGE</code>（电量相关）。主页面是所有页面的总闸（<code>ui_state = MAIN_PAGE</code> 是默认态）。"能调"不止于阅读参数，还包括触控、超时、全刷、蓝牙这类设备级开关。</p>
+
+<pre><code><span class="cmt">/* src/epub_screen.h：MainOption 枚举——README 说 3 入口，代码是 4 */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+	OPTION_OPEN_LIBRARY = <span class="num">0</span>,
+	OPTION_ENTER_SETTINGS,
+	OPTION_WEATHER,        <span class="cmt">// 第 4 项：查看天气（README 未列出）</span>
+	OPTION_CONTINUE_READING,
+	OPTION_COUNT
+} MainOption;
+
+<span class="cmt">/* epub_screen.cpp：主页面选项文本 */</span>
+<span class="kw">switch</span> (main_option)
+{
+  <span class="kw">case</span> OPTION_OPEN_LIBRARY:   opt_text = <span class="str">"打开书库"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_ENTER_SETTINGS: opt_text = <span class="str">"进入设置"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_WEATHER:        opt_text = <span class="str">"查看天气"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_CONTINUE_READING:
+    opt_text = has_continue_reading ? <span class="str">"继续阅读"</span> : <span class="str">"无阅读记录"</span>;
+    <span class="kw">break</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/epub_screen.cpp：功能设置页实际绘制的 6 行（README 列了 5 项） */</span>
+<span class="cmt">// 1) 触控开关</span>
+draw_setting_row(SET_TOUCH, buf, y);          <span class="cmt">// 触控开关：开/关</span>
+<span class="cmt">// 2) 超时关机</span>
+draw_setting_row(SET_TIMEOUT, buf, y);        <span class="cmt">// 超时关机：N分钟/不关机</span>
+<span class="cmt">// 3) 全刷周期</span>
+draw_setting_row(SET_FULL_REFRESH, buf, y);   <span class="cmt">// 全刷周期：N次/每次</span>
+<span class="cmt">// 4) 蓝牙开关（绑定真实蓝牙栈）</span>
+draw_setting_row(SET_BLUETOOTH, buf, y);      <span class="cmt">// 蓝牙：开/关（README 未列出）</span>
+<span class="cmt">// 5) 阅读设置（进入子页面）</span>
+draw_setting_row(SET_READING_SETTINGS, <span class="str">"阅读设置"</span>, y);
+<span class="cmt">// 6) 确认按钮</span>
+<span class="kw">static_add_area</span>(confirm_x, confirm_y, confirm_w, confirm_touch_h, SET_CONFIRM * <span class="num">3</span> + <span class="num">2</span>);
+renderer-&gt;draw_text(confirm_x + (confirm_w - c_w) / <span class="num">2</span>, confirm_y + (confirm_h - c_h) / <span class="num">2</span>, confirm, <span class="kw">false</span>, <span class="kw">true</span>);</code></pre>
+
+  <table>
+    <tr><th>项目</th><th>README 所述</th><th>源码实况</th><th>判定</th></tr>
+    <tr><td>主页面入口</td><td>3 个（书库/继续阅读/设置）</td><td>4 个（多了「查看天气」）</td><td>README 过旧，以代码为准</td></tr>
+    <tr><td>功能设置项</td><td>5 项</td><td>6 行（多了「蓝牙」）</td><td>README 过旧，以代码为准</td></tr>
+    <tr><td>阅读设置</td><td>字体/字号/字重/行距/边距 + 保存退出</td><td>一致，持久化 <code>/settings.cfg</code></td><td>一致</td></tr>
+    <tr><td>覆盖操作层</td><td>触控/全刷切换、跳页、目录/书库/设置</td><td>一致（第 13 章 12 格面板）</td><td>一致</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>这是全教程最有价值的一次"文档漂移"现场：README 的「主页面 3 入口」「功能设置 5 项」都比代码旧，分别漏了天气与蓝牙两项。学到的是工程习惯：<strong>功能文档写出来就注定会过时，排查问题永远以源码为准</strong>；反过来，改功能时记得同步文档，否则下一个读文档的人就被你坑了。</p>
+  </div>
+
+  <!-- ========== 14.4 电量与低功耗：一路省到底 ========== -->
+  <h2>14.4 电量与低功耗：一路省到底</h2>
+
+  <p>README「电量与低功耗」列了五条，逐条对源码：<strong>页面顶部显示电量与充电状态（闪电图标），电量满时（≥98%）自动清除充电图标</strong>——状态栏由 <code>draw_status_bar</code> 绘制，<code>MSG_UPDATE_CHARGE_STATUS</code> 分支里 <code>percentage &gt;= 98 &amp;&amp; !charge_full</code> 就 <code>clear_charge_icon()</code> 并把 <code>charge_full</code> 置真，<code>percentage &lt; 98</code> 再复位。<strong>低电量进入 <code>LOW_POWER_PAGE</code> 并抑制普通用户操作</strong>——主循环里 <code>percentage &lt; 2 &amp;&amp; !is_charging</code> 触发 <code>MSG_DRAW_LOW_POWER_PAGE</code>，而 <code>handleUserInteraction</code> 一进来先查 <code>battery-&gt;get_low_power_state() == 1</code>，是就直接 <code>return</code>——操作被整体抑制。</p>
+
+  <p><strong>充电状态变化可触发页面刷新（仅百分比或充电状态真正变化时刷屏）</strong>——主循环末尾 <code>if (cur_percent != last_battery_percent || cur_charging != last_battery_charging)</code> 才 <code>draw_status_bar + request_flush</code>，否则不刷，避免无效刷新。<strong>用户无操作达到设置超时后进入 <code>WELCOME_PAGE</code>（类似熄屏）</strong>——超时策略 <code>kTimeoutOptions[] = {5, 10, 30, 60, 0}</code>（分钟，默认 30），主循环里 <code>rt_tick_get_millisecond() - last_user_interaction &gt;= 60 * 1000 * screen_get_timeout_shutdown_minutes()</code> 就进欢迎页；再次交互唤醒回主页面并重置计时。</p>
+
+  <p><strong>主循环默认 5 小时无交互进入 <code>SHUTDOWN_PAGE</code></strong>——这是整条省电路径的尽头。<code>#define TIMEOUT_SHUTDOWN_TIME 5</code>（小时），主循环条件 <code>while (rt_tick_get_millisecond() - last_user_interaction &lt; 60 * 1000 * 60 * TIMEOUT_SHUTDOWN_TIME)</code>；5 小时一到，循环退出，<code>renderer-&gt;dehydrate()</code> 保存状态、<code>board-&gt;stop_filesystem()</code>、画关机页、<code>board-&gt;prepare_to_sleep()</code> 进入深睡眠。至此"能省电"闭环：超时先熄屏（欢迎页）→ 更久无操作则关机深睡，中间再配合触控硬件下电（13.3）与局刷省功耗。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：低电量进 LOW_POWER_PAGE + 抑制用户操作 */</span>
+<span class="kw">if</span> (percentage &lt; <span class="num">2</span> &amp;&amp; !is_charging &amp;&amp; adc_battery-&gt;get_low_power_state() != <span class="num">1</span>) {
+    adc_battery-&gt;set_low_power_state(<span class="num">1</span>);
+    UIAction msg = MSG_DRAW_LOW_POWER_PAGE;
+    ...
+}
+<span class="cmt">/* handleUserInteraction 入口：低电量直接短路，不处理任何操作 */</span>
+<span class="kw">if</span> (battery &amp;&amp; battery-&gt;get_low_power_state() == <span class="num">1</span>) {
+    rt_kprintf(<span class="str">"low power state\n"</span>);
+    <span class="kw">return</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：超时欢迎页 + 5 小时关机深睡 */</span>
+<span class="kw">#define</span> TIMEOUT_SHUTDOWN_TIME <span class="num">5</span> <span class="cmt">// 默认关机超时（小时）；0 表示不关机</span>
+...
+<span class="kw">while</span> ((rt_tick_get_millisecond() - last_user_interaction &lt; <span class="num">60</span> * <span class="num">1000</span> * <span class="num">60</span> * TIMEOUT_SHUTDOWN_TIME))
+{
+  <span class="cmt">// 无操作达到设置超时 → 欢迎页（类似熄屏）</span>
+  <span class="kw">if</span> (rt_tick_get_millisecond() - last_user_interaction &gt;=
+      <span class="num">60</span> * <span class="num">1000</span> * screen_get_timeout_shutdown_minutes() &amp;&amp; ...)
+  {
+      renderer-&gt;set_margin_bottom(<span class="num">0</span>);
+      draw_welcome_page(battery);
+  }
+  ...
+}
+<span class="cmt">// 5 小时无交互 → 保存状态、关文件系统、画关机页、深睡眠</span>
+renderer-&gt;dehydrate();
+board-&gt;stop_filesystem();
+renderer-&gt;set_margin_bottom(<span class="num">0</span>);
+draw_shutdown_page();
+board-&gt;prepare_to_sleep();</code></pre>
+
+  <table>
+    <tr><th>README 承诺</th><th>代码证据</th><th>实现位置</th></tr>
+    <tr><td>顶部电量 + 充电闪电图标；≥98% 清除图标</td><td><code>draw_status_bar</code> / <code>clear_charge_icon</code>（<code>percentage &gt;= 98</code>）</td><td><code>main.cpp</code></td></tr>
+    <tr><td>低电量进 <code>LOW_POWER_PAGE</code> 并抑制操作</td><td><code>percentage &lt; 2</code> 触发；<code>get_low_power_state()==1</code> 短路</td><td><code>main.cpp</code></td></tr>
+    <tr><td>充电状态变化才刷屏</td><td><code>cur_percent != last || cur_charging != last</code></td><td><code>main.cpp</code> 主循环末尾</td></tr>
+    <tr><td>超时进欢迎页</td><td><code>&gt;= 60*1000*screen_get_timeout_shutdown_minutes()</code></td><td><code>main.cpp</code> 主循环</td></tr>
+    <tr><td>默认 5 小时关机深睡</td><td><code>TIMEOUT_SHUTDOWN_TIME 5</code> + 循环条件</td><td><code>main.cpp</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>这五条全部对得上，一条不虚。注意省电的层次：<strong>触控硬件下电（13.3）→ 超时欢迎页熄屏（分钟级）→ 5 小时关机深睡（小时级）</strong>，一级比一级省，一级比一级代价大。低功耗设计就是这么一层层摞起来的——盘点时把层次画出来，比单条罗列更能看清系统。</p>
+  </div>
+
+  <!-- ========== 14.5 一句话结论：能读、能调、能省电 ========== -->
+  <h2>14.5 一句话结论：能读、能调、能省电</h2>
+
+  <p>把 14.1-14.4 全部对上证的条目收拢，整台阅读器可以浓缩成一句话：<strong>「能读、能调、能省电」</strong>。<strong>能读</strong>——TF 卡与内置 Flash 双来源的书库、EPUB 解析与 FreeType 中英文渲染、书库→目录→阅读的完整闭环；<strong>能调</strong>——主页面四入口、功能设置（触控/超时/全刷/蓝牙）、阅读设置（字体/字号/字重/行距/边距）持久化到 <code>/settings.cfg</code>、阅读页 12 格覆盖层；<strong>能省电</strong>——电量状态栏、低电量抑制、超时欢迎页、5 小时关机深睡、触控硬件下电。三者叠加，才称得上"一本真正能用的电纸书"。</p>
+
+  <p>最后把"状态全景"亮出来——<code>AppUIState</code> 枚举里那 <strong>12 个状态</strong>，就是这台阅读器的全部页面地图：<code>MAIN_PAGE</code> 是总闸，<code>SELECTING_EPUB / SELECTING_TABLE_CONTENTS / READING_EPUB</code> 是阅读主线，<code>READING_SETTINGS / SETTINGS_PAGE</code> 是两套设置，<code>WEATHER_PAGE / WEATHER_CITY_PAGE</code> 是天气支线，<code>WELCOME_PAGE / LOW_POWER_PAGE / CHARGING_PAGE / SHUTDOWN_PAGE</code> 是电源与熄屏。对照第 1 章那张"领域地图"，你会看到一条清晰的成长线：从"理解为什么"走到"逐行读懂每一页代码"，再到本章"能逐条盘点、逐条求证"——这正是整个移植实战想教给你的能力。</p>
+
+<pre><code><span class="cmt">/* src/type.h：AppUIState —— 这台阅读器的全部页面状态 */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+    MAIN_PAGE,            <span class="cmt">// 主页面（四入口总闸）</span>
+    SELECTING_EPUB,       <span class="cmt">// 书库页</span>
+    SELECTING_TABLE_CONTENTS, <span class="cmt">// 目录页</span>
+    READING_EPUB,         <span class="cmt">// 阅读页（含覆盖操作层）</span>
+    READING_SETTINGS,     <span class="cmt">// 阅读设置页</span>
+    SETTINGS_PAGE,        <span class="cmt">// 功能设置页</span>
+    WEATHER_PAGE,         <span class="cmt">// 天气页</span>
+    WEATHER_CITY_PAGE,    <span class="cmt">// 天气城市选择页</span>
+    WELCOME_PAGE,         <span class="cmt">// 欢迎页（超时熄屏）</span>
+    LOW_POWER_PAGE,       <span class="cmt">// 低电量页</span>
+    CHARGING_PAGE,        <span class="cmt">// 充电页</span>
+    SHUTDOWN_PAGE         <span class="cmt">// 关机页</span>
+} AppUIState;</code></pre>
+
+<pre><code><span class="cmt">/* 一句话结论：能读 · 能调 · 能省电（能力 → 章节映射） */</span>
+能读  → 14.1 书库/文件系统 · 7-8 章解析渲染 · 14.2 中英文显示
+能调  → 14.3 四入口/功能设置/阅读设置/覆盖层（9、12、13 章已拆解）
+能省电→ 14.4 电量/低电量/超时熄屏/关机深睡 · 13.3 触控硬件下电</code></pre>
+
+  <table>
+    <tr><th>能力</th><th>已实现功能</th><th>对应章节</th></tr>
+    <tr><td>能读</td><td>TF 卡 + 内置双来源书库、EPUB 解析、中英文渲染、书库→目录→阅读</td><td>7-8、12、14.1-14.2</td></tr>
+    <tr><td>能调</td><td>四入口主页面、功能设置、阅读设置 + <code>/settings.cfg</code> 持久化、覆盖层</td><td>9、13、14.3</td></tr>
+    <tr><td>能省电</td><td>电量/充电状态栏、低电量抑制、超时欢迎页、5 小时关机深睡、触控下电</td><td>6、13.3、14.4</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>本官断案至此，卷宗已合。盘点章的收尾不是"我讲完了"，而是"你有清单了"：把这三行映射表留作自测——<strong>每一项你能否自己打开源码、说出它对应的文件与函数</strong>？能做到，这一路移植实战就没白学；做不到，就回到对应章节再对一次证据。铁面无私的最后一条原则：证据不是背下来的，是查出来的。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：逐项对质 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 README「当前功能」与对应源码，逐条核对并填写：(a) "优先使用 TF 卡"对应 <code>SF32Paper.cpp</code> 里的哪段逻辑？(b) 书库最多收录多少本书？这个限制定义在哪？(c) "电量满时自动清除充电图标"的阈值是多少，写在哪行代码？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个问题分别指向 mount 循环、MAX_EPUB_LIST_SIZE、percentage &gt;= 98 的 if 判断。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>SF32Paper.cpp</code> 挂载循环：先挂 <code>sd0</code> 成功即 <code>break</code>，失败才挂 <code>flash0</code>；(b) 最多 20 本，<code>MAX_EPUB_LIST_SIZE = 20</code>，定义在 <code>lib/Epub/EpubList/State.h</code>；(c) 阈值 <code>98</code>，在 <code>main.cpp</code> 的 <code>MSG_UPDATE_CHARGE_STATUS</code> 分支：<code>percentage &gt;= 98 &amp;&amp; charge_full == false</code> 时 <code>clear_charge_icon</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：证词不符 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>README 说主页面有 3 个入口、功能设置有 5 项。核实源码后，分别说出实际数量、多出来的那项是什么，并判断该以谁为准。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>MainOption 枚举数一数；render_settings_page 里 draw_setting_row 数一数。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>主页面实际 4 个入口（多了「查看天气」，<code>OPTION_WEATHER</code>）；功能设置实际 6 行（多了「蓝牙：开/关」，<code>SET_BLUETOOTH</code>）。两处都是 README 比代码旧，以源码为准——README 是静态文档，代码是活的真相。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：省电层次 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把 14.4 的省电手段按"从轻到重"排成层次，并说明每一层由什么条件触发、代价是什么。低电量抑制用户操作具体在哪一行生效？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>触控下电（13.3）→ 超时欢迎页（分钟）→ 关机深睡（小时）；handleUserInteraction 入口的 low_power_state 判断。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>层次：① 触控硬件下电（软件开关翻转即断电，代价是失去触控）；② 超时进欢迎页熄屏（无操作达 <code>60*1000*screen_get_timeout_shutdown_minutes()</code>，默认 30 分钟，代价是再看需唤醒）；③ 5 小时无交互关机深睡（<code>TIMEOUT_SHUTDOWN_TIME 5</code> 主循环退出，代价是重新开机慢）。低电量抑制在 <code>handleUserInteraction</code> 第一行：<code>if (battery &amp;&amp; battery-&gt;get_low_power_state() == 1) return;</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：为自己出一份盘点清单 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>不看本盘点章，自己为「能调」这个能力列一份清单：主页面、功能设置、阅读设置、覆盖层各有哪些可调项，每项写出它的代码证据（枚举/函数/常量）。再对照 14.3 的表格，看你有几处与源码一致。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>枚举：MainOption、SettingItem、OverlayCenterMode、AppUIState；函数：handleSettingsPage / reading_settings_handle_action / screen_cycle_full_refresh_period。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>「能调」清单参考：主页面四入口（<code>MainOption</code>）；功能设置 6 行（<code>SET_TOUCH/SET_TIMEOUT/SET_FULL_REFRESH/SET_BLUETOOTH/SET_READING_SETTINGS/SET_CONFIRM</code>）；阅读设置 6 项（<code>SettingItem</code>：字体/字号/字重/行距/边距/保存退出，<code>SETTINGS_FILE_PATH="/settings.cfg"</code>）；覆盖层 12 格（<code>render_overlay</code> 的 3+5+4 布局，<code>OverlayCenterMode</code>）。凡是你写的每一项能对上源码枚举与函数，就说明盘点能力已到手。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第14章：字体生成 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="14" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第14章：字体生成——把一本字库"瘦身"进几万字节的固件</h1>
+  <p class="chapter-subtitle">老木匠讲究"工欲善其事，必先利其器"。这把"器"就是四套只有黑白两色、塞进 Flash 的字库——它们决定了翻页到底能有多快。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「鲁班造梯子之前，先得磨斧子。这块屏幕能不能"像翻纸质书一样快"，有一半的功劳不在渲染代码，而在那把看不见的"斧子"——字体。一个 18 磅的拉丁字母，字形只有几十像素；可要是贪心把整本中文字库塞进去，光是常用字就要好几 MB，比这设备的整块 Flash 还大。所以字体生成这门手艺，核心就两个字：取舍。只留四种风格、只留拉丁字符、只留黑白两色，最后再把它们压进几万字节——先把"器"磨利，后面雕什么都顺手。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 14.1 嵌入式字体的取舍：四种风格 + 拉丁字符 ========== -->
+  <h2>14.1 嵌入式字体的取舍：只 4 种风格，只留拉丁字符与标点</h2>
+
+  <p>普通桌面系统要显示文字，直接加载系统的<strong>字库</strong>即可——说人话，字库就是字体数据的集合，一套<strong>字体</strong>（一种字形样式，类似宋体/黑体之分）由几千个<strong>字形</strong>（glyph，单个字符对应的图形，比如字母 A 的样子）组成；几十 MB 的 TTF，对它不过是九牛一毛。但在这台设备上，字体是要<strong>编译进固件、常驻 Flash</strong> 的资源。README 的开头就把作者的取舍写得很坦白：<em>"I've only included 4 font styles - regular, bold, italic and bold-italic. I've also only generated glyphs for Latin characters and punctuation."</em>——只做四种风格（常规 / 粗体 / 斜体 / 粗斜体），而且只生成拉丁字符与标点的字形。</p>
+
+  <p>这四个"瘦身"约束分别回答了一个现实问题。四种风格，是因为 EPUB 的排版里最多只出现 <code>&lt;b&gt;</code> 粗体和 <code>&lt;i&gt;</code> 斜体这两种强调（HTML 解析器也只认这两个标签），作者据此给每种字形准备一套 <code>get_font(bold, italic)</code> 就能覆盖的组合；只留拉丁字符，是因为书源（古登堡计划）以英文书为主；只做黑白两色，则是为了让屏幕走快速刷新通道（14.3 详述）。每一刀都砍在"不常用的部分"上，换来的是"常用的部分更小、更快"。</p>
+
+  <p>落地到仓库就是 <code>lib/Fonts/</code> 下四个头文件：<code>regular_font.h</code>、<code>bold_font.h</code>、<code>italic_font.h</code>、<code>bold_italic_font.h</code>。板级代码（<code>src/boards/Epdiy.cpp</code>、<code>M5Paper.cpp</code>）直接 <code>#include &lt;regular_font.h&gt;</code> 等四个头文件，把四个 <code>EpdFont</code> 结构体指针连同忙碌图标一起传给渲染器构造函数。于是字体数据成为固件的一部分，随 Flash 一起被芯片直接映射执行（XIP），读取不占 RAM。四个文件里的压缩字形数据分别约 56 KB、58 KB、66 KB、68 KB——加起来才约 <strong>242 KB</strong>。</p>
+
+<pre><code><span class="cmt">/* src/boards/Epdiy.cpp：四套字体编译进固件，交给渲染器 */</span>
+<span class="kw">#include</span> &lt;regular_font.h&gt;
+<span class="kw">#include</span> &lt;bold_font.h&gt;
+<span class="kw">#include</span> &lt;italic_font.h&gt;
+<span class="kw">#include</span> &lt;bold_italic_font.h&gt;
+<span class="kw">#include</span> &lt;hourglass.h&gt;
+...
+<span class="kw">return</span> <span class="kw">new</span> EpdiyRenderer(
+    &amp;regular_font, &amp;bold_font, &amp;italic_font, &amp;bold_italic_font,
+    hourglass_data, hourglass_width, hourglass_height);</code></pre>
+
+  <table>
+    <tr><th>字体文件</th><th>压缩字形数据</th><th>对应风格</th></tr>
+    <tr><td><code>regular_font.h</code></td><td>56,399 字节</td><td>常规（<code>get_font(false,false)</code>）</td></tr>
+    <tr><td><code>bold_font.h</code></td><td>57,819 字节</td><td>粗体（<code>get_font(true,false)</code>）</td></tr>
+    <tr><td><code>italic_font.h</code></td><td>65,724 字节</td><td>斜体（<code>get_font(false,true)</code>）</td></tr>
+    <tr><td><code>bold_italic_font.h</code></td><td>67,883 字节</td><td>粗斜体（<code>get_font(true,true)</code>）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>把"字体"当成<em>资源预算</em>而非"随便装个库"，是嵌入式 UI 的第一课。这里真正的设计是：风格数量被 HTML 能力（只有 b/i 两个强调标签）锁死，字符集被书源（英文）锁死，颜色被刷新模式（黑白）锁死——三个约束叠加，字体量自然收敛到"几十 KB 一个文件"。先问"我到底需要显示什么"，再决定生成什么，而不是反过来。</p>
+  </div>
+
+  <!-- ========== 14.2 generate_fonts.sh：从 epdiy 改来的两色字库生成器 ========== -->
+  <h2>14.2 从 epdiy 改来的 generate_fonts.sh：怎么产出两色字体数据</h2>
+
+  <p>这四个头文件不是人写的，是脚本生成的。README 的 "Fonts" 一节说：<em>"this is a slightly modified script from the <a href="https://github.com/vroland/epdiy" rel="noreferrer">epdiy</a> repository that lets you output the font data in only two colors which lets us update the screen considerably faster."</em>——<code>scripts/generate_fonts.sh</code> 是从 EPDiy 官方脚本改来的，关键改动是"<strong>只输出两色的字体数据</strong>"。看这个脚本：它先用 <code>python3 -m venv venv</code> 建虚拟环境、<code>pip install freetype-py</code> 装字体引擎，再用 <code>curl</code> 从 Google Fonts 拉下 Source Sans Pro 一族四个 TTF；同一时刻还拉来 Open Sans 一族四个 TTF，作为后备字体。然后调用 <code>fontconvert.py</code> 生成四个头文件。</p>
+
+<pre><code><span class="cmt"># scripts/generate_fonts.sh：拉字体 → 生成四套字库头文件</span>
+pip install freetype-py
+curl <span class="str">https://raw.githubusercontent.com/google/fonts/main/ofl/sourcesanspro/SourceSansPro-Regular.ttf</span> \
+     -o SourceSansPro-Regular.ttf
+curl <span class="str">.../SourceSansPro-Bold.ttf</span>      -o SourceSansPro-Bold.ttf
+curl <span class="str">.../SourceSansPro-Italic.ttf</span>    -o SourceSansPro-Italic.ttf
+curl <span class="str">.../SourceSansPro-BoldItalic.ttf</span> -o SourceSansPro-BoldItalic.ttf
+<span class="cmt"># （同样方式拉来 OpenSans 四个 TTF 作为后备）</span>
+
+python3 fontconvert.py regular_font <span class="num">18</span> SourceSansPro-Regular.ttf OpenSans-Regular.ttf \
+    --two-color --compress &gt; ../lib/Fonts/regular_font.h
+python3 fontconvert.py bold_font <span class="num">18</span> SourceSansPro-Bold.ttf OpenSans-Bold.ttf \
+    --two-color --compress &gt; ../lib/Fonts/bold_font.h
+python3 fontconvert.py italic_font <span class="num">18</span> SourceSansPro-Italic.ttf OpenSans-Italic.ttf \
+    --two-color --compress &gt; ../lib/Fonts/italic_font.h
+python3 fontconvert.py bold_italic_font <span class="num">18</span> SourceSansPro-BoldItalic.ttf OpenSans-BoldItalic.ttf \
+    --two-color --compress &gt; ../lib/Fonts/bold_italic_font.h</code></pre>
+
+  <p><code>fontconvert.py</code> 是真正干活的人，它做四件事。第一，确定<strong>字符区间</strong>：脚本里内置一份 <code>intervals</code> 列表，覆盖 ASCII 可打印字符（<code>0x20–0x7E</code>）、Latin-1 补充区（<code>0xA0–0x17E</code>）、西里尔字母（<code>0x400–0x4FF</code>），以及弯引号、破折号、省略号等常用标点；还提供 <code>--additional-intervals</code> 参数（可重复）让你按 "min,max" 追加区间。第二，按 <code>18</code> 磅字号加载字形：<code>face.set_char_size(18 &lt;&lt; 6, 18 &lt;&lt; 6, 150, 150)</code>——尺寸以 6 位小数给出，按 150 dpi（屏幕的物理分辨率）换算成像素。第三，字体栈回退：<code>font_stack</code> 里的 TTF 按优先级排序，某个字符在 Source Sans Pro 里没有时自动落到 Open Sans，这正是脚本把两种字体一起传的原因。</p>
+
+<pre><code><span class="cmt"># fontconvert.py：两色打包 —— 每个 4 位 nibble 只可能是纯黑或纯白</span>
+<span class="kw">for</span> i, v <span class="kw">in</span> enumerate(bitmap.buffer):
+    x = i % bitmap.width
+    <span class="kw">if</span> x % <span class="num">2</span> == <span class="num">0</span>:                     <span class="cmt"># 偶数列 → 低 nibble</span>
+        <span class="kw">if</span> two_color:
+            px = <span class="num">0xF</span> <span class="kw">if</span> v &gt; <span class="num">128</span> <span class="kw">else</span> <span class="num">0</span>     <span class="cmt"># v&gt;128 判黑，否则判白</span>
+        <span class="kw">else</span>:
+            px = v &gt;&gt; <span class="num">4</span>                     <span class="cmt"># 普通模式：保留 4 位灰度</span>
+    <span class="kw">else</span>:                                <span class="cmt"># 奇数列 → 高 nibble</span>
+        <span class="kw">if</span> two_color:
+            px = px | (<span class="num">0xF0</span> <span class="kw">if</span> v &gt; <span class="num">128</span> <span class="kw">else</span> <span class="num">0</span>)
+        <span class="kw">else</span>:
+            px = px | (v &amp; <span class="num">0xF0</span>)
+        pixels.append(px)                <span class="cmt"># 每两个像素打包成一个字节</span>
+
+compressed = packed
+<span class="kw">if</span> compress:
+    compressed = zlib.compress(packed)  <span class="cmt"># --compress：字形位图整体 zlib 压缩</span></code></pre>
+
+  <p>第四，把结果写成 C 头文件。所谓<strong>点阵字体</strong>（也叫位图字体），就是每个字符用一张小像素图表示——本章生成的正是这种字体。产物是一个四件套：<code>XXXBitmaps[]</code>（压缩字形位图）、<code>XXXGlyphs[]</code>（每个字形的描述符）、<code>XXXIntervals[]</code>（码点区间 → 字形偏移）、以及一个 <code>EpdFont</code> 结构体把它们串起来。以 <code>regular_font.h</code> 结尾的真实结构体为例：<code>{ regular_fontBitmaps, regular_fontGlyphs, regular_fontIntervals, 79, 1, 47, 37, -11 }</code>——依次是 79 个字符区间、<code>1</code>（压缩标志，位图已 zlib 压缩）、字体高 47 像素、上伸部 37、下探部 −11。每个字形描述符则长这样：<code>{ 21, 25, 20, 0, 25, 70, 1572 }</code> 表示大写 A 宽 21、高 25、字距 20、其 70 字节的压缩位图存放在 Bitmaps 数组第 1572 字节处。EPDiy 渲染时靠 <code>Intervals</code> 把字符码点定位到字形、再解压位图。</p>
+
+<pre><code><span class="cmt">/* lib/Fonts/regular_font.h 末尾 —— EpdFont 结构体（真实数据） */</span>
+<span class="kw">const</span> EpdFont regular_font = {
+    regular_fontBitmaps,     <span class="cmt">// 压缩字形位图（56,399 字节）</span>
+    regular_fontGlyphs,      <span class="cmt">// 946 个字形描述符</span>
+    regular_fontIntervals,   <span class="cmt">// 79 个码点区间</span>
+    <span class="num">79</span>,                      <span class="cmt">// 区间个数</span>
+    <span class="num">1</span>,                       <span class="cmt">// 位图已压缩（绘制时解压）</span>
+    <span class="num">47</span>,                      <span class="cmt">// 字体高度（像素）</span>
+    <span class="num">37</span>,                      <span class="cmt">// ascender</span>
+    <span class="num">-11</span>,                     <span class="cmt">// descender</span>
+};</code></pre>
+
+  <table>
+    <tr><th>阶段</th><th>谁负责</th><th>产物</th></tr>
+    <tr><td>拉取字体</td><td><code>generate_fonts.sh</code>（curl）</td><td>Source Sans Pro + Open Sans 各 4 个 TTF</td></tr>
+    <tr><td>选字符集</td><td><code>fontconvert.py</code> 内置 intervals</td><td>拉丁 + 西里尔 + 标点（可用 <code>--additional-intervals</code> 扩展）</td></tr>
+    <tr><td>栅格化 + 两色打包</td><td>freetype-py + <code>--two-color</code></td><td>每 2 像素 1 字节，仅 0/255 两色</td></tr>
+    <tr><td>压缩 + 输出</td><td><code>--compress</code>（zlib）</td><td><code>lib/Fonts/*.h</code> 四件套头文件</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>字体大小是"生成期"参数，不是"运行期"可变的。想换字号就得重新跑 <code>fontconvert.py</code>、重新 <code>#include</code> 新的头文件、重新烧固件——不像桌面系统可以在运行时 <code>setFontSize()</code>。这也是嵌入式字体"预栅格化"思路的代价：提前在 PC 上把字形烤成位图，MCU 只负责查表解压，不负责缩放字体。仓库里 <code>scripts/get_intervals_from_font.py</code> 就是辅助工具：给定一个 TTF，它把该字体实际包含的码点区间列出来，帮你决定把哪些区间编进 intervals。</p>
+  </div>
+
+  <!-- ========== 14.3 两色字体的好处：只两色让屏幕更新更快 ========== -->
+  <h2>14.3 两色字体的好处：只两色，翻页才能走快车道</h2>
+
+  <p>上一节那个 <code>--two-color</code> 是整条字体流水线里最关键的一个开关。普通字体栅格化后，字形边缘会有<strong>抗锯齿</strong>的中间灰度——像素值介于纯黑和纯白之间；而两色打包把每个像素的 4 位值只压成两种：<code>0</code>（白）或 <code>0xF</code>（黑），<code>v &gt; 128</code> 判黑、否则判白。于是写进帧缓冲的像素<strong>永远只有 0 / 255</strong>。这正好接上第 12 章那条刷新分档：<code>Renderer::needs_gray(color)</code> 只在 <code>color != 0 &amp;&amp; color != 255</code> 时置位 <code>needs_gray_flush</code>，而两色字形从不产生中间灰阶——所以纯文字页始终走又快又省的 <code>MODE_DU</code> 直接更新，而不必坠入要几百毫秒的 <code>MODE_GC16</code> 灰阶全刷。</p>
+
+  <p>这一点在 <code>draw_text</code> 里被刻成了一个显眼的"遗迹"：那行 <code>needs_gray_flush = true;</code> 被注释掉了，旁边写着 <em>"if using antialised text then set to gray next flush"</em>。也就是说，如果哪天你换回灰度字体，这行注释就是恢复抗锯齿渲染的开关——而代价是每一页都要整屏慢刷。作者的取舍很明白：不要那点边缘平滑，要的是"像翻纸质书一样快"。</p>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer.h：两色字体 = 永不产生中间灰阶 */</span>
+<span class="type">void</span> draw_text(<span class="type">int</span> x, <span class="type">int</span> y, <span class="kw">const</span> <span class="type">char</span> *text, <span class="type">bool</span> bold, <span class="type">bool</span> italic) {
+  <span class="cmt">// if using antialised text then set to gray next flush</span>
+  <span class="cmt">// needs_gray_flush = true;   // 两色字体不需要它，翻页才能快</span>
+  epd_write_string(get_font(bold, italic), text,
+                   &amp;xpos, &amp;ypos, m_frame_buffer, &amp;m_font_props);
+}
+
+<span class="cmt">/* needs_gray：非纯黑白才标记灰阶，需要慢刷 */</span>
+<span class="type">void</span> needs_gray(<span class="type">uint8_t</span> color) {
+  <span class="kw">if</span> (color != <span class="num">0</span> &amp;&amp; color != <span class="num">255</span>) needs_gray_flush = <span class="kw">true</span>;
+}</code></pre>
+
+  <p>两色之外还有第二层优化——<strong>压缩</strong>。字形位图是高度规律的稀疏二值数据，用 zlib 压一遍体积大减：大写 A 的 21×25 位图原本要 263 字节（2 像素/字节），压缩后只有 70 字节。EPDiy 渲染时根据 <code>EpdFont</code> 里的压缩标志，在绘制过程中逐字形解压、写进帧缓冲。压缩在"生成期"（PC 上）完成，解压在"绘制期"（MCU 上）完成——把最贵的压缩成本前置，MCU 只付出一次廉价解压。四个字体合计约 242 KB 的压缩数据，正是这条"两色 + 压缩"流水线的成绩单。</p>
+
+  <table>
+    <tr><th>维度</th><th>灰度（抗锯齿）字体</th><th>两色字体（本项目）</th></tr>
+    <tr><td>像素值</td><td>出现 1..254 中间灰阶</td><td>仅 0 / 255 纯黑白</td></tr>
+    <tr><td>刷新模式</td><td>强制 <code>MODE_GC16</code>（数百毫秒）</td><td><code>MODE_DU</code> 快速直接更新</td></tr>
+    <tr><td>字形体积</td><td>4 位灰度，压缩率一般</td><td>二值 + zlib，压缩率更高</td></tr>
+    <tr><td>观感</td><td>边缘平滑</td><td>边缘略硬，换取翻页速度</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>两色字体是"用观感的 5% 换速度的 200%"的典型权衡。想在工程里复用它，请记住这条因果链：<strong>两色字形 → 无中间灰阶 → <code>needs_gray</code> 不置位 → <code>flush_display</code> 走 <code>MODE_DU</code> → 翻页变快</strong>。任何破坏第一环的改动（换灰度字体、启用抗锯齿、画进灰阶图标）都会让链条失效，让整页退回慢刷——改代码前先顺着这条链检查一遍。</p>
+  </div>
+
+  <!-- ========== 14.4 想加中文字符会遇到什么 ========== -->
+  <h2>14.4 想加中文字符会遇到什么：字数爆炸与内存墙</h2>
+
+  <p>这套字体系统目前只有 <code>regular_font.h</code> 一个文件就有约 <strong>946 个字形</strong>，四个字体加起来约 242 KB 压缩数据——对一个英文阅读器，这个量很健康。可一旦你想让它读中文书，麻烦立刻放大。汉字不是靠"26 个字母组合"生成字形的：<strong>每个汉字都是一个独立的字形</strong>。常用汉字约 3500 个，GB2312 一级字库有 3755 个，而完整的 CJK 统一表意区（<code>0x4E00–0x9FFF</code>）更是有 20,992 个码位。对照之下，现在整个字体系统才 946 个字形。</p>
+
+  <p>字形本身也大得多。拉丁字母 18 磅时高 47 像素、宽不过 20 像素；而汉字是方块字，宽度基本等于字高——一个 18 磅汉字大约是 <strong>40×47 像素</strong>。按每 2 像素 1 字节算，一个汉字位图约 940 字节（未压缩）。乘一下就是触目惊心的账：3755 个一级常用字 ≈ <strong>3.5 MB 未压缩</strong>，四个风格就是约 14 MB；若塞满整个 CJK 区 20992 个码位，单风格就接近 20 MB。而这张 Flash 总共只有 4 MB——查 <code>partitions.csv</code>，留给固件的 <code>app0</code> 分区 <code>0x120000</code> 只有约 <strong>1.13 MB</strong>，字体又是编译进固件的。一个风格的中文字体就顶得上整个固件分区的三倍。</p>
+
+<pre><code><span class="cmt">/* partitions.csv：4 MB Flash 的分区 —— 字体住在 app0 里 */</span>
+nvs,      data, nvs,     <span class="num">0x9000</span>,  <span class="num">0x5000</span>,
+otadata,  data, ota,     <span class="num">0xe000</span>,  <span class="num">0x2000</span>,
+app0,     app,  ota_0,   <span class="num">0x10000</span>, <span class="num">0x120000</span>,   <span class="cmt">// 应用分区 ≈ 1.13 MB</span>
+spiffs,   data, spiffs,  <span class="num">0x130000</span>, <span class="num">0x2D0000</span>,   <span class="cmt">// 文件系统 ≈ 2.81 MB</span>
+
+<span class="cmt">/* 一个 18 磅汉字的体积估算（未压缩） */</span>
+<span class="cmt">// 40 px × 47 px ÷ 2 像素/字节 ≈ 940 字节/字</span>
+<span class="cmt">// 3755 一级常用字 × 940 B ≈ 3.5 MB —— 单风格就爆掉 app0 分区</span></code></pre>
+
+  <p>除了体积，还有两道暗礁。第一道在<strong>生成期</strong>：<code>fontconvert.py</code> 的 <code>load_glyph()</code> 只会在字体栈里找码位，找不到就 <code>raise ValueError</code> 直接终止——而 Source Sans Pro 和 Open Sans 都不含 CJK 字形，你不往字体栈里叠一个中文字体，脚本根本跑不完。第二道在<strong>绘制期</strong>：汉字笔画密集，zlib 压缩率远不如稀疏的拉丁字形，且每帧要解压的字形数据量成倍增加，翻页会更慢；<code>epd_get_text_bounds</code> 做文本测量也要扫过这些大位图。内存与速度两头受挤压。</p>
+
+  <p>所以"给这个阅读器加中文"从来不是改一行配置的事。现实里的常见路线有三条：<strong>子集化</strong>——只把项目真正用到的那几百个汉字（书名、作者、目录）编进 intervals，配一个 CJK 字体做后备；<strong>换更省的方法</strong>——用更高的 <code>--additional-intervals</code> 精确圈定范围，配合 <code>get_intervals_from_font.py</code> 先探查字体覆盖；或者<strong>接受更大预算</strong>——换更大 Flash 的模组、把字体放进文件系统而不是固件。作者选择在 README 里坦白"only generated glyphs for Latin characters and punctuation"，正是把这道墙明明白白立在了读者面前。</p>
+
+  <table>
+    <tr><th>方案</th><th>代价</th><th>可行性</th></tr>
+    <tr><td>全量 CJK（20992 字）</td><td>单风格约 20 MB 未压缩，四个风格超整片 4 MB Flash</td><td>不可行</td></tr>
+    <tr><td>一级常用字（3755 字）</td><td>单风格约 3.5 MB 未压缩，仍超 app0 分区（1.13 MB）</td><td>需强压缩 + 精选子集</td></tr>
+    <tr><td>子集化（几百常用字）</td><td>可控，但书里没编入的字会缺失</td><td>最现实</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>压缩并不能免费解决汉字问题。字形位图是 0/1 二值数据，拉丁字母笔画稀疏、空白多，zlib 能压到原来三成以下；汉字笔画又密又粗，有效信息占比高，压缩率差得多——3.5 MB 未压缩的汉字集，压完很可能仍在 1.5 MB 以上，对 1.13 MB 的 app0 分区依然是坏消息。估算内存时，别拿"未压缩 × 压缩率"的乐观数字糊弄自己，最好实际跑一遍脚本看输出体积。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：四套字体的分工 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>阅读 <code>EpdiyFrameBufferRenderer.h</code> 里的 <code>get_font(bool is_bold, bool is_italic)</code>，写出它返回四个字体的四种组合条件，并说明为什么 HTML 里只需要 <code>&lt;b&gt;</code> 和 <code>&lt;i&gt;</code> 两个标签就能和这四套字体一一对应。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>两个布尔值共四种组合；HTML 的强调标签只有粗体 <code>&lt;b&gt;</code> 与斜体 <code>&lt;i&gt;</code> 两种，可叠加。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>bold &amp;&amp; italic</code> → <code>bold_italic_font</code>；仅 <code>bold</code> → <code>bold_font</code>；仅 <code>italic</code> → <code>italic_font</code>；否则 → <code>regular_font</code>。HTML 解析器只把 <code>&lt;b&gt;</code> 记为粗体、<code>&lt;i&gt;</code> 记为斜体，且一个词可以两种都占——所以两个布尔标志正好覆盖全部可能（不粗不斜 / 粗 / 斜 / 粗斜），四套字体与此一一对应，不多不少。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：手算两色打包 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>仿照 <code>fontconvert.py</code> 的两色逻辑，把一行 8 个像素（灰度值 <code>[200, 30, 40, 160, 250, 128, 127, 0]</code>）打包成字节。规则：偶数列进低 nibble、奇数列进高 nibble，<code>v &gt; 128</code> 判黑（0xF）、否则判白（0）。写出 4 个输出字节，并指出哪些像素会被判黑。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>逐一配对：像素对 (200,30)、(40,160)、(250,128)、(127,0)。注意 128 不满足 <code>&gt; 128</code>，是白的。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>像素对 (200,30) → 低 nibble 黑(0xF)、高 nibble 白(0x0) → <code>0x0F</code>；(40,160) → 低白高黑 → <code>0xF0</code>；(250,128) → 低黑高白（128 不 &gt;128）→ <code>0x0F</code>；(127,0) → 全白 → <code>0x00</code>。判黑的是 200、160、250 三个像素。可见打包后每个字节拆开还原时，只有 0 和 255 两种灰度值——这就是"两色"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：估算中文字体的账单 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>基于 14.4 的数字，估算：(1) 只支持 3500 个常用汉字、单风格、未压缩，约需多少字节？(2) 按 40% 的乐观压缩率算，压完约多少 MB？(3) 对照 <code>partitions.csv</code> 的 <code>app0</code> 分区大小，得出结论。再想想为什么"四个风格全量中文"连 4 MB 整片 Flash 都装不下。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>单字约 940 字节；app0 = <code>0x120000</code> = 1,179,648 字节 ≈ 1.13 MB；压缩后仍有 1.3 MB 以上。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 3500 × 940 ≈ 3,290,000 字节 ≈ 3.3 MB。(2) 按 40% 压缩率 ≈ 1.3 MB，仍超过 <code>app0</code> 的约 1.13 MB。(3) 因此连"单风格、只做常用字、还给了乐观压缩率"都放不进应用分区，必须子集化或换更大预算。而全量四个风格 ≈ 3500×4×940×40% ≈ 5.0 MB 压缩后——加上固件与 SPIFFS 分区，已经超过整片 4 MB Flash。汉字数是英文阅读器字体系统绕不过去的墙。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：为中文改造字体流水线 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>假设你要让这台设备能读一本中文书，请给出一个可落地的方案，至少包含三处改动：字符区间、字体栈、生成参数/存储位置。针对每一处，指出不改会出什么问题（结合 <code>fontconvert.py</code> 的 <code>load_glyph</code>、<code>--additional-intervals</code>、以及 14.3 的刷新因果链）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>load_glyph 找不到码位会 raise；CJK 字体要进 font_stack；区间要么子集要么用 additional-intervals；存储可从固件移到文件系统。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 字符区间：用 <code>--additional-intervals</code> 把书的实际用字圈进 intervals，或先用 <code>get_intervals_from_font.py</code> 探查字体覆盖——否则 <code>load_glyph</code> 在遇到 CJK 码位时 <code>raise ValueError</code>，脚本直接中断。(2) 字体栈：往 <code>font_stack</code> 里加一个 CJK 字体（如思源宋体子集）并排在 Source Sans Pro 之后做后备——否则汉字从任何字体都查不到。(3) 生成参数/存储：把字号、子集规模压到 app0 分区能装下的范围，或把字体数据放进 SPIFFS 文件系统而非固件（代价是上电要加载）；同时保持两色输出，否则中文字形边缘一旦出现抗锯齿灰阶，会让 <code>needs_gray</code> 置位、整页退回 <code>MODE_GC16</code> 慢刷。这三点环环相扣，改一处而不动其余，流水线都会在某一步断掉。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

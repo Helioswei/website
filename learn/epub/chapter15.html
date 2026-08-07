@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第15章：深睡眠与低功耗（ULP/EXT1） - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="15" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：深睡眠与低功耗——ULP/EXT1 唤醒</h1>
+  <p class="chapter-subtitle">铁面无私：别让任何一粒电流，在该睡的时候还醒着</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私，以证据定案</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「本官断案，讲的是'铁面无私'四个字——证据面前，没有侥幸。功耗也是一样：每一微安的电流都得有出处，每一毫秒的清醒都得有交代。电子墨水屏号称'静态零功耗'，可若主控还在偷电，这块招牌就是空话。这一章，我们就来当一回青天大老爷，把谁该睡、谁该醒、谁在深睡眠里还撑着最后一盏灯，一件一件审个明白。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 为什么电子书需要深睡眠 ========== -->
+  <h2>15.1 为什么电子书需要深睡眠</h2>
+
+  <p>先从物理说起：电子墨水屏是<strong>双稳态</strong>的，画面定格后屏幕本身不再耗电——但屏幕不耗电，不代表整台设备不耗电。<strong>ESP32 主控、Flash、SD 卡、触摸芯片都还醒着</strong>。而阅读这个场景恰恰是"突发式"的：你盯着某一页看好几分钟，偶尔才翻一页。也就是说，一台阅读器 99% 的时间都在"等待"。如果等待时主控依然全速运转，那么"一页能停几周"就永远只是屏幕的承诺，而不是整台设备的现实。深睡眠（deep sleep，说人话：芯片几乎关停所有模块、只保留极低功耗唤醒能力的休眠模式）要解决的，正是这 99% 的等待时间。</p>
+
+  <p>深睡眠的本质是<strong>大规模断电</strong>：主 CPU 停止运行、Flash 与大部分 SRAM 掉电，只留下一个很小的 <strong>RTC 域</strong>（<strong>RTC 内存</strong>，说人话就是深睡眠时仍能保留数据的一块小内存；<strong>ULP 协处理器</strong>，说人话就是 ESP32 里的超低功耗协处理器，能在主核休眠时干点轻活；还有若干 GPIO）持续供电。电流量级随之从"毫安级"掉到"微安级"——三个数量级的差距。代价是清醒代价很高：醒来要重新跑 <code>app_main</code>、重新初始化文件系统、重新构造渲染器。所以深睡眠不是"快进快出"的省电技巧，而是一个"睡之前把家当安置好"的完整流程。看 <code>main.cpp</code> 主循环的尾巴，入睡前的清场动作是一套组合拳：<code>dehydrate()</code> 存画面、<code>stop_filesystem()</code> 停 SD 卡、<code>prepare_to_sleep()</code> 各板收尾、<code>setup_deep_sleep()</code> 配置唤醒，最后 <code>esp_deep_sleep_start()</code> 才真正闭眼。</p>
+
+  <p>这章的第一个教学点，恰恰藏在"多长时间不操作就睡"这个问题里。README 的 <strong>"Deep sleep"</strong> 一节白纸黑字写着 "The code will go to sleep after 30 seconds of inactivity"（30 秒无操作后入睡）；但代码里却是 <code>esp_timer_get_time() - last_user_interaction &lt; 120 * 1000 * 1000</code>。<code>esp_timer_get_time()</code> 返回<strong>微秒</strong>，所以 <code>120 * 1000 * 1000</code> 微秒 = <strong>120 秒</strong>。文档与代码漂移，这是全书的第 N 次——前几章你已经在注释里见过 100ms vs 50ms、以及这个 30s vs 120s。结论始终不变：<strong>永远以代码为准</strong>。而且细看这个 while，还有个更隐蔽的节拍：<code>xQueueReceive</code> 只等 60 秒，即使没有按键，每 60 秒循环也会醒来刷新一次电量图标并 <code>flush_display()</code>——也就是说，等待期不是死睡，而是"每 60 秒眨一次眼"，直到累计满 120 秒才真正入睡。</p>
+
+<pre><code><span class="cmt">/* main.cpp：主循环 + 深睡眠入口（节选） */</span>
+<span class="type">int64_t</span> last_user_interaction = <span class="fn">esp_timer_get_time</span>();
+<span class="kw">while</span> (<span class="fn">esp_timer_get_time</span>() - last_user_interaction &lt; <span class="num">120</span> * <span class="num">1000</span> * <span class="num">1000</span>) {   <span class="cmt">// 微秒 → 120 秒</span>
+  UIAction ui_action = NONE;
+  <span class="cmt">// wait for something to happen for 60 seconds</span>
+  <span class="kw">if</span> (<span class="fn">xQueueReceive</span>(ui_queue, &amp;ui_action, <span class="fn">pdMS_TO_TICKS</span>(<span class="num">60000</span>)) == pdTRUE) {
+    <span class="kw">if</span> (ui_action != NONE) {
+      last_user_interaction = <span class="fn">esp_timer_get_time</span>();   <span class="cmt">// 有交互，刷新计时</span>
+      <span class="fn">handleUserInteraction</span>(renderer, ui_action, <span class="kw">false</span>);
+    }
+  }
+  <span class="kw">if</span> (battery) { <span class="cmt">/* 每 60 秒刷一次电量，即使空闲 */</span> }
+  renderer-&gt;<span class="fn">flush_display</span>();
+}
+<span class="fn">ESP_LOGI</span>(<span class="str">"main"</span>, <span class="str">"Saving state"</span>);
+renderer-&gt;<span class="fn">dehydrate</span>();        <span class="cmt">// 画面压缩存盘 → /fs/front_buffer.z</span>
+board-&gt;<span class="fn">stop_filesystem</span>();    <span class="cmt">// SD 卡是耗电大户，睡前必须停</span>
+board-&gt;<span class="fn">prepare_to_sleep</span>();   <span class="cmt">// 各板收尾（关屏 / 保持主电源）</span>
+<span class="fn">ESP_ERROR_CHECK</span>(<span class="fn">esp_sleep_enable_ulp_wakeup</span>());
+button_controls-&gt;<span class="fn">setup_deep_sleep</span>();   <span class="cmt">// 按按键极性配置 ULP 或 EXT1</span>
+<span class="fn">vTaskDelay</span>(<span class="fn">pdMS_TO_TICKS</span>(<span class="num">500</span>));
+<span class="fn">esp_deep_sleep_start</span>();       <span class="cmt">// 真正入睡</span></code></pre>
+
+  <table>
+    <tr><th>状态</th><th>谁还醒着</th><th>电流量级</th><th>能翻页吗</th></tr>
+    <tr><td>运行</td><td>主 CPU + 屏幕 + SD + 触摸全部供电</td><td>毫安级</td><td>能，但最费电</td></tr>
+    <tr><td>等待（主循环）</td><td>主 CPU 等待队列消息，每 60 秒醒来刷电量</td><td>毫安级</td><td>能，等待中持续耗电</td></tr>
+    <tr><td>深睡眠</td><td>仅 RTC 域（RTC 内存 + ULP）</td><td>微安级</td><td>不能，必须唤醒后重初始化</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>README 说 30 秒入睡，代码里是 <code>120 * 1000 * 1000</code> 微秒 = <strong>120 秒</strong>。这是嵌入式项目"文档与代码漂移"的经典活例，前几章已反复提醒。真正要记住的姿势是：看到超时、单位、引脚这类"硬事实"，永远先去 <code>grep</code> 源码核对，而不是背 README。本教程也以代码值为准。</p>
+  </div>
+
+  <!-- ========== 15.2 状态保存：显示走文件系统、进度走 RTC 内存 ========== -->
+  <h2>15.2 状态保存：显示走文件系统、进度走 RTC 内存</h2>
+
+  <p>要跨过深睡眠活下来的状态有两类，各自的"性格"完全不同，存放位置也随之不同。<strong>屏幕帧缓冲</strong>（约 <code>EPD_WIDTH * EPD_HEIGHT / 2</code> 字节，4 bpp，一块 4.7" 屏就是几十 KB）又大又"一次性"——只在入睡前存一次、醒来读一次；它进不了 RTC 内存（RTC 慢速 RAM 只有约 8 KB），于是走<strong>文件系统</strong>。入睡前 <code>renderer-&gt;dehydrate()</code> 用 miniz 的 <code>tdefl_compress_mem_to_heap</code> 把整帧压成 <code>/fs/front_buffer.z</code>（注释说得明白：写盘很慢，压缩后再写能省空间、提速），醒来 <code>hydrate()</code> 用 <code>tinfl_decompress_mem_to_mem</code> 解压回缓冲、原样刷回屏幕。这一存一取都在 SD 卡上——也正是第 6 章里 README 说 SPIFFS 在深睡眠存显示状态上"有已知问题"的根源。</p>
+
+  <p><strong>阅读进度</strong>（书单、当前章节、页码）又小又"要活到下次开机"，走的是 <strong>RTC 内存</strong>。深睡眠只断主域的电，RTC 域持续供电，所以挂在 <code>RTC_NOINIT_ATTR</code> / <code>RTC_DATA_ATTR</code> 上的变量在睡眠期间一字不丢。三个关键对象全在这里：<code>RTC_NOINIT_ATTR UIState ui_state</code>（当前在哪一层界面）、<code>RTC_DATA_ATTR EpubListState epub_list_state</code>（书单 + 每本书读到第几节第几页）、<code>RTC_DATA_ATTR EpubTocState epub_index_state</code>（目录里选中了哪一项）。第 5 章你已经见过 <code>EpubListItem</code> 带着 <code>current_section</code>、<code>current_page</code>、<code>pages_in_current_section</code> 三个字段，而 <code>EpubReader</code> 持有的是 <code>EpubListItem &amp;state</code> 的<strong>引用</strong>——翻页时改的本来就是 RTC 内存，天然持久，根本不需要"保存"动作。</p>
+
+  <p>醒来之后怎么接上？<code>main.cpp</code> 用 <code>button_controls-&gt;did_wake_from_deep_sleep()</code> 判断自己是不是被按键叫醒的（见 15.3）；若是，则 <code>renderer-&gt;hydrate()</code> 把上一屏画面读回来，再 <code>get_deep_sleep_action()</code> 把"刚才按的哪个键"翻译成一次 <code>UIAction</code> 直接执行。这里有个很讲究的参数：<code>handleUserInteraction(renderer, ui_action, !hydrate_success)</code>——<strong>hydrate 成功就不用重绘（省一次全屏刷新），失败才整页重绘</strong>。墨水屏全刷一次几百毫秒还伤屏，能省则省。于是"屏幕画面走文件系统、阅读进度走 RTC 内存"，两类状态、两条通道、各按自己的性格选位子——这就是状态保存的完整审案记录。</p>
+
+<pre><code><span class="cmt">/* main.cpp：三份持久状态，全挂在不断电的 RTC 域 */</span>
+<span class="ann">RTC_NOINIT_ATTR</span> UIState ui_state = SELECTING_EPUB;      <span class="cmt">// 在哪一层界面</span>
+<span class="ann">RTC_DATA_ATTR</span> EpubListState epub_list_state;           <span class="cmt">// 书单 + 阅读进度</span>
+<span class="ann">RTC_DATA_ATTR</span> EpubTocState epub_index_state;           <span class="cmt">// 目录选中项</span>
+
+<span class="cmt">/* EpubListItem：进度字段就住在 RTC 内存里，引用它即是持久化 */</span>
+<span class="type">int</span> current_section;      <span class="cmt">// 读到第几节</span>
+<span class="type">int</span> current_page;        <span class="cmt">// 本节第几页</span>
+<span class="type">int</span> pages_in_current_section;  <span class="cmt">// 本节共几页</span></code></pre>
+
+<pre><code><span class="cmt">/* main.cpp：从深睡眠醒来的恢复分支 */</span>
+<span class="kw">if</span> (button_controls-&gt;<span class="fn">did_wake_from_deep_sleep</span>()) {
+  <span class="cmt">// restore the renderer state - it should have been saved when we went to sleep...</span>
+  <span class="kw">bool</span> hydrate_success = renderer-&gt;<span class="fn">hydrate</span>();       <span class="cmt">// 读回 /fs/front_buffer.z</span>
+  UIAction ui_action = button_controls-&gt;<span class="fn">get_deep_sleep_action</span>();
+  <span class="fn">handleUserInteraction</span>(renderer, ui_action, !hydrate_success);  <span class="cmt">// 成功则不重绘</span>
+} <span class="kw">else</span> {
+  renderer-&gt;<span class="fn">reset</span>();                                 <span class="cmt">// 冷启动：整页重绘</span>
+  <span class="fn">handleUserInteraction</span>(renderer, NONE, <span class="kw">true</span>);
+}</code></pre>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer.h：dehydrate 压缩整帧写盘（节选） */</span>
+<span class="kw">virtual bool</span> <span class="fn">dehydrate</span>()
+{
+  <span class="cmt">// compress the buffer to save space and increase performance - writing data is slow!</span>
+  <span class="kw">void</span> *compressed = <span class="fn">tdefl_compress_mem_to_heap</span>(
+      m_frame_buffer, EPD_WIDTH * EPD_HEIGHT / <span class="num">2</span>, &amp;compressed_size, <span class="num">0</span>);
+  FILE *fp = <span class="fn">fopen</span>(<span class="str">"/fs/front_buffer.z"</span>, <span class="str">"w"</span>);
+  <span class="kw">if</span> (fp) {
+    <span class="kw">size_t</span> written = <span class="fn">fwrite</span>(compressed, <span class="num">1</span>, compressed_size, fp);
+    <span class="fn">fclose</span>(fp);
+    ...
+    <span class="kw">return</span> <span class="kw">true</span>;
+  }
+  <span class="kw">return</span> <span class="kw">false</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>状态</th><th>存放位置</th><th>为什么</th></tr>
+    <tr><td>当前屏幕帧缓冲</td><td>文件系统 <code>/fs/front_buffer.z</code>（miniz 压缩）</td><td>大、一次性读写，放不进 RTC 内存</td></tr>
+    <tr><td>书单 + 每本书进度</td><td><code>RTC_DATA_ATTR</code> 的 <code>epub_list_state</code></td><td>小、长期，要活到下次开机</td></tr>
+    <tr><td>目录选中项</td><td><code>RTC_DATA_ATTR</code> 的 <code>epub_index_state</code></td><td>小、长期，目录导航时更新</td></tr>
+    <tr><td>当前 UI 状态</td><td><code>RTC_NOINIT_ATTR</code> 的 <code>ui_state</code></td><td>决定醒来后走哪个 handler</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>审状态，先按三个维度分类：<strong>多大</strong>、<strong>要多长寿</strong>、<strong>多常访问</strong>。大而一次性的（帧缓冲）→ 文件系统；小而长期的（进度）→ RTC 内存；千万别把会跨睡眠活下来的东西放进普通 RAM——一掉电就成冤案。把这个"记忆分布图"画出来，你就能给自己未来的嵌入式项目设计持久化方案。</p>
+  </div>
+
+  <!-- ========== 15.3 唤醒机制：低电平用 ULP、高电平用 EXT1 ========== -->
+  <h2>15.3 唤醒机制：低电平用 ULP、高电平用 EXT1</h2>
+
+  <p>睡了，还得能被叫醒。要叫醒睡眠中的芯片，得靠一个<strong>唤醒源</strong>（说人话：把芯片从睡眠叫醒的事件来源，比如按下按键）。项目的答案取决于一个硬件事实——<strong>按键的电平极性</strong>。按下为<strong>低电平</strong>的按键，平时靠上拉电阻维持在高电平，按下才拉到 0；而 <code>esp_sleep_enable_ext1_wakeup</code> 的 <strong>EXT1</strong>（说人话：一种由多个 GPIO 触发的唤醒机制）唤醒是"某 GPIO 变高"才触发，无法感知"由高变低"的按下动作。所以低有效按键在深睡眠里只能靠 <strong>ULP</strong>（Ultra-Low-Power 协处理器）来守门。反过来，按下为<strong>高电平</strong>的按键，静态时是低、按下变高，恰好命中 EXT1 的能力范围。看 <code>GPIOButtonControls::setup_deep_sleep()</code> 的两条分支，注释把逻辑挑得很明："need to use the ULP if we have buttons that are active low" 与 "can use ext1 for buttons that are active high"。第 4 章里 EPDiy V6 板选择高电平有效，正是因为它低电平会在深睡眠里被误唤醒。</p>
+
+  <p><strong>EXT1 路线</strong>（高有效）是最省事的一种：<code>setup_deep_sleep</code> 把三个引脚用 <code>rtc_gpio_init</code> + <code>rtc_gpio_set_direction(RTC_GPIO_MODE_INPUT_ONLY)</code> 配置成输入，再用 <code>rtc_gpio_pulldown_en</code> 把它们静态拉到低，最后 <code>esp_sleep_enable_ext1_wakeup((1ULL &lt;&lt; gpio_up) | (1ULL &lt;&lt; gpio_down) | (1ULL &lt;&lt; gpio_select), ESP_EXT1_WAKEUP_ANY_HIGH)</code>——任一按键按下变高就唤醒。醒来后，<code>did_wake_from_deep_sleep()</code> 通过 <code>esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1</code> 确认身份，<code>get_deep_sleep_action()</code> 用 <code>esp_sleep_get_ext1_wakeup_status()</code> 读回位掩码，一一比对 UP/DOWN/SELECT 返回对应动作。全程零协处理器、零轮询。</p>
+
+  <p><strong>ULP 路线</strong>（低有效）要动真格。ULP 是 ESP32（经典款）里一颗超低功耗协处理器，主 CPU 深睡眠时它还能跑一段极简汇编程序——注意经典款 ESP32 的 ULP 是专用的 FSM 协处理器，不是 RISC-V 核心（RISC-V 版 ULP 是 S2/S3 时代的事，本项目面向 <code>esp32dev</code>）。构建上，<code>src/CMakeLists.txt</code> 用 <code>ulp_embed_binary(ulp_main "../ulp/main.S" "main.cpp")</code> 把 <code>ulp/main.S</code> 编译成二进制嵌进固件，并自动生成 <code>ulp_main.h</code> 暴露变量与入口。运行时，<code>setup_deep_sleep</code> 先 <code>ulp_load_binary</code> 载入程序、把三个 mask 写进 <code>ulp_up_mask</code> / <code>ulp_down_mask</code> / <code>ulp_select_mask</code>（都是 <code>1 &lt;&lt; rtc_io_number_get(gpio_x)</code>）、<code>ulp_set_wakeup_period(0, 100 * 1000)</code> 让它每 <strong>100 ms</strong> 醒来采样一次 GPIO，最后 <code>ulp_run(&amp;ulp_entry - RTC_SLOW_MEM)</code> 启动。醒来后 <code>did_wake_from_deep_sleep()</code> 认 <code>ESP_SLEEP_WAKEUP_ULP</code>，<code>get_deep_sleep_action()</code> 则读 <code>ulp_gpio_status &amp; UINT16_MAX</code>——这个值就是 ULP 汇编在 <code>wakeup:</code> 段存下的"哪只引脚叫的床"。</p>
+
+  <p>最后读一遍 <code>ulp/main.S</code> 本身，它是全书唯一的汇编，但逻辑并不复杂。<code>entry:</code> 用 <code>READ_RTC_REG</code> 读 <code>RTC_GPIO_IN_REG</code> 的<strong>低 16 位</strong>，分别与 <code>up_mask</code>、<code>down_mask</code>、<code>select_mask</code> 求与，命中（求与为 0，即某低有效按键被按下）就跳 <code>wakeup:</code>；否则 <code>halt</code> 等下个 100 ms。在 <code>wakeup:</code> 里，<code>ST r1, r0, 0</code> 把引脚掩码存进 <code>gpio_status</code>，然后用 <code>STAGE_INC</code> 加一个计数器、循环读 <code>RTC_CNTL_RDY_FOR_WAKEUP</code> 忙等 SoC 就绪（超过 10 次就 <code>exit</code> 放弃），就绪后一条 <code>wake</code> 把主 CPU 叫醒。源码里还留了一句诚实的注脚：它只读了 GPIO 的低 16 位，"if you need the higher 16 bits then you'll need to adjust this"——又是一个"注释如实交代局限"的标本。</p>
+
+<pre><code><span class="cmt">/* GPIOButtonControls.cpp：setup_deep_sleep 的两条唤醒路线（节选） */</span>
+<span class="kw">void</span> <span class="fn">GPIOButtonControls::setup_deep_sleep</span>()
+{
+  <span class="kw">if</span> (active_level == <span class="num">0</span>) {            <span class="cmt">// 低有效 → ULP</span>
+    <span class="fn">rtc_gpio_init</span>(gpio_up);  <span class="fn">rtc_gpio_set_direction</span>(gpio_up, RTC_GPIO_MODE_INPUT_ONLY);
+    <span class="fn">rtc_gpio_pullup_en</span>(gpio_up);        <span class="cmt">// 静态高，按下拉低</span>
+    <span class="cmt">// ... down / select 相同处理 ...</span>
+    <span class="fn">ulp_load_binary</span>(<span class="num">0</span>, ulp_main_bin_start, (ulp_main_bin_end - ulp_main_bin_start) / <span class="kw">sizeof</span>(<span class="type">uint32_t</span>));
+    ulp_up_mask = <span class="num">1</span> &lt;&lt; <span class="fn">rtc_io_number_get</span>(gpio_up);
+    ulp_down_mask = <span class="num">1</span> &lt;&lt; <span class="fn">rtc_io_number_get</span>(gpio_down);
+    ulp_select_mask = <span class="num">1</span> &lt;&lt; <span class="fn">rtc_io_number_get</span>(gpio_select);
+    <span class="fn">ulp_set_wakeup_period</span>(<span class="num">0</span>, <span class="num">100</span> * <span class="num">1000</span>);       <span class="cmt">// 每 100 ms 采样一次</span>
+    <span class="fn">ulp_run</span>(&amp;ulp_entry - RTC_SLOW_MEM);
+  } <span class="kw">else</span> {                      <span class="cmt">// 高有效 → EXT1</span>
+    <span class="fn">rtc_gpio_init</span>(gpio_up);  <span class="fn">rtc_gpio_set_direction</span>(gpio_up, RTC_GPIO_MODE_INPUT_ONLY);
+    <span class="fn">rtc_gpio_pulldown_en</span>(gpio_up);        <span class="cmt">// 静态低，按下拉高</span>
+    <span class="cmt">// ... down / select 相同处理 ...</span>
+    <span class="fn">esp_sleep_enable_ext1_wakeup</span>(
+        (<span class="num">1</span>ULL &lt;&lt; gpio_up) | (<span class="num">1</span>ULL &lt;&lt; gpio_down) | (<span class="num">1</span>ULL &lt;&lt; gpio_select),
+        ESP_EXT1_WAKEUP_ANY_HIGH);
+  }
+}</code></pre>
+
+<pre><code><span class="cmt">; ulp/main.S：低有效按键的看门程序（节选）</span>
+entry:
+    STAGE_RST                          <span class="cmt">; 清空计数器</span>
+    <span class="cmt">; 读 RTC GPIO 输入的低 16 位</span>
+    READ_RTC_REG (RTC_GPIO_IN_REG, RTC_GPIO_IN_NEXT_S, 16)
+    move r2, r0
+    move r1, up_mask     ; ld r1, r1, 0
+    and r0, r0, r1
+    jump wakeup, eq      ; UP 被按下（读 0）→ 唤醒
+    move r0, r2
+    move r1, down_mask
+    ld r1, r1, 0
+    and r0, r0, r1
+    jump wakeup, eq      ; DOWN 被按下
+    move r0, r2
+    move r1, select_mask
+    ld r1, r1, 0
+    and r0, r0, r1
+    jump wakeup, eq      ; SELECT 被按下
+    halt                 ; 没人按，等下一个 100 ms
+
+wakeup:
+    <span class="cmt">; r1 里是唤醒引脚位掩码，存进 gpio_status 供主 CPU 读取</span>
+    MOVE r0, gpio_status
+    ST r1, r0, 0
+try_wakeup:              <span class="cmt">; 轮询 SoC 是否就绪，最多 10 次</span>
+    STAGE_INC  1
+    JUMPS exit, 10, GT
+    READ_RTC_FIELD(RTC_CNTL_LOW_POWER_ST_REG, RTC_CNTL_RDY_FOR_WAKEUP)
+    AND r0, r0, 1
+    JUMP try_wakeup, eq
+    wake                 <span class="cmt">; 主 CPU 醒！</span>
+exit:
+    halt</code></pre>
+
+<pre><code><span class="cmt">/* GPIOButtonControls.cpp：醒来后，判身份、认按键（节选） */</span>
+<span class="kw">bool</span> <span class="fn">GPIOButtonControls::did_wake_from_deep_sleep</span>()
+{
+  <span class="kw">auto</span> wake_cause = <span class="fn">esp_sleep_get_wakeup_cause</span>();
+  <span class="kw">if</span> (active_level == <span class="num">0</span> &amp;&amp; wake_cause == ESP_SLEEP_WAKEUP_ULP)   <span class="kw">return</span> <span class="kw">true</span>;
+  <span class="kw">if</span> (active_level == <span class="num">1</span> &amp;&amp; wake_cause == ESP_SLEEP_WAKEUP_EXT1) <span class="kw">return</span> <span class="kw">true</span>;
+  <span class="kw">return</span> <span class="kw">false</span>;
+}
+UIAction <span class="fn">GPIOButtonControls::get_deep_sleep_action</span>()
+{
+  <span class="kw">if</span> (active_level == <span class="num">0</span>) {
+    <span class="type">uint16_t</span> rtc_pin = ulp_gpio_status &amp; UINT16_MAX;   <span class="cmt">// ULP 存下的掩码</span>
+    <span class="kw">if</span> (rtc_pin &amp; (<span class="num">1</span> &lt;&lt; <span class="fn">rtc_io_number_get</span>(gpio_up)))      <span class="kw">return</span> UIAction::UP;
+    <span class="kw">else if</span> (rtc_pin &amp; (<span class="num">1</span> &lt;&lt; <span class="fn">rtc_io_number_get</span>(gpio_down)))  <span class="kw">return</span> UIAction::DOWN;
+    <span class="kw">else</span>                                              <span class="kw">return</span> UIAction::SELECT;
+  } <span class="kw">else</span> {
+    <span class="type">uint64_t</span> ext1 = <span class="fn">esp_sleep_get_ext1_wakeup_status</span>();     <span class="cmt">// EXT1 位掩码</span>
+    <span class="kw">if</span> (ext1 &amp; (<span class="num">1</span>ULL &lt;&lt; gpio_up))      <span class="kw">return</span> UIAction::UP;
+    <span class="kw">else if</span> (ext1 &amp; (<span class="num">1</span>ULL &lt;&lt; gpio_down))  <span class="kw">return</span> UIAction::DOWN;
+    <span class="kw">else</span>                               <span class="kw">return</span> UIAction::SELECT;
+  }
+}</code></pre>
+
+  <table>
+    <tr><th>维度</th><th>ULP 唤醒</th><th>EXT1 唤醒</th></tr>
+    <tr><td>适用极性</td><td>按下为低电平（active-low）</td><td>按下为高电平（active-high）</td></tr>
+    <tr><td>原理</td><td>ULP 协处理器每 100 ms 采样 GPIO</td><td>RTC 域 GPIO 由低变高直接触发</td></tr>
+    <tr><td>关键调用</td><td><code>ulp_load_binary</code> + <code>ulp_set_wakeup_period</code> + <code>ulp_run</code></td><td><code>esp_sleep_enable_ext1_wakeup(..., ANY_HIGH)</code></td></tr>
+    <tr><td>醒来读什么</td><td><code>ulp_gpio_status</code>（ULP 写入的掩码）</td><td><code>esp_sleep_get_ext1_wakeup_status()</code></td></tr>
+    <tr><td>额外成本</td><td>一条汇编程序 + 100ms 轮询周期</td><td>零软件，纯硬件</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>唤醒这件事，本质是"谁在你睡着时替你守门"。EXT1 是<strong>硬件门铃</strong>——零软件、零轮询，但它只认"信号变高"这一种敲门声，所以只伺候高有效按键。ULP 是<strong>会守门的小人</strong>——能跑汇编、能认低有效，但得每 100 ms 醒来巡逻一次，还只能蹲在 RTC 域里。选门铃还是选门卫，一看按键极性，二看你愿不愿意写那几行汇编。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>ULP 与 EXT1 都走 RTC 域，因此按键<strong>必须接在带 RTC 能力的 GPIO 上</strong>（ESP32 经典款的 0、2、4、12–15、25–27、32–39 等，三块板用的 34/35/37/38/39 全都在列）。若把按键接到 GPIO 16/17 这类非 RTC 引脚，深睡眠里它们既不能被 ULP 采样，也不能触发 EXT1——唤醒方案就得整个重设计。</p>
+  </div>
+
+  <!-- ========== 15.4 电量与电池电压采样 ========== -->
+  <h2>15.4 电量与电池电压采样</h2>
+
+  <p>低功耗的最后一环，是知道自己还剩多少电——这要靠 <strong>ADC</strong>（说人话：把模拟电压读数转成数字值的模块）来做<strong>电压采样</strong>（说人话：量电池电压）。电池在 README 里是<strong>可选项</strong>，代码也处处给它留了"不存在的余地"：<code>Board::get_battery()</code> 在 <code>platformio.ini</code> 定义了 <code>BATTERY_ADC_CHANNEL</code> 时才 <code>new ADCBattery(channel)</code>，否则返回 <code>nullptr</code>——主程序里 <code>battery</code> 为空就直接跳过采样和绘制。三块板的通道各不相同：<code>lilygo_t5_47</code> 是 <code>ADC1_CHANNEL_0</code>（接 <code>GPIO_NUM_36</code>）、<code>epdiy</code> 是 <code>ADC1_CHANNEL_6</code>（接 <code>GPIO_NUM_34</code>）、<code>m5_paper</code> 是 <code>ADC1_CHANNEL_7</code>（接 <code>GPIO_NUM_35</code>）——都是"分压电阻接入的 ADC 通道"，README 在每个宏注释里写明了对应的 GPIO。</p>
+
+  <p>采样本身在 <code>ADCBattery</code> 里。初始化三件套缺一不可：<code>adc1_config_width(ADC_WIDTH_12Bit)</code> 定 12 位分辨率；<code>adc1_config_channel_atten(m_adc_channel, ADC_ATTEN_DB_11)</code> 用 11 dB 衰减把量程撑高，好让 3.5–4.2 V 的电池电压落在可测范围；<code>esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &amp;m_adc_chars)</code> 做 ADC 校准。读取时，<code>get_voltage()</code> 先 <code>adc1_get_raw</code> 拿原始读数，经 <code>esp_adc_cal_raw_to_voltage</code> 换成毫伏，再<strong>乘 2</strong> 还原分压前的真实电压。百分比则按锂电的放电曲线算：<code>&gt;= 4.20 V</code> 记 100%、<code>&lt;= 3.50 V</code> 记 0%，中间用一条四次多项式拟合（源码注释还诚实地标了灵感来源——一个 GitHub issue）。</p>
+
+  <p>电量怎么上屏，看 <code>main.cpp</code> 的 <code>draw_battery_level()</code>：先 <code>renderer-&gt;set_margin_top(0)</code> 清掉顶部边距，画一个 40×20 的电池框——<code>fill_rect</code> 白色底、黑色按百分比填充、<code>draw_rect</code> 描边，左侧再画 4px 宽的小帽，画完把 <code>margin_top</code> 恢复成 35（这是给电量条预留的高度）。有趣的是，函数头顶还挂着 <code>// TODO - add the battery level</code> 的注释——它其实早已实现，又是一个"注释滞后于代码"的活标本。而刷新时机与 15.1 呼应：主循环每 60 秒超时都会调一次 <code>get_voltage()</code> / <code>get_percentage()</code> + <code>draw_battery_level()</code> + <code>flush_display()</code>，即使你什么都没按，电量条也会每分钟更新一次——这就是"等待期每 60 秒眨一次眼"的具体内容。</p>
+
+<pre><code><span class="cmt">/* ADCBattery.h：电压采样 + 百分比拟合（节选） */</span>
+<span class="kw">virtual void</span> <span class="fn">setup</span>()
+{
+  <span class="fn">adc1_config_width</span>(ADC_WIDTH_12Bit);
+  <span class="fn">adc1_config_channel_atten</span>(m_adc_channel, ADC_ATTEN_DB_11);
+  <span class="fn">esp_adc_cal_characterize</span>(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, <span class="num">1100</span>, &amp;m_adc_chars);
+}
+<span class="kw">virtual float</span> <span class="fn">get_voltage</span>()
+{
+  <span class="kw">auto</span> adc_value = <span class="fn">adc1_get_raw</span>(m_adc_channel);
+  <span class="kw">auto</span> voltage = <span class="num">2</span> * <span class="fn">esp_adc_cal_raw_to_voltage</span>(adc_value, &amp;m_adc_chars); <span class="cmt">// ×2 还原分压</span>
+  <span class="kw">return</span> voltage;
+}
+<span class="type">int</span> <span class="fn">get_percentage</span>()
+{
+  <span class="kw">auto</span> voltage = <span class="fn">get_voltage</span>() / <span class="num">1000.0f</span>;
+  <span class="kw">if</span> (voltage &gt;= <span class="num">4.20</span>) <span class="kw">return</span> <span class="num">100</span>;
+  <span class="kw">if</span> (voltage &lt;= <span class="num">3.50</span>) <span class="kw">return</span> <span class="num">0</span>;
+  <span class="kw">return</span> <span class="fn">roundf</span>(<span class="num">2836.9625</span> * <span class="fn">pow</span>(voltage, <span class="num">4</span>) - <span class="num">43987.4889</span> * <span class="fn">pow</span>(voltage, <span class="num">3</span>)
+              + <span class="num">255233.8134</span> * <span class="fn">pow</span>(voltage, <span class="num">2</span>) - <span class="num">656689.7123</span> * voltage + <span class="num">632041.7303</span>);
+}</code></pre>
+
+<pre><code><span class="cmt">; platformio.ini：三块板各自的电池 ADC 通道（节选）</span>
+[env:lilygo_t5_47]
+<span class="cmt">; the adc channel ... battery voltage divider - this is GPIO_NUM_36</span>
+-DBATTERY_ADC_CHANNEL=ADC1_CHANNEL_0
+[env:epdiy]
+<span class="cmt">; this is GPIO_NUM_34 in EPDiy V6</span>
+-DBATTERY_ADC_CHANNEL=ADC1_CHANNEL_6
+[env:m5_paper]
+<span class="cmt">; this is GPIO_NUM_35</span>
+-DBATTERY_ADC_CHANNEL=ADC1_CHANNEL_7
+
+<span class="cmt">/* Board.cpp：定义了 BATTERY_ADC_CHANNEL 才创建电池对象 */</span>
+Battery *<span class="fn">Board::get_battery</span>()
+{
+<span class="kw">#ifdef</span> BATTERY_ADC_CHANNEL
+  <span class="kw">return new</span> ADCBattery(BATTERY_ADC_CHANNEL);
+<span class="kw">#else</span>
+  <span class="kw">return nullptr</span>;          <span class="cmt">// 主程序据此跳过电量采样与绘制</span>
+<span class="kw">#endif</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* main.cpp：draw_battery_level——画 40×20 的电量图标（节选） */</span>
+<span class="cmt">// TODO - add the battery level   ← 注释滞后：函数其实早已实现</span>
+<span class="kw">void</span> <span class="fn">draw_battery_level</span>(Renderer *renderer, <span class="kw">float</span> voltage, <span class="kw">float</span> percentage)
+{
+  renderer-&gt;<span class="fn">set_margin_top</span>(<span class="num">0</span>);          <span class="cmt">// 清边距好定位</span>
+  <span class="type">int</span> width = <span class="num">40</span>, height = <span class="num">20</span>, margin_right = <span class="num">5</span>, margin_top = <span class="num">10</span>;
+  <span class="type">int</span> xpos = renderer-&gt;<span class="fn">get_page_width</span>() - width - margin_right;
+  <span class="type">int</span> ypos = margin_top;
+  <span class="type">int</span> percent_width = width * percentage / <span class="num">100</span>;
+  renderer-&gt;<span class="fn">fill_rect</span>(xpos, ypos, width, height, <span class="num">255</span>);                        <span class="cmt">// 白底</span>
+  renderer-&gt;<span class="fn">fill_rect</span>(xpos + width - percent_width, ypos, percent_width, height, <span class="num">0</span>); <span class="cmt">// 黑色填充</span>
+  renderer-&gt;<span class="fn">draw_rect</span>(xpos, ypos, width, height, <span class="num">0</span>);                          <span class="cmt">// 描边</span>
+  renderer-&gt;<span class="fn">fill_rect</span>(xpos - <span class="num">4</span>, ypos + height / <span class="num">4</span>, <span class="num">4</span>, height / <span class="num">2</span>, <span class="num">0</span>);      <span class="cmt">// 电池小帽</span>
+  renderer-&gt;<span class="fn">set_margin_top</span>(<span class="num">35</span>);       <span class="cmt">// 恢复给电量条预留的高度</span>
+}</code></pre>
+
+  <table>
+    <tr><th>板子</th><th>宏</th><th>ADC 通道</th><th>对应 GPIO</th></tr>
+    <tr><td>LilyGo T5 4.7"</td><td><code>BATTERY_ADC_CHANNEL</code></td><td><code>ADC1_CHANNEL_0</code></td><td><code>GPIO_NUM_36</code></td></tr>
+    <tr><td>EPDiy V6</td><td><code>BATTERY_ADC_CHANNEL</code></td><td><code>ADC1_CHANNEL_6</code></td><td><code>GPIO_NUM_34</code></td></tr>
+    <tr><td>M5 Paper</td><td><code>BATTERY_ADC_CHANNEL</code></td><td><code>ADC1_CHANNEL_7</code></td><td><code>GPIO_NUM_35</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>采样电池，三件套别省：<strong>衰减、校准、单位</strong>。ESP32 内置 ADC 的线性度一般，直接把 <code>adc1_get_raw</code> 当电压会骗你；<code>esp_adc_cal_characterize</code> 里的 <code>1100</code> 是默认参考电压（mV），真讲究要自己标定。还有分压系数——<code>get_voltage</code> 里那个 <code>2 *</code> 正是分压电阻的比例，换板子改电阻就改这里。最后记住：锂电不是线性耗尽的，3.5–4.2 V 之间用多项式拟合百分比，比"按电压线性算"靠谱得多。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：读代码找真值 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>src/main.cpp</code> 主循环，回答：深睡眠前的等待超时是 <code>120 * 1000 * 1000</code>，单位是什么？换算成秒是多少？README「Deep sleep」一节写的是多少秒？为什么遇到这种出入应该以代码为准？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>esp_timer_get_time()</code> 的返回值单位是微秒；对照 README 原文 "go to sleep after 30 seconds of inactivity"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>esp_timer_get_time()</code> 返回微秒，所以 <code>120 * 1000 * 1000</code> 微秒 = <strong>120 秒</strong>。README 写的是 30 秒——文档与代码漂移。以代码为准是因为：编译器、硬件、行为都以源码为唯一事实来源，文档可能没跟上代码演进；本教程各章引用的数值也统一以源码为准。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：给状态分配"床位" <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以下四类状态各应放哪里（文件系统 / RTC 内存）？给出理由：<code>(a)</code> 当前屏幕帧缓冲；<code>(b)</code> 书单 + 每本书进度；<code>(c)</code> 目录选中项；<code>(d)</code> 当前 UI 状态。分别指出源码里对应的变量或文件。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按"多大 + 多长寿"分类：帧缓冲几十 KB 且一次性；其余三个都很小但要跨睡眠存活。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 文件系统——入睡前 <code>dehydrate()</code> 压成 <code>/fs/front_buffer.z</code>，醒来 <code>hydrate()</code> 读回；(b) RTC 内存——<code>RTC_DATA_ATTR</code> 的 <code>epub_list_state</code>，<code>EpubReader</code> 持有 <code>EpubListItem &amp;state</code> 引用，翻页即改 RTC；(c) RTC 内存——<code>RTC_DATA_ATTR</code> 的 <code>epub_index_state</code>；(d) RTC 内存——<code>RTC_NOINIT_ATTR</code> 的 <code>ui_state</code>。核心：帧缓冲太大进不了 RTC（慢速 RAM 仅约 8 KB），又只需"睡前一写、醒来一读"，所以走文件系统；其余小且长期，交给一直供电的 RTC 域。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：唤醒二选一 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>某板按键按下为<strong>高电平</strong>。回答：(1) <code>setup_deep_sleep()</code> 该走 ULP 还是 EXT1 分支？给出关键调用；(2) 为什么按下为低电平的按键不能直接用 EXT1？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>EXT1 是"变高才触发"；低有效按键平时是高、按下变低，方向反了。看 <code>GPIOButtonControls.cpp</code> 的 else 分支。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 走 EXT1 分支：<code>rtc_gpio_init</code> + <code>rtc_gpio_set_direction(INPUT_ONLY)</code> + <code>rtc_gpio_pulldown_en</code>（静态拉低），再 <code>esp_sleep_enable_ext1_wakeup((1ULL&lt;&lt;up)|(1ULL&lt;&lt;down)|(1ULL&lt;&lt;select), ESP_EXT1_WAKEUP_ANY_HIGH)</code>；(2) EXT1 的 ANY_HIGH 只在 GPIO 变高时唤醒，而低有效按键被上拉维持在高、按下才拉低——这个"由高变低"的方向 EXT1 认不出来，所以只能靠 ULP 协处理器每 100 ms 采样、发现某脚读 0（被按下）后再 <code>wake</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：审 ULP 汇编 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>逐段解释 <code>ulp/main.S</code>：<code>(1)</code> <code>entry</code> 段做了哪几步、判断命中后跳到哪？<code>(2)</code> <code>wakeup</code> 段把什么存进 <code>gpio_status</code>，为什么？<code>(3)</code> <code>try_wakeup</code> 的 <code>STAGE_INC</code> + <code>JUMPS exit, 10, GT</code> 在干什么？<code>(4)</code> 三个 mask（<code>ulp_up_mask</code> 等）在 <code>GPIOButtonControls.cpp</code> 里是怎么算出来的？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>mask = <code>1 &lt;&lt; rtc_io_number_get(gpio_x)</code>；STAGE 是忙等计数器；<code>gpio_status</code> 被主 CPU 读走当"哪个键"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) <code>STAGE_RST</code> 清计数器后，<code>READ_RTC_REG</code> 读 RTC GPIO 输入的低 16 位，依次与 <code>up_mask</code>/<code>down_mask</code>/<code>select_mask</code> 求与；某个掩码命中（求与为 0，表示该低有效键被按下）就跳 <code>wakeup</code>，全不命中就 <code>halt</code> 等下一个 100 ms 周期。(2) 在 <code>wakeup</code> 段把"唤醒引脚位掩码"（<code>r1</code>）写进 <code>gpio_status</code>，因为主 CPU 醒来后要靠它知道"按的是哪个键"——对应 <code>get_deep_sleep_action()</code> 里读 <code>ulp_gpio_status &amp; UINT16_MAX</code>。(3) 这是<strong>忙等 SoC 就绪</strong>：每次轮询 <code>STAGE_INC 1</code>，若阶段计数超过 10 就 <code>exit</code> 放弃（说明 SoC 还没准备好被唤醒），否则读 <code>RTC_CNTL_RDY_FOR_WAKEUP</code>，为 0 继续等、为 1 才执行 <code>wake</code>。(4) 三个 mask 在 <code>setup_deep_sleep()</code> 的 ULP 分支里，是 <code>1 &lt;&lt; rtc_io_number_get(gpio_up / gpio_down / gpio_select)</code>——把每个按钮的 GPIO 号换算成 RTC 引脚号后移位得到位掩码，ULP 汇编正是拿这些掩码去比对 GPIO 输入寄存器。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

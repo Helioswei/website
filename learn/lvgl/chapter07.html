@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章：Flex/Grid 布局引擎 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="7" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：Flex/Grid 布局引擎</h1>
+  <p class="chapter-subtitle">排兵布阵的两副棋盘：一维的流，二维的表格</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄，把布局当排兵布阵来设计</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「行军布阵，讲究的是'规则先行'：将领只定阵列的规矩，士卒自己找位置。Flex 与 Grid 正是这样的将令——你声明方向、对齐、行列，无数个子控件自动各就其位。阵型一变，全军重排，这就是运筹帷幄之道。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 布局引擎总览：从手动定位到自动排布 ========== -->
+  <h2>7.1 布局引擎总览：从手动定位到自动排布</h2>
+
+  <p>第 3、5 章里你手动用 <code>lv_obj_align()</code> / <code>lv_obj_set_pos()</code> 摆放控件。这套方式在控件少时很直观，但对象一多、或屏幕尺寸一变，"手摆"就难以为继——改一处坐标，整片界面都要跟着挪。布局引擎（layout）解决的正是"子对象如何自动排布"这个共性问题：你在父对象上声明规则，子对象的位置、尺寸由引擎统一计算，尺寸变化时自动重排，无需你干预。</p>
+
+  <p>启用方式是一条 API：<code>lv_obj_set_layout(obj, LV_LAYOUT_FLEX)</code> 或 <code>LV_LAYOUT_GRID</code>（<code>LV_LAYOUT_NONE</code> 关闭）。布局枚举 <code>lv_layout_t</code> 定义在 <code>src/layouts/lv_layout.h</code>，两种布局的实现分别在 <code>src/layouts/flex/</code>（<code>lv_flex.c</code>）与 <code>src/layouts/grid/</code>（<code>lv_grid.c</code>），由配置宏 <code>LV_USE_FLEX</code> / <code>LV_USE_GRID</code> 决定是否编译进库。还要记住一条铁律：<strong>布局只作用于当前对象的直接子对象</strong>，子对象仍可再开自己的布局——这就是嵌套组合的根基。</p>
+
+<pre><code><span class="cmt">/* 三种布局模式（lv_layout_t，src/layouts/lv_layout.h） */</span>
+<span class="fn">lv_obj_set_layout</span>(row, <span class="kw">LV_LAYOUT_FLEX</span>);     <span class="cmt">/* 一维：沿主轴排布 */</span>
+<span class="fn">lv_obj_set_layout</span>(box, <span class="kw">LV_LAYOUT_GRID</span>);     <span class="cmt">/* 二维：行列网格 */</span>
+<span class="fn">lv_obj_set_layout</span>(row, <span class="kw">LV_LAYOUT_NONE</span>);     <span class="cmt">/* 关闭布局，回到手动定位 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 布局本身也是一个样式属性：LV_STYLE_LAYOUT */</span>
+<span class="fn">lv_obj_set_style_layout</span>(container, <span class="kw">LV_LAYOUT_FLEX</span>, <span class="num">0</span>);
+
+<span class="cmt">/* 一个 Flex 容器 + 一个 Grid 容器，各自排布自己的子对象 */</span>
+<span class="type">lv_obj_t</span> * flex_box = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_layout</span>(flex_box, <span class="kw">LV_LAYOUT_FLEX</span>);
+<span class="fn">lv_obj_set_flex_flow</span>(flex_box, <span class="kw">LV_FLEX_FLOW_ROW</span>);
+
+<span class="type">lv_obj_t</span> * grid_box = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_layout</span>(grid_box, <span class="kw">LV_LAYOUT_GRID</span>);</code></pre>
+
+  <table>
+    <tr><th>布局模式</th><th>lv_layout_t 值</th><th>适用场景</th></tr>
+    <tr><td>手动定位</td><td><code>LV_LAYOUT_NONE</code></td><td>少量固定控件、像素级控制</td></tr>
+    <tr><td>Flex</td><td><code>LV_LAYOUT_FLEX</code></td><td>一行/一列、数量不定的同类项</td></tr>
+    <tr><td>Grid</td><td><code>LV_LAYOUT_GRID</code></td><td>表格、键盘、行列规整的仪表盘</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>父对象一旦开了布局，其<strong>直接子对象</strong>的手动坐标就会被布局结果覆盖。想对个别子对象做例外，用 <code>lv_obj_set_style_flex_grow</code>、<code>lv_obj_set_grid_cell</code> 这类"布局内的微调"，而不要硬塞 <code>lv_obj_set_pos</code>——那会被引擎重新摆掉。</p>
+  </div>
+
+  <!-- ========== 7.2 Flex 流动方向：主轴、换行与顺序 ========== -->
+  <h2>7.2 Flex 流动方向：主轴、换行与顺序</h2>
+
+  <p>Flex 的模型一句话就能说清：<strong>子对象沿一条轴（主轴）依次排开，放不下就换行（track）</strong>。主轴方向由 flow 决定：<code>lv_obj_set_flex_flow(obj, LV_FLEX_FLOW_ROW)</code> 横排、<code>LV_FLEX_FLOW_COLUMN</code> 竖排。在此基础上还有两个"开关位"——<code>WRAP</code> 位允许超出后换行，<code>REVERSE</code> 位反转排列顺序；三者按位或，组合出 <code>ROW_WRAP</code>、<code>COLUMN_WRAP_REVERSE</code> 等共 8 种取值。枚举 <code>lv_flex_flow_t</code> 定义在 <code>include/lvgl/layouts/lv_flex.h</code>。</p>
+
+  <p><code>lvgl-master/examples/layouts/flex/lv_example_flex_flow.c</code> 是理解换行最直观的样本：一个 <code>LV_FLEX_FLOW_ROW_WRAP</code> 容器里塞了 10 个按钮，超出宽度后自动折到第二行。把它改成 <code>ROW</code>、<code>COLUMN_WRAP_REVERSE</code> 等其它值，同一批子对象会呈现完全不同的排布——这正是布局的威力：<strong>规则与内容解耦</strong>，改一行 flow，整组控件重新列阵。</p>
+
+<pre><code><span class="cmt">/* 横排 + 自动换行：10 个按钮排成多行（参考 lv_example_flex_flow.c） */</span>
+<span class="type">lv_obj_t</span> * container = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_layout</span>(container, <span class="kw">LV_LAYOUT_FLEX</span>);
+<span class="fn">lv_obj_set_flex_flow</span>(container, <span class="kw">LV_FLEX_FLOW_ROW_WRAP</span>);
+<span class="fn">lv_obj_set_size</span>(container, <span class="fn">lv_pct</span>(<span class="num">90</span>), <span class="fn">lv_pct</span>(<span class="num">50</span>));
+
+<span class="kw">for</span>(<span class="kw">int</span> i = <span class="num">0</span>; i &lt; <span class="num">10</span>; i++) {
+    <span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(container);   <span class="cmt">/* 子对象自动依次排布 */</span>
+    <span class="type">lv_obj_t</span> * lbl = <span class="fn">lv_label_create</span>(btn);
+    <span class="fn">lv_label_set_text_fmt</span>(lbl, <span class="str">"%d"</span>, i);
+}</code></pre>
+
+<pre><code><span class="cmt">/* 8 种 flow：方向 × 换行 × 顺序反转 */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(row,  <span class="kw">LV_FLEX_FLOW_ROW</span>);               <span class="cmt">/* 横排，不换行 */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(row2, <span class="kw">LV_FLEX_FLOW_ROW_WRAP</span>);          <span class="cmt">/* 横排，超出换行 */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(row3, <span class="kw">LV_FLEX_FLOW_ROW_WRAP_REVERSE</span>);  <span class="cmt">/* 横排换行 + 反向 */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(col,  <span class="kw">LV_FLEX_FLOW_COLUMN</span>);            <span class="cmt">/* 竖排 */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(col2, <span class="kw">LV_FLEX_FLOW_COLUMN_REVERSE</span>);    <span class="cmt">/* 竖排，反向 */</span></code></pre>
+
+  <table>
+    <tr><th>常量</th><th>含义</th></tr>
+    <tr><td><code>LV_FLEX_FLOW_ROW</code></td><td>横排，不换行</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_ROW_WRAP</code></td><td>横排，超出换行</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_ROW_REVERSE</code></td><td>横排，顺序反转</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_ROW_WRAP_REVERSE</code></td><td>横排换行 + 反转</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_COLUMN</code></td><td>竖排，不换行</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_COLUMN_WRAP</code></td><td>竖排，超出换列</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_COLUMN_REVERSE</code></td><td>竖排，顺序反转</td></tr>
+    <tr><td><code>LV_FLEX_FLOW_COLUMN_WRAP_REVERSE</code></td><td>竖排换列 + 反转</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>主轴方向一旦确定，"对齐"和"空隙"都沿它展开：<code>LV_FLEX_FLOW_ROW</code> 时主轴是水平方向，<code>COLUMN</code> 时主轴变成垂直方向。先定 flow，再谈对齐——顺序不要反，否则你以为是"左右分布"，实际是"上下分布"。</p>
+  </div>
+
+  <!-- ========== 7.3 Flex 对齐与 grow：把自由空间分出去 ========== -->
+  <h2>7.3 Flex 对齐与 grow：把自由空间分出去</h2>
+
+  <p>方向定了，接下来是"怎么分布"。<code>lv_obj_set_flex_align(obj, main_place, cross_place, track_cross_place)</code> 一次管三个维度：<strong>主轴</strong>上的分布方式（<code>LV_FLEX_ALIGN_START/END/CENTER/SPACE_EVENLY/SPACE_AROUND/SPACE_BETWEEN</code>）、<strong>交叉轴</strong>上的对齐（<code>START/END/CENTER</code>）、以及多行轨道整体在交叉轴上的位置。取值枚举 <code>lv_flex_align_t</code> 同样来自 <code>lv_flex.h</code>。</p>
+
+  <p>三个"空隙"常量是分布美学的主力：<code>SPACE_BETWEEN</code> 首尾贴边、中间等距；<code>SPACE_AROUND</code> 每项两侧各留一半空隙；<code>SPACE_EVENLY</code> 相邻项之间空隙完全相等。而 <code>lv_example_flex_align.c</code> 用一个高按钮 + 开关 + 复选框演示了交叉轴对齐——三个控件高度不同，<code>LV_FLEX_ALIGN_CENTER</code> 让它们在垂直方向排齐。若要让某个子对象"吃下剩余空间"，用 <code>lv_obj_set_flex_grow(obj, n)</code> 按权重瓜分（<code>lv_example_flex_grow.c</code>：固定宽 + <code>grow=1</code> + <code>grow=2</code>，剩余宽度按 1:2 分配）。</p>
+
+<pre><code><span class="cmt">/* 三个对齐维度：主轴分布 / 交叉轴对齐 / 轨道位置（参考 lv_example_flex_align.c） */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(container, <span class="kw">LV_FLEX_FLOW_ROW</span>);
+<span class="fn">lv_obj_set_flex_align</span>(container,
+                      <span class="kw">LV_FLEX_ALIGN_SPACE_BETWEEN</span>,   <span class="cmt">/* 主轴：首尾贴边、中间等距 */</span>
+                      <span class="kw">LV_FLEX_ALIGN_CENTER</span>,          <span class="cmt">/* 交叉轴：垂直居中 */</span>
+                      <span class="kw">LV_FLEX_ALIGN_CENTER</span>);         <span class="cmt">/* 多行轨道：整体居中 */</span>
+
+<span class="cmt">/* 项间距也可以单独控制：列间距 12px */</span>
+<span class="fn">lv_obj_set_style_pad_column</span>(container, <span class="num">12</span>, <span class="num">0</span>);</code></pre>
+
+<pre><code><span class="cmt">/* flex_grow：按权重瓜分剩余空间（参考 lv_example_flex_grow.c） */</span>
+<span class="type">lv_obj_t</span> * fixed = <span class="fn">lv_button_create</span>(container);
+<span class="fn">lv_obj_set_size</span>(fixed, <span class="num">50</span>, <span class="kw">LV_SIZE_CONTENT</span>);   <span class="cmt">/* 固定宽度，不参与瓜分 */</span>
+
+<span class="type">lv_obj_t</span> * g1 = <span class="fn">lv_button_create</span>(container);
+<span class="fn">lv_obj_set_flex_grow</span>(g1, <span class="num">1</span>);   <span class="cmt">/* 拿走 1 份剩余空间 */</span>
+
+<span class="type">lv_obj_t</span> * g2 = <span class="fn">lv_button_create</span>(container);
+<span class="fn">lv_obj_set_flex_grow</span>(g2, <span class="num">2</span>);   <span class="cmt">/* 拿走 2 份：宽度是 g1 的两倍 */</span></code></pre>
+
+  <table>
+    <tr><th>对齐常量</th><th>含义</th></tr>
+    <tr><td><code>LV_FLEX_ALIGN_START</code></td><td>对齐主轴起点</td></tr>
+    <tr><td><code>LV_FLEX_ALIGN_END</code></td><td>对齐主轴终点</td></tr>
+    <tr><td><code>LV_FLEX_ALIGN_CENTER</code></td><td>主轴居中</td></tr>
+    <tr><td><code>LV_FLEX_ALIGN_SPACE_EVENLY</code></td><td>项与项之间空隙完全相等</td></tr>
+    <tr><td><code>LV_FLEX_ALIGN_SPACE_AROUND</code></td><td>每项两侧各留一半空隙</td></tr>
+    <tr><td><code>LV_FLEX_ALIGN_SPACE_BETWEEN</code></td><td>首尾贴边、中间等距</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>换行之后，"主轴上的分布"仍只在每一行（track）内部生效。想让多行作为一个整体分布，得靠第三个参数 <code>track_cross_place</code>。三个维度各管一段，哪个方向出问题就查哪个参数——这是排查 Flex 布局最有效的思路。</p>
+  </div>
+
+  <!-- ========== 7.4 Grid 轨道描述：声明行与列 ========== -->
+  <h2>7.4 Grid 轨道描述：声明行与列</h2>
+
+  <p>Grid 与 Flex 的差别在"维度"：Flex 只管一条主轴，Grid 同时声明行、列两条轨道。声明轨道用 <code>lv_obj_set_grid_dsc_array(obj, col_dsc, row_dsc)</code>（或等价的样式 API <code>lv_obj_set_style_grid_column_dsc_array</code> / <code>grid_row_dsc_array</code>），两个数组里每个元素代表一条轨道的尺寸，且<strong>必须以 <code>LV_GRID_TEMPLATE_LAST</code> 结尾</strong>——它在 <code>lv_grid.h</code> 中定义为 <code>LV_COORD_MAX</code>，充当"数组结束"的哨兵。</p>
+
+  <p>轨道尺寸支持四种写法：固定像素（如 <code>70</code> 表示 70px）、<code>LV_GRID_FR(x)</code> 按权重瓜分剩余空间、<code>LV_GRID_CONTENT</code> 按内容自适应、以及 <code>LV_SIZE_CONTENT</code>。固定像素的写法见 <code>lv_example_grid_descriptors.c</code>——<code>{70, 70, 70}</code> 三列 × <code>{44, 44}</code> 两行，拼出规整的 3×2 表格；比例写法见 <code>lv_example_grid_fr.c</code>——<code>{80, LV_GRID_FR(1), LV_GRID_FR(2)}</code>：第一列固定 80px，剩下的宽度按 1:2 分给后两列。</p>
+
+<pre><code><span class="cmt">/* 固定像素轨道：3 列 × 2 行（参考 lv_example_grid_descriptors.c） */</span>
+<span class="type">lv_obj_t</span> * grid = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_layout</span>(grid, <span class="kw">LV_LAYOUT_GRID</span>);
+
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int32_t</span> col_dsc[] = {<span class="num">70</span>, <span class="num">70</span>, <span class="num">70</span>, <span class="kw">LV_GRID_TEMPLATE_LAST</span>};
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int32_t</span> row_dsc[] = {<span class="num">44</span>, <span class="num">44</span>, <span class="kw">LV_GRID_TEMPLATE_LAST</span>};
+<span class="fn">lv_obj_set_grid_dsc_array</span>(grid, col_dsc, row_dsc);</code></pre>
+
+<pre><code><span class="cmt">/* 混合轨道：固定 + 按比例（参考 lv_example_grid_fr.c） */</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int32_t</span> col_dsc[] = {<span class="num">80</span>, <span class="kw">LV_GRID_FR</span>(<span class="num">1</span>), <span class="kw">LV_GRID_FR</span>(<span class="num">2</span>), <span class="kw">LV_GRID_TEMPLATE_LAST</span>};
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int32_t</span> row_dsc[] = {<span class="num">44</span>, <span class="kw">LV_GRID_FR</span>(<span class="num">1</span>), <span class="kw">LV_GRID_TEMPLATE_LAST</span>};
+<span class="fn">lv_obj_set_grid_dsc_array</span>(grid, col_dsc, row_dsc);</code></pre>
+
+  <table>
+    <tr><th>轨道尺寸写法</th><th>含义</th><th>示例</th></tr>
+    <tr><td>数字</td><td>固定像素</td><td><code>70</code> → 70px 宽</td></tr>
+    <tr><td><code>LV_GRID_FR(x)</code></td><td>按权重瓜分剩余空间</td><td><code>LV_GRID_FR(2)</code> → 占 2 份</td></tr>
+    <tr><td><code>LV_GRID_CONTENT</code></td><td>按内容自适应</td><td>适合列表列</td></tr>
+    <tr><td><code>LV_GRID_TEMPLATE_LAST</code></td><td>轨道数组结束标记</td><td>必须放数组末尾</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>忘了放 <code>LV_GRID_TEMPLATE_LAST</code>，轨道数组会被读到数组边界之外，行为未定义。把"轨道尺寸 + 结束标记"写进同一个 <code>static</code> 数组，是既省内存又不会出错的做法——哨兵必须跟着数据走。</p>
+  </div>
+
+  <!-- ========== 7.5 Grid 单元格：比例、跨列与嵌套组合 ========== -->
+  <h2>7.5 Grid 单元格：比例、跨列与嵌套组合</h2>
+
+  <p>轨道声明好之后，每个子对象要"落座"——用 <code>lv_obj_set_grid_cell(obj, column_align, col_pos, col_span, row_align, row_pos, row_span)</code> 指定它落在哪一列哪一行、横跨几列几行、以及单元格内的对齐方式（<code>LV_GRID_ALIGN_START/CENTER/END/STRETCH</code>）。等价的样式 API 是 <code>lv_obj_set_style_grid_cell_column_pos</code> / <code>row_pos</code> / <code>column_span</code> / <code>row_span</code> 一组，两者选其一即可。</p>
+
+  <p>跨列跨行让"一张网格"能承载不规则的布局：<code>lv_example_grid_cell_span.c</code> 里，一个子对象用 <code>column_span = 2</code> 横跨两列，另一个用 <code>row_span = 2</code> 竖跨两行。而"布局的组合"更是诸葛亮的用武之地——<code>lv_example_grid_fr.c</code> 里 <code>container_2</code>、<code>container_3</code>、<code>container_4</code> 就被分别落座到主网格的不同单元格；这些单元格内还可以再创建开启新布局的容器（外层 Grid 定骨架、内层 Flex 排同类项）。排布规则由此一层层叠加，从一块小面板到整个仪表盘都能运筹帷幄。</p>
+
+<pre><code><span class="cmt">/* 子对象落座：第 0 行第 0 列，铺满整个单元格 */</span>
+<span class="type">lv_obj_t</span> * cell = <span class="fn">lv_label_create</span>(grid);
+<span class="fn">lv_label_set_text</span>(cell, <span class="str">"0,0"</span>);
+<span class="fn">lv_obj_set_grid_cell</span>(cell,
+                     <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">0</span>, <span class="num">1</span>,   <span class="cmt">/* 列对齐、第 0 列、占 1 列 */</span>
+                     <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">0</span>, <span class="num">1</span>);  <span class="cmt">/* 行对齐、第 0 行、占 1 行 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 跨列 / 跨行 / 单元格内对齐（参考 lv_example_grid_cell_span.c） */</span>
+<span class="fn">lv_obj_set_grid_cell</span>(banner,
+                     <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">1</span>, <span class="num">2</span>,   <span class="cmt">/* 从第 1 列开始，横跨 2 列 */</span>
+                     <span class="kw">LV_GRID_ALIGN_CENTER</span>, <span class="num">1</span>, <span class="num">1</span>);   <span class="cmt">/* 第 1 行，垂直居中 */</span>
+
+<span class="cmt">/* 组合布局：grid 单元格里再放一个 flex 容器，占满第 2 行整行 */</span>
+<span class="type">lv_obj_t</span> * inner = <span class="fn">lv_obj_create</span>(grid);
+<span class="fn">lv_obj_set_grid_cell</span>(inner,
+                     <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">0</span>, <span class="num">3</span>,   <span class="cmt">/* 横跨全部 3 列 */</span>
+                     <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">2</span>, <span class="num">1</span>);  <span class="cmt">/* 第 2 行 */</span>
+<span class="fn">lv_obj_set_layout</span>(inner, <span class="kw">LV_LAYOUT_FLEX</span>);          <span class="cmt">/* 内层切回 flex */</span>
+<span class="fn">lv_obj_set_flex_flow</span>(inner, <span class="kw">LV_FLEX_FLOW_ROW</span>);</code></pre>
+
+  <table>
+    <tr><th>Grid API</th><th>作用</th></tr>
+    <tr><td><code>lv_obj_set_grid_dsc_array()</code></td><td>声明行/列轨道数组</td></tr>
+    <tr><td><code>lv_obj_set_grid_align()</code></td><td>整表行列的整体对齐</td></tr>
+    <tr><td><code>lv_obj_set_grid_cell()</code></td><td>指定子对象的单元格、对齐与跨度</td></tr>
+    <tr><td><code>lv_grid_fr()</code></td><td>绑定友好的 <code>LV_GRID_FR</code> 包装函数</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>选 Flex 还是 Grid，一句话判断：内容是一维的"流"（菜单、按钮行）就用 Flex；内容是二维的"表"（键盘、仪表、卡片墙）就用 Grid。两者还能无限嵌套——外层 Grid 定骨架、内层 Flex 排同类项，这就是布局的运筹帷幄之道。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：用 Flex 排一行按钮 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建一个 <code>lv_obj</code> 容器并开启 <code>LV_LAYOUT_FLEX</code>，把 5 个按钮横排在一行，居中排列。写出完整代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回忆 7.2/7.3：<code>lv_obj_set_layout(container, LV_LAYOUT_FLEX)</code> → <code>lv_obj_set_flex_flow(container, LV_FLEX_FLOW_ROW)</code>，再创建按钮即可；要居中再加 <code>lv_obj_set_flex_align(..., LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER)</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_obj_t * row = lv_obj_create(lv_screen_active()); lv_obj_set_layout(row, LV_LAYOUT_FLEX); lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW); lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER); for(int i = 0; i &lt; 5; i++) lv_button_create(row);</code>。按钮作为直接子对象会自动排布，无需手动定位。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：做一条"标题 + 操作"的导航栏 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 Flex 做一条水平导航栏：左侧一个标题标签，右侧两个按钮（"设置"、"退出"）。要求：标题贴左、两个按钮贴右、三者垂直居中。需要用到哪个对齐常量组合？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>要让左侧标题与右侧按钮组分居两端，用主轴 <code>LV_FLEX_ALIGN_SPACE_BETWEEN</code>；右侧两个按钮之间想留空隙，可给它们单独套一个 flex 子容器，或调 <code>lv_obj_set_style_pad_column</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>导航栏容器：<code>lv_obj_set_flex_flow(nav, LV_FLEX_FLOW_ROW)</code>，<code>lv_obj_set_flex_align(nav, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER)</code>。标题放最左，右侧放一个开启 flex 的小容器包住两个按钮（内部可再加 <code>pad_column</code> 控制按钮间距）。"首尾贴边、中间等距"正是 <code>SPACE_BETWEEN</code> 的典型用途。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：用 Grid 拼一个计算器键盘 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 <code>LV_LAYOUT_GRID</code> 做一个 4 列的计算器键盘：第一行是"0-9、+、-、×、÷"中的 4 个按键，再排 4 行 4 列共 16 个按键，第 4 列统一为操作符。请写出轨道数组，并说明如何让"0"键横跨 3 列。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>4 列轨道可写成 <code>{LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST}</code>（等宽四列）；"0"跨 3 列用 <code>lv_obj_set_grid_cell(..., LV_GRID_ALIGN_STRETCH, 0, 3, ...)</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>轨道：<code>static const int32_t col[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};</code>，行轨道同理（<code>LV_GRID_FR(1)</code> 保证按键随容器伸缩）。每个按键用 <code>lv_obj_set_grid_cell</code> 落座；数字"0"横跨 3 列：<code>lv_obj_set_grid_cell(key0, LV_GRID_ALIGN_STRETCH, 0, 3, LV_GRID_ALIGN_STRETCH, last_row, 1)</code>。这样键盘既定宽又能自适应屏幕。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：响应式仪表盘——布局的组合 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>设计一个"设置仪表盘"：外层 Grid 3 列，第一列放一列竖排滑块（内层 Flex + <code>COLUMN</code>），后两列放一个横跨 2 列的图表区。要求：所有轨道用 <code>LV_GRID_FR</code>，让整个仪表盘随屏幕尺寸伸缩；并说明为什么外层用 Grid、内层用 Flex。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>外层：<code>{LV_GRID_FR(1), LV_GRID_FR(2)}</code> 两列或三列；滑块列容器开启 <code>LV_LAYOUT_FLEX</code> + <code>LV_FLEX_FLOW_COLUMN</code> 并用 <code>lv_obj_set_flex_grow</code> 让每个滑块均分高度；图表区用 <code>column_span</code> 跨列。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>外层容器 <code>LV_LAYOUT_GRID</code>，轨道 <code>{LV_GRID_FR(1), LV_GRID_FR(2), LV_GRID_TEMPLATE_LAST}</code>（或三列后让图表 <code>column_span=2</code>）；滑块列是 grid 的一个单元格，内部 <code>lv_obj_set_layout(slider_col, LV_LAYOUT_FLEX)</code> + <code>LV_FLEX_FLOW_COLUMN</code>，每根滑块 <code>lv_obj_set_flex_grow(slider, 1)</code> 均分高度；图表区 <code>lv_obj_set_grid_cell(chart, LV_GRID_ALIGN_STRETCH, 1, 2, LV_GRID_ALIGN_STRETCH, 0, 1)</code>。选型依据：外层是"左右两块区域"的二维骨架 → Grid；内层是"数量不定、要均分"的一维列表 → Flex。<code>FR</code> 保证任何分辨率下区域等比例伸缩。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

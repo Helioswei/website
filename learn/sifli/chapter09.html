@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第9章：阅读设置与持久化 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="9" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：阅读设置与持久化</h1>
+  <p class="chapter-subtitle">"运筹帷幄之中，决胜千里之外"——看书想要舒服，不是靠临时调，而是把字体、字号、行距、边距这套配置提前摆布好，存下来、开机自动恢复。这章我们就看诸葛亮怎么在设置页上排兵布阵。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄——先摆布清楚六枚棋子，再决定谁进谁出、谁去谁留</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「下棋要算三步：第一算棋子有多少，第二算每一步怎么走，第三算这盘棋下完怎么收——收完还要能重开。阅读设置也是三步：设置项有哪些（9.1）、交互怎么转（9.2）、退出怎么存、开机怎么恢复（9.3）。最后一问：这一页和主设置页、阅读页该怎么衔接（9.4）？算清楚了，棋就不会乱。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 阅读设置项：六枚棋子 ========== -->
+  <h2>9.1 阅读设置项：字体、字号、字重、行距、边距</h2>
+
+  <p>阅读设置页面（<code>READING_SETTINGS</code>）是把"阅读体验"的五根旋钮集中在一起的子页面。README 的「阅读设置页面」一节把可选值列成一张表：<strong>字体</strong>可选 Default（内置）及 TF 卡 <code>/fonts</code> 目录下所有 <code>.ttf</code> / <code>.otf</code> 文件；<strong>字号</strong>有 <code>24 / 28 / 32 / 36 / 40 / 44 / 48 px</code> 七档；<strong>字重</strong>有 <code>正常 / 中粗 / 粗体</code> 三档；<strong>行距</strong>从 <code>1.0x</code> 到 <code>2.0x</code> 六档；<strong>边距</strong>从 <code>5</code> 到 <code>20 px</code> 六档；最后一行是<strong>保存退出</strong>。上一章 8.4 已经见过字号和字重那两排数组，这里把它们放进完整的<strong>设置项枚举</strong>里，看它们如何被统一编号。</p>
+
+  <p>实现上，六个设置项就是 <code>reading_settings.cpp</code> 里的 <code>SettingItem</code> 枚举（<code>SETTING_FONT_TYPE</code>、<code>SETTING_FONT_SIZE</code>、<code>SETTING_BOLD</code>、<code>SETTING_LINE_SPACING</code>、<code>SETTING_MARGIN</code>、<code>SETTING_SAVE_EXIT</code>），当前光标位置用一个 <code>g_current_item</code> 全局变量记录。这一章要特别留意两个嵌入式小技巧：一是<strong>行距档位用整数存</strong>——<code>LINE_SPACINGS[] = {10, 12, 14, 16, 18, 20}</code> 存的其实是"10 倍行距"，10 代表 1.0x、12 代表 1.2x，等真正应用时才 <code>/ 10.0f</code> 转成浮点，避免在无浮点单元的 MCU 上做无谓的浮点比较；二是<strong>中文标签以 UTF-8 转义字符串写在源码里</strong>——<code>"\xe6\xad\xa3\xe5\xb8\xb8"</code> 就是"正常"，让源码在任意编码环境里都能编译出正确的中文。</p>
+
+  <p>绘制时，每行左边画标签、右边画当前值。值得看的是"<strong>光标</strong>"的画法：<code>reading_settings_draw</code> 先按<strong>布局公式</strong>算出行高——<code>max_lh = (page_h - 30) / 17</code>，保证 6 个设置项 + 标题 + 提示区能装进一屏；当前项前画一个实心小三角（<code>fill_triangle</code>），外面再套一个外框矩形（<code>draw_rect</code>）突出选中项。字号、行距、边距的值用 <code>snprintf</code> 拼成 <code>&lt; 32 px &gt;</code>、<code>&lt; 1.4x &gt;</code> 这样的格式，字重还会在字体是可变字体时加一个 <code>(VF)</code> 后缀提示。</p>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：五根旋钮的档位数组（节选） */</span>
+<span class="cmt">/* 字号档位（像素） */</span>
+<span class="kw">static const int</span> FONT_SIZES[] = {<span class="num">24</span>, <span class="num">28</span>, <span class="num">32</span>, <span class="num">36</span>, <span class="num">40</span>, <span class="num">44</span>, <span class="num">48</span>};
+<span class="kw">static const int</span> FONT_SIZES_COUNT = <span class="kw">sizeof</span>(FONT_SIZES) / <span class="kw">sizeof</span>(FONT_SIZES[<span class="num">0</span>]);
+
+<span class="cmt">/* 加粗等级 */</span>
+<span class="kw">static const int</span> BOLD_LEVELS[] = {<span class="num">0</span>, <span class="num">1</span>, <span class="num">2</span>};
+<span class="kw">static const char</span> *BOLD_NAMES[] = {
+    <span class="str">"\xe6\xad\xa3\xe5\xb8\xb8"</span>,    <span class="cmt">/* 正常 */</span>
+    <span class="str">"\xe4\xb8\xad\xe7\xb2\x97"</span>,    <span class="cmt">/* 中粗 */</span>
+    <span class="str">"\xe7\xb2\x97\xe4\xbd\x93"</span>     <span class="cmt">/* 粗体 */</span>
+};
+
+<span class="cmt">/* 行距档位（x10，避免浮点，10 = 1.0x, 12 = 1.2x） */</span>
+<span class="kw">static const int</span> LINE_SPACINGS[] = {<span class="num">10</span>, <span class="num">12</span>, <span class="num">14</span>, <span class="num">16</span>, <span class="num">18</span>, <span class="num">20</span>};
+
+<span class="cmt">/* 边距档位（像素） */</span>
+<span class="kw">static const int</span> MARGINS[] = {<span class="num">5</span>, <span class="num">8</span>, <span class="num">11</span>, <span class="num">14</span>, <span class="num">17</span>, <span class="num">20</span>};
+
+<span class="cmt">/* 设置项枚举 */</span>
+<span class="kw">typedef enum</span> {
+    SETTING_FONT_TYPE = <span class="num">0</span>,
+    SETTING_FONT_SIZE,
+    SETTING_BOLD,
+    SETTING_LINE_SPACING,
+    SETTING_MARGIN,
+    SETTING_SAVE_EXIT,
+    SETTING_COUNT
+} SettingItem;</code></pre>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：绘制当前值（节选） */</span>
+<span class="kw">case</span> SETTING_FONT_TYPE: {
+    <span class="kw">char</span> name_buf[<span class="num">32</span>];
+    utf8_truncate(name_buf, font_manager_get_name(g_font_type_idx), max_name_bytes);
+    snprintf(val_buf, <span class="kw">sizeof</span>(val_buf), <span class="str">"&lt; %s &gt;"</span>, name_buf);
+    <span class="kw">break</span>;
+}
+<span class="kw">case</span> SETTING_FONT_SIZE:
+    snprintf(val_buf, <span class="kw">sizeof</span>(val_buf), <span class="str">"&lt; %d px &gt;"</span>, FONT_SIZES[g_font_size_idx]);
+    <span class="kw">break</span>;
+<span class="kw">case</span> SETTING_BOLD:
+    <span class="kw">if</span> (epd_font_ft_is_variable_weight()) {
+        snprintf(val_buf, <span class="kw">sizeof</span>(val_buf), <span class="str">"&lt; %s (VF) &gt;"</span>, BOLD_NAMES[g_bold_idx]);
+    } <span class="kw">else</span> {
+        snprintf(val_buf, <span class="kw">sizeof</span>(val_buf), <span class="str">"&lt; %s &gt;"</span>, BOLD_NAMES[g_bold_idx]);
+    }
+    <span class="kw">break</span>;
+<span class="kw">case</span> SETTING_LINE_SPACING:
+    snprintf(val_buf, <span class="kw">sizeof</span>(val_buf), <span class="str">"&lt; %d.%dx &gt;"</span>,
+             LINE_SPACINGS[g_line_spacing_idx] / <span class="num">10</span>,
+             LINE_SPACINGS[g_line_spacing_idx] % <span class="num">10</span>);
+    <span class="kw">break</span>;
+<span class="kw">case</span> SETTING_MARGIN:
+    snprintf(val_buf, <span class="kw">sizeof</span>(val_buf), <span class="str">"&lt; %d px &gt;"</span>, MARGINS[g_margin_idx]);
+    <span class="kw">break</span>;</code></pre>
+
+  <table>
+    <tr><th>设置项</th><th>可选值</th><th>代码档位</th><th>应用方式</th></tr>
+    <tr><td>字体</td><td>Default + <code>/fonts</code> 的 ttf/otf</td><td><code>font_manager_get_count()</code></td><td><code>font_manager_select</code>（8.3）</td></tr>
+    <tr><td>字号</td><td>24 / 28 / 32 / 36 / 40 / 44 / 48 px</td><td><code>FONT_SIZES[]</code></td><td><code>epd_font_ft_set_size</code></td></tr>
+    <tr><td>字重</td><td>正常 / 中粗 / 粗体</td><td><code>BOLD_LEVELS[]</code></td><td><code>epd_font_ft_set_bold</code></td></tr>
+    <tr><td>行距</td><td>1.0x ~ 2.0x（六档）</td><td><code>LINE_SPACINGS[]</code>（x10）</td><td><code>epd_font_ft_set_line_spacing</code></td></tr>
+    <tr><td>边距</td><td>5 / 8 / 11 / 14 / 17 / 20 px</td><td><code>MARGINS[]</code></td><td><code>renderer->set_margin_left/right</code></td></tr>
+    <tr><td>保存退出</td><td>—</td><td><code>SETTING_SAVE_EXIT</code></td><td><code>reading_settings_apply + save</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>棋子先编号，后作战。六个设置项用一个枚举统一编号（0–5），后续 UP/DOWN、SELECT、持久化全都围着这个编号转——这就是"运筹"的第一层：先把维度定下来，再谈怎么动。你写任何菜单/表单类 UI 时，都该先问一句：选项的"编号表"建好了吗？</p>
+  </div>
+
+  <!-- ========== 9.2 交互：UP/DOWN 与 SELECT 循环 ========== -->
+  <h2>9.2 交互：UP/DOWN 切换项、SELECT 循环取值、保存退出</h2>
+
+  <p>交互的规矩 README 一句话讲完了：<strong><code>UP</code> / <code>DOWN</code> 在设置项之间上下移动；<code>SELECT</code> 在当前项上循环切换值；光标停在"保存退出"时按 <code>SELECT</code> 保存并退出</strong>。落到代码就是 <code>reading_settings_handle_action</code> 里对三种动作的 <code>switch</code>。UP/DOWN 走"减一 / 加一 + 取模"：<code>g_current_item = (g_current_item + 1) % SETTING_COUNT</code>，到了 <code>SETTING_COUNT - 1</code> 再按 UP 会绕回 0——循环移动，光标永不越界。每次移动后立刻 <code>reading_settings_draw(renderer)</code> 重绘，返回 <code>true</code> 表示"还留在设置页"。</p>
+
+  <p>SELECT 是重头戏。它在当前项上把对应下标 <code>+1</code> 后再 <code>% 档位数</code> 循环：字号 <code>g_font_size_idx = (g_font_size_idx + 1) % FONT_SIZES_COUNT</code>，行距、边距同理，一直按就会绕回第一档。只有一项例外——光标在 <code>SETTING_SAVE_EXIT</code> 时，SELECT 会先检查 <code>g_settings_changed</code>（本次进入后有没有改过任何值），改过才调用 <code>reading_settings_apply</code> + <code>reading_settings_save</code> 落盘，然后 <code>return false</code> 通知上层"设置页结束、该回去了"；没改过就跳过保存、直接退出。这个"<strong>变了才存</strong>"的小开关，避免用户进进出出反复写 TF 卡。</p>
+
+  <p>真正把新值"生米煮成熟饭"的是 <code>reading_settings_apply</code>。它把五根旋钮翻译成五条底层调用：字体变化最重——要先 <code>renderer->show_busy()</code> 显示忙碌图标，再 <code>font_manager_select</code> 切换（第 8 章讲过，失败返回非 0 时会<strong>保留当前字体</strong>并回退下标）；其余四个直接调 <code>epd_font_ft_set_size</code>、<code>epd_font_ft_set_bold</code>、<code>epd_font_ft_set_line_spacing</code>、<code>renderer->set_margin_left/right</code>。注意行距在这里才从整数还原成浮点：<code>LINE_SPACINGS[idx] / 10.0f</code>。另外别漏了触控：<code>reading_settings_draw</code> 里 <code>add_area()</code> 为每一行注册了整行触控区域，<code>reading_settings_set_current_item</code> 供触控回调直接选中某一行——按键与触控（第 5 章）走同一条设置逻辑。</p>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：按键处理（节选） */</span>
+<span class="kw">bool</span> reading_settings_handle_action(Renderer *renderer, UIAction action)
+{
+    <span class="kw">switch</span> (action) {
+    <span class="kw">case</span> UP:                       <span class="cmt">// 上移一项（循环）</span>
+        <span class="kw">if</span> (g_current_item &gt; <span class="num">0</span>)
+            g_current_item = (SettingItem)(g_current_item - <span class="num">1</span>);
+        <span class="kw">else</span>
+            g_current_item = (SettingItem)(SETTING_COUNT - <span class="num">1</span>);
+        reading_settings_draw(renderer);
+        <span class="kw">return true</span>;
+
+    <span class="kw">case</span> DOWN:                     <span class="cmt">// 下移一项（循环）</span>
+        <span class="kw">if</span> (g_current_item &lt; SETTING_COUNT - <span class="num">1</span>)
+            g_current_item = (SettingItem)(g_current_item + <span class="num">1</span>);
+        <span class="kw">else</span>
+            g_current_item = (SettingItem)<span class="num">0</span>;
+        reading_settings_draw(renderer);
+        <span class="kw">return true</span>;
+
+    <span class="kw">case</span> SELECT:                   <span class="cmt">// 循环切换当前项的值</span>
+        <span class="kw">switch</span> (g_current_item) {
+        <span class="kw">case</span> SETTING_FONT_TYPE:
+            g_font_type_idx = (g_font_type_idx + <span class="num">1</span>) % font_count;
+            g_settings_changed = <span class="kw">true</span>;
+            g_font_changed = <span class="kw">true</span>;   <span class="cmt">// 字体切换单独记账</span>
+            <span class="kw">break</span>;
+        <span class="kw">case</span> SETTING_FONT_SIZE:
+            g_font_size_idx = (g_font_size_idx + <span class="num">1</span>) % FONT_SIZES_COUNT;
+            g_settings_changed = <span class="kw">true</span>;
+            <span class="kw">break</span>;
+        <span class="cmt">/* SETTING_BOLD / LINE_SPACING / MARGIN 同理 ... */</span>
+        <span class="kw">case</span> SETTING_SAVE_EXIT:       <span class="cmt">// 光标停在"保存退出"</span>
+            <span class="kw">if</span> (g_settings_changed) {  <span class="cmt">// 变了才存</span>
+                reading_settings_apply(renderer);
+                reading_settings_save();
+                g_settings_changed = <span class="kw">false</span>;
+                g_font_changed = <span class="kw">false</span>;
+            }
+            g_current_item = SETTING_FONT_TYPE;
+            <span class="kw">return false</span>;               <span class="cmt">/* 退出设置页面 */</span>
+        <span class="kw">default</span>:
+            <span class="kw">break</span>;
+        }
+        reading_settings_draw(renderer);
+        <span class="kw">return true</span>;
+    <span class="kw">default</span>:
+        <span class="kw">return true</span>;
+    }
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：应用设置（节选） */</span>
+<span class="kw">void</span> reading_settings_apply(Renderer *renderer)
+{
+    <span class="type">int</span> new_size = FONT_SIZES[g_font_size_idx];
+    <span class="type">float</span> new_spacing = LINE_SPACINGS[g_line_spacing_idx] / <span class="num">10.0f</span>;
+    <span class="type">int</span> new_margin = MARGINS[g_margin_idx];
+    <span class="type">int</span> new_bold = BOLD_LEVELS[g_bold_idx];
+
+    <span class="kw">if</span> (g_font_changed) {
+        renderer-&gt;show_busy();                 <span class="cmt">// 切换字体较慢，先显示忙碌图标</span>
+        <span class="type">int</span> ret = font_manager_select(g_font_type_idx, new_size);
+        <span class="kw">if</span> (ret != <span class="num">0</span>) {
+            <span class="cmt">// 失败：保留当前字体，下标回退</span>
+            g_font_type_idx = font_manager_get_current();
+        }
+    } <span class="kw">else</span> {
+        epd_font_ft_set_size(new_size);
+    }
+    epd_font_ft_set_bold(new_bold);
+    epd_font_ft_set_line_spacing(new_spacing);
+    renderer-&gt;set_margin_left(new_margin);
+    renderer-&gt;set_margin_right(new_margin);
+}</code></pre>
+
+  <table>
+    <tr><th>动作</th><th>在阅读设置页的行为</th><th>返回值 / 效果</th></tr>
+    <tr><td><code>UP</code></td><td>光标上移一项（到顶绕回"保存退出"）</td><td>重绘，返回 true</td></tr>
+    <tr><td><code>DOWN</code></td><td>光标下移一项（到底绕回"字体"）</td><td>重绘，返回 true</td></tr>
+    <tr><td><code>SELECT</code>（普通项）</td><td>当前值下标 +1 再对档位数取模，循环切换</td><td>置 <code>g_settings_changed</code>，重绘</td></tr>
+    <tr><td><code>SELECT</code>（保存退出）</td><td>有改动才 apply + save；无论有无都退出</td><td>返回 false（退出设置页）</td></tr>
+    <tr><td>触控</td><td><code>add_area</code> 注册整行区域，点击选中对应项</td><td>经 <code>reading_settings_set_current_item</code> 同步</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>循环取值用"下标 +1 取模"而不是"值本身 +1"：因为你操作的是"第几档"而不是"档位值"，下标永远不会越界，后面持久化也是存下标对应的档位值。把"用户看到的档位"和"内部的下标"分开记账，是这类菜单的通用棋路。</p>
+  </div>
+
+  <!-- ========== 9.3 持久化：/settings.cfg 的 key=value ========== -->
+  <h2>9.3 持久化：/settings.cfg、开机加载与字体回退</h2>
+
+  <p><strong>持久化</strong>（persistence）的意思是：把用户这次的配置写到不掉电的存储里，下次开机还能读回来——在阅读器里，就是存到 TF 卡的 <code>/settings.cfg</code>。移植版选了一个最朴素的格式：<strong><code>key=value</code> 的纯文本</strong>，一行一个键，结尾 <code>\n</code> 分隔。为什么不用 JSON？因为这里只有五个固定键，一个 <code>snprintf</code> 就能写完、一个 <code>strtok</code> 就能读完，还方便用户拔卡下来用电脑手工改。保存端是 <code>reading_settings_save</code>：<code>open(SETTINGS_FILE_PATH, O_WRONLY | O_CREAT | O_TRUNC)</code> 打开（不存在就创建、打开即清空），把 <code>font_name</code> / <code>font_size</code> / <code>bold</code> / <code>line_spacing</code> / <code>margin</code> 五个键拼进一个 256 字节的缓冲，一次 <code>write</code> 写完再 <code>close</code>。</p>
+
+  <p>加载端 <code>reading_settings_load(Renderer *)</code> 正好是逆过程：<code>open(O_RDONLY)</code> 读入，用 <code>strtok(buf, "\n")</code> 按行切，逐行用 <code>strncmp</code> 匹配前缀、<code>atoi</code> 取数字。读到五个值后，用 9.1 的 <code>find_index</code> 把数字"吸"回最近的档位下标——比如配置里 <code>font_size=30</code> 不在档位表里，就回退到默认下标 0（24px）。真正见功夫的是<strong>字体回退</strong>：先 <code>find_font_by_name(font_name)</code> 在字体表里找名字，找不到（比如这次没插 TF 卡、上次选的外部字体不在），日志打一条 <code>Font not found, fallback to Default</code> 并把 <code>g_font_type_idx</code> 归 0；找到的是内置字体（下标 0）就直接用；找到外部字体才 <code>font_manager_select</code> 真正加载，加载失败同样回退 0。字体这一步比较慢，加载时会先 <code>renderer->show_busy()</code>。</p>
+
+  <p>调用时机在 <code>main.cpp</code> 的启动序列里，顺序很关键：<code>board->start_filesystem()</code> 先挂起 TF 卡，<code>font_manager_init("/fonts")</code> 扫描字体（第 8 章），然后立刻 <code>reading_settings_load(renderer)</code> 恢复上次的阅读设置，最后才进主循环画主页面。也就是说——<strong>用户上次调的字体、字号、行距、边距，在屏幕亮起来之前就已经生效了</strong>，你看到的第一页就是上次的样子。README 正是这么承诺的："设置以 <code>key=value</code> 文本格式保存于 TF 卡 <code>/settings.cfg</code>，下次开机自动加载；若指定字体文件不可用，自动回退到内置默认字体。"文档与代码，一字不差。</p>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：保存到 /settings.cfg */</span>
+<span class="kw">#define</span> SETTINGS_FILE_PATH <span class="str">"/settings.cfg"</span>
+
+<span class="kw">void</span> reading_settings_save(<span class="type">void</span>)
+{
+    <span class="type">int</span> fd = open(SETTINGS_FILE_PATH, O_WRONLY | O_CREAT | O_TRUNC);
+    <span class="kw">if</span> (fd &lt; <span class="num">0</span>) {
+        rt_kprintf(<span class="str">"[settings] Cannot save to %s\n"</span>, SETTINGS_FILE_PATH);
+        <span class="kw">return</span>;
+    }
+    <span class="kw">char</span> buf[<span class="num">256</span>];
+    <span class="type">int</span> len = snprintf(buf, <span class="kw">sizeof</span>(buf),
+                       <span class="str">"font_name=%s\n"</span>
+                       <span class="str">"font_size=%d\n"</span>
+                       <span class="str">"bold=%d\n"</span>
+                       <span class="str">"line_spacing=%d\n"</span>
+                       <span class="str">"margin=%d\n"</span>,
+                       font_manager_get_name(g_font_type_idx),
+                       FONT_SIZES[g_font_size_idx],
+                       BOLD_LEVELS[g_bold_idx],
+                       LINE_SPACINGS[g_line_spacing_idx],
+                       MARGINS[g_margin_idx]);
+    write(fd, buf, len);
+    close(fd);
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：开机加载与字体回退（节选） */</span>
+<span class="cmt">/* 按行解析 key=value ... */</span>
+<span class="kw">char</span> *line = strtok(buf, <span class="str">"\n"</span>);
+<span class="kw">while</span> (line) {
+    <span class="kw">char</span> *cr = strchr(line, <span class="str">'\r'</span>);
+    <span class="kw">if</span> (cr) *cr = <span class="str">'\0'</span>;                     <span class="cmt">// 兼容 Windows 换行</span>
+    <span class="kw">if</span> (strncmp(line, <span class="str">"font_name="</span>, <span class="num">10</span>) == <span class="num">0</span>) {
+        strncpy(font_name, line + <span class="num">10</span>, <span class="kw">sizeof</span>(font_name) - <span class="num">1</span>);
+    } <span class="kw">else if</span> (strncmp(line, <span class="str">"font_size="</span>, <span class="num">10</span>) == <span class="num">0</span>) {
+        font_size = atoi(line + <span class="num">10</span>);
+    }
+    <span class="cmt">/* bold / line_spacing / margin 同理 ... */</span>
+    line = strtok(<span class="kw">NULL</span>, <span class="str">"\n"</span>);
+}
+
+<span class="cmt">/* 字体回退：找不到名字或加载失败 → Default（下标 0） */</span>
+<span class="type">int</span> font_idx = find_font_by_name(font_name);
+<span class="kw">if</span> (font_idx &lt; <span class="num">0</span>) {
+    rt_kprintf(<span class="str">"[settings] Font '%s' not found, fallback to Default\n"</span>, font_name);
+    g_font_type_idx = <span class="num">0</span>;                     <span class="cmt">// 内置 Default 永远兜底</span>
+} <span class="kw">else if</span> (font_idx == <span class="num">0</span>) {
+    g_font_type_idx = <span class="num">0</span>;
+} <span class="kw">else</span> {
+    renderer-&gt;show_busy();
+    <span class="type">int</span> ret = font_manager_select(font_idx, FONT_SIZES[g_font_size_idx]);
+    <span class="kw">if</span> (ret != <span class="num">0</span>) { g_font_type_idx = <span class="num">0</span>; }  <span class="cmt">// 加载失败同样回退</span>
+}</code></pre>
+
+  <table>
+    <tr><th>配置键</th><th>含义</th><th>示例</th><th>缺失/异常时的行为</th></tr>
+    <tr><td><code>font_name</code></td><td>选中的字体名</td><td><code>font_name=songti.ttf</code></td><td>找不到 → 回退 Default</td></tr>
+    <tr><td><code>font_size</code></td><td>字号（像素）</td><td><code>font_size=32</code></td><td>不在档位表 → <code>find_index</code> 回默认</td></tr>
+    <tr><td><code>bold</code></td><td>字重档位</td><td><code>bold=1</code></td><td>同上，回默认 0</td></tr>
+    <tr><td><code>line_spacing</code></td><td>行距（x10 整数）</td><td><code>line_spacing=16</code>（1.6x）</td><td>同上，回默认 12</td></tr>
+    <tr><td><code>margin</code></td><td>边距（像素）</td><td><code>margin=11</code></td><td>同上，回默认 8</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>持久化的"持久"二字，赢在兜底：数字对不上档位表就吸回最近档，字体找不到就退回内置，文件不存在就全用默认。三步兜底层层收口，无论卡里躺着什么"残缺配置"，开机都不会白屏。写配置文件系统时，把"读回来一定合法"当作验收标准。</p>
+  </div>
+
+  <!-- ========== 9.4 与主设置页的关系：两条入口、一套出口 ========== -->
+  <h2>9.4 与主设置页的关系：两条入口、一套出口</h2>
+
+  <p>阅读设置页不是独立王国，它有两条入口、且退出后"回到哪"要按来路决定。第一条入口来自<strong>功能设置页</strong>（<code>SETTINGS_PAGE</code>）：README 说"通过功能设置 → 阅读设置"进入。代码上，<code>handleSettingsPage</code> 的六个列表项里第 5 项是"阅读设置"，用户选中后按 SELECT，函数 <code>return 2</code>；<code>main.cpp</code> 收到返回值 2 就把 <code>g_state_before_settings</code> 记成 <code>SETTINGS_PAGE</code>，状态切到 <code>READING_SETTINGS</code> 并立刻画设置页。第二条入口更妙——<strong>阅读页的覆盖操作层</strong>（第 13 章会细讲）里也有一格"设置"：阅读中触发 <code>UPGLIDE</code> 呼出覆盖层，选到设置格按 SELECT，代码先 <code>reader->save_anchor(...)</code> 把"读到哪一块、哪一行"存进锚点，再切进 <code>READING_SETTINGS</code>。所谓<strong>锚点</strong>（anchor），就是"阅读位置的书签"——因为改字号、行距、边距后整个排版都会重排，页码会变，必须记"块 + 行"而不是"第几页"。</p>
+
+  <p>为什么退出时要分来路？因为两条入口的"家"不一样。<code>main.cpp</code> 里 <code>READING_SETTINGS</code> 分支这样收尾：<code>reading_settings_handle_action</code> 返回 <code>false</code>（用户按了保存退出）后，看 <code>g_state_before_settings</code>——若是 <code>READING_EPUB</code>，就删掉旧 reader、按锚点 <code>restore_by_anchor(g_anchor_block, g_anchor_line)</code> 重新定位并渲染，回到刚才读的那一行；若是 <code>SETTINGS_PAGE</code>，就回功能设置页继续改别的（比如触控开关、超时策略）。这个 <code>g_state_before_settings</code> 就是"来路记账"，正是 README 说的"退出后自动恢复到当前阅读位置"。</p>
+
+  <p>把这一套串起来，就是本章的"帷幄"：一个阅读设置页 + 五根旋钮 + 一个保存退出 + 一份 <code>/settings.cfg</code> + 两条入口 + 一套按来路返回的出口。设置项枚举是棋盘，<code>g_current_item</code> 是落子，<code>g_state_before_settings</code> 是后手记忆，<code>reading_settings_save/load</code> 是存棋谱——用户怎么折腾，棋都不会下乱。这也是为什么 8.3 的字体切换、这一章的行距边距，都要归口到"设置"这一根主线上：体验的每一处细节，都在一个地方被摆布。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：设置页返回 2 → 进入阅读设置（节选） */</span>
+<span class="kw">case</span> SETTINGS_PAGE:
+{
+    <span class="type">int</span> settings_result = handleSettingsPage(renderer, ui_action, needs_redraw);
+    <span class="kw">if</span> (settings_result == <span class="num">1</span>) {
+        ui_state = MAIN_PAGE;                    <span class="cmt">// 回主页</span>
+        handleMainPage(renderer, NONE, <span class="kw">true</span>);
+    } <span class="kw">else if</span> (settings_result == <span class="num">2</span>) {
+        g_state_before_settings = SETTINGS_PAGE; <span class="cmt">// 记账：从功能设置页来的</span>
+        ui_state = READING_SETTINGS;
+        reading_settings_draw(renderer);
+    }
+    <span class="kw">break</span>;
+}
+
+<span class="cmt">/* 阅读设置页退出：按来路回到阅读页或功能设置页 */</span>
+<span class="kw">case</span> READING_SETTINGS:
+{
+    <span class="kw">bool</span> still_in_settings = reading_settings_handle_action(renderer, ui_action);
+    <span class="kw">if</span> (!still_in_settings) {
+        <span class="kw">if</span> (g_state_before_settings == READING_EPUB) {
+            ui_state = READING_EPUB;             <span class="cmt">// 从阅读页来的 → 回阅读页</span>
+            delete reader;
+            reader = <span class="kw">nullptr</span>;
+            handleEpub(renderer, NONE);
+            <span class="kw">if</span> (g_has_anchor &amp;&amp; reader) {
+                <span class="cmt">// 按锚点恢复阅读位置（排版已重排，页码不可靠）</span>
+                reader-&gt;restore_by_anchor(g_anchor_block, g_anchor_line);
+                reader-&gt;render();
+                g_has_anchor = <span class="kw">false</span>;
+            }
+        } <span class="kw">else</span> {
+            ui_state = SETTINGS_PAGE;            <span class="cmt">// 从功能设置页来的 → 回去</span>
+            (void)handleSettingsPage(renderer, NONE, <span class="kw">true</span>);
+        }
+    }
+    <span class="kw">return</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：阅读页覆盖操作层的"设置"格（节选） */</span>
+<span class="kw">else if</span> (sel == <span class="num">11</span> || touch_sel == <span class="num">11</span>) <span class="cmt">// 设置（阅读设置）</span>
+{
+    <span class="cmt">// 保存锚点：记住"读到哪一块、哪一行"</span>
+    reader-&gt;save_anchor(g_anchor_block, g_anchor_line);
+    g_has_anchor = <span class="kw">true</span>;
+    g_state_before_settings = READING_EPUB;      <span class="cmt">// 记账：从阅读页来的</span>
+    renderer-&gt;set_margin_bottom(<span class="num">0</span>);
+    reader-&gt;stop_overlay();
+    ui_state = READING_SETTINGS;
+    reading_settings_draw(renderer);
+    touch_sel = -<span class="num">1</span>;
+    <span class="kw">return</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>入口</th><th>触发路径</th><th>来路记账</th><th>保存退出后回到</th></tr>
+    <tr><td>功能设置页</td><td>主页面 → 进入设置 → 阅读设置（SELECT）</td><td><code>SETTINGS_PAGE</code></td><td>功能设置页</td></tr>
+    <tr><td>阅读页覆盖层</td><td>阅读页 <code>UPGLIDE</code> → 覆盖层"设置"格（SELECT）</td><td><code>READING_EPUB</code> + 锚点</td><td>阅读页，锚点恢复位置</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>"进"分两路，"退"也分两路——但判断只用一条规则：<code>g_state_before_settings</code> 里记的是什么就回哪。复杂功能最怕"多条入口、单一出口"：只要进去之前先记账，出来时看账本行事，再多入口也不会迷路。这就是运筹帷幄在代码里的样子。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：设置项盘点 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>阅读设置页有几枚"棋子"（设置项）？各自的可选值是什么？哪一项在代码里是特殊处理的（不参与"循环取值"）？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 9.1 的表格：字体/字号/字重/行距/边距/保存退出；"保存退出"不是调值，而是触发保存与退出。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>六枚：字体（Default + <code>/fonts</code>）、字号（24–48px 七档）、字重（正常/中粗/粗体）、行距（1.0x–2.0x 六档）、边距（5–20px 六档）、保存退出。<code>SETTING_SAVE_EXIT</code> 特殊：SELECT 时不做"下标 +1 取模"，而是有改动就 <code>reading_settings_apply</code> + <code>reading_settings_save</code>，然后 <code>return false</code> 退出页面。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：循环切换机制 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为什么 SELECT 切换值要用"下标 +1 再对档位数取模"？行距为什么要用整数 x10 存储，而不是直接存 1.0 / 1.2 这样的浮点？<code>g_settings_changed</code> 起什么作用？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>取模保证下标永不出界、且能绕回第一档；行距 x10 避免在 MCU 上做浮点比较；g_settings_changed 让"没改过就不写 TF 卡"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>用户操作的是"第几档"（下标），<code>% FONT_SIZES_COUNT</code> 等取模让下标永远落在合法区间并循环回绕。行距用 <code>LINE_SPACINGS[]={10,12,...}</code> 存"10 倍行距"的整数，应用时才 <code>/10.0f</code> 转浮点，规避在无浮点单元的 MCU 上频繁做浮点运算与比较。<code>g_settings_changed</code> 记录本次进入设置页后是否改过任何值，只有改过才在"保存退出"时写 <code>/settings.cfg</code>，避免无效的 TF 卡写入。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：持久化解析 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设 TF 卡 <code>/settings.cfg</code> 内容是 <code>font_name=MyFont.ttf</code>、<code>font_size=30</code>、<code>bold=1</code>、<code>line_spacing=15</code>、<code>margin=9</code>，但这次开机没插 TF 卡、<code>/fonts</code> 里没有 MyFont.ttf。逐项说明加载后各设置实际落到哪个值。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>find_index 会把不在档位表里的数字吸回最近合法档位的默认下标；find_font_by_name 找不到名字就回退下标 0（Default）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>字号 30 不在 {24,28,32,...}，<code>find_index</code> 返回默认下标 0 → 24px；行距 15 不在 {10,12,14,16,...} → 回默认下标 1 → 1.2x；边距 9 不在 {5,8,11,...} → 回默认下标 1 → 8px；字重 1 合法 → 中粗。字体 MyFont.ttf 因没插卡在字体表里找不到，<code>find_font_by_name</code> 返回 -1，打日志 "Font not found, fallback to Default"，<code>g_font_type_idx = 0</code> 用内置 Default——三层兜底保证不白屏。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：锚点恢复 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>为什么从阅读页进阅读设置要记"块 + 行"的锚点，而不是记页码？改完字号/行距/边距返回阅读页时，代码做了哪几步？试想如果不做锚点恢复会怎样。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>改字号行距后整页重排，页码含义会变；流程是 save_anchor → 退出时 delete reader → 重新 handleEpub → restore_by_anchor + render。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>改字号、行距、边距会改变每一页能放多少行，整本书的分页都会重排，此时"第几页"已经失去意义，而"读到哪个文本块、第几行"是稳定标识，所以锚点记 block + line。退出时：<code>delete reader</code> 释放旧阅读器 → <code>handleEpub</code> 重新加载 → <code>restore_by_anchor(g_anchor_block, g_anchor_line)</code> 用锚点重定位 → <code>reader->render()</code> 渲染。若不做锚点恢复，用户改完设置回到阅读页会跳到错误位置甚至停在书开头，阅读体验完全断裂。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

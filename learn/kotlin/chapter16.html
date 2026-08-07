@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第16章：综合项目实战 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="16" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第16章：综合项目实战</h1>
+  <p class="chapter-subtitle">从零构建一个完整的待办事项应用 —— 将前十五章所学融会贯通</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：统揽全局，从线索到结案</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「诸位，一桩大案的侦破，靠的不是单一线索，而是将所有证据串联成一条完整的证据链。构建一个完整的应用亦是如此——从数据层的基石，到架构层的桥梁，再到界面层的呈现，每一层都是不可或缺的环节。今日，让我们将前十五章积累的所有'线索'，汇聚成一个完整的'结案报告'。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 16.1 项目概述与需求分析 ========== -->
+  <h2>16.1 项目概述与需求分析</h2>
+
+  <p>诸位，经过前十五章的勘查与历练，我们已经掌握了 Kotlin 语言基础、Jetpack Compose UI、Room 数据库、Hilt 依赖注入、协程与 Flow、MVVM 架构以及单元测试等核心技能——这些就是我们手中的「物证」。正如侦破一桩悬案需要将零散的线索串联成完整的证据链，现在正是将这些知识整合到一个真实项目中、写出最终「结案报告」的时候了。</p>
+
+  <p>我们要侦办的这桩「案件」，就是构建一个功能完整的<strong>待办事项（TODO）应用</strong>。且看本案的「案情摘要」——它需要具备以下核心功能：</p>
+
+  <ul>
+    <li><strong>添加待办</strong>：用户可以创建带有标题和描述的待办事项</li>
+    <li><strong>编辑待办</strong>：修改已有待办的标题和描述</li>
+    <li><strong>删除待办</strong>：滑动删除或点击删除按钮移除待办</li>
+    <li><strong>完成待办</strong>：点击复选框标记待办为已完成</li>
+    <li><strong>筛选待办</strong>：按状态过滤（全部 / 进行中 / 已完成）</li>
+    <li><strong>数据持久化</strong>：所有数据保存到本地 Room 数据库</li>
+  </ul>
+
+  <h3>技术栈总览</h3>
+
+  <p>一桩大案的侦破，仰赖各类专业手段的配合。下表便是我们为此案准备的全部「侦查工具」：</p>
+
+  <table>
+    <tr>
+      <th>技术领域</th>
+      <th>选型</th>
+      <th>对应章节</th>
+    </tr>
+    <tr>
+      <td>UI 框架</td>
+      <td>Jetpack Compose</td>
+      <td>第6-7章</td>
+    </tr>
+    <tr>
+      <td>架构模式</td>
+      <td>MVVM + Clean Architecture</td>
+      <td>第9章</td>
+    </tr>
+    <tr>
+      <td>本地数据库</td>
+      <td>Room</td>
+      <td>第11章</td>
+    </tr>
+    <tr>
+      <td>依赖注入</td>
+      <td>Hilt</td>
+      <td>第12章</td>
+    </tr>
+    <tr>
+      <td>异步编程</td>
+      <td>Kotlin 协程 + Flow</td>
+      <td>第8章</td>
+    </tr>
+    <tr>
+      <td>页面导航</td>
+      <td>Navigation Compose</td>
+      <td>第7章</td>
+    </tr>
+    <tr>
+      <td>动画</td>
+      <td>Compose Animation API</td>
+      <td>第13章</td>
+    </tr>
+    <tr>
+      <td>测试</td>
+      <td>JUnit + Compose Testing</td>
+      <td>第15章</td>
+    </tr>
+  </table>
+
+  <h3>项目结构</h3>
+
+  <p>破案讲究条理分明、各司其职。我们采用按功能分包的方式组织代码，正如大理寺中各科各房各有分工，每一处文件的位置都经过审慎安排：</p>
+
+<pre><code>com.example.todoapp/
+├── TodoApplication.kt            <span class="cmt">// Application 类，Hilt 入口</span>
+├── MainActivity.kt               <span class="cmt">// 主 Activity</span>
+├── data/
+│   ├── local/
+│   │   ├── Todo.kt               <span class="cmt">// Entity 实体类</span>
+│   │   ├── TodoDao.kt            <span class="cmt">// 数据访问对象</span>
+│   │   └── TodoDatabase.kt       <span class="cmt">// Room 数据库</span>
+│   └── repository/
+│       ├── TodoRepository.kt     <span class="cmt">// Repository 接口</span>
+│       └── TodoRepositoryImpl.kt <span class="cmt">// Repository 实现</span>
+├── di/
+│   ├── DatabaseModule.kt         <span class="cmt">// 数据库依赖注入模块</span>
+│   └── RepositoryModule.kt       <span class="cmt">// Repository 依赖注入模块</span>
+├── ui/
+│   ├── navigation/
+│   │   └── TodoNavGraph.kt       <span class="cmt">// 导航图</span>
+│   ├── list/
+│   │   ├── TodoListViewModel.kt  <span class="cmt">// 列表页 ViewModel</span>
+│   │   └── TodoListScreen.kt     <span class="cmt">// 列表页 UI</span>
+│   ├── addedit/
+│   │   ├── AddEditViewModel.kt   <span class="cmt">// 添加/编辑页 ViewModel</span>
+│   │   └── AddEditScreen.kt      <span class="cmt">// 添加/编辑页 UI</span>
+│   └── components/
+│       ├── TodoItem.kt           <span class="cmt">// 待办事项卡片组件</span>
+│       └── FilterChips.kt        <span class="cmt">// 筛选标签组件</span>
+└── util/
+    └── DateUtils.kt              <span class="cmt">// 日期工具类</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">架构原则</div>
+    <p>本案——不，本项目——严格遵循<strong>单向数据流</strong>原则，正如案情只能从线索汇聚到结论，绝不允许反向推演、捏造证据：UI 层只负责展示和发送事件，ViewModel 处理业务逻辑并暴露状态，Repository 管理数据源。每一层只依赖它下面的层，绝不反向依赖。如此，整条「证据链」方能环环相扣、无懈可击。</p>
+  </div>
+
+  <!-- ========== 16.2 数据层：Entity 与 Database ========== -->
+  <h2>16.2 数据层：Entity 与 Database</h2>
+
+  <p>诸位，侦办大案，首先要做的便是勘察现场、固定物证。数据层就是我们整个应用的「案发现场」，是一切线索的起点和归宿。我们首先要定义 Room 实体类——这便是案件中最基本的「物证」，然后创建 DAO 接口和数据库类，作为保管和查阅物证的「证据库」。</p>
+
+  <h3>Todo 实体类</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.data.local
+
+<span class="kw">import</span> androidx.room.<span class="type">Entity</span>
+<span class="kw">import</span> androidx.room.<span class="type">PrimaryKey</span>
+
+<span class="ann">@Entity</span>(<span class="param">tableName</span> <span class="op">=</span> <span class="str">"todos"</span>)
+<span class="kw">data class</span> <span class="type">Todo</span>(
+    <span class="ann">@PrimaryKey</span>(<span class="param">autoGenerate</span> <span class="op">=</span> <span class="kw">true</span>)
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Long</span> <span class="op">=</span> <span class="num">0</span>,
+    <span class="kw">val</span> <span class="param">title</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">description</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>,
+    <span class="kw">val</span> <span class="param">isCompleted</span>: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>,
+    <span class="kw">val</span> <span class="param">createdAt</span>: <span class="type">Long</span> <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+)</code></pre>
+
+  <p>且看这份「物证登记表」中的几项关键设计——每一处细节都经过我的审慎推敲：</p>
+  <ul>
+    <li><code>id</code> 使用 <code>autoGenerate = true</code>，让 Room 自动生成主键——正如每件物证都需要唯一的编号，不容混淆</li>
+    <li><code>description</code> 默认为空字符串，允许用户只填写标题——有时一条线索只有名目，尚无详细描述，这是合理的</li>
+    <li><code>isCompleted</code> 默认为 <code>false</code>，新建的待办都是未完成状态——新案件入卷时，自然尚未结案</li>
+    <li><code>createdAt</code> 使用时间戳记录创建时间，方便排序——案发时间是最重要的线索之一，务必精确记录</li>
+  </ul>
+
+  <h3>TodoDao 数据访问对象</h3>
+
+  <p>有了物证，便需要一套严谨的「查阅与管理规程」。DAO 便是我们的证据管理制度——增、删、改、查，每一步都有据可依：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.data.local
+
+<span class="kw">import</span> androidx.room.*
+<span class="kw">import</span> kotlinx.coroutines.flow.<span class="type">Flow</span>
+
+<span class="ann">@Dao</span>
+<span class="kw">interface</span> <span class="type">TodoDao</span> {
+
+    <span class="cmt">// 获取所有待办，按创建时间倒序</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos ORDER BY createdAt DESC"</span>)
+    <span class="kw">fun</span> <span class="fn">getAllTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="cmt">// 获取未完成的待办</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos WHERE isCompleted = 0 ORDER BY createdAt DESC"</span>)
+    <span class="kw">fun</span> <span class="fn">getActiveTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="cmt">// 获取已完成的待办</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos WHERE isCompleted = 1 ORDER BY createdAt DESC"</span>)
+    <span class="kw">fun</span> <span class="fn">getCompletedTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="cmt">// 根据 ID 获取单个待办</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos WHERE id = :todoId"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">getTodoById</span>(<span class="param">todoId</span>: <span class="type">Long</span>): <span class="type">Todo?</span>
+
+    <span class="cmt">// 插入待办</span>
+    <span class="ann">@Insert</span>(<span class="param">onConflict</span> <span class="op">=</span> <span class="type">OnConflictStrategy</span>.REPLACE)
+    <span class="kw">suspend fun</span> <span class="fn">insertTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>): <span class="type">Long</span>
+
+    <span class="cmt">// 更新待办</span>
+    <span class="ann">@Update</span>
+    <span class="kw">suspend fun</span> <span class="fn">updateTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="cmt">// 删除待办</span>
+    <span class="ann">@Delete</span>
+    <span class="kw">suspend fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="cmt">// 根据 ID 删除</span>
+    <span class="ann">@Query</span>(<span class="str">"DELETE FROM todos WHERE id = :todoId"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">deleteTodoById</span>(<span class="param">todoId</span>: <span class="type">Long</span>)
+
+    <span class="cmt">// 切换完成状态</span>
+    <span class="ann">@Query</span>(<span class="str">"UPDATE todos SET isCompleted = NOT isCompleted WHERE id = :todoId"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">toggleComplete</span>(<span class="param">todoId</span>: <span class="type">Long</span>)
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">为什么查询返回 Flow？</div>
+    <p>返回 <code>Flow&lt;List&lt;Todo&gt;&gt;</code> 而不是 <code>List&lt;Todo&gt;</code>，这正是我狄仁杰办案的精髓——不能只查一次就收工。Flow 能让我们<strong>实时监听数据变化</strong>，正如在案发现场布下眼线：当数据库中的数据发生任何修改时，Room 会自动发射新的列表，UI 会自动更新，无需手动刷新。任何风吹草动，都逃不过我们的法眼。</p>
+  </div>
+
+  <h3>TodoDatabase 数据库类</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.data.local
+
+<span class="kw">import</span> androidx.room.<span class="type">Database</span>
+<span class="kw">import</span> androidx.room.<span class="type">RoomDatabase</span>
+
+<span class="ann">@Database</span>(
+    <span class="param">entities</span> <span class="op">=</span> [<span class="type">Todo</span>::<span class="kw">class</span>],
+    <span class="param">version</span> <span class="op">=</span> <span class="num">1</span>,
+    <span class="param">exportSchema</span> <span class="op">=</span> <span class="kw">false</span>
+)
+<span class="kw">abstract class</span> <span class="type">TodoDatabase</span> : <span class="type">RoomDatabase</span>() {
+    <span class="kw">abstract fun</span> <span class="fn">todoDao</span>(): <span class="type">TodoDao</span>
+}</code></pre>
+
+  <p>数据库类简洁明了——它只声明了版本号、包含的实体和对应的 DAO，如同大理寺的证据库只需记录其编目规则与管理人，具体的实例创建工作则交由 Hilt 依赖注入来安排，各司其职，井然有序。</p>
+
+  <!-- ========== 16.3 数据层：Repository ========== -->
+  <h2>16.3 数据层：Repository</h2>
+
+  <p>诸位，在大理寺的办案体制中，主审官从不直接翻阅原始卷宗——他只需向书吏索要整理好的案情摘要即可。Repository 模式的道理与此相同：它为数据访问提供了一层抽象。ViewModel 不需要知道数据是来自 Room、网络还是内存缓存——它只需要调用 Repository 提供的方法。这也让后续的测试验证变得极为便利，因为我们可以轻松地伪造一个 Repository 实现，就像在模拟审讯中安排假证人一样。</p>
+
+  <h3>Repository 接口</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.data.repository
+
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+<span class="kw">import</span> kotlinx.coroutines.flow.<span class="type">Flow</span>
+
+<span class="kw">interface</span> <span class="type">TodoRepository</span> {
+
+    <span class="kw">fun</span> <span class="fn">getAllTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="kw">fun</span> <span class="fn">getActiveTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="kw">fun</span> <span class="fn">getCompletedTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="kw">suspend fun</span> <span class="fn">getTodoById</span>(<span class="param">id</span>: <span class="type">Long</span>): <span class="type">Todo?</span>
+
+    <span class="kw">suspend fun</span> <span class="fn">addTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>): <span class="type">Long</span>
+
+    <span class="kw">suspend fun</span> <span class="fn">updateTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="kw">suspend fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="kw">suspend fun</span> <span class="fn">toggleComplete</span>(<span class="param">todoId</span>: <span class="type">Long</span>)
+}</code></pre>
+
+  <h3>Repository 实现</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.data.repository
+
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">TodoDao</span>
+<span class="kw">import</span> kotlinx.coroutines.flow.<span class="type">Flow</span>
+<span class="kw">import</span> javax.inject.<span class="type">Inject</span>
+<span class="kw">import</span> javax.inject.<span class="type">Singleton</span>
+
+<span class="ann">@Singleton</span>
+<span class="kw">class</span> <span class="type">TodoRepositoryImpl</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">todoDao</span>: <span class="type">TodoDao</span>
+) : <span class="type">TodoRepository</span> {
+
+    <span class="kw">override fun</span> <span class="fn">getAllTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; <span class="op">=</span>
+        todoDao.<span class="fn">getAllTodos</span>()
+
+    <span class="kw">override fun</span> <span class="fn">getActiveTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; <span class="op">=</span>
+        todoDao.<span class="fn">getActiveTodos</span>()
+
+    <span class="kw">override fun</span> <span class="fn">getCompletedTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; <span class="op">=</span>
+        todoDao.<span class="fn">getCompletedTodos</span>()
+
+    <span class="kw">override suspend fun</span> <span class="fn">getTodoById</span>(<span class="param">id</span>: <span class="type">Long</span>): <span class="type">Todo?</span> <span class="op">=</span>
+        todoDao.<span class="fn">getTodoById</span>(id)
+
+    <span class="kw">override suspend fun</span> <span class="fn">addTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>): <span class="type">Long</span> <span class="op">=</span>
+        todoDao.<span class="fn">insertTodo</span>(todo)
+
+    <span class="kw">override suspend fun</span> <span class="fn">updateTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>) <span class="op">=</span>
+        todoDao.<span class="fn">updateTodo</span>(todo)
+
+    <span class="kw">override suspend fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>) <span class="op">=</span>
+        todoDao.<span class="fn">deleteTodo</span>(todo)
+
+    <span class="kw">override suspend fun</span> <span class="fn">toggleComplete</span>(<span class="param">todoId</span>: <span class="type">Long</span>) <span class="op">=</span>
+        todoDao.<span class="fn">toggleComplete</span>(todoId)
+}</code></pre>
+
+  <p><code>TodoRepositoryImpl</code> 目前只是将调用委托给 <code>TodoDao</code>——如同书吏暂时只从一处卷宗调取材料。但在实际的大案中，Repository 可能还会从朝廷邸报（网络数据源）和地方衙门（缓存）整合情报。即便当前只有单一来源，这层抽象仍然至关重要——它确保 ViewModel 完全不知晓 Room 的存在，正如主审官不必亲赴证据库翻箱倒柜。</p>
+
+  <!-- ========== 16.4 依赖注入配置 ========== -->
+  <h2>16.4 依赖注入配置</h2>
+
+  <p>诸位，一个运转良好的衙门，靠的是明确的职责分工与人员调配。使用 Hilt 进行依赖注入，便如同为这座「大理寺」安排了一位精干的管家——他负责将合适的人安排到合适的位置，各模块之间保持松耦合，互不越权。我们需要配置两个模块：一个负责提供数据库相关依赖（证据库的钥匙），另一个负责绑定 Repository 接口与实现（指定哪位书吏负责调卷）。</p>
+
+  <h3>Application 类</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp
+
+<span class="kw">import</span> android.app.<span class="type">Application</span>
+<span class="kw">import</span> dagger.hilt.android.<span class="type">HiltAndroidApp</span>
+
+<span class="ann">@HiltAndroidApp</span>
+<span class="kw">class</span> <span class="type">TodoApplication</span> : <span class="type">Application</span>()</code></pre>
+
+  <h3>DatabaseModule</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.di
+
+<span class="kw">import</span> android.content.<span class="type">Context</span>
+<span class="kw">import</span> androidx.room.<span class="type">Room</span>
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">TodoDatabase</span>
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">TodoDao</span>
+<span class="kw">import</span> dagger.<span class="type">Module</span>
+<span class="kw">import</span> dagger.<span class="type">Provides</span>
+<span class="kw">import</span> dagger.hilt.<span class="type">InstallIn</span>
+<span class="kw">import</span> dagger.hilt.android.qualifiers.<span class="type">ApplicationContext</span>
+<span class="kw">import</span> dagger.hilt.components.<span class="type">SingletonComponent</span>
+<span class="kw">import</span> javax.inject.<span class="type">Singleton</span>
+
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">DatabaseModule</span> {
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideTodoDatabase</span>(
+        <span class="ann">@ApplicationContext</span> <span class="param">context</span>: <span class="type">Context</span>
+    ): <span class="type">TodoDatabase</span> {
+        <span class="kw">return</span> <span class="type">Room</span>.<span class="fn">databaseBuilder</span>(
+            context,
+            <span class="type">TodoDatabase</span>::<span class="kw">class</span>.java,
+            <span class="str">"todo_database"</span>
+        ).<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideTodoDao</span>(
+        <span class="param">database</span>: <span class="type">TodoDatabase</span>
+    ): <span class="type">TodoDao</span> {
+        <span class="kw">return</span> database.<span class="fn">todoDao</span>()
+    }
+}</code></pre>
+
+  <h3>RepositoryModule</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.di
+
+<span class="kw">import</span> com.example.todoapp.data.repository.<span class="type">TodoRepository</span>
+<span class="kw">import</span> com.example.todoapp.data.repository.<span class="type">TodoRepositoryImpl</span>
+<span class="kw">import</span> dagger.<span class="type">Binds</span>
+<span class="kw">import</span> dagger.<span class="type">Module</span>
+<span class="kw">import</span> dagger.hilt.<span class="type">InstallIn</span>
+<span class="kw">import</span> dagger.hilt.components.<span class="type">SingletonComponent</span>
+<span class="kw">import</span> javax.inject.<span class="type">Singleton</span>
+
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">RepositoryModule</span> {
+
+    <span class="ann">@Binds</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindTodoRepository</span>(
+        <span class="param">impl</span>: <span class="type">TodoRepositoryImpl</span>
+    ): <span class="type">TodoRepository</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">@Provides 与 @Binds 的区别</div>
+    <p>二者的区别，正如「亲自委任」与「按名册调拨」的不同。<code>@Provides</code> 用于需要手动创建实例的情况（如 Room 数据库），方法体包含具体的构造逻辑——这如同你需要亲手打造一把特殊的锁。<code>@Binds</code> 则用于将接口绑定到已有实现，它更高效——Hilt 不需要生成额外的工厂类。当实现类已经通过 <code>@Inject constructor</code> 标注时，优先使用 <code>@Binds</code>，这便是最省力、最精准的「人事安排」。</p>
+  </div>
+
+  <!-- ========== 16.5 ViewModel 层 ========== -->
+  <h2>16.5 ViewModel 层</h2>
+
+  <p>诸位，在一桩大案中，主审官居中指挥，承上启下——他从证据库中取得物证与供词，经过缜密推理，最终向堂上呈报案情结论。ViewModel 正是这位「主审官」。它持有 UI 需要展示的状态，处理用户操作，并通过 StateFlow 将案情的最新进展通知给 Compose UI——也就是那面向天下公布的堂审大屏。</p>
+
+  <h3>UI 状态定义</h3>
+
+  <p>一桩案件在审理过程中，有几种截然不同的阶段：正在调查、尚无线索、已有眉目、出了岔子。我们的 UI 状态亦是如此：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.list
+
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+
+<span class="cmt">// 筛选类型</span>
+<span class="kw">enum class</span> <span class="type">TodoFilter</span> {
+    ALL,        <span class="cmt">// 全部</span>
+    ACTIVE,     <span class="cmt">// 进行中</span>
+    COMPLETED   <span class="cmt">// 已完成</span>
+}
+
+<span class="cmt">// UI 状态</span>
+<span class="kw">sealed class</span> <span class="type">TodoListUiState</span> {
+    <span class="kw">object</span> <span class="type">Loading</span> : <span class="type">TodoListUiState</span>()
+
+    <span class="kw">data class</span> <span class="type">Success</span>(
+        <span class="kw">val</span> <span class="param">todos</span>: <span class="type">List</span>&lt;<span class="type">Todo</span>&gt;,
+        <span class="kw">val</span> <span class="param">filter</span>: <span class="type">TodoFilter</span>
+    ) : <span class="type">TodoListUiState</span>()
+
+    <span class="kw">object</span> <span class="type">Empty</span> : <span class="type">TodoListUiState</span>()
+
+    <span class="kw">data class</span> <span class="type">Error</span>(
+        <span class="kw">val</span> <span class="param">message</span>: <span class="type">String</span>
+    ) : <span class="type">TodoListUiState</span>()
+}</code></pre>
+
+  <h3>TodoListViewModel</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.list
+
+<span class="kw">import</span> androidx.lifecycle.<span class="type">ViewModel</span>
+<span class="kw">import</span> androidx.lifecycle.<span class="fn">viewModelScope</span>
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+<span class="kw">import</span> com.example.todoapp.data.repository.<span class="type">TodoRepository</span>
+<span class="kw">import</span> dagger.hilt.android.lifecycle.<span class="type">HiltViewModel</span>
+<span class="kw">import</span> kotlinx.coroutines.flow.*
+<span class="kw">import</span> kotlinx.coroutines.<span class="fn">launch</span>
+<span class="kw">import</span> javax.inject.<span class="type">Inject</span>
+
+<span class="ann">@HiltViewModel</span>
+<span class="kw">class</span> <span class="type">TodoListViewModel</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">repository</span>: <span class="type">TodoRepository</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="cmt">// 当前筛选条件</span>
+    <span class="kw">private val</span> _filter <span class="op">=</span> <span class="type">MutableStateFlow</span>(<span class="type">TodoFilter</span>.ALL)
+    <span class="kw">val</span> filter: <span class="type">StateFlow</span>&lt;<span class="type">TodoFilter</span>&gt; <span class="op">=</span> _filter.<span class="fn">asStateFlow</span>()
+
+    <span class="cmt">// UI 状态：根据筛选条件切换不同的数据流</span>
+    <span class="kw">val</span> uiState: <span class="type">StateFlow</span>&lt;<span class="type">TodoListUiState</span>&gt; <span class="op">=</span> _filter
+        .<span class="fn">flatMapLatest</span> { currentFilter <span class="op">-></span>
+            <span class="kw">when</span> (currentFilter) {
+                <span class="type">TodoFilter</span>.ALL <span class="op">-></span> repository.<span class="fn">getAllTodos</span>()
+                <span class="type">TodoFilter</span>.ACTIVE <span class="op">-></span> repository.<span class="fn">getActiveTodos</span>()
+                <span class="type">TodoFilter</span>.COMPLETED <span class="op">-></span> repository.<span class="fn">getCompletedTodos</span>()
+            }
+        }
+        .<span class="fn">map</span> { todos <span class="op">-></span>
+            <span class="kw">if</span> (todos.<span class="fn">isEmpty</span>()) {
+                <span class="type">TodoListUiState</span>.<span class="type">Empty</span>
+            } <span class="kw">else</span> {
+                <span class="type">TodoListUiState</span>.<span class="type">Success</span>(todos, _filter.value)
+            }
+        }
+        .<span class="fn">catch</span> { e <span class="op">-></span>
+            <span class="fn">emit</span>(<span class="type">TodoListUiState</span>.<span class="type">Error</span>(e.message <span class="op">?:</span> <span class="str">"未知错误"</span>))
+        }
+        .<span class="fn">stateIn</span>(
+            <span class="param">scope</span> <span class="op">=</span> viewModelScope,
+            <span class="param">started</span> <span class="op">=</span> <span class="type">SharingStarted</span>.WhileSubscribed(<span class="num">5000</span>),
+            <span class="param">initialValue</span> <span class="op">=</span> <span class="type">TodoListUiState</span>.<span class="type">Loading</span>
+        )
+
+    <span class="cmt">// 设置筛选条件</span>
+    <span class="kw">fun</span> <span class="fn">setFilter</span>(<span class="param">newFilter</span>: <span class="type">TodoFilter</span>) {
+        _filter.value <span class="op">=</span> newFilter
+    }
+
+    <span class="cmt">// 添加待办</span>
+    <span class="kw">fun</span> <span class="fn">addTodo</span>(<span class="param">title</span>: <span class="type">String</span>, <span class="param">description</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="kw">val</span> todo <span class="op">=</span> <span class="type">Todo</span>(
+                <span class="param">title</span> <span class="op">=</span> title.<span class="fn">trim</span>(),
+                <span class="param">description</span> <span class="op">=</span> description.<span class="fn">trim</span>()
+            )
+            repository.<span class="fn">addTodo</span>(todo)
+        }
+    }
+
+    <span class="cmt">// 删除待办</span>
+    <span class="kw">fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            repository.<span class="fn">deleteTodo</span>(todo)
+        }
+    }
+
+    <span class="cmt">// 切换完成状态</span>
+    <span class="kw">fun</span> <span class="fn">toggleComplete</span>(<span class="param">todoId</span>: <span class="type">Long</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            repository.<span class="fn">toggleComplete</span>(todoId)
+        }
+    }
+}</code></pre>
+
+  <p>这段代码的精妙之处在于 <code>uiState</code> 的构建——这正是主审官最核心的推理逻辑。通过 <code>flatMapLatest</code>，我们将筛选条件与对应的数据查询关联起来——当侦查方向改变时，旧的调查线路立即撤回，新的调查随即展开。然后通过 <code>map</code> 将数据列表转换为案情结论（UI 状态），最后通过 <code>stateIn</code> 将 Cold Flow 转换为 Hot StateFlow，让「堂审公屏」（Compose）能够实时订阅案件进展。</p>
+
+  <div class="warning">
+    <div class="tip-title">注意 WhileSubscribed(5000)</div>
+    <p><code>SharingStarted.WhileSubscribed(5000)</code> 表示当最后一个订阅者取消订阅后，Flow 会在 5 秒后停止收集。这如同主审官暂时离席——探子们不必急于撤走，等上五秒再说。这样在配置变更（如屏幕旋转）时，ViewModel 不会立即重新查询数据库，提升了性能。</p>
+  </div>
+
+  <!-- ========== 16.6 UI 层：主界面 ========== -->
+  <h2>16.6 UI 层：主界面</h2>
+
+  <p>现在，我们来到了案件的「公堂呈堂」环节——也就是用户直接面对的界面层。主界面是用户看到的第一个页面，正如大理寺的正堂之上，所有案件的进展一目了然。它包含待办列表、筛选标签、浮动按钮和空状态提示。让我们逐一摆设堂上的「证物」。</p>
+
+  <h3>TodoItem 组件</h3>
+
+  <p>每一条待办事项，便如同案卷架上的一份卷宗。卡片上清楚标注着案件名目（标题）、案情简述（描述）、是否已结案（完成状态），以及销案按钮（删除）：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.components
+
+<span class="kw">import</span> androidx.compose.foundation.layout.*
+<span class="kw">import</span> androidx.compose.material.icons.<span class="type">Icons</span>
+<span class="kw">import</span> androidx.compose.material.icons.filled.<span class="type">Delete</span>
+<span class="kw">import</span> androidx.compose.material3.*
+<span class="kw">import</span> androidx.compose.runtime.<span class="type">Composable</span>
+<span class="kw">import</span> androidx.compose.ui.<span class="type">Modifier</span>
+<span class="kw">import</span> androidx.compose.ui.text.style.<span class="type">TextDecoration</span>
+<span class="kw">import</span> androidx.compose.ui.text.style.<span class="type">TextOverflow</span>
+<span class="kw">import</span> androidx.compose.ui.unit.dp
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TodoItem</span>(
+    <span class="param">todo</span>: <span class="type">Todo</span>,
+    <span class="param">onToggleComplete</span>: (<span class="type">Long</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">onDelete</span>: (<span class="type">Todo</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">onItemClick</span>: (<span class="type">Long</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">modifier</span>: <span class="type">Modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+) {
+    <span class="fn">Card</span>(
+        <span class="param">modifier</span> <span class="op">=</span> modifier
+            .<span class="fn">fillMaxWidth</span>()
+            .<span class="fn">padding</span>(<span class="param">horizontal</span> <span class="op">=</span> <span class="num">16</span>.dp, <span class="param">vertical</span> <span class="op">=</span> <span class="num">4</span>.dp),
+        <span class="param">onClick</span> <span class="op">=</span> { <span class="fn">onItemClick</span>(todo.id) }
+    ) {
+        <span class="fn">Row</span>(
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+                .<span class="fn">fillMaxWidth</span>()
+                .<span class="fn">padding</span>(<span class="num">12</span>.dp),
+            <span class="param">verticalAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.CenterVertically
+        ) {
+            <span class="cmt">// 复选框</span>
+            <span class="fn">Checkbox</span>(
+                <span class="param">checked</span> <span class="op">=</span> todo.isCompleted,
+                <span class="param">onCheckedChange</span> <span class="op">=</span> { <span class="fn">onToggleComplete</span>(todo.id) }
+            )
+
+            <span class="cmt">// 标题和描述</span>
+            <span class="fn">Column</span>(
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+                    .<span class="fn">weight</span>(<span class="num">1</span>f)
+                    .<span class="fn">padding</span>(<span class="param">horizontal</span> <span class="op">=</span> <span class="num">12</span>.dp)
+            ) {
+                <span class="fn">Text</span>(
+                    <span class="param">text</span> <span class="op">=</span> todo.title,
+                    <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.titleMedium,
+                    <span class="param">textDecoration</span> <span class="op">=</span> <span class="kw">if</span> (todo.isCompleted)
+                        <span class="type">TextDecoration</span>.LineThrough <span class="kw">else</span> <span class="type">TextDecoration</span>.None,
+                    <span class="param">maxLines</span> <span class="op">=</span> <span class="num">1</span>,
+                    <span class="param">overflow</span> <span class="op">=</span> <span class="type">TextOverflow</span>.Ellipsis
+                )
+                <span class="kw">if</span> (todo.description.<span class="fn">isNotBlank</span>()) {
+                    <span class="fn">Text</span>(
+                        <span class="param">text</span> <span class="op">=</span> todo.description,
+                        <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.bodyMedium,
+                        <span class="param">color</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.onSurfaceVariant,
+                        <span class="param">maxLines</span> <span class="op">=</span> <span class="num">2</span>,
+                        <span class="param">overflow</span> <span class="op">=</span> <span class="type">TextOverflow</span>.Ellipsis
+                    )
+                }
+            }
+
+            <span class="cmt">// 删除按钮</span>
+            <span class="fn">IconButton</span>(<span class="param">onClick</span> <span class="op">=</span> { <span class="fn">onDelete</span>(todo) }) {
+                <span class="fn">Icon</span>(
+                    <span class="param">imageVector</span> <span class="op">=</span> <span class="type">Icons</span>.Default.Delete,
+                    <span class="param">contentDescription</span> <span class="op">=</span> <span class="str">"删除"</span>,
+                    <span class="param">tint</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.error
+                )
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>FilterChips 筛选组件</h3>
+
+  <p>破案时，我们常常需要从不同角度审视证据——有时需要总览全局，有时只看未解之谜，有时则要回顾已结之案。筛选组件便是我们手中的「分类案卷签」：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.components
+
+<span class="kw">import</span> androidx.compose.foundation.layout.*
+<span class="kw">import</span> androidx.compose.material3.*
+<span class="kw">import</span> androidx.compose.runtime.<span class="type">Composable</span>
+<span class="kw">import</span> androidx.compose.ui.<span class="type">Modifier</span>
+<span class="kw">import</span> androidx.compose.ui.unit.dp
+<span class="kw">import</span> com.example.todoapp.ui.list.<span class="type">TodoFilter</span>
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">FilterChips</span>(
+    <span class="param">currentFilter</span>: <span class="type">TodoFilter</span>,
+    <span class="param">onFilterSelected</span>: (<span class="type">TodoFilter</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">modifier</span>: <span class="type">Modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+) {
+    <span class="fn">Row</span>(
+        <span class="param">modifier</span> <span class="op">=</span> modifier
+            .<span class="fn">fillMaxWidth</span>()
+            .<span class="fn">padding</span>(<span class="param">horizontal</span> <span class="op">=</span> <span class="num">16</span>.dp, <span class="param">vertical</span> <span class="op">=</span> <span class="num">8</span>.dp),
+        <span class="param">horizontalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">8</span>.dp)
+    ) {
+        <span class="kw">val</span> filters <span class="op">=</span> <span class="fn">listOf</span>(
+            <span class="type">TodoFilter</span>.ALL <span class="kw">to</span> <span class="str">"全部"</span>,
+            <span class="type">TodoFilter</span>.ACTIVE <span class="kw">to</span> <span class="str">"进行中"</span>,
+            <span class="type">TodoFilter</span>.COMPLETED <span class="kw">to</span> <span class="str">"已完成"</span>
+        )
+
+        filters.<span class="fn">forEach</span> { (filter, label) <span class="op">-></span>
+            <span class="fn">FilterChip</span>(
+                <span class="param">selected</span> <span class="op">=</span> currentFilter <span class="op">==</span> filter,
+                <span class="param">onClick</span> <span class="op">=</span> { <span class="fn">onFilterSelected</span>(filter) },
+                <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(label) }
+            )
+        }
+    }
+}</code></pre>
+
+  <h3>TodoListScreen 主页面</h3>
+
+  <p>这便是大理寺的正堂——所有案件的进展在此一览无余。加载中时，堂上悬挂等候的灯笼；案卷清空时，呈现一片宁静；线索汇聚时，案卷列表整齐排列；出了差错时，红字警示高悬：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.list
+
+<span class="kw">import</span> androidx.compose.foundation.layout.*
+<span class="kw">import</span> androidx.compose.foundation.lazy.<span class="type">LazyColumn</span>
+<span class="kw">import</span> androidx.compose.foundation.lazy.<span class="fn">items</span>
+<span class="kw">import</span> androidx.compose.material.icons.<span class="type">Icons</span>
+<span class="kw">import</span> androidx.compose.material.icons.filled.<span class="type">Add</span>
+<span class="kw">import</span> androidx.compose.material3.*
+<span class="kw">import</span> androidx.compose.runtime.*
+<span class="kw">import</span> androidx.compose.ui.<span class="type">Alignment</span>
+<span class="kw">import</span> androidx.compose.ui.<span class="type">Modifier</span>
+<span class="kw">import</span> androidx.compose.ui.unit.dp
+<span class="kw">import</span> androidx.hilt.navigation.compose.<span class="fn">hiltViewModel</span>
+<span class="kw">import</span> com.example.todoapp.ui.components.*
+
+<span class="ann">@OptIn</span>(<span class="type">ExperimentalMaterial3Api</span>::<span class="kw">class</span>)
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TodoListScreen</span>(
+    <span class="param">onNavigateToAdd</span>: () <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">onNavigateToEdit</span>: (<span class="type">Long</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">viewModel</span>: <span class="type">TodoListViewModel</span> <span class="op">=</span> <span class="fn">hiltViewModel</span>()
+) {
+    <span class="kw">val</span> uiState <span class="kw">by</span> viewModel.uiState.<span class="fn">collectAsState</span>()
+    <span class="kw">val</span> currentFilter <span class="kw">by</span> viewModel.filter.<span class="fn">collectAsState</span>()
+
+    <span class="fn">Scaffold</span>(
+        <span class="param">topBar</span> <span class="op">=</span> {
+            <span class="fn">TopAppBar</span>(
+                <span class="param">title</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"待办事项"</span>) },
+                <span class="param">colors</span> <span class="op">=</span> <span class="type">TopAppBarDefaults</span>.<span class="fn">topAppBarColors</span>(
+                    <span class="param">containerColor</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.primaryContainer
+                )
+            )
+        },
+        <span class="param">floatingActionButton</span> <span class="op">=</span> {
+            <span class="fn">FloatingActionButton</span>(<span class="param">onClick</span> <span class="op">=</span> onNavigateToAdd) {
+                <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Add, <span class="param">contentDescription</span> <span class="op">=</span> <span class="str">"添加待办"</span>)
+            }
+        }
+    ) { paddingValues <span class="op">-></span>
+        <span class="fn">Column</span>(
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+                .<span class="fn">fillMaxSize</span>()
+                .<span class="fn">padding</span>(paddingValues)
+        ) {
+            <span class="cmt">// 筛选标签</span>
+            <span class="fn">FilterChips</span>(
+                <span class="param">currentFilter</span> <span class="op">=</span> currentFilter,
+                <span class="param">onFilterSelected</span> <span class="op">=</span> { viewModel.<span class="fn">setFilter</span>(it) }
+            )
+
+            <span class="cmt">// 根据状态展示不同内容</span>
+            <span class="kw">when</span> (<span class="kw">val</span> state <span class="op">=</span> uiState) {
+                <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Loading</span> <span class="op">-></span> {
+                    <span class="fn">Box</span>(
+                        <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+                        <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center
+                    ) {
+                        <span class="fn">CircularProgressIndicator</span>()
+                    }
+                }
+
+                <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Empty</span> <span class="op">-></span> {
+                    <span class="fn">EmptyState</span>(<span class="param">filter</span> <span class="op">=</span> currentFilter)
+                }
+
+                <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span> <span class="op">-></span> {
+                    <span class="fn">LazyColumn</span> {
+                        <span class="fn">items</span>(
+                            <span class="param">items</span> <span class="op">=</span> state.todos,
+                            <span class="param">key</span> <span class="op">=</span> { it.id }
+                        ) { todo <span class="op">-></span>
+                            <span class="fn">TodoItem</span>(
+                                <span class="param">todo</span> <span class="op">=</span> todo,
+                                <span class="param">onToggleComplete</span> <span class="op">=</span> { viewModel.<span class="fn">toggleComplete</span>(it) },
+                                <span class="param">onDelete</span> <span class="op">=</span> { viewModel.<span class="fn">deleteTodo</span>(it) },
+                                <span class="param">onItemClick</span> <span class="op">=</span> { onNavigateToEdit(it) },
+                                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">animateItem</span>()
+                            )
+                        }
+                    }
+                }
+
+                <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Error</span> <span class="op">-></span> {
+                    <span class="fn">Box</span>(
+                        <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+                        <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center
+                    ) {
+                        <span class="fn">Text</span>(
+                            <span class="param">text</span> <span class="op">=</span> <span class="str">"出错了: ${state.message}"</span>,
+                            <span class="param">color</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">private fun</span> <span class="fn">EmptyState</span>(<span class="param">filter</span>: <span class="type">TodoFilter</span>) {
+    <span class="kw">val</span> message <span class="op">=</span> <span class="kw">when</span> (filter) {
+        <span class="type">TodoFilter</span>.ALL <span class="op">-></span> <span class="str">"还没有待办事项\n点击右下角按钮添加一个吧！"</span>
+        <span class="type">TodoFilter</span>.ACTIVE <span class="op">-></span> <span class="str">"没有进行中的待办事项"</span>
+        <span class="type">TodoFilter</span>.COMPLETED <span class="op">-></span> <span class="str">"还没有完成任何待办事项"</span>
+    }
+    <span class="fn">Box</span>(
+        <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+        <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center
+    ) {
+        <span class="fn">Text</span>(
+            <span class="param">text</span> <span class="op">=</span> message,
+            <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.bodyLarge,
+            <span class="param">color</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.onSurfaceVariant
+        )
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">关于 Modifier.animateItem()</div>
+    <p>在 <code>LazyColumn</code> 的 <code>items</code> 中使用 <code>Modifier.animateItem()</code>，可以为列表项的添加、移除和重新排列自动添加平滑动画——正如案卷在架上的增减移动应当有条不紊、从容不迫。前提是必须为每个列表项提供唯一的 <code>key</code>，这里我们使用 <code>todo.id</code>，就如同每份卷宗的编号绝不可重复。</p>
+  </div>
+
+  <!-- ========== 16.7 UI 层：添加/编辑界面 ========== -->
+  <h2>16.7 UI 层：添加/编辑界面</h2>
+
+  <p>接下来便是「立案」与「修档」的环节。添加和编辑共用同一个页面——正如新案件的登记与旧案件的补充调查，用的是同一张案卷格式。如果导航时传入了 <code>todoId</code> 参数，便是重新审视旧案（编辑模式）；否则便是新开一桩（添加模式）。</p>
+
+  <h3>AddEditViewModel</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.addedit
+
+<span class="kw">import</span> androidx.lifecycle.<span class="type">SavedStateHandle</span>
+<span class="kw">import</span> androidx.lifecycle.<span class="type">ViewModel</span>
+<span class="kw">import</span> androidx.lifecycle.<span class="fn">viewModelScope</span>
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+<span class="kw">import</span> com.example.todoapp.data.repository.<span class="type">TodoRepository</span>
+<span class="kw">import</span> dagger.hilt.android.lifecycle.<span class="type">HiltViewModel</span>
+<span class="kw">import</span> kotlinx.coroutines.flow.*
+<span class="kw">import</span> kotlinx.coroutines.<span class="fn">launch</span>
+<span class="kw">import</span> javax.inject.<span class="type">Inject</span>
+
+<span class="ann">@HiltViewModel</span>
+<span class="kw">class</span> <span class="type">AddEditViewModel</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">repository</span>: <span class="type">TodoRepository</span>,
+    <span class="param">savedStateHandle</span>: <span class="type">SavedStateHandle</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="kw">private val</span> todoId: <span class="type">Long?</span> <span class="op">=</span> savedStateHandle.<span class="fn">get</span>&lt;<span class="type">Long</span>&gt;(<span class="str">"todoId"</span>)
+    <span class="kw">val</span> isEditMode: <span class="type">Boolean</span> <span class="op">=</span> todoId <span class="op">!=</span> <span class="kw">null</span> <span class="op">&amp;&amp;</span> todoId <span class="op">!=</span> <span class="num">-1</span>L
+
+    <span class="kw">private val</span> _title <span class="op">=</span> <span class="type">MutableStateFlow</span>(<span class="str">""</span>)
+    <span class="kw">val</span> title: <span class="type">StateFlow</span>&lt;<span class="type">String</span>&gt; <span class="op">=</span> _title.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">private val</span> _description <span class="op">=</span> <span class="type">MutableStateFlow</span>(<span class="str">""</span>)
+    <span class="kw">val</span> description: <span class="type">StateFlow</span>&lt;<span class="type">String</span>&gt; <span class="op">=</span> _description.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">private val</span> _titleError <span class="op">=</span> <span class="type">MutableStateFlow</span>&lt;<span class="type">String?</span>&gt;(<span class="kw">null</span>)
+    <span class="kw">val</span> titleError: <span class="type">StateFlow</span>&lt;<span class="type">String?</span>&gt; <span class="op">=</span> _titleError.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">private val</span> _saveCompleted <span class="op">=</span> <span class="type">MutableSharedFlow</span>&lt;<span class="type">Unit</span>&gt;()
+    <span class="kw">val</span> saveCompleted: <span class="type">SharedFlow</span>&lt;<span class="type">Unit</span>&gt; <span class="op">=</span> _saveCompleted.<span class="fn">asSharedFlow</span>()
+
+    <span class="kw">init</span> {
+        <span class="cmt">// 编辑模式：加载已有数据</span>
+        <span class="kw">if</span> (isEditMode) {
+            viewModelScope.<span class="fn">launch</span> {
+                repository.<span class="fn">getTodoById</span>(todoId!!)?.<span class="fn">let</span> { todo <span class="op">-></span>
+                    _title.value <span class="op">=</span> todo.title
+                    _description.value <span class="op">=</span> todo.description
+                }
+            }
+        }
+    }
+
+    <span class="kw">fun</span> <span class="fn">onTitleChange</span>(<span class="param">newTitle</span>: <span class="type">String</span>) {
+        _title.value <span class="op">=</span> newTitle
+        _titleError.value <span class="op">=</span> <span class="kw">null</span>  <span class="cmt">// 清除错误提示</span>
+    }
+
+    <span class="kw">fun</span> <span class="fn">onDescriptionChange</span>(<span class="param">newDescription</span>: <span class="type">String</span>) {
+        _description.value <span class="op">=</span> newDescription
+    }
+
+    <span class="kw">fun</span> <span class="fn">saveTodo</span>() {
+        <span class="kw">val</span> currentTitle <span class="op">=</span> _title.value.<span class="fn">trim</span>()
+
+        <span class="cmt">// 验证：标题不能为空</span>
+        <span class="kw">if</span> (currentTitle.<span class="fn">isEmpty</span>()) {
+            _titleError.value <span class="op">=</span> <span class="str">"标题不能为空"</span>
+            <span class="kw">return</span>
+        }
+
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="kw">if</span> (isEditMode) {
+                <span class="kw">val</span> existingTodo <span class="op">=</span> repository.<span class="fn">getTodoById</span>(todoId!!)
+                existingTodo?.<span class="fn">let</span> {
+                    repository.<span class="fn">updateTodo</span>(
+                        it.<span class="fn">copy</span>(
+                            <span class="param">title</span> <span class="op">=</span> currentTitle,
+                            <span class="param">description</span> <span class="op">=</span> _description.value.<span class="fn">trim</span>()
+                        )
+                    )
+                }
+            } <span class="kw">else</span> {
+                repository.<span class="fn">addTodo</span>(
+                    <span class="type">Todo</span>(
+                        <span class="param">title</span> <span class="op">=</span> currentTitle,
+                        <span class="param">description</span> <span class="op">=</span> _description.value.<span class="fn">trim</span>()
+                    )
+                )
+            }
+            _saveCompleted.<span class="fn">emit</span>(<span class="type">Unit</span>)
+        }
+    }
+}</code></pre>
+
+  <h3>AddEditScreen 界面</h3>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.addedit
+
+<span class="kw">import</span> androidx.compose.foundation.layout.*
+<span class="kw">import</span> androidx.compose.material.icons.<span class="type">Icons</span>
+<span class="kw">import</span> androidx.compose.material.icons.automirrored.filled.<span class="type">ArrowBack</span>
+<span class="kw">import</span> androidx.compose.material3.*
+<span class="kw">import</span> androidx.compose.runtime.*
+<span class="kw">import</span> androidx.compose.ui.<span class="type">Modifier</span>
+<span class="kw">import</span> androidx.compose.ui.unit.dp
+<span class="kw">import</span> androidx.hilt.navigation.compose.<span class="fn">hiltViewModel</span>
+
+<span class="ann">@OptIn</span>(<span class="type">ExperimentalMaterial3Api</span>::<span class="kw">class</span>)
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AddEditScreen</span>(
+    <span class="param">onNavigateBack</span>: () <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">viewModel</span>: <span class="type">AddEditViewModel</span> <span class="op">=</span> <span class="fn">hiltViewModel</span>()
+) {
+    <span class="kw">val</span> title <span class="kw">by</span> viewModel.title.<span class="fn">collectAsState</span>()
+    <span class="kw">val</span> description <span class="kw">by</span> viewModel.description.<span class="fn">collectAsState</span>()
+    <span class="kw">val</span> titleError <span class="kw">by</span> viewModel.titleError.<span class="fn">collectAsState</span>()
+
+    <span class="cmt">// 监听保存完成事件，返回上一页</span>
+    <span class="fn">LaunchedEffect</span>(<span class="type">Unit</span>) {
+        viewModel.saveCompleted.<span class="fn">collect</span> {
+            <span class="fn">onNavigateBack</span>()
+        }
+    }
+
+    <span class="fn">Scaffold</span>(
+        <span class="param">topBar</span> <span class="op">=</span> {
+            <span class="fn">TopAppBar</span>(
+                <span class="param">title</span> <span class="op">=</span> {
+                    <span class="fn">Text</span>(<span class="kw">if</span> (viewModel.isEditMode) <span class="str">"编辑待办"</span> <span class="kw">else</span> <span class="str">"新建待办"</span>)
+                },
+                <span class="param">navigationIcon</span> <span class="op">=</span> {
+                    <span class="fn">IconButton</span>(<span class="param">onClick</span> <span class="op">=</span> onNavigateBack) {
+                        <span class="fn">Icon</span>(<span class="type">Icons</span>.AutoMirrored.Filled.ArrowBack, <span class="str">"返回"</span>)
+                    }
+                }
+            )
+        }
+    ) { paddingValues <span class="op">-></span>
+        <span class="fn">Column</span>(
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+                .<span class="fn">fillMaxSize</span>()
+                .<span class="fn">padding</span>(paddingValues)
+                .<span class="fn">padding</span>(<span class="num">16</span>.dp),
+            <span class="param">verticalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">16</span>.dp)
+        ) {
+            <span class="cmt">// 标题输入框</span>
+            <span class="fn">OutlinedTextField</span>(
+                <span class="param">value</span> <span class="op">=</span> title,
+                <span class="param">onValueChange</span> <span class="op">=</span> { viewModel.<span class="fn">onTitleChange</span>(it) },
+                <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"标题"</span>) },
+                <span class="param">isError</span> <span class="op">=</span> titleError <span class="op">!=</span> <span class="kw">null</span>,
+                <span class="param">supportingText</span> <span class="op">=</span> {
+                    titleError?.<span class="fn">let</span> { <span class="fn">Text</span>(it) }
+                },
+                <span class="param">singleLine</span> <span class="op">=</span> <span class="kw">true</span>,
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>()
+            )
+
+            <span class="cmt">// 描述输入框</span>
+            <span class="fn">OutlinedTextField</span>(
+                <span class="param">value</span> <span class="op">=</span> description,
+                <span class="param">onValueChange</span> <span class="op">=</span> { viewModel.<span class="fn">onDescriptionChange</span>(it) },
+                <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"描述（可选）"</span>) },
+                <span class="param">minLines</span> <span class="op">=</span> <span class="num">3</span>,
+                <span class="param">maxLines</span> <span class="op">=</span> <span class="num">5</span>,
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>()
+            )
+
+            <span class="cmt">// 保存按钮</span>
+            <span class="fn">Button</span>(
+                <span class="param">onClick</span> <span class="op">=</span> { viewModel.<span class="fn">saveTodo</span>() },
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>()
+            ) {
+                <span class="fn">Text</span>(<span class="kw">if</span> (viewModel.isEditMode) <span class="str">"保存修改"</span> <span class="kw">else</span> <span class="str">"添加待办"</span>)
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>导航配置</h3>
+
+  <p>两个厅堂——案卷大厅（列表页）与受理窗口（添加/编辑页）——之间需要有通畅的廊道。Navigation Compose 就是这条廊道，它确保我们可以在正堂与后堂之间自如穿行：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.navigation
+
+<span class="kw">import</span> androidx.compose.runtime.<span class="type">Composable</span>
+<span class="kw">import</span> androidx.navigation.<span class="type">NavType</span>
+<span class="kw">import</span> androidx.navigation.compose.*
+<span class="kw">import</span> androidx.navigation.<span class="fn">navArgument</span>
+<span class="kw">import</span> com.example.todoapp.ui.list.<span class="type">TodoListScreen</span>
+<span class="kw">import</span> com.example.todoapp.ui.addedit.<span class="type">AddEditScreen</span>
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TodoNavGraph</span>() {
+    <span class="kw">val</span> navController <span class="op">=</span> <span class="fn">rememberNavController</span>()
+
+    <span class="fn">NavHost</span>(
+        <span class="param">navController</span> <span class="op">=</span> navController,
+        <span class="param">startDestination</span> <span class="op">=</span> <span class="str">"todo_list"</span>
+    ) {
+        <span class="cmt">// 待办列表页</span>
+        <span class="fn">composable</span>(<span class="str">"todo_list"</span>) {
+            <span class="fn">TodoListScreen</span>(
+                <span class="param">onNavigateToAdd</span> <span class="op">=</span> {
+                    navController.<span class="fn">navigate</span>(<span class="str">"add_edit/-1"</span>)
+                },
+                <span class="param">onNavigateToEdit</span> <span class="op">=</span> { todoId <span class="op">-></span>
+                    navController.<span class="fn">navigate</span>(<span class="str">"add_edit/$todoId"</span>)
+                }
+            )
+        }
+
+        <span class="cmt">// 添加/编辑页</span>
+        <span class="fn">composable</span>(
+            <span class="param">route</span> <span class="op">=</span> <span class="str">"add_edit/{todoId}"</span>,
+            <span class="param">arguments</span> <span class="op">=</span> <span class="fn">listOf</span>(
+                <span class="fn">navArgument</span>(<span class="str">"todoId"</span>) {
+                    type <span class="op">=</span> <span class="type">NavType</span>.LongType
+                    defaultValue <span class="op">=</span> <span class="num">-1</span>L
+                }
+            )
+        ) {
+            <span class="fn">AddEditScreen</span>(
+                <span class="param">onNavigateBack</span> <span class="op">=</span> { navController.<span class="fn">popBackStack</span>() }
+            )
+        }
+    }
+}</code></pre>
+
+  <h3>MainActivity</h3>
+
+  <p>万事俱备，只欠升堂。<code>MainActivity</code> 便是那一声「升堂！」的惊堂木——整个应用由此启动：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp
+
+<span class="kw">import</span> android.os.<span class="type">Bundle</span>
+<span class="kw">import</span> androidx.activity.<span class="type">ComponentActivity</span>
+<span class="kw">import</span> androidx.activity.compose.<span class="fn">setContent</span>
+<span class="kw">import</span> androidx.compose.material3.<span class="type">MaterialTheme</span>
+<span class="kw">import</span> com.example.todoapp.ui.navigation.<span class="type">TodoNavGraph</span>
+<span class="kw">import</span> dagger.hilt.android.<span class="type">AndroidEntryPoint</span>
+
+<span class="ann">@AndroidEntryPoint</span>
+<span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        <span class="fn">setContent</span> {
+            <span class="fn">MaterialTheme</span> {
+                <span class="fn">TodoNavGraph</span>()
+            }
+        }
+    }
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">别忘了 @AndroidEntryPoint</div>
+    <p>此处必须格外警惕——这是一个隐藏极深的「嫌疑犯」。使用 Hilt 的 Activity 必须添加 <code>@AndroidEntryPoint</code> 注解，Application 类必须添加 <code>@HiltAndroidApp</code>。遗漏了这些注解，就如同升堂时忘了带官印——Hilt 无法注入依赖，应用会在运行时崩溃。我见过无数开发者栽在此处，诸位切记、切记。</p>
+  </div>
+
+  <!-- ========== 16.8 添加动画效果 ========== -->
+  <h2>16.8 添加动画效果</h2>
+
+  <p>诸位，一桩精彩的堂审，不仅仅是宣读卷宗——它还需要起承转合、抑扬顿挫，方能让旁听者心领神会。动画在应用中扮演的正是这个角色：它让界面的状态变化有迹可循，让用户自然而然地理解正在发生什么。让我们在几个关键的「审案节点」加入动效。</p>
+
+  <h3>AnimatedVisibility：空状态动画</h3>
+
+  <p>当案卷从有到无、从无到有时，堂上的陈设不应骤然出现或消失，而应如帷幕缓缓拉开。使用 <code>AnimatedVisibility</code> 实现淡入淡出过渡：</p>
+
+<pre><code><span class="kw">import</span> androidx.compose.animation.*
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TodoContent</span>(
+    <span class="param">uiState</span>: <span class="type">TodoListUiState</span>,
+    <span class="param">filter</span>: <span class="type">TodoFilter</span>,
+    <span class="cmt">// ... 其他参数</span>
+) {
+    <span class="kw">val</span> isEmpty <span class="op">=</span> uiState <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Empty</span>
+
+    <span class="cmt">// 空状态：淡入淡出 + 上滑进入</span>
+    <span class="fn">AnimatedVisibility</span>(
+        <span class="param">visible</span> <span class="op">=</span> isEmpty,
+        <span class="param">enter</span> <span class="op">=</span> <span class="fn">fadeIn</span>() + <span class="fn">slideInVertically</span>(),
+        <span class="param">exit</span> <span class="op">=</span> <span class="fn">fadeOut</span>() + <span class="fn">slideOutVertically</span>()
+    ) {
+        <span class="fn">EmptyState</span>(<span class="param">filter</span> <span class="op">=</span> filter)
+    }
+
+    <span class="cmt">// 列表：淡入淡出</span>
+    <span class="fn">AnimatedVisibility</span>(
+        <span class="param">visible</span> <span class="op">=</span> !isEmpty <span class="op">&amp;&amp;</span> uiState <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>,
+        <span class="param">enter</span> <span class="op">=</span> <span class="fn">fadeIn</span>(),
+        <span class="param">exit</span> <span class="op">=</span> <span class="fn">fadeOut</span>()
+    ) {
+        <span class="cmt">// LazyColumn ...</span>
+    }
+}</code></pre>
+
+  <h3>animateColorAsState：完成状态颜色变化</h3>
+
+  <p>当一桩案件从「侦办中」变为「已结案」，卷宗封面的颜色也随之改变。用户点击复选框标记待办完成时，卡片背景色应当平滑过渡，如同案情水落石出、尘埃落定：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TodoItem</span>(
+    <span class="param">todo</span>: <span class="type">Todo</span>,
+    <span class="cmt">// ... 其他参数</span>
+) {
+    <span class="cmt">// 根据完成状态动画过渡背景色</span>
+    <span class="kw">val</span> containerColor <span class="kw">by</span> <span class="fn">animateColorAsState</span>(
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="kw">if</span> (todo.isCompleted)
+            <span class="type">MaterialTheme</span>.colorScheme.surfaceVariant
+        <span class="kw">else</span>
+            <span class="type">MaterialTheme</span>.colorScheme.surface,
+        <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">tween</span>(<span class="param">durationMillis</span> <span class="op">=</span> <span class="num">300</span>),
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"todoCardColor"</span>
+    )
+
+    <span class="fn">Card</span>(
+        <span class="param">colors</span> <span class="op">=</span> <span class="type">CardDefaults</span>.<span class="fn">cardColors</span>(
+            <span class="param">containerColor</span> <span class="op">=</span> containerColor
+        ),
+        <span class="cmt">// ...</span>
+    ) {
+        <span class="cmt">// 卡片内容</span>
+    }
+}</code></pre>
+
+  <h3>Crossfade：筛选切换过渡</h3>
+
+  <p>在不同的侦查方向之间切换——从全局总览到聚焦未结之案，再到回顾已结旧案——使用 <code>Crossfade</code> 实现内容交叉淡入淡出，如同在不同的案卷册之间从容翻阅：</p>
+
+<pre><code><span class="fn">Crossfade</span>(
+    <span class="param">targetState</span> <span class="op">=</span> uiState,
+    <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">tween</span>(<span class="num">300</span>),
+    <span class="param">label</span> <span class="op">=</span> <span class="str">"contentCrossfade"</span>
+) { state <span class="op">-></span>
+    <span class="kw">when</span> (state) {
+        <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Loading</span> <span class="op">-></span> { <span class="cmt">/* 加载状态 */</span> }
+        <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Empty</span> <span class="op">-></span> { <span class="fn">EmptyState</span>(<span class="param">filter</span> <span class="op">=</span> currentFilter) }
+        <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span> <span class="op">-></span> { <span class="cmt">/* 列表 */</span> }
+        <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Error</span> <span class="op">-></span> { <span class="cmt">/* 错误状态 */</span> }
+    }
+}</code></pre>
+
+  <h3>SwipeToDismiss：滑动删除</h3>
+
+  <p>有些案件需要被销案——向左一拂，红色警示浮现，案卷便从架上消失。这便是滑动删除功能，它赋予用户一种果断而优雅的「结案」体验：</p>
+
+<pre><code><span class="kw">import</span> androidx.compose.material3.<span class="type">SwipeToDismissBox</span>
+<span class="kw">import</span> androidx.compose.material3.<span class="type">SwipeToDismissBoxValue</span>
+<span class="kw">import</span> androidx.compose.material3.<span class="fn">rememberSwipeToDismissBoxState</span>
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">SwipeableTodoItem</span>(
+    <span class="param">todo</span>: <span class="type">Todo</span>,
+    <span class="param">onDelete</span>: (<span class="type">Todo</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">onToggleComplete</span>: (<span class="type">Long</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">onItemClick</span>: (<span class="type">Long</span>) <span class="op">-></span> <span class="type">Unit</span>
+) {
+    <span class="kw">val</span> dismissState <span class="op">=</span> <span class="fn">rememberSwipeToDismissBoxState</span>(
+        <span class="param">confirmValueChange</span> <span class="op">=</span> { dismissValue <span class="op">-></span>
+            <span class="kw">if</span> (dismissValue <span class="op">==</span> <span class="type">SwipeToDismissBoxValue</span>.EndToStart) {
+                <span class="fn">onDelete</span>(todo)
+                <span class="kw">true</span>
+            } <span class="kw">else</span> {
+                <span class="kw">false</span>
+            }
+        }
+    )
+
+    <span class="fn">SwipeToDismissBox</span>(
+        <span class="param">state</span> <span class="op">=</span> dismissState,
+        <span class="param">enableDismissFromStartToEnd</span> <span class="op">=</span> <span class="kw">false</span>,
+        <span class="param">backgroundContent</span> <span class="op">=</span> {
+            <span class="cmt">// 红色删除背景</span>
+            <span class="fn">Box</span>(
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+                    .<span class="fn">fillMaxSize</span>()
+                    .<span class="fn">background</span>(<span class="type">MaterialTheme</span>.colorScheme.error)
+                    .<span class="fn">padding</span>(<span class="param">horizontal</span> <span class="op">=</span> <span class="num">20</span>.dp),
+                <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.CenterEnd
+            ) {
+                <span class="fn">Icon</span>(
+                    <span class="type">Icons</span>.Default.Delete,
+                    <span class="param">contentDescription</span> <span class="op">=</span> <span class="str">"删除"</span>,
+                    <span class="param">tint</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.onError
+                )
+            }
+        }
+    ) {
+        <span class="fn">TodoItem</span>(
+            <span class="param">todo</span> <span class="op">=</span> todo,
+            <span class="param">onToggleComplete</span> <span class="op">=</span> onToggleComplete,
+            <span class="param">onDelete</span> <span class="op">=</span> onDelete,
+            <span class="param">onItemClick</span> <span class="op">=</span> onItemClick
+        )
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">动画的适度原则</div>
+    <p>我狄仁杰断案，讲究张弛有度、点到为止。动画亦然——它应当服务于用户体验，而非炫技。一个好的动画应该让用户自然地理解界面状态的变化，而不是让用户眼花缭乱。保持动画简洁、时长合理（200-400 毫秒通常是最佳范围），在关键交互节点使用动画即可。过犹不及，适可而止。</p>
+  </div>
+
+  <!-- ========== 16.9 编写测试 ========== -->
+  <h2>16.9 编写测试</h2>
+
+  <p>诸位，狄仁杰办案有一条铁律：每一项指控都必须经得起反复推敲，每一条证据链都必须严丝合缝。写代码亦是如此——一个真正可靠的应用离不开测试。测试就是我们的「复查制度」，是防止冤假错案的最后一道防线。我们为核心逻辑编写单元测试，为 UI 编写集成测试。</p>
+
+  <h3>FakeTodoRepository</h3>
+
+  <p>首先，我们需要一位「替身证人」——一个假的 Repository 实现，用于在测试中替代真实的数据库操作。这样我们便可以在不依赖真实证据库的情况下，独立验证主审官（ViewModel）的推理逻辑是否正确：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.data.repository
+
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+<span class="kw">import</span> kotlinx.coroutines.flow.*
+
+<span class="kw">class</span> <span class="type">FakeTodoRepository</span> : <span class="type">TodoRepository</span> {
+
+    <span class="kw">private val</span> todos <span class="op">=</span> <span class="type">MutableStateFlow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;(<span class="fn">emptyList</span>())
+    <span class="kw">private var</span> nextId <span class="op">=</span> <span class="num">1</span>L
+
+    <span class="kw">override fun</span> <span class="fn">getAllTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; <span class="op">=</span>
+        todos.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">override fun</span> <span class="fn">getActiveTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; <span class="op">=</span>
+        todos.<span class="fn">map</span> { list <span class="op">-></span> list.<span class="fn">filter</span> { !it.isCompleted } }
+
+    <span class="kw">override fun</span> <span class="fn">getCompletedTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; <span class="op">=</span>
+        todos.<span class="fn">map</span> { list <span class="op">-></span> list.<span class="fn">filter</span> { it.isCompleted } }
+
+    <span class="kw">override suspend fun</span> <span class="fn">getTodoById</span>(<span class="param">id</span>: <span class="type">Long</span>): <span class="type">Todo?</span> <span class="op">=</span>
+        todos.value.<span class="fn">find</span> { it.id <span class="op">==</span> id }
+
+    <span class="kw">override suspend fun</span> <span class="fn">addTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>): <span class="type">Long</span> {
+        <span class="kw">val</span> id <span class="op">=</span> nextId++
+        <span class="kw">val</span> newTodo <span class="op">=</span> todo.<span class="fn">copy</span>(<span class="param">id</span> <span class="op">=</span> id)
+        todos.value <span class="op">=</span> todos.value + newTodo
+        <span class="kw">return</span> id
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">updateTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>) {
+        todos.value <span class="op">=</span> todos.value.<span class="fn">map</span> {
+            <span class="kw">if</span> (it.id <span class="op">==</span> todo.id) todo <span class="kw">else</span> it
+        }
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>) {
+        todos.value <span class="op">=</span> todos.value.<span class="fn">filter</span> { it.id <span class="op">!=</span> todo.id }
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">toggleComplete</span>(<span class="param">todoId</span>: <span class="type">Long</span>) {
+        todos.value <span class="op">=</span> todos.value.<span class="fn">map</span> {
+            <span class="kw">if</span> (it.id <span class="op">==</span> todoId) it.<span class="fn">copy</span>(<span class="param">isCompleted</span> <span class="op">=</span> !it.isCompleted)
+            <span class="kw">else</span> it
+        }
+    }
+}</code></pre>
+
+  <h3>ViewModel 单元测试</h3>
+
+  <p>现在，让我们对主审官的每一步推理进行严格的复核——初始状态是否正确？立案后卷宗是否入库？结案标记是否生效？销案是否彻底？筛选是否精准？每一项都要验证：</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.list
+
+<span class="kw">import</span> com.example.todoapp.data.repository.<span class="type">FakeTodoRepository</span>
+<span class="kw">import</span> kotlinx.coroutines.test.*
+<span class="kw">import</span> kotlinx.coroutines.<span class="type">Dispatchers</span>
+<span class="kw">import</span> kotlinx.coroutines.<span class="type">ExperimentalCoroutinesApi</span>
+<span class="kw">import</span> org.junit.*
+<span class="kw">import</span> org.junit.<span class="type">Assert</span>.*
+
+<span class="ann">@OptIn</span>(<span class="type">ExperimentalCoroutinesApi</span>::<span class="kw">class</span>)
+<span class="kw">class</span> <span class="type">TodoListViewModelTest</span> {
+
+    <span class="kw">private lateinit var</span> viewModel: <span class="type">TodoListViewModel</span>
+    <span class="kw">private lateinit var</span> repository: <span class="type">FakeTodoRepository</span>
+    <span class="kw">private val</span> testDispatcher <span class="op">=</span> <span class="fn">UnconfinedTestDispatcher</span>()
+
+    <span class="ann">@Before</span>
+    <span class="kw">fun</span> <span class="fn">setup</span>() {
+        <span class="type">Dispatchers</span>.<span class="fn">setMain</span>(testDispatcher)
+        repository <span class="op">=</span> <span class="type">FakeTodoRepository</span>()
+        viewModel <span class="op">=</span> <span class="type">TodoListViewModel</span>(repository)
+    }
+
+    <span class="ann">@After</span>
+    <span class="kw">fun</span> <span class="fn">tearDown</span>() {
+        <span class="type">Dispatchers</span>.<span class="fn">resetMain</span>()
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">`initial state is Empty`</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        <span class="cmt">// 收集一次状态</span>
+        <span class="kw">val</span> state <span class="op">=</span> viewModel.uiState.value
+        <span class="fn">assertTrue</span>(state <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Empty</span>)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">`addTodo updates state to Success`</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"买牛奶"</span>, <span class="str">"去超市买两盒"</span>)
+
+        <span class="cmt">// 等待状态更新</span>
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="kw">val</span> state <span class="op">=</span> viewModel.uiState.value
+        <span class="fn">assertTrue</span>(state <span class="kw">is</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>)
+        <span class="kw">val</span> todos <span class="op">=</span> (state <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>).todos
+        <span class="fn">assertEquals</span>(<span class="num">1</span>, todos.size)
+        <span class="fn">assertEquals</span>(<span class="str">"买牛奶"</span>, todos[<span class="num">0</span>].title)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">`toggleComplete changes todo status`</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"写报告"</span>)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="kw">val</span> todoId <span class="op">=</span> (viewModel.uiState.value <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>)
+            .todos[<span class="num">0</span>].id
+        viewModel.<span class="fn">toggleComplete</span>(todoId)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="kw">val</span> updatedTodo <span class="op">=</span> (viewModel.uiState.value <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>)
+            .todos[<span class="num">0</span>]
+        <span class="fn">assertTrue</span>(updatedTodo.isCompleted)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">`deleteTodo removes item from list`</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"任务A"</span>)
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"任务B"</span>)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="kw">val</span> todoToDelete <span class="op">=</span> (viewModel.uiState.value <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>)
+            .todos[<span class="num">0</span>]
+        viewModel.<span class="fn">deleteTodo</span>(todoToDelete)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="kw">val</span> remaining <span class="op">=</span> (viewModel.uiState.value <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>)
+            .todos
+        <span class="fn">assertEquals</span>(<span class="num">1</span>, remaining.size)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">`setFilter to Active shows only active todos`</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"进行中的任务"</span>)
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"已完成的任务"</span>)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="cmt">// 完成第二个任务</span>
+        <span class="kw">val</span> todos <span class="op">=</span> (viewModel.uiState.value <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>).todos
+        viewModel.<span class="fn">toggleComplete</span>(todos[<span class="num">1</span>].id)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="cmt">// 切换到"进行中"筛选</span>
+        viewModel.<span class="fn">setFilter</span>(<span class="type">TodoFilter</span>.ACTIVE)
+        <span class="fn">advanceUntilIdle</span>()
+
+        <span class="kw">val</span> activeTodos <span class="op">=</span> (viewModel.uiState.value <span class="kw">as</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>)
+            .todos
+        <span class="fn">assertEquals</span>(<span class="num">1</span>, activeTodos.size)
+        <span class="fn">assertFalse</span>(activeTodos[<span class="num">0</span>].isCompleted)
+    }
+}</code></pre>
+
+  <h3>Compose UI 测试</h3>
+
+  <p>验证完主审官的推理逻辑后，还要检验公堂上的呈现是否合规——卷宗的内容是否正确显示？点击复选框时回调是否被正确触发？删除按钮是否如实执行了销案？</p>
+
+<pre><code><span class="kw">package</span> com.example.todoapp.ui.list
+
+<span class="kw">import</span> androidx.compose.ui.test.*
+<span class="kw">import</span> androidx.compose.ui.test.junit4.<span class="fn">createComposeRule</span>
+<span class="kw">import</span> com.example.todoapp.data.local.<span class="type">Todo</span>
+<span class="kw">import</span> com.example.todoapp.ui.components.<span class="type">TodoItem</span>
+<span class="kw">import</span> org.junit.<span class="type">Rule</span>
+<span class="kw">import</span> org.junit.<span class="type">Test</span>
+
+<span class="kw">class</span> <span class="type">TodoListScreenTest</span> {
+
+    <span class="ann">@get:Rule</span>
+    <span class="kw">val</span> composeTestRule <span class="op">=</span> <span class="fn">createComposeRule</span>()
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">todoItem_displaysCorrectContent</span>() {
+        <span class="kw">val</span> todo <span class="op">=</span> <span class="type">Todo</span>(
+            <span class="param">id</span> <span class="op">=</span> <span class="num">1</span>,
+            <span class="param">title</span> <span class="op">=</span> <span class="str">"写代码"</span>,
+            <span class="param">description</span> <span class="op">=</span> <span class="str">"完成第16章示例"</span>
+        )
+
+        composeTestRule.<span class="fn">setContent</span> {
+            <span class="fn">TodoItem</span>(
+                <span class="param">todo</span> <span class="op">=</span> todo,
+                <span class="param">onToggleComplete</span> <span class="op">=</span> {},
+                <span class="param">onDelete</span> <span class="op">=</span> {},
+                <span class="param">onItemClick</span> <span class="op">=</span> {}
+            )
+        }
+
+        <span class="cmt">// 验证标题和描述正确显示</span>
+        composeTestRule.<span class="fn">onNodeWithText</span>(<span class="str">"写代码"</span>).<span class="fn">assertIsDisplayed</span>()
+        composeTestRule.<span class="fn">onNodeWithText</span>(<span class="str">"完成第16章示例"</span>).<span class="fn">assertIsDisplayed</span>()
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">todoItem_checkboxTogglesOnClick</span>() {
+        <span class="kw">var</span> toggledId: <span class="type">Long?</span> <span class="op">=</span> <span class="kw">null</span>
+        <span class="kw">val</span> todo <span class="op">=</span> <span class="type">Todo</span>(
+            <span class="param">id</span> <span class="op">=</span> <span class="num">42</span>,
+            <span class="param">title</span> <span class="op">=</span> <span class="str">"测试任务"</span>
+        )
+
+        composeTestRule.<span class="fn">setContent</span> {
+            <span class="fn">TodoItem</span>(
+                <span class="param">todo</span> <span class="op">=</span> todo,
+                <span class="param">onToggleComplete</span> <span class="op">=</span> { toggledId <span class="op">=</span> it },
+                <span class="param">onDelete</span> <span class="op">=</span> {},
+                <span class="param">onItemClick</span> <span class="op">=</span> {}
+            )
+        }
+
+        <span class="cmt">// 点击复选框</span>
+        composeTestRule
+            .<span class="fn">onNodeWithTag</span>(<span class="str">"checkbox"</span>, <span class="param">useUnmergedTree</span> <span class="op">=</span> <span class="kw">true</span>)
+            .<span class="fn">performClick</span>()
+
+        <span class="cmt">// 验证回调被调用，传入正确的 ID</span>
+        <span class="fn">assertEquals</span>(<span class="num">42</span>L, toggledId)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">todoItem_deleteButtonTriggersCallback</span>() {
+        <span class="kw">var</span> deletedTodo: <span class="type">Todo?</span> <span class="op">=</span> <span class="kw">null</span>
+        <span class="kw">val</span> todo <span class="op">=</span> <span class="type">Todo</span>(<span class="param">id</span> <span class="op">=</span> <span class="num">1</span>, <span class="param">title</span> <span class="op">=</span> <span class="str">"要删除的任务"</span>)
+
+        composeTestRule.<span class="fn">setContent</span> {
+            <span class="fn">TodoItem</span>(
+                <span class="param">todo</span> <span class="op">=</span> todo,
+                <span class="param">onToggleComplete</span> <span class="op">=</span> {},
+                <span class="param">onDelete</span> <span class="op">=</span> { deletedTodo <span class="op">=</span> it },
+                <span class="param">onItemClick</span> <span class="op">=</span> {}
+            )
+        }
+
+        <span class="cmt">// 点击删除按钮</span>
+        composeTestRule
+            .<span class="fn">onNodeWithContentDescription</span>(<span class="str">"删除"</span>)
+            .<span class="fn">performClick</span>()
+
+        <span class="fn">assertEquals</span>(todo, deletedTodo)
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">测试驱动信心</div>
+    <p>通过 <code>FakeTodoRepository</code>，我们的 ViewModel 测试完全不依赖 Room 数据库，运行速度极快——正如在模拟审讯中，无需动用真正的刑部大牢。在真实项目中，还应该为 DAO 编写 instrumented test（使用内存数据库），验证 SQL 查询的正确性。测试覆盖了核心路径后，你便可以放心大胆地重构代码，因为测试会替你守住每一道防线——正如我狄仁杰从不在没有把握的情况下提审嫌犯，有了测试覆盖，重构便再无后顾之忧。</p>
+  </div>
+
+  <!-- ========== 16.10 项目回顾与扩展方向 ========== -->
+  <h2>16.10 项目回顾与扩展方向</h2>
+
+  <p>诸位，至此，这桩「大案」的侦办已经完成。让我们退后一步，从全局审视这条完整的「证据链」——从最底层的数据基石，到中间的逻辑枢纽，再到最上层的堂审呈堂，每一个环节是如何环环相扣的。</p>
+
+  <h3>数据流架构图</h3>
+
+  <p>整个应用的数据流如下所示，严格遵循单向数据流原则——证据只从现场汇聚到结论，绝不反向捏造：</p>
+
+<pre><code>┌─────────────────────────────────────────────────────┐
+│                      UI 层                          │
+│  ┌─────────────┐         ┌─────────────────────┐    │
+│  │  Compose UI  │ ──────→ │  用户事件 (点击等)   │    │
+│  │  (展示状态)  │ ←────── │                     │    │
+│  └─────────────┘         └──────────┬──────────┘    │
+│         ↑ StateFlow                 │ 调用方法      │
+├─────────┼───────────────────────────┼───────────────┤
+│         │           ViewModel 层    │               │
+│  ┌──────┴──────────────────────────┐│               │
+│  │     TodoListViewModel           ││               │
+│  │  - 管理 UI 状态                 ││               │
+│  │  - 处理业务逻辑                 │←               │
+│  │  - 暴露 StateFlow               │                │
+│  └──────────────┬──────────────────┘                │
+│                 │ 调用 Repository                    │
+├─────────────────┼───────────────────────────────────┤
+│                 │       数据层                       │
+│  ┌──────────────▼──────────────────┐                │
+│  │     TodoRepository              │                │
+│  │  - 抽象数据访问                 │                │
+│  │  - 暴露 Flow                    │                │
+│  └──────────────┬──────────────────┘                │
+│                 │                                    │
+│  ┌──────────────▼──────────────────┐                │
+│  │     Room Database               │                │
+│  │  - Entity / DAO / Database      │                │
+│  │  - SQLite 持久化                │                │
+│  └─────────────────────────────────┘                │
+└─────────────────────────────────────────────────────┘</code></pre>
+
+  <h3>知识点回顾</h3>
+
+  <p>让我们像整理结案卷宗一样，将本案中动用的全部侦查手段逐一登记在案：</p>
+
+  <table>
+    <tr>
+      <th>项目功能</th>
+      <th>使用的技术</th>
+      <th>来自章节</th>
+    </tr>
+    <tr>
+      <td>数据类 / 密封类定义</td>
+      <td>data class, sealed class, enum class</td>
+      <td>第3-4章</td>
+    </tr>
+    <tr>
+      <td>集合操作与高阶函数</td>
+      <td>map, filter, forEach, let</td>
+      <td>第5章</td>
+    </tr>
+    <tr>
+      <td>声明式 UI 布局</td>
+      <td>Compose: Column, Row, LazyColumn</td>
+      <td>第6章</td>
+    </tr>
+    <tr>
+      <td>页面导航</td>
+      <td>Navigation Compose, NavHost</td>
+      <td>第7章</td>
+    </tr>
+    <tr>
+      <td>异步数据加载</td>
+      <td>协程, Flow, StateFlow</td>
+      <td>第8章</td>
+    </tr>
+    <tr>
+      <td>MVVM 架构分层</td>
+      <td>ViewModel, UiState, Repository</td>
+      <td>第9章</td>
+    </tr>
+    <tr>
+      <td>本地数据持久化</td>
+      <td>Room: Entity, Dao, Database</td>
+      <td>第11章</td>
+    </tr>
+    <tr>
+      <td>依赖注入</td>
+      <td>Hilt: @Module, @Provides, @Inject</td>
+      <td>第12章</td>
+    </tr>
+    <tr>
+      <td>列表与删除动画</td>
+      <td>AnimatedVisibility, animateColorAsState</td>
+      <td>第13章</td>
+    </tr>
+    <tr>
+      <td>单元测试与 UI 测试</td>
+      <td>JUnit, Compose Testing, Fake</td>
+      <td>第15章</td>
+    </tr>
+  </table>
+
+  <h3>扩展方向</h3>
+
+  <p>一桩案件虽已结案，但由此牵出的线索往往指向更多值得深究的方向。这个 TODO 应用已经具备了完整的基础功能，但作为一位有追求的「捕快」，你还可以沿着以下线索继续侦查：</p>
+
+  <ul>
+    <li><strong>截止日期</strong>：为每个待办添加 <code>dueDate</code> 字段，支持日期选择器，按截止日期排序和提醒——如同为每桩案件设定最后审限</li>
+    <li><strong>分类与标签</strong>：创建 <code>Category</code> 实体，实现多对多关系，让用户按类别管理待办——正如大理寺按案件类型分科归档</li>
+    <li><strong>搜索功能</strong>：在顶部添加搜索栏，使用 Room 的 <code>LIKE</code> 查询实现模糊搜索——让你能在堆积如山的卷宗中迅速定位目标</li>
+    <li><strong>通知提醒</strong>：结合 <code>WorkManager</code> 在截止日期前发送本地通知——如同安排衙役按时提醒主审官开堂</li>
+    <li><strong>云端同步</strong>：集成 Firebase 或自建后端 API，实现多设备数据同步——好比在各州府之间建立驿站快递系统</li>
+    <li><strong>深色模式</strong>：利用 <code>MaterialTheme</code> 的 <code>darkColorScheme</code> 实现深色主题切换——夜审模式，保护双眼</li>
+    <li><strong>Widget 小组件</strong>：使用 Glance 创建桌面小组件，快速查看和添加待办——在衙门门口设立告示牌</li>
+    <li><strong>数据导出</strong>：支持将待办列表导出为 JSON 或 CSV 文件——结案后归档备查</li>
+  </ul>
+
+  <div class="tip">
+    <div class="tip-title">持续学习建议</div>
+    <p>诸位，Android 开发的江湖风云变幻，技术的更迭如同朝代的兴替。掌握了本教程涵盖的基础知识后，建议你关注以下方向：Kotlin Multiplatform（跨平台开发）、Compose Multiplatform（跨平台 UI）、以及 AI 辅助开发工具的使用。我狄仁杰虽身处大唐，但若有新的断案之术传入中原，亦必虚心研习。保持对新技术的好奇心，在实际项目中不断实践，你就会从初出茅庐的新手捕快成长为一名独当一面的断案能手。</p>
+  </div>
+
+  <p>诸位，恭喜你完成了整个教程的学习！从第 1 章的 Kotlin 基础语法到如今的综合项目实战——这桩横跨十六章的「大案」终于画上了圆满的句号。正如我狄仁杰常言：天下没有破不了的案，亦没有学不会的技术。关键在于——条理清晰地分析每一条线索，坚持不懈地追踪每一个细节，最终将它们串联成一个完整的全貌。编程是一项需要持续精进的技艺——最好的修炼方式就是亲手办案。现在，去构建属于你自己的应用吧！</p>
+
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：为待办添加优先级字段 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>在 <code>Todo</code> 实体类中新增一个 <code>priority</code> 字段（可使用枚举类型：LOW、MEDIUM、HIGH），并在 <code>TodoItem</code> 卡片中以不同颜色的小圆点显示优先级。提示：这好比为每份卷宗加上紧急程度的标签——红色为急案，黄色为常案，绿色为缓案。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>1. 创建一个 <code>enum class Priority { LOW, MEDIUM, HIGH }</code>。</p>
+          <p>2. 在 <code>Todo</code> data class 中添加 <code>val priority: Priority = Priority.MEDIUM</code> 字段。</p>
+          <p>3. 注意：修改 Entity 后需要升级数据库版本或使用 <code>fallbackToDestructiveMigration()</code>。</p>
+          <p>4. 在 <code>TodoItem</code> 的 Row 中添加一个 <code>Box</code> 或 <code>Canvas</code> 绘制小圆点，根据 priority 值选择不同颜色。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// 1. 定义优先级枚举</span>
+<span class="kw">enum class</span> <span class="type">Priority</span> {
+    LOW, MEDIUM, HIGH
+}
+
+<span class="cmt">// 2. 修改 Todo 实体</span>
+<span class="ann">@Entity</span>(<span class="param">tableName</span> <span class="op">=</span> <span class="str">"todos"</span>)
+<span class="kw">data class</span> <span class="type">Todo</span>(
+    <span class="ann">@PrimaryKey</span>(<span class="param">autoGenerate</span> <span class="op">=</span> <span class="kw">true</span>)
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Long</span> <span class="op">=</span> <span class="num">0</span>,
+    <span class="kw">val</span> <span class="param">title</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">description</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>,
+    <span class="kw">val</span> <span class="param">isCompleted</span>: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>,
+    <span class="kw">val</span> <span class="param">priority</span>: <span class="type">Priority</span> <span class="op">=</span> <span class="type">Priority</span>.MEDIUM,
+    <span class="kw">val</span> <span class="param">createdAt</span>: <span class="type">Long</span> <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+)
+
+<span class="cmt">// 3. 在 TodoItem 中显示优先级圆点</span>
+<span class="kw">val</span> priorityColor <span class="op">=</span> <span class="kw">when</span> (todo.priority) {
+    <span class="type">Priority</span>.HIGH <span class="op">-></span> <span class="type">Color</span>.Red
+    <span class="type">Priority</span>.MEDIUM <span class="op">-></span> <span class="type">Color</span>.Yellow
+    <span class="type">Priority</span>.LOW <span class="op">-></span> <span class="type">Color</span>.Green
+}
+<span class="fn">Box</span>(
+    <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+        .<span class="fn">size</span>(<span class="num">12</span>.dp)
+        .<span class="fn">background</span>(priorityColor, <span class="type">CircleShape</span>)
+)</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：实现搜索功能 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在待办列表页面的顶部添加一个搜索框，允许用户按标题关键字搜索待办事项。搜索应该是实时的（用户每输入一个字便立即过滤结果）。提示：这如同在堆积如山的案卷中按关键线索快速检索——你需要在 DAO 层添加一个带 <code>LIKE</code> 查询的方法，然后在 ViewModel 中用 <code>debounce</code> 配合 <code>flatMapLatest</code> 实现实时搜索。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>1. 在 <code>TodoDao</code> 中添加：<code>@Query("SELECT * FROM todos WHERE title LIKE '%' || :query || '%'")</code></p>
+          <p>2. 在 <code>TodoListViewModel</code> 中添加 <code>MutableStateFlow&lt;String&gt;</code> 保存搜索关键字。</p>
+          <p>3. 使用 <code>combine</code> 将搜索关键字与筛选条件合并，再用 <code>flatMapLatest</code> 切换数据源。</p>
+          <p>4. 使用 <code>debounce(300)</code> 避免用户每敲一个字都触发查询。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// DAO 层新增搜索方法</span>
+<span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos WHERE title LIKE '%' || :query || '%' ORDER BY createdAt DESC"</span>)
+<span class="kw">fun</span> <span class="fn">searchTodos</span>(<span class="param">query</span>: <span class="type">String</span>): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+<span class="cmt">// ViewModel 中添加搜索逻辑</span>
+<span class="kw">private val</span> _searchQuery <span class="op">=</span> <span class="type">MutableStateFlow</span>(<span class="str">""</span>)
+
+<span class="kw">val</span> uiState <span class="op">=</span> <span class="fn">combine</span>(_filter, _searchQuery) { filter, query <span class="op">-></span>
+    <span class="type">Pair</span>(filter, query)
+}
+.<span class="fn">debounce</span>(<span class="num">300</span>)
+.<span class="fn">flatMapLatest</span> { (filter, query) <span class="op">-></span>
+    <span class="kw">if</span> (query.<span class="fn">isNotBlank</span>()) {
+        repository.<span class="fn">searchTodos</span>(query)
+    } <span class="kw">else</span> {
+        <span class="kw">when</span> (filter) {
+            <span class="type">TodoFilter</span>.ALL <span class="op">-></span> repository.<span class="fn">getAllTodos</span>()
+            <span class="type">TodoFilter</span>.ACTIVE <span class="op">-></span> repository.<span class="fn">getActiveTodos</span>()
+            <span class="type">TodoFilter</span>.COMPLETED <span class="op">-></span> repository.<span class="fn">getCompletedTodos</span>()
+        }
+    }
+}
+.<span class="fn">map</span> { todos <span class="op">-></span>
+    <span class="kw">if</span> (todos.<span class="fn">isEmpty</span>()) <span class="type">TodoListUiState</span>.<span class="type">Empty</span>
+    <span class="kw">else</span> <span class="type">TodoListUiState</span>.<span class="type">Success</span>(todos, _filter.value)
+}
+.<span class="fn">stateIn</span>(viewModelScope, <span class="type">SharingStarted</span>.WhileSubscribed(<span class="num">5000</span>), <span class="type">TodoListUiState</span>.<span class="type">Loading</span>)
+
+<span class="kw">fun</span> <span class="fn">onSearchQueryChange</span>(<span class="param">query</span>: <span class="type">String</span>) {
+    _searchQuery.value <span class="op">=</span> query
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：添加撤销删除功能 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>当用户滑动删除一条待办后，在屏幕底部显示一个 <code>Snackbar</code>，提示「已删除：XXX」，并提供一个「撤销」按钮。用户点击撤销后，被删除的待办应当恢复。提示：这如同判决后的复审机制——给当事人一次申诉的机会。你需要在删除时先将待办暂存，然后在撤销时重新插入。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>1. 使用 <code>SnackbarHostState</code> 并将其传入 <code>Scaffold</code> 的 <code>snackbarHost</code> 参数。</p>
+          <p>2. 在 ViewModel 中新增一个 <code>SharedFlow</code> 用于通知 UI 显示 Snackbar。</p>
+          <p>3. 删除时先保存被删除的 Todo 副本，然后执行删除。</p>
+          <p>4. 调用 <code>snackbarHostState.showSnackbar()</code> 并检查返回值是否为 <code>SnackbarResult.ActionPerformed</code>。</p>
+          <p>5. 如果用户点击了撤销，调用 <code>repository.addTodo()</code> 将备份重新插入。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// ViewModel 中</span>
+<span class="kw">private var</span> _lastDeletedTodo: <span class="type">Todo?</span> <span class="op">=</span> <span class="kw">null</span>
+
+<span class="kw">private val</span> _showUndoSnackbar <span class="op">=</span> <span class="type">MutableSharedFlow</span>&lt;<span class="type">Todo</span>&gt;()
+<span class="kw">val</span> showUndoSnackbar <span class="op">=</span> _showUndoSnackbar.<span class="fn">asSharedFlow</span>()
+
+<span class="kw">fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>) {
+    viewModelScope.<span class="fn">launch</span> {
+        _lastDeletedTodo <span class="op">=</span> todo
+        repository.<span class="fn">deleteTodo</span>(todo)
+        _showUndoSnackbar.<span class="fn">emit</span>(todo)
+    }
+}
+
+<span class="kw">fun</span> <span class="fn">undoDelete</span>() {
+    viewModelScope.<span class="fn">launch</span> {
+        _lastDeletedTodo?.<span class="fn">let</span> { repository.<span class="fn">addTodo</span>(it) }
+        _lastDeletedTodo <span class="op">=</span> <span class="kw">null</span>
+    }
+}
+
+<span class="cmt">// Screen 中</span>
+<span class="kw">val</span> snackbarHostState <span class="op">=</span> <span class="fn">remember</span> { <span class="type">SnackbarHostState</span>() }
+
+<span class="fn">LaunchedEffect</span>(<span class="type">Unit</span>) {
+    viewModel.showUndoSnackbar.<span class="fn">collect</span> { todo <span class="op">-></span>
+        <span class="kw">val</span> result <span class="op">=</span> snackbarHostState.<span class="fn">showSnackbar</span>(
+            <span class="param">message</span> <span class="op">=</span> <span class="str">"已删除: ${todo.title}"</span>,
+            <span class="param">actionLabel</span> <span class="op">=</span> <span class="str">"撤销"</span>,
+            <span class="param">duration</span> <span class="op">=</span> <span class="type">SnackbarDuration</span>.Short
+        )
+        <span class="kw">if</span> (result <span class="op">==</span> <span class="type">SnackbarResult</span>.ActionPerformed) {
+            viewModel.<span class="fn">undoDelete</span>()
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：实现数据库迁移 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>假设应用已经发布了第一个版本（数据库版本 1），现在需要为 <code>Todo</code> 实体新增 <code>dueDate: Long?</code>（截止日期）和 <code>categoryId: Long?</code>（分类 ID）两个可空字段。请编写一个 Room 数据库迁移（Migration），将数据库从版本 1 升级到版本 2，同时保留用户的已有数据。提示：这如同在不打乱已有卷宗顺序的情况下，为案卷架增设新的分类标签栏位——任何已有案卷不得丢失。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>1. 在 <code>Todo</code> 实体中添加两个新字段：<code>val dueDate: Long? = null</code> 和 <code>val categoryId: Long? = null</code>。</p>
+          <p>2. 将 <code>@Database</code> 的 <code>version</code> 改为 <code>2</code>。</p>
+          <p>3. 创建 <code>Migration(1, 2)</code> 对象，在 <code>migrate()</code> 方法中执行 <code>ALTER TABLE</code> 语句。</p>
+          <p>4. 在 <code>DatabaseModule</code> 中通过 <code>.addMigrations()</code> 注册迁移。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// 定义迁移</span>
+<span class="kw">val</span> MIGRATION_1_2 <span class="op">=</span> <span class="kw">object</span> : <span class="type">Migration</span>(<span class="num">1</span>, <span class="num">2</span>) {
+    <span class="kw">override fun</span> <span class="fn">migrate</span>(<span class="param">db</span>: <span class="type">SupportSQLiteDatabase</span>) {
+        db.<span class="fn">execSQL</span>(<span class="str">"ALTER TABLE todos ADD COLUMN dueDate INTEGER DEFAULT NULL"</span>)
+        db.<span class="fn">execSQL</span>(<span class="str">"ALTER TABLE todos ADD COLUMN categoryId INTEGER DEFAULT NULL"</span>)
+    }
+}
+
+<span class="cmt">// 在 DatabaseModule 中注册</span>
+<span class="ann">@Provides</span>
+<span class="ann">@Singleton</span>
+<span class="kw">fun</span> <span class="fn">provideTodoDatabase</span>(
+    <span class="ann">@ApplicationContext</span> <span class="param">context</span>: <span class="type">Context</span>
+): <span class="type">TodoDatabase</span> {
+    <span class="kw">return</span> <span class="type">Room</span>.<span class="fn">databaseBuilder</span>(
+        context,
+        <span class="type">TodoDatabase</span>::<span class="kw">class</span>.java,
+        <span class="str">"todo_database"</span>
+    )
+    .<span class="fn">addMigrations</span>(MIGRATION_1_2)
+    .<span class="fn">build</span>()
+}
+
+<span class="cmt">// 更新 Entity</span>
+<span class="ann">@Entity</span>(<span class="param">tableName</span> <span class="op">=</span> <span class="str">"todos"</span>)
+<span class="kw">data class</span> <span class="type">Todo</span>(
+    <span class="ann">@PrimaryKey</span>(<span class="param">autoGenerate</span> <span class="op">=</span> <span class="kw">true</span>)
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Long</span> <span class="op">=</span> <span class="num">0</span>,
+    <span class="kw">val</span> <span class="param">title</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">description</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>,
+    <span class="kw">val</span> <span class="param">isCompleted</span>: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>,
+    <span class="kw">val</span> <span class="param">createdAt</span>: <span class="type">Long</span> <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>(),
+    <span class="kw">val</span> <span class="param">dueDate</span>: <span class="type">Long?</span> <span class="op">=</span> <span class="kw">null</span>,
+    <span class="kw">val</span> <span class="param">categoryId</span>: <span class="type">Long?</span> <span class="op">=</span> <span class="kw">null</span>
+)
+
+<span class="cmt">// 更新 Database 版本</span>
+<span class="ann">@Database</span>(
+    <span class="param">entities</span> <span class="op">=</span> [<span class="type">Todo</span>::<span class="kw">class</span>],
+    <span class="param">version</span> <span class="op">=</span> <span class="num">2</span>,
+    <span class="param">exportSchema</span> <span class="op">=</span> <span class="kw">false</span>
+)
+<span class="kw">abstract class</span> <span class="type">TodoDatabase</span> : <span class="type">RoomDatabase</span>() {
+    <span class="kw">abstract fun</span> <span class="fn">todoDao</span>(): <span class="type">TodoDao</span>
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：编写端到端集成测试 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>编写一个完整的 Compose UI 集成测试，模拟以下用户操作流程：启动应用 -> 看到空状态 -> 点击添加按钮 -> 输入标题和描述 -> 点击保存 -> 返回列表页 -> 验证新待办显示在列表中 -> 点击复选框标记完成 -> 验证待办显示删除线样式。提示：这是一次完整的「模拟审案演练」，从立案到结案全程走一遍，确保每一个环节都经得起考验。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>1. 使用 <code>createAndroidComposeRule&lt;MainActivity&gt;()</code> 启动完整的 Activity。</p>
+          <p>2. 使用 Hilt 的测试支持：<code>@HiltAndroidTest</code> 注解和 <code>HiltAndroidRule</code>。</p>
+          <p>3. 提供一个使用内存数据库的测试模块，替换生产环境的数据库模块。</p>
+          <p>4. 按照操作流程依次调用 <code>onNodeWithText()</code>、<code>performClick()</code>、<code>performTextInput()</code> 等方法。</p>
+          <p>5. 使用 <code>waitUntil()</code> 等待异步操作完成后再进行断言。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="ann">@HiltAndroidTest</span>
+<span class="kw">class</span> <span class="type">TodoAppE2ETest</span> {
+
+    <span class="ann">@get:Rule</span>(<span class="param">order</span> <span class="op">=</span> <span class="num">0</span>)
+    <span class="kw">val</span> hiltRule <span class="op">=</span> <span class="type">HiltAndroidRule</span>(<span class="kw">this</span>)
+
+    <span class="ann">@get:Rule</span>(<span class="param">order</span> <span class="op">=</span> <span class="num">1</span>)
+    <span class="kw">val</span> composeRule <span class="op">=</span> <span class="fn">createAndroidComposeRule</span>&lt;<span class="type">MainActivity</span>&gt;()
+
+    <span class="ann">@Before</span>
+    <span class="kw">fun</span> <span class="fn">setup</span>() { hiltRule.<span class="fn">inject</span>() }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">fullUserFlow_addAndCompleteTodo</span>() {
+        <span class="cmt">// 1. 验证空状态</span>
+        composeRule.<span class="fn">onNodeWithText</span>(<span class="str">"还没有待办事项"</span>)
+            .<span class="fn">assertIsDisplayed</span>()
+
+        <span class="cmt">// 2. 点击添加按钮</span>
+        composeRule.<span class="fn">onNodeWithContentDescription</span>(<span class="str">"添加待办"</span>)
+            .<span class="fn">performClick</span>()
+
+        <span class="cmt">// 3. 输入标题和描述</span>
+        composeRule.<span class="fn">onNodeWithText</span>(<span class="str">"标题"</span>)
+            .<span class="fn">performTextInput</span>(<span class="str">"买菜"</span>)
+        composeRule.<span class="fn">onNodeWithText</span>(<span class="str">"描述（可选）"</span>)
+            .<span class="fn">performTextInput</span>(<span class="str">"西红柿、鸡蛋、青菜"</span>)
+
+        <span class="cmt">// 4. 保存</span>
+        composeRule.<span class="fn">onNodeWithText</span>(<span class="str">"添加待办"</span>)
+            .<span class="fn">performClick</span>()
+
+        <span class="cmt">// 5. 回到列表，验证新待办存在</span>
+        composeRule.<span class="fn">waitUntil</span>(<span class="num">3000</span>) {
+            composeRule.<span class="fn">onAllNodesWithText</span>(<span class="str">"买菜"</span>)
+                .<span class="fn">fetchSemanticsNodes</span>().isNotEmpty()
+        }
+        composeRule.<span class="fn">onNodeWithText</span>(<span class="str">"买菜"</span>)
+            .<span class="fn">assertIsDisplayed</span>()
+
+        <span class="cmt">// 6. 点击复选框标记完成</span>
+        composeRule.<span class="fn">onNode</span>(
+            <span class="fn">hasClickAction</span>() <span class="kw">and</span> <span class="fn">isToggleable</span>()
+        ).<span class="fn">performClick</span>()
+
+        <span class="cmt">// 7. 验证文字带删除线（已完成状态）</span>
+        composeRule.<span class="fn">onNodeWithText</span>(<span class="str">"买菜"</span>)
+            .<span class="fn">assertIsDisplayed</span>()
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

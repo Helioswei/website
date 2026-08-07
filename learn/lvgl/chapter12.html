@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第12章：LVGL Pro CLI 工作流（XML→C） - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="12" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第12章：LVGL Pro CLI 工作流（XML→C）</h1>
+  <p class="chapter-subtitle">设计一次，处处生成——把 XML 界面描述"编译"成 C 代码</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「手艺人的功夫不在'做'，而在'备'——工具趁手，活儿就成了一半。写界面也一样：与其在 C 里一行行摆控件，不如先把界面描述成一张 XML 图纸，再让工具把图纸变成代码。看懂这把'鲁班的刨子'，你就从手工时代进入了流水线时代。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 12.1 鲁班的工具箱：认识 lved-cli ========== -->
+  <h2>12.1 鲁班的工具箱：认识 lved-cli</h2>
+
+  <p>打开 README 的「LVGL Pro」一节，官方把设计工具链拆成四件套：<strong>Editor</strong>（桌面可视化编辑器，所见即所得）、<strong>Online Viewer</strong>（浏览器里跑编辑器）、<strong>Figma Plugin</strong>（Figma 设计一键搬进 LVGL Pro）、以及<strong>CLI Tool</strong>——在 CI/CD 里生成 C 代码、跑 UI 测试的那一件。四件共享同一种 XML 格式。本章主角就是最后这件 CLI，在工作区里对应 <code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code> 这个目录。</p>
+
+  <p>先拆开这个"工具箱"看看里面有什么。真实目录里只有三样东西：<code>lved-cli.js</code> 是把整套 CLI 打包进<strong>单个文件</strong>的 Node.js 程序（体积约 18 MB）；<code>lvgl-resources.zip</code>（约 16 MB）是生成代码时需要用到的 LVGL 资源包；<code>bin/resvgjs.darwin-arm64.node</code> 是一个原生扩展模块——文件名里的 <code>resvg</code> 是著名的 SVG 栅格化引擎，而 <code>darwin-arm64</code> 直接点明了它的宿主：macOS 的 Apple Silicon。这也是整套工具"按平台分发"的最直接证据。</p>
+
+<pre><code><span class="cmt"># lvgl-sample 工作区里的 CLI 工具（真实文件）</span>
+LVGL_Pro_CLI-2.0.2-rc1-darwin/
+├── <span class="fn">lved-cli.js</span>                  <span class="cmt"># 打包为单文件的 Node CLI（约 18 MB）</span>
+├── <span class="str">lvgl-resources.zip</span>            <span class="cmt"># LVGL 资源包（约 16 MB）</span>
+└── <span class="fn">bin</span>/
+    └── <span class="param">resvgjs.darwin-arm64.node</span>   <span class="cmt"># resvg 原生扩展（SVG 栅格化，macOS arm64）</span></code></pre>
+
+  <p>运行方式是把子命令参数交给 Node：<code>node lved-cli.js &lt;子命令&gt;</code>。先问一句"它到底能干什么"——执行 <code>node lved-cli.js --help</code>，顶部用法行写着 <code>Usage: lved [options] [command]</code>，下面是 7 个顶层命令。逐一读一遍，几乎就是一张完整的"XML→C 流水线"地图：<code>generate</code> 负责翻译，<code>compile</code> 负责编译，<code>validate</code> 负责静态校验，<code>screenshot</code> 负责出图，<code>run-test</code> 与 <code>run-all-tests</code> 负责 UI 交互回归，<code>compare</code> 负责与参考示例比对生成的代码。</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js --help
+Usage: lved [options] [command]
+
+LVGL Pro Editor CLI tool
+
+Options:
+  -V, --version                                                 output the version number
+  -h, --help                                                    display help for command
+
+Commands:
+  <span class="fn">generate</span> [options] <span class="param">&lt;project-path&gt;</span>                             Generate code from XML files
+  <span class="fn">compile</span> [options] <span class="param">&lt;project-path&gt;</span>                              Compile LVGL project
+  <span class="fn">compare</span> [options] <span class="param">&lt;first-project-path&gt;</span> <span class="param">&lt;second-project-path&gt;</span>  Compare generated code with reference examples
+  <span class="fn">validate</span> [options] <span class="param">&lt;project-path&gt;</span>                             Validate LVGL code
+  <span class="fn">run-test</span> [options] <span class="param">&lt;project-path&gt;</span> <span class="param">&lt;testing-file&gt;</span>              Run UI interaction tests
+  <span class="fn">run-all-tests</span> [options] <span class="param">&lt;project-path&gt;</span>                        Run all UI interaction tests
+  <span class="fn">screenshot</span> [options] <span class="param">&lt;project-path&gt;</span> <span class="param">&lt;screen&gt;</span>                  Take a screenshot of the selected screen
+  help [command]                                                display help for command</code></pre>
+
+  <table>
+    <tr><th>命令</th><th>作用</th><th>关键参数</th></tr>
+    <tr><td><code>generate</code></td><td>从 XML 工程生成 C 代码</td><td><code>--token / --ignore-fonts / --ignore-images</code></td></tr>
+    <tr><td><code>compile</code></td><td>编译 LVGL 工程</td><td><code>--target editor|cli / --skip-resources</code></td></tr>
+    <tr><td><code>validate</code></td><td>静态校验 LVGL 代码</td><td><code>-l, --errorlimit</code></td></tr>
+    <tr><td><code>screenshot</code></td><td>给指定屏幕截图</td><td><code>--out / --delay</code></td></tr>
+    <tr><td><code>run-test</code></td><td>运行单个 UI 交互测试</td><td><code>--slowdown</code></td></tr>
+    <tr><td><code>run-all-tests</code></td><td>运行全部 UI 交互测试</td><td>—</td></tr>
+    <tr><td><code>compare</code></td><td>与参考示例比对生成代码</td><td>—</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>这套 CLI 的用法不必死记——它自带了"说明书"：顶层 <code>--help</code> 看有哪些命令，<code>help [command]</code> 或 <code>&lt;command&gt; --help</code> 看某个命令的参数。写脚本之前先跑一次 <code>--help</code>，就是最快的"反编译"。本章所有命令与参数的说法，都以你本地跑出来的真实输出为准。</p>
+  </div>
+
+  <!-- ========== 12.2 一张"图纸"：XML 工程结构 ========== -->
+  <h2>12.2 一张"图纸"：XML 工程结构</h2>
+
+  <p>CLI 吃的不是单个文件，而是一个<strong>工程目录</strong>。仓库里现成的样例就在 <code>lvgl-master/examples/xml_project/</code>，里面恰好四样东西：<code>project.xml</code>（工程与目标设备）、<code>globals.xml</code>（全局数据）、<code>images/</code>（图像素材）、<code>fonts/</code>（字体文件）。把它理解成一张"施工图"：项目信息画在 <code>project.xml</code>，全局材料清单记在 <code>globals.xml</code>，素材单独放目录。</p>
+
+  <p>先看 <code>project.xml</code>。它很短——声明这份 XML 面向的 LVGL 版本（<code>lvgl_version="9.5.0"</code>），以及一块 320×240 的显示：</p>
+
+<pre><code><span class="cmt">&lt;!-- examples/xml_project/project.xml（真实源码，全文） --&gt;</span>
+<span class="op">&lt;project</span> <span class="param">lvgl_version</span>=<span class="str">"9.5.0"</span><span class="op">&gt;</span>
+    <span class="op">&lt;targets&gt;</span>
+        <span class="op">&lt;target</span> <span class="param">name</span>=<span class="str">"target1"</span><span class="op">&gt;</span>
+            <span class="op">&lt;display</span> <span class="param">width</span>=<span class="str">"320"</span> <span class="param">height</span>=<span class="str">"240"</span> <span class="op">/&gt;</span>
+        <span class="op">&lt;/target&gt;</span>
+    <span class="op">&lt;/targets&gt;</span>
+<span class="op">&lt;/project&gt;</span></code></pre>
+
+  <p>注意 <code>lvgl_version="9.5.0"</code> 这个细节：它描述的是这份 XML 面向的版本目标，而仓库里真正编译进固件的运行时是 <strong>9.6.0-dev</strong>（见第 1 章）。两者相差一个小版本——可以把它理解为"XML 的目标 SDK 版本"，与最终链接的运行时版本是两回事，通常不影响生成代码的编译。CLI 工具自身的版本号则从启动横幅里读到：<code>LVGL CLI v2.0.2-rc1</code>。</p>
+
+  <p><code>globals.xml</code> 才是"材料清单"的主体，内部按 <code>api / consts / styles / subjects / images / fonts</code> 六块组织。前四块和第 10、11 章都见过：<code>&lt;subjects&gt;</code> 声明可观察数据（<code>subject_value</code> 等），<code>&lt;images&gt;</code> 用 <code>&lt;data&gt;</code> 声明图像（带 <code>src_path</code> 与 <code>color_format="argb8888"</code>），<code>&lt;fonts&gt;</code> 用 <code>&lt;bin&gt;</code> 声明二进制字体。下面这一段的注释格外有价值——它说图像 <code>img_example_lvgl_logo</code> 的名字特意与 <code>demos/widgets/assets/img_example_lvgl_logo.c</code> 里预置的描述符一致，<strong>生成代码直接链接这个既有符号</strong>，因此样例不必依赖编辑器的图像转换管线。</p>
+
+<pre><code><span class="cmt">&lt;!-- globals.xml：subjects / images / fonts 三块（真实源码，节选） --&gt;</span>
+<span class="op">&lt;subjects&gt;</span>
+    <span class="op">&lt;int</span>    <span class="param">name</span>=<span class="str">"subject_value"</span>  <span class="param">value</span>=<span class="str">"50"</span>  <span class="param">min_value</span>=<span class="str">"0"</span> <span class="param">max_value</span>=<span class="str">"100"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;int</span>    <span class="param">name</span>=<span class="str">"subject_opa"</span>    <span class="param">value</span>=<span class="str">"128"</span> <span class="param">min_value</span>=<span class="str">"0"</span> <span class="param">max_value</span>=<span class="str">"255"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;string</span> <span class="param">name</span>=<span class="str">"subject_text"</span>  <span class="param">value</span>=<span class="str">"Hello"</span><span class="op">/&gt;</span>
+<span class="op">&lt;/subjects&gt;</span>
+
+<span class="op">&lt;images&gt;</span>
+    <span class="op">&lt;data</span> <span class="param">name</span>=<span class="str">"img_example_lvgl_logo"</span> <span class="param">src_path</span>=<span class="str">"images/img_example_lvgl_logo.png"</span>
+          <span class="param">color_format</span>=<span class="str">"argb8888"</span><span class="op">/&gt;</span>
+<span class="op">&lt;/images&gt;</span>
+
+<span class="op">&lt;fonts&gt;</span>
+    <span class="op">&lt;bin</span> <span class="param">name</span>=<span class="str">"font_example_large"</span> <span class="param">src_path</span>=<span class="str">"fonts/Montserrat-Medium.ttf"</span>
+         <span class="param">size</span>=<span class="str">"32"</span> <span class="param">bpp</span>=<span class="str">"4"</span> <span class="param">as_file</span>=<span class="str">"false"</span><span class="op">/&gt;</span>
+<span class="op">&lt;/fonts&gt;</span></code></pre>
+
+  <p>一个值得品味的属性是字体标签里的 <code>as_file="false"</code>：它表示转换后的二进制字体<strong>内嵌进生成的 C 数组</strong>，而不是落地成一个外部 <code>.bin</code> 文件。这决定了你拿到生成代码后要不要多带一个文件——是"代码即资源"还是"资源随行"。图像那边 <code>color_format="argb8888"</code> 则是输出像素格式，与第 10 章讲的图像解码一一对应。</p>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>不要把 <code>project.xml</code> 里的 <code>lvgl_version="9.5.0"</code> 和仓库运行时版本 <strong>9.6.0-dev</strong> 混为一谈：前者是这份 XML 面向的版本目标，后者是 <code>lvgl-master/</code> 源码的实际版本。生成出来的 C 代码最终链接的是后者。</p>
+  </div>
+
+  <!-- ========== 12.3 许可与 lved generate：XML 到 C 的翻译 ========== -->
+  <h2>12.3 许可与 lved generate：XML 到 C 的翻译</h2>
+
+  <p>核心命令是 <code>generate</code>。跑 <code>node lved-cli.js generate --help</code>，真实输出显示它接收一个必填参数 <code>&lt;project-path&gt;</code>（工程目录），并有四个选项：<code>--token</code>（许可令牌，说明文字写明"Can also be set with <code>LVGL_CLI_TOKEN</code>"）、<code>--ignore-fonts</code>（跳过字体转换）、<code>--ignore-images</code>（跳过图像转换）、<code>--skip-resources</code>（跳过 LVGL resources 的拷贝与校验，默认 false）。</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js generate --help
+Usage: lved generate [options] &lt;project-path&gt;
+
+Generate code from XML files
+
+Arguments:
+  project-path             Path to the project directory
+
+Options:
+  --token &lt;license-token&gt;  License token for running CLI. Can also be set with
+                           LVGL_CLI_TOKEN.
+  --ignore-fonts           Skip font conversion during code generation
+  --ignore-images          Skip image conversion during code generation
+  --skip-resources         Skip copying and checking LVGL resources during setup
+                           (default: false)
+  -h, --help               display help for command</code></pre>
+
+  <p><code>--token</code> 背后是一道"许可门禁"：LVGL Pro 不是无条件使用的。README「License」一节说得很清楚——Community 与 Evaluation 两个级别对非商业用途免费（学习、爱好、评估工具都算），<strong>商业使用则需要付费许可</strong>。我在没有 token 的情况下实际跑过一次 <code>generate</code>，程序先打出一幅 ASCII 艺术横幅，然后直截了当地拒绝：</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js generate /tmp/xml_project_test   <span class="cmt"># 未提供 token</span>
+<span class="cmt"># （先打印 ASCII 艺术横幅，已省略）</span>
+LVGL CLI v2.0.2-rc1
+
+[ERROR] No token provided. Use <span class="param">--token &lt;license-token&gt;</span> or set <span class="param">LVGL_CLI_TOKEN</span> to run the CLI.</code></pre>
+
+  <p>于是使用流程就被拆成了两半：要么每次命令行传 <code>--token &lt;token&gt;</code>，要么把 token 写进环境变量 <code>LVGL_CLI_TOKEN</code>（更推荐，理由见下面的提示）。token 验过后，<code>generate</code> 才会真正开工：读 <code>project.xml</code> 与 <code>globals.xml</code>，把 <code>&lt;subjects&gt;</code> 变成 <code>lv_subject_t</code> 与初始化调用，把 <code>&lt;images&gt;</code>/<code>&lt;fonts&gt;</code> 变成描述符与字体资源，把屏幕上的控件树变成一串 <code>lv_*_create()</code>——也就是第 11 章末尾预告过的"XML 与 C 是同一副面孔"。</p>
+
+  <p>两个"跳过"选项值得单独解释。<code>--ignore-fonts</code> / <code>--ignore-images</code> 分别跳过字体与图像的转换环节——如果你的工程暂时不想带资源、只想先把控件骨架跑起来，或者在 CI 里已经有预转换好的资源、不想每次重复转换，就加上它们。<code>--skip-resources</code> 则跳过 12.1 里那个 <code>lvgl-resources.zip</code> 的拷贝与校验环节——本地已经初始化过资源、只想增量生成时，省掉这步能省不少时间。</p>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>命令行的 <code>--token</code> 会出现在你的 shell 历史、进程列表和 CI 日志里，等于把许可密钥到处撒。在 CI/CD 里请优先用环境变量：在流水线配置里设置 <code>LVGL_CLI_TOKEN</code>，脚本里只写 <code>lved generate &lt;dir&gt;</code>。README 那句 "Can also be set with <code>LVGL_CLI_TOKEN</code>" 就是给自动化场景留的口子。</p>
+  </div>
+
+  <!-- ========== 12.4 编译、校验、截图与测试：四条"验收"命令 ========== -->
+  <h2>12.4 编译、校验、截图与测试：四条"验收"命令</h2>
+
+  <p>生成只是第一步，工程要"过验收"还得靠另外几条命令。<code>compile</code> 负责把工程编译起来，真实参数里有一个值得一提的 <code>--target &lt;target&gt;</code>：可取值 <code>editor</code> 或 <code>cli</code>（默认 <code>cli</code>），也就是"按编辑器环境编译"还是"按命令行环境编译"。它在调试"编辑器里能跑、CLI 里报错"这类环境差异时很有用，还附带 <code>--skip-resources</code>。</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js compile --help
+Usage: lved compile [options] &lt;project-path&gt;
+
+Compile LVGL project
+
+Arguments:
+  project-path             Path to the project directory
+
+Options:
+  --target &lt;target&gt;        Set the target platform for compiling (editor or cli)
+                           (default: "cli")
+  --token &lt;license-token&gt;  License token for running CLI. Can also be set with
+                           LVGL_CLI_TOKEN.
+  --skip-resources         Skip copying and checking LVGL resources during setup
+                           (default: false)
+  -h, --help               display help for command</code></pre>
+
+  <p><code>validate</code> 做静态校验，<code>-l, --errorlimit &lt;amount&gt;</code> 控制最多显示多少条错误——这个参数意味着它可能一次性吐出一长串诊断，限制条数是为了不刷屏。<code>screenshot</code> 更有意思：它给<strong>指定的屏幕</strong>截图，第二个参数 <code>&lt;screen&gt;</code> 是"相对工程目录的屏幕路径"——因为一个工程可以有多个屏幕，必须指明截哪一块；<code>--out</code> 指定输出文件名，<code>--delay</code> 指定截图前等多少毫秒（等界面"安定"下来再截）。</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js screenshot --help
+Usage: lved screenshot [options] &lt;project-path&gt; &lt;screen&gt;
+
+Take a screenshot of the selected screen
+
+Arguments:
+  project-path             Path to the project directory
+  screen                   The relative path of the screen to capture screenshot
+
+Options:
+  --token &lt;license-token&gt;  License token for running CLI. Can also be set with
+                           LVGL_CLI_TOKEN.
+  --out &lt;out-file&gt;         File name for the screenshot
+  --delay &lt;delay&gt;          Delay in milliseconds before taking the screenshot
+                           (default: 0)
+  -h, --help               display help for command</code></pre>
+
+  <p>交互回归则由 <code>run-test</code> 与 <code>run-all-tests</code> 承接。<code>run-test &lt;project-path&gt; &lt;testing-file&gt;</code> 运行单个 UI 交互测试文件（相对工程目录），<code>--slowdown &lt;number&gt;</code> 可以人为放慢执行速度（0 为最快），方便在测试太快、肉眼跟不上时调试；<code>run-all-tests</code> 则是把全部交互测试跑一遍。此外 <code>validate</code> 的 help 明确给出 <code>-l, --errorlimit</code>，<code>compare</code> 的 help 则要求两个工程路径（生成代码与参考示例各一）。</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js validate --help
+Usage: lved validate [options] &lt;project-path&gt;
+
+Validate LVGL code
+
+Arguments:
+  project-path               Path to the project directory
+
+Options:
+  --token &lt;license-token&gt;    License token for running CLI. Can also be set with
+                             LVGL_CLI_TOKEN.
+  -l, --errorlimit &lt;amount&gt;  Maximum errors to show
+  -h, --help                 display help for command
+
+<span class="param">$</span> node lved-cli.js run-test --help
+Usage: lved run-test [options] &lt;project-path&gt; &lt;testing-file&gt;
+
+Run UI interaction tests
+
+Arguments:
+  project-path             Path to the project directory
+  testing-file             Path to the testing file relative to the project
+                           directory
+
+Options:
+  --token &lt;license-token&gt;  License token for running CLI. Can also be set with
+                           LVGL_CLI_TOKEN.
+  --slowdown &lt;number&gt;      Slow down test execution (0 = fastest) (default: 0)
+  -h, --help               display help for command</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>把这几条命令串起来，一个"XML→C 的自动化产线"就成型了：改 XML → <code>generate</code> 重新生成 → <code>validate</code> 查语法 → <code>screenshot</code> 出图留档 → <code>run-test</code> 回归交互。尤其 <code>screenshot</code>——它让"界面长什么样"也能进入自动化，视觉回归的门槛一下就被拉下来了。</p>
+  </div>
+
+  <!-- ========== 12.5 工作流串联：从设计到编译进 LVGL ========== -->
+  <h2>12.5 工作流串联：从设计到编译进 LVGL</h2>
+
+  <p>把前面几节拼成一条完整的流水线。① 在 Editor 里可视化搭屏幕（或直接手写 XML），得到一个目录：<code>project.xml + globals.xml + images/ + fonts/</code>；② 用 <code>generate</code> 把它"翻译"成纯 C 代码——注意 README 的原话：Pro <strong>"exports plain LVGL C code: the same LVGL you already use, with no extra runtime or dependency"</strong>，也就是说生成产物和你手写的代码没有任何区别，不会夹带私货；③ 把生成的 C 加进你的编译目标，与 <code>lvgl-master</code> 一起编译、烧录。</p>
+
+<pre><code><span class="cmt"># ① 把许可放进环境变量，避免写进 shell 历史 / CI 日志</span>
+<span class="kw">export</span> <span class="param">LVGL_CLI_TOKEN</span>=<span class="str">"你的 token"</span>
+
+<span class="cmt"># ② 用仓库自带的 XML 样例工程，生成 C 代码</span>
+node lved-cli.js <span class="fn">generate</span> ../lvgl-master/examples/xml_project
+
+<span class="cmt"># ③ 编译 → 截图 → 跑全部交互测试</span>
+node lved-cli.js <span class="fn">compile</span>     ../lvgl-master/examples/xml_project
+node lved-cli.js <span class="fn">screenshot</span>   ../lvgl-master/examples/xml_project <span class="param">&lt;屏幕相对路径&gt;</span> --out preview.png
+node lved-cli.js <span class="fn">run-all-tests</span> ../lvgl-master/examples/xml_project</code></pre>
+
+  <p>生成代码"长什么样"，其实第 11 章已经剧透过了：<code>&lt;subjects&gt;</code> 变成 <code>lv_subject_t</code> + <code>lv_subject_init_*()</code>，<code>&lt;images&gt;</code>/<code>&lt;fonts&gt;</code> 变成描述符与字体资源，屏幕上的控件树变成一串 <code>lv_*_create()</code>。再对照 12.2 里 globals.xml 那段真实注释——"生成代码直接链接 <code>img_example_lvgl_logo</code> 这个既有符号"——就能确定：生成代码是<strong>普通 LVGL 代码</strong>，可以自由地塞进任意已有工程。</p>
+
+<pre><code><span class="cmt">/* globals.xml 里 &lt;int name="subject_value" value="50"
+       min_value="0" max_value="100"/&gt; 在生成代码里的落点 */</span>
+<span class="type">lv_subject_t</span> subject_value;
+<span class="fn">lv_subject_init_int</span>(&amp;subject_value, <span class="num">50</span>);
+
+<span class="cmt">/* &lt;data name="img_example_lvgl_logo" color_format="argb8888"/&gt;
+   生成/引用一个图像描述符（样例特意与 demos 预置符号同名） */</span>
+<span class="kw">LV_IMAGE_DECLARE</span>(img_example_lvgl_logo);
+
+<span class="cmt">/* 屏幕上的控件树则是一串 lv_*_create() —— 与手写无差别 */</span>
+<span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(screen);</code></pre>
+
+  <p>生成出来的入口怎么接？一般是这样：把生成的 <code>.c/.h</code> 加入编译，<code>#include</code> 对应头文件，在 <code>lv_init()</code>、创建好显示与输入设备之后，调用生成代码暴露的初始化入口（具体函数名以你实际生成的头文件为准），屏幕对象树上就会出现设计好的整棵控件树。自此，设计工具里改一处，重跑一次 <code>generate</code>，界面就"翻译"成了新的 C——不需要你手敲一个像素。</p>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>"生成代码 = 手写代码"是一把双刃剑，也是它的全部价值：既然没差别，你可以随时手改生成的 C 来救急、做只此一次的微调；代价是下次重新 <code>generate</code> 会覆盖手改。所以纪律很重要——能写进 XML 的，就别动生成的 C。把 XML 当成唯一事实来源，生成的代码当"构建产物"。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：通读帮助，画出命令地图 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>在工作区里实际运行 <code>node lved-cli.js --help</code>，列出全部 7 个子命令，并为每个子命令写一句"什么时候用它"。接着运行 <code>node lved-cli.js generate --help</code>，写出它的 4 个选项。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>顶层命令里，翻译、编译、静态校验、截图、交互测试各有其责；<code>compare</code> 需要两个工程路径，<code>generate</code> 的 4 个选项里有 3 个是"跳过/免做"类。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>7 个子命令：<code>generate</code>（XML→C 生成）、<code>compile</code>（编译工程）、<code>compare</code>（与参考示例比对生成代码）、<code>validate</code>（静态校验）、<code>run-test</code>（运行单个 UI 交互测试）、<code>run-all-tests</code>（运行全部交互测试）、<code>screenshot</code>（给指定屏幕截图）。<code>generate</code> 的 4 个选项：<code>--token</code>（许可，亦可 <code>LVGL_CLI_TOKEN</code>）、<code>--ignore-fonts</code>（跳过字体转换）、<code>--ignore-images</code>（跳过图像转换）、<code>--skip-resources</code>（跳过资源拷贝与校验）。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：按需求改一张"图纸" <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>复制 <code>examples/xml_project/</code> 为一个新工程目录，然后把 <code>project.xml</code> 里的显示改成 480×272，并新增一个 <code>target2</code>（分辨率 128×64）。说明：<code>&lt;targets&gt;</code>、<code>&lt;target&gt;</code>、<code>&lt;display width height&gt;</code> 三层各表达什么含义？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>XML 是树形结构：工程下可挂多个 target，每个 target 声明一块显示。对照 12.2 的真实 <code>project.xml</code> 全文作答。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>三者是"工程 → 目标 → 屏幕"的树：<code>&lt;project&gt;</code> 是根（带 <code>lvgl_version</code> 目标版本），<code>&lt;targets&gt;</code> 容纳多个目标，<code>&lt;target name="..."&gt;</code> 是一个编译目标，其下的 <code>&lt;display width="480" height="272"/&gt;</code> 声明这块屏的尺寸。改法：复制工程目录后，把 width/height 改成 480/272，再在同一 <code>&lt;targets&gt;</code> 下追加一个 <code>&lt;target name="target2"&gt;&lt;display width="128" height="64"/&gt;&lt;/target&gt;</code>。多 target 意味着一次生成可产出适配多种分辨率屏的代码。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：读懂三个"跳过"选项 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>结合 <code>globals.xml</code> 的 <code>&lt;bin&gt;</code>/<code>&lt;data&gt;</code> 标签与 12.1 的目录内容，解释 <code>--ignore-fonts</code>、<code>--ignore-images</code>、<code>--skip-resources</code> 各自跳过的是什么环节，并说出"已经在 CI 里预转换好资源、只想增量生成"时应该用哪几个。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>&lt;bin&gt;</code> 把 TTF 转成二进制字体、<code>&lt;data&gt;</code> 把 PNG 转成图像描述符；<code>lvgl-resources.zip</code> 是 12.1 里那个约 16 MB 的资源包。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>--ignore-fonts</code> 跳过字体转换（<code>&lt;bin name="font_example_large" .../&gt;</code> 的 TTF→二进制字体那一步）；<code>--ignore-images</code> 跳过图像转换（<code>&lt;data color_format="argb8888"/&gt;</code> 的 PNG→描述符那一步）；<code>--skip-resources</code> 跳过 <code>lvgl-resources.zip</code> 的拷贝与校验。增量生成且资源已就绪时，三个都可以加上；只想省时间重跑时至少加 <code>--skip-resources</code>。注意若你的界面真的引用了字体/图像，跳过转换可能让生成代码缺资源，需按实际工程权衡。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：许可的设计哲学 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>CLI 用 <code>--token</code> 与 <code>LVGL_CLI_TOKEN</code> 两种方式接受同一份许可。请分析：为什么同时提供两种？各适合什么场景？结合 README 的 License 说明（Community/Evaluation 免费、商业付费），讨论"没有 token 就拒绝执行"这种门禁设计对开发者与厂商分别意味着什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想三个点：命令行参数会进 shell 历史与进程列表；环境变量可以由 CI 系统安全注入；门禁让"免费试用"和"商业付费"边界清晰，但也会让第一次上手多一道坎。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>两种方式服务两种场景：<code>--token</code> 适合临时、本地、一次性使用，直观但会出现在 shell 历史、进程参数与日志里，有泄露风险；<code>LVGL_CLI_TOKEN</code> 适合 CI/CD——由流水线安全注入、不进脚本源码、也不出现在命令行里，README 明确两者等价（"Can also be set with LVGL_CLI_TOKEN"）。门禁设计上，token 是"免费与付费之间的闸机"：无 token 时报 <code>[ERROR] No token provided</code> 并拒绝执行，保障了厂商的商业边界；对开发者则是"先注册再使用"的体验成本。这也解释了为什么教程建议本地实验先申请 Community 许可、把 token 放进环境变量——低成本迈过这道坎，就能用上整条流水线。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

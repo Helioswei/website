@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第16章：二次开发与移植新屏 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="16" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第16章：二次开发与移植新屏</h1>
+  <p class="chapter-subtitle">「鲁班说：要做出东西，先把工具备齐。」这一章是终点站，也是真正的起点——给这台阅读器加电子书（16.1）、加字体（16.2）、换一块新屏幕（16.3），最后回顾这四条技术线里本项目的位置（16.4）。前 15 章学会"读代码"，这一章学会"改代码"：你手上已经有完整的工具链和模板。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事——先备齐工具和模板，再做二次开发</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「鲁班教徒弟，第一课不是教做柜子，而是教磨斧子。这一章也一样：换屏幕不是从头写驱动，而是『复制模板、填波形、改四个函数、加一行配置』；加书不是改代码，而是『知道书往哪放』；加字体不是写解析器，而是『往目录里丢一个文件』。工具备好了，活儿都是搭积木。我们把前一章留下的『待完善』清单，一件件变成『动手就能做』的活。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 16.1 加 EPUB：少量进镜像，大量走 TF 卡 ========== -->
+  <h2>16.1 加 EPUB：少量进镜像，大量走 TF 卡</h2>
+
+  <p>EPUB 本质是一个 zip 压缩包（第 7 章讲过用 miniz 解包），体积从几百 KB 到几十 MB 不等。这台阅读器有两条取书通道：<strong>内置文件系统</strong>（随镜像打包进 Flash）和 <strong>TF 卡</strong>（microSD 存储卡，可随时插拔）。README 的「二次开发」开宗明义只有两句话：<strong>少量样书放入 <code>disk/</code>，随文件系统镜像打包；大量书籍建议使用 TF 卡</strong>。原因很朴素——镜像里的文件系统是只读的、空间有限，每改一次都要重新编译烧录；而 TF 卡容量大、内容随时可以换，不需要动固件。</p>
+
+  <p><code>disk/</code> 是怎么变成镜像里的文件的？答案在 <code>project/SConstruct</code> 里。<code>FileSystemBuild("../disk", env)</code> 把整个 <code>disk/</code> 目录打包成一个文件系统镜像，<code>AddCustomImg("fs_root", bin=[fs_bin])</code> 再以 <code>fs_root</code> 的名字把这个镜像烧进固件分区。所以你在 <code>disk/</code> 里放的任何 EPUB，开机后都会出现在内置文件系统里——第 12 章书库页扫描的就是它（这就是"优先内置文件系统"的来源）。注意同一个文件如果还满足 <code>EPD_WAVEFORM_USE_BIN</code>（选了二进制波形），构建脚本还会把 <code>../waveform/epd_waveform.bin</code> 单独打成 <code>wave_table</code> 分区——这也是模板里 <code>#ifndef EPD_WAVEFORM_USE_BIN</code> 那条分支存在的意义。</p>
+
+  <p>一个真实的小插曲能让你看清这套打包机制：<code>disk/</code> 里现成的三本样书里，<code>oebps.epub</code> 和 <code>pg43-images.epub</code> 大小一模一样（都是 304004 字节），连 MD5 都完全相同——它们是同一个文件被复制成了两份，等于镜像里白白塞了两份一模一样的书（第 15 章那套"信号盘点"思路在这里立刻派上用场）。另一本 <code>no_oebps.epub</code> 则是有意的"压力测试书"：它没有标准的 <code>OEBPS/</code> 目录，<code>content.opf</code> 直接躺在包根目录，专门用来检验解析器对非标准结构的容错。这些真实细节告诉你：读一个项目的构建脚本，等于读它"怎么把资源变进固件"的全部真相。</p>
+
+<pre><code><span class="cmt"># project/SConstruct：把 disk/ 打包成镜像里的只读文件系统 fs_root</span>
+fs_bin = FileSystemBuild( <span class="str">"../disk"</span>, env)
+AddCustomImg(<span class="str">"fs_root"</span>, bin=[fs_bin])
+
+<span class="cmt"># 选了二进制波形（EPD_WAVEFORM_USE_BIN）时，额外把波形打成一个独立分区</span>
+<span class="kw">if</span> GetDepend(<span class="str">'EPD_WAVEFORM_USE_BIN'</span>):
+    epd_wave_bin = <span class="str">"../waveform/epd_waveform.bin"</span>
+    AddCustomImg(<span class="str">"wave_table"</span>, bin=[epd_wave_bin])</code></pre>
+
+<pre><code><span class="cmt"># 真实现状：disk/ 里三本样书，其中两本是同一个文件</span>
+$ ls -l disk/
+oebps.epub        <span class="num">304004</span> 字节
+pg43-images.epub  <span class="num">304004</span> 字节   <span class="cmt">← 和 oebps.epub 大小一致</span>
+no_oebps.epub     <span class="num">96038</span>  字节   <span class="cmt">← 无 OEBPS/ 目录的非标准测试书</span>
+
+$ md5sum disk/oebps.epub disk/pg43-images.epub
+<span class="num">18dbb997072703ff53471889f614b781</span>  disk/oebps.epub
+<span class="num">18dbb997072703ff53471889f614b781</span>  disk/pg43-images.epub   <span class="cmt">← MD5 完全相同</span></code></pre>
+
+  <table>
+    <tr><th>取书通道</th><th>怎么加书</th><th>优点</th><th>代价</th></tr>
+    <tr><td><code>disk/</code>（内置）</td><td>把 EPUB 丢进 <code>disk/</code>，重新编译烧录</td><td>开机即有、不怕丢</td><td>只读、空间有限、改一次烧一次</td></tr>
+    <tr><td>TF 卡</td><td>卡里建个目录放 EPUB，插卡即读</td><td>容量大、可热插拔、不动固件</td><td>依赖卡的存在与格式</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>「工欲善其事，先磨斧子」在这儿的落点是：<strong>先搞清"谁把书打包进镜像"这条构建管线，再决定书放哪</strong>。动手改任何"资源类"的东西（书、图、字体、波形）之前，先花两分钟在 SConstruct / Kconfig 里找到它被烧录的入口——你就能判断"改完要不要重新编译烧录"，而这是最容易踩的坑。</p>
+  </div>
+
+  <!-- ========== 16.2 加外部字体：/fonts 即插即用 ========== -->
+  <h2>16.2 加外部字体：/fonts 即插即用</h2>
+
+  <p>第 8 章讲过内置中文字体是怎么从 Flash XIP（在 Flash 里直接取数据、不搬进 RAM 的执行方式）加载的。这一节把"系统怎么认识你自己的字体"讲完整。字体管理器 <code>src/font_manager.c</code> 的全部秘密就藏在一个上限、一个目录和一个后缀检查里。上限是三个宏：<code>FONT_MAX_COUNT 64</code>（内置 Default 占 1 个，外部字体最多 <code>64 - 1 = 63</code> 个）、<code>FONT_NAME_MAX 32</code>、<code>FONT_PATH_MAX 64</code>。后缀检查是 <code>is_ttf_file()</code>：只认 <code>.ttf / .TTF / .otf / .OTF</code> 四种结尾。</p>
+
+  <p>启动时 <code>font_manager_init("/fonts")</code> 做两件事：先把内置 <code>"Default"</code> 登记到 index 0，然后 <code>opendir</code> 扫描目录、把每个命中后缀的文件登记进 <code>g_font_list</code>（撞到 <code>FONT_MAX_COUNT</code> 就停）。所以加字体的完整流程只有两步：<strong>在 TF 卡根目录建 <code>/fonts</code>，把 <code>.ttf/.otf</code> 放进去，重启</strong>——开机扫描后，新字体会自动出现在「阅读设置 → 字体」列表里（第 9 章讲过 reading_settings 页面）。选择时的切换逻辑在 <code>font_manager_select()</code>：先清字形缓存、释放旧的 FreeType face，然后分两条路——内置字体走 <code>epd_font_ft_init_builtin</code>（从 Flash XIP 读），TF 卡字体走 <code>epd_font_ft_init_from_file</code>（FreeType 直接从 TF 卡文件读取，不占 PSRAM，第 8 章提过这个取舍）；外部字体一旦加载失败，自动回退内置 Default 并返回 <code>-4</code>。看懂这段，你就明白 README 那句"若指定字体文件不可用，自动回退到内置默认字体"是从哪来的。</p>
+
+<pre><code><span class="cmt">/* src/font_manager.c：字体列表的三个上限 + 扫描时认哪几种后缀 */</span>
+<span class="kw">#define</span> FONT_MAX_COUNT   <span class="num">64</span>     <span class="cmt">// 列表上限（含内置 Default）</span>
+<span class="kw">#define</span> FONT_NAME_MAX    <span class="num">32</span>
+<span class="kw">#define</span> FONT_PATH_MAX    <span class="num">64</span>
+
+<span class="kw">typedef</span> <span class="kw">struct</span> {
+    <span class="type">char</span> name[FONT_NAME_MAX];
+    <span class="type">char</span> path[FONT_PATH_MAX];
+    <span class="type">int</span>  is_builtin;
+} FontEntry;
+
+<span class="kw">static</span> FontEntry g_font_list[FONT_MAX_COUNT];
+
+<span class="kw">static</span> <span class="type">int</span> <span class="fn">is_ttf_file</span>(<span class="kw">const</span> <span class="type">char</span> *filename)
+{
+    <span class="kw">const</span> <span class="type">char</span> *dot = strrchr(filename, <span class="str">'.'</span>);
+    <span class="kw">if</span> (!dot) <span class="kw">return</span> <span class="num">0</span>;
+    <span class="kw">return</span> (strcmp(dot, <span class="str">".ttf"</span>) == <span class="num">0</span> || strcmp(dot, <span class="str">".TTF"</span>) == <span class="num">0</span> ||
+            strcmp(dot, <span class="str">".otf"</span>) == <span class="num">0</span> || strcmp(dot, <span class="str">".OTF"</span>) == <span class="num">0</span>);
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/font_manager.c：初始化 = 内置占位 + 扫描 /fonts 目录 */</span>
+<span class="type">int</span> <span class="fn">font_manager_init</span>(<span class="kw">const</span> <span class="type">char</span> *font_dir)
+{
+    strcpy(g_font_list[<span class="num">0</span>].name, <span class="str">"Default"</span>);   <span class="cmt">// index 0 永远是内置字体</span>
+    g_font_list[<span class="num">0</span>].path[<span class="num">0</span>] = <span class="str">'\0'</span>;
+    g_font_list[<span class="num">0</span>].is_builtin = <span class="num">1</span>;
+    g_font_count = <span class="num">1</span>;
+
+    DIR *dir = opendir(font_dir);
+    <span class="kw">if</span> (!dir) <span class="kw">return</span> g_font_count;   <span class="cmt">// 没有 /fonts 也能用（只有 Default）</span>
+
+    <span class="kw">struct</span> dirent *entry;
+    <span class="kw">while</span> ((entry = readdir(dir)) != NULL) {
+        <span class="kw">if</span> (g_font_count &gt;= FONT_MAX_COUNT) <span class="kw">break</span>;   <span class="cmt">// 撞上限就停</span>
+        <span class="kw">if</span> (!is_ttf_file(entry-&gt;d_name)) <span class="kw">continue</span>;     <span class="cmt">// 只认 .ttf/.otf</span>
+        FontEntry *fe = &amp;g_font_list[g_font_count];
+        snprintf(fe-&gt;path, FONT_PATH_MAX, <span class="str">"%s/%s"</span>, font_dir, entry-&gt;d_name);
+        extract_display_name(entry-&gt;d_name, fe-&gt;name, FONT_NAME_MAX);
+        fe-&gt;is_builtin = <span class="num">0</span>;
+        g_font_count++;
+    }
+    closedir(dir);
+    <span class="kw">return</span> g_font_count;
+}</code></pre>
+
+  <table>
+    <tr><th>来源</th><th>加载函数</th><th>数据在哪</th><th>失败策略</th></tr>
+    <tr><td>内置 Default</td><td><code>epd_font_ft_init_builtin</code></td><td>Flash XIP，编译进固件</td><td>—（永远可用）</td></tr>
+    <tr><td>TF 卡外部字体</td><td><code>epd_font_ft_init_from_file</code></td><td>TF 卡 <code>/fonts</code>，FreeType 直接读文件</td><td>回退内置 Default，返回 <code>-4</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>验证"字体加对了没"最快的方法，不是看代码，是<strong>看开机日志</strong>：<code>font_manager_init</code> 每扫到一个字体就打一行 <code>[font_mgr] Found font: [N] 名字 (路径)</code>，结束再打 <code>[font_mgr] Total N fonts available</code>。第 2 章教你用串口/调试口看 RT-Thread 日志时讲过怎么读 log——现在它就是你的"磨斧子"。加完字体重启，扫一眼这两行，比猜代码快十倍。</p>
+  </div>
+
+  <!-- ========== 16.3 移植新屏：四步配方 ========== -->
+  <h2>16.3 移植新屏：四步配方</h2>
+
+  <p>这一节是第 3 章（板级与 Kconfig）和第 4 章（LUT、时序、VCOM、EPIC）知识的总装。README 的「二次开发」把"加一块新屏幕"压缩成了四步：<strong>复制模板 → 波形数组 → 关键函数 → Kconfig 配置</strong>。最要紧的一点是架构上的解耦——屏驱跟 EPUB 解析、UI 状态机互不相干，换屏完全不影响上层阅读逻辑（第 4 章已经讲过 DBI 驱动如何被渲染器调用）。所以移植新屏的本质不是"重写驱动"，而是"照着已有模板填四个口子"。</p>
+
+  <p><strong>第 1 步：复制模板改名。</strong>把 <code>src/boards/display_dbi/epd_configs_opm060d.c</code> 复制一份，按新屏型号命名（README 建议）。模板开头是 <code>#if defined(LCD_USING_OPM060D)</code>，这个宏开关要换成你自己的屏宏。<strong>第 2 步：填波形数组。</strong>把屏幕厂商给的波形文档转成 C 数组：全刷 <code>static const uint8_t xxx_wave_full[32][256] = {}</code>、局刷 <code>[12][256]</code>。模板里真实的全刷数组叫 <code>yzc085_wave_full_0_100[32][256]</code>，局刷叫 <code>yzc085_wave_partial_0_100[12][256]</code>，每个元素取值 <code>0/1/2</code>——它本质是一张 256 级灰阶查找表，告诉屏幕在当前这一帧里对每个新旧像素组合施加多大的电压，这正是第 4 章讲的 LUT（查找表）概念。</p>
+
+  <p><strong>第 3 步：改四个关键函数。</strong>（1）波形选择 <code>epd_wave_table_get_frames(temperature, mode)</code>：按温度区间和全刷/局刷模式选波形、返回帧数；超温区自动回退全刷表。README 还给了一个多温区分段表的例子（<code>te067xjhe_wave_forms_full[]</code> 把波形按 <code>0-5℃ / 5-10℃ / 50-100℃</code> 分段）。（2）LUT 转换 <code>epd_wave_table_fill_lut</code>：核心就一行 <code>p_epic_lut[i] = p_frame_wave[i] &lt;&lt; 3;</code>，把 8bit 波形左移 3 位转成 32bit EPIC 加速器能用的值。（3）时序 <code>epd_get_timing_config</code>：像素时钟 <code>sclk_freq = 24</code>（MHz）、行时钟 <code>fclk_freq = 83</code>（KHz）、有效数据长度 <code>LDL = LCD_HOR_RES_MAX / 4</code>（8 位数据线要除 4）、<code>FDL = LCD_VER_RES_MAX</code>。（4）公共电极电压 <code>epd_get_vcom_voltage</code>：R7D005 屏返 <code>2100</code>（mV），其他屏返 <code>1050</code>。<strong>第 4 步：Kconfig。</strong>在 <code>project/Kconfig.proj</code> 的 <code>choice "Custom LCD driver"</code> 里加一项（<code>select</code> 对应触控芯片、驱动源文件宏和总线宏 <code>BSP_LCDC_USING_EPD_8BIT</code>），补上 <code>LCD_HOR_RES_MAX / LCD_VER_RES_MAX / LCD_DPI</code> 三组默认值，然后跑 menuconfig 确认新屏选项可见并默认选中。</p>
+
+<pre><code><span class="cmt">/* 第 1-2 步：模板开关 + 波形数组（src/boards/display_dbi/epd_configs_opm060d.c） */</span>
+<span class="kw">#if</span> defined(LCD_USING_OPM060D)        <span class="cmt">// 换成你自己的屏宏</span>
+<span class="kw">#ifndef</span> EPD_WAVEFORM_USE_BIN          <span class="cmt">// 不用二进制波形时才走 C 数组</span>
+
+<span class="kw">typedef</span> <span class="kw">struct</span> {
+    <span class="type">int</span> min_temp;                  <span class="cmt">// 温区下限</span>
+    <span class="type">int</span> max_temp;                  <span class="cmt">// 温区上限</span>
+    <span class="type">uint32_t</span> frame_count;          <span class="cmt">// 这个波形共有几帧</span>
+    <span class="kw">const</span> <span class="type">uint8_t</span> (*wave_table)[<span class="num">256</span>];  <span class="cmt">// 指向 [N][256] 二维数组</span>
+} WaveTableEntry;
+
+<span class="cmt">// 全刷：32 帧 × 256 灰阶组合；局刷：12 帧 × 256</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">uint8_t</span> yzc085_wave_full_0_100[<span class="num">32</span>][<span class="num">256</span>]    = { ... };
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">uint8_t</span> yzc085_wave_partial_0_100[<span class="num">12</span>][<span class="num">256</span>] = { ... };
+
+<span class="kw">static</span> <span class="kw">const</span> WaveTableEntry full_wave_table =
+    {<span class="num">0</span>, <span class="num">100</span>, <span class="num">32</span>, &amp;yzc085_wave_full_0_100[<span class="num">0</span>]};
+<span class="kw">static</span> <span class="kw">const</span> WaveTableEntry partial_wave_table =
+    {<span class="num">0</span>, <span class="num">100</span>, <span class="num">12</span>, &amp;yzc085_wave_partial_0_100[<span class="num">0</span>]};</code></pre>
+
+<pre><code><span class="cmt">/* 第 3 步-1：波形选择（温区 + 全刷/局刷），超温区回退全刷表 */</span>
+<span class="type">uint32_t</span> <span class="fn">epd_wave_table_get_frames</span>(<span class="type">int</span> temperature, EpdDrawMode mode)
+{
+    <span class="kw">const</span> WaveTableEntry *wave_table = NULL;
+    <span class="kw">if</span> (EPD_DRAW_MODE_FULL == mode) wave_table = &amp;full_wave_table;
+    <span class="kw">else</span>                            wave_table = &amp;partial_wave_table;
+    <span class="kw">if</span> (temperature &lt; wave_table-&gt;min_temp ||
+        temperature &gt;= wave_table-&gt;max_temp) {
+        wave_table = &amp;full_wave_table;   <span class="cmt">// 超出温区一律用全刷表</span>
+    }
+    p_current_wave_from = (<span class="kw">const</span> <span class="type">uint8_t</span> *)&amp;wave_table-&gt;wave_table[<span class="num">0</span>][<span class="num">0</span>];
+    <span class="kw">return</span> wave_table-&gt;frame_count;
+}
+
+<span class="cmt">/* 第 3 步-2：8bit 波形 → 32bit EPIC LUT（核心就这一行左移） */</span>
+<span class="type">void</span> <span class="fn">epd_wave_table_fill_lut</span>(<span class="type">uint32_t</span> *p_epic_lut, <span class="type">uint32_t</span> frame_num)
+{
+    <span class="kw">const</span> <span class="type">uint8_t</span> *p_frame_wave = p_current_wave_from + (frame_num * <span class="num">256</span>);
+    <span class="kw">for</span> (<span class="type">uint16_t</span> i = <span class="num">0</span>; i &lt; <span class="num">256</span>; i++)
+        p_epic_lut[i] = p_frame_wave[i] &lt;&lt; <span class="num">3</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* 第 3 步-3/4：时序 + VCOM（数值务必按新屏数据手册改） */</span>
+<span class="kw">const</span> EPD_TimingConfig *<span class="fn">epd_get_timing_config</span>(<span class="type">void</span>)
+{
+    <span class="kw">static</span> <span class="kw">const</span> EPD_TimingConfig timing_config = {
+        .sclk_freq = <span class="num">24</span>,        <span class="cmt">// 像素时钟，单位 MHz</span>
+        .SDMODE = <span class="num">0</span>,            <span class="cmt">// R7D005 屏要改为 1</span>
+        .LSL = <span class="num">0</span>, .LBL = <span class="num">0</span>,
+        .LDL = LCD_HOR_RES_MAX/<span class="num">4</span>, <span class="cmt">// 有效数据 clock 数（8 线数据要除 4）</span>
+        .LEL = <span class="num">1</span>,
+        .fclk_freq = <span class="num">83</span>,        <span class="cmt">// 行时钟，单位 KHz</span>
+        .FSL = <span class="num">1</span>, .FBL = <span class="num">3</span>,
+        .FDL = LCD_VER_RES_MAX,
+        .FEL = <span class="num">5</span>,
+    };
+    <span class="kw">return</span> &amp;timing_config;
+}
+
+<span class="type">uint16_t</span> <span class="fn">epd_get_vcom_voltage</span>(<span class="type">void</span>)
+{
+<span class="kw">#if</span> defined(LCD_USING_EPD_R7D005)
+    <span class="kw">return</span> <span class="num">2100</span>;   <span class="cmt">// 这块屏要 2.1V 公共电极电压</span>
+<span class="kw">#else</span>
+    <span class="kw">return</span> <span class="num">1050</span>;   <span class="cmt">// YZC085 等其他屏用 1.05V</span>
+<span class="kw">#endif</span>
+}</code></pre>
+
+<pre><code><span class="cmt"># 第 4 步：project/Kconfig.proj —— choice 里加一项 + 补分辨率/DPI 默认值</span>
+choice
+    prompt <span class="str">"Custom LCD driver"</span>
+    default LCD_USING_EPD_YZC085_V100 if BSP_USING_BOARD_SF32_OED_EPD_V11
+    default LCD_USING_EPD_YZC085_V100_V12 if BSP_USING_BOARD_SF32_OED_EPD_V12
+
+    config LCD_USING_EPD_YZC085_V100_V12
+        bool <span class="str">"6.0 rect electronic paper display(EPD YZC085_V1.05 1032x758) for V1.2 board"</span>
+        select TSC_USING_GT967 if BSP_USING_TOUCHD   <span class="cmt"># 触控芯片</span>
+        select LCD_USING_OPM060D                      <span class="cmt"># 驱动源文件开关</span>
+        select BSP_LCDC_USING_EPD_8BIT                <span class="cmt"># DBI 8-bit 并行总线</span>
+
+    config LCD_USING_EPD_R7D005
+        bool <span class="str">"6.0 rect electronic paper display(EPD R7D005_-1.30 1448x1072)"</span>
+        select TSC_USING_FT5446U_V01 if BSP_USING_TOUCHD
+        select LCD_USING_OPM060D
+        select BSP_LCDC_USING_EPD_8BIT
+endchoice
+
+<span class="cmt"># 新屏务必补上这三组默认值，否则编译期分辨率是错的</span>
+config LCD_HOR_RES_MAX
+    int
+    default <span class="num">1448</span> if LCD_USING_EPD_R7D005
+    default <span class="num">1032</span> if LCD_USING_EPD_YZC085_V100
+    default <span class="num">240</span>  if LCD_USING_EPD_OPMO37A3
+config LCD_VER_RES_MAX
+    int
+    default <span class="num">1072</span> if LCD_USING_EPD_R7D005
+    default <span class="num">758</span>  if LCD_USING_EPD_YZC085_V100
+    default <span class="num">416</span>  if LCD_USING_EPD_OPMO37A3
+config LCD_DPI
+    int
+    default <span class="num">315</span> if LCD_USING_EPD_R7D005
+    default <span class="num">300</span> if LCD_USING_EPD_YZC085_V100
+    default <span class="num">130</span> if LCD_USING_EPD_OPMO37A3</code></pre>
+
+<pre><code><span class="cmt"># 收尾验证：确认新屏选项可见并默认选中</span>
+$ scons --board=sf32-oed-epd_v12 --board_search_path=.. --menuconfig
+<span class="cmt"># （也可按 README 的等价写法：）</span>
+$ menuconfig --board=sf32-oed-epd_v12 --board_search_path=..</code></pre>
+
+  <table>
+    <tr><th>关键函数</th><th>干什么</th><th>新屏要改什么</th></tr>
+    <tr><td><code>epd_wave_table_get_frames</code></td><td>按温度/模式选波形并返回帧数</td><td>温区划分、帧数</td></tr>
+    <tr><td><code>epd_wave_table_fill_lut</code></td><td>8bit 波形 → 32bit EPIC LUT</td><td>一般不用改（左移 3 位是通用约定）</td></tr>
+    <tr><td><code>epd_get_timing_config</code></td><td>像素/行时钟与有效数据长度</td><td><code>sclk_freq / fclk_freq / LDL / FDL</code></td></tr>
+    <tr><td><code>epd_get_vcom_voltage</code></td><td>公共电极电压（mV）</td><td>按数据手册返回值</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>四步配方的顺序是有讲究的，每一步都有"验证点"：第 2 步填完数组，可以先只用全刷表点亮看灰阶是否正常；第 3 步改完 VCOM 和时序，先测一次全刷再测局刷（局刷要额外验证残影，第 4 章讲过）；第 4 步加完 Kconfig，必须跑一次 menuconfig 看选项是否真的出现在 <code>Custom LCD driver</code> 下。小步验证、逐级点亮——这是移植硬件驱动最稳的节奏。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>波形数组的值（<code>0/1/2</code>）来自屏幕厂商的波形文档，不是你自己发明的。两个常见坑：一是数组维度搞反——全刷表必须是 <code>[32][256]</code>、局刷是 <code>[12][256]</code>，少一行都会让 <code>epd_wave_table_get_frames</code> 越界读；二是时序里的单位——<code>sclk_freq</code> 是 MHz、<code>fclk_freq</code> 是 KHz，差 1000 倍会让整屏闪烁或白屏。动手前把波形文档和数据手册放在手边，逐行对照着填。</p>
+  </div>
+
+  <!-- ========== 16.4 本教程回顾：从三线到四线，你的下一步 ========== -->
+  <h2>16.4 本教程回顾：从三线到四线，你的下一步</h2>
+
+  <p>回头看这个站点：四条技术线，Kotlin 教你怎么从零写一个 Android 应用，LVGL 教你怎么在嵌入式上画界面，ESP32 电子墨水屏线教你解剖一个真实阅读器的完整实现，而 <strong>SF32 电子书移植实战</strong>是站在第三条线肩膀上的一课——把同一个 EPUB 阅读器从 ESP32 芯片整体搬到 SiFli 芯片。它回答的不是"怎么写一个新东西"，而是"怎么把一个能跑的东西搬到另一个平台"：第 3-6 章换硬件层，第 7-10 章沿用解析与渲染，第 11-13 章重做 UI 与状态机，第 14-16 章盘点与扩展。这个"移植"的视角，是前三条线都没直接给的——它训练的是另一种能力：<strong>读已有代码、辨别哪些该搬哪些该重写</strong>。</p>
+
+  <p>如果把本教程的十六章压缩成一张地图，它是这样的：<strong>第 1-2 章</strong>（认识项目）给你坐标系和工具——项目是什么、怎么编译烧录、日志怎么看；<strong>第 3-6 章</strong>（硬件平台）回答"这台机器由什么组成"——板级、显示、输入、电源四条硬件线；<strong>第 7-10 章</strong>（解析与渲染）回答"一本书怎么变成屏幕上的字"——EPUB 解包、字体、设置、渲染；<strong>第 11-13 章</strong>（UI 与状态机）回答"整台机器怎么被组织起来"——状态机、书库流程、触控操作层；<strong>第 14-16 章</strong>（现状与展望）回答"它做到哪一步了、还能怎么变"——已实现盘点、未实现清单、二次开发。从"能跑起来"到"看得懂"再到"改得动"，是这条线递进的三级台阶。</p>
+
+  <p>你的下一步，就照 16.3 那四步配方动手：挑一块你手上真实存在的墨水屏（数据手册 + 波形文档齐全的那种），照着模板走一遍"复制 → 填波形 → 改四函数 → 加 Kconfig → menuconfig 验证"。这一步走通，你就不再是"读过移植代码的人"，而是"真的移植过一块屏的人"——第 15 章那份待完善清单里，你也可以顺手挑一条（比如给 <code>disk/</code> 里重复的样书去重，或给天气补上文档）当成第一个真实 issue。鲁班说的"工欲善其事"，到这一步才算圆满：工具你已经全有了，接下来就是干活。</p>
+
+<pre><code><span class="cmt"># 本章核心配方速记：加新屏四步走</span>
+<span class="num">1</span>. cp src/boards/display_dbi/epd_configs_opm060d.c \
+       src/boards/display_dbi/epd_configs_myedp.c     <span class="cmt"># 复制模板 + 改名</span>
+<span class="num">2</span>. <span class="cmt"># 填波形数组：全刷 [32][256]，局刷 [12][256]</span>
+<span class="num">3</span>. <span class="cmt"># 改四函数：波形选择 / LUT 转换 / 时序 / VCOM</span>
+<span class="num">4</span>. <span class="cmt"># project/Kconfig.proj 加选项 + LCD_HOR_RES_MAX / VER_RES_MAX / DPI</span>
+$ scons --board=sf32-oed-epd_v12 --board_search_path=.. --menuconfig   <span class="cmt"># 验证</span></code></pre>
+
+<pre><code><span class="cmt"># 加字两句话：往 TF 卡放字体，重启即可</span>
+$ mkdir -p /fonts
+$ cp /path/to/MyFont.ttf /fonts/          <span class="cmt"># .ttf/.TTF/.otf/.OTF 都认</span>
+<span class="cmt"># 开机日志确认：</span>
+<span class="cmt"># [font_mgr] Found font: [1] MyFont (fonts/MyFont.ttf)</span>
+<span class="cmt"># [font_mgr] Total 2 fonts available</span></code></pre>
+
+  <table>
+    <tr><th>技术线</th><th>核心问题</th><th>本教程的独特价值</th></tr>
+    <tr><td>Kotlin</td><td>怎么从零写 Android 应用</td><td>语言 + 架构的系统路径</td></tr>
+    <tr><td>LVGL</td><td>怎么在嵌入式上画界面</td><td>嵌入式图形库的完整机制</td></tr>
+    <tr><td>ESP32 电子墨水屏</td><td>怎么解剖一个真实阅读器</td><td>完整产品的读码能力</td></tr>
+    <tr><td>SF32 移植实战（本线）</td><td>怎么把它搬到另一块芯片</td><td>跨平台移植：辨别该搬 / 该重写</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>毕业前最后一课，鲁班讲的是"磨斧子的终点就是动手"。这台阅读器从头到尾都是真实代码，而你现在的工具箱里有：<strong>SCons 构建</strong>（第 2 章）、<strong>menuconfig</strong>（第 3 章）、<strong>模板文件 <code>epd_configs_opm060d.c</code></strong>、<strong>Kconfig 配置块</strong>，以及最重要的——<strong>一套"先 grep 再写"的求证习惯</strong>。接下来不管你是移植新屏、加功能还是修 bug，记住这一条：先找到证据，再动手改。这一章学完，你可以真正毕业了。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：书放哪 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>下面三种书，分别该走 <code>disk/</code> 还是 TF 卡？给出理由：① 出厂时随镜像预装的两本样书；② 你私藏的 20 本正文电子书，想随时换；③ 打算一次拷 500 本进设备。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回到 16.1 的对比表：只读+空间 vs 可插拔+大容量，再想一下"要不要重新编译烧录"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 放 <code>disk/</code>：随镜像打包、开机即有，适合"出厂即带"的固定内容。② 建议 TF 卡：内容要频繁换，放镜像每次都要重新编译烧录。③ 必须 TF 卡：500 本体积远超镜像文件系统容量，且只读镜像根本塞不下；同时还要注意第 12 章讲的单页列表上限（<code>MAX_EPUB_LIST_SIZE</code>）对一次能列出的本数有限制，需要靠翻页解决。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：加外部字体走一遍流程 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>src/font_manager.c</code>：加外部字体的完整步骤是什么？<code>FONT_MAX_COUNT = 64</code> 这个上限意味着"外部字体最多几个"？外部字体文件加载失败时，<code>font_manager_select</code> 会做什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 <code>font_manager_init</code> 的扫描循环、<code>is_ttf_file</code> 认的后缀、以及 <code>font_manager_select</code> 的失败分支（返回 <code>-4</code> 前后发生了什么）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>步骤：在 TF 卡根目录建 <code>/fonts</code>，把 <code>.ttf/.TTF/.otf/.OTF</code> 放进去，重启；开机时 <code>font_manager_init("/fonts")</code> 扫描登记，新字体会出现在「阅读设置 → 字体」里。由于 index 0 被内置 Default 占用，外部字体最多 <code>64 - 1 = 63</code> 个。加载失败时：先 <code>epd_font_ft_cache_clear()</code> 清缓存、释放旧 FT_Face，若 <code>epd_font_ft_init_from_file</code> 返回非 0，则回退调用 <code>epd_font_ft_init_builtin</code>、把 <code>g_current_font</code> 归 0 并返回 <code>-4</code>——即"自动回退到内置默认字体"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：移植新屏四步走 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设你要给项目加一块 1234×567、DPI 300 的新墨水屏（数据手册要求 VCOM 1800mV、像素时钟 18MHz）。按 16.3 的四步配方，列出每一步要动哪个文件、改哪个值。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 16.3 的四个代码块：模板在 <code>display_dbi/</code> 下，Kconfig 在 <code>project/</code> 下，四函数在屏驱文件里，分辨率/DPI 在 <code>LCD_HOR_RES_MAX</code> 等宏。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 复制 <code>epd_configs_opm060d.c</code> 为 <code>epd_configs_myedp.c</code>，把 <code>#if defined(LCD_USING_OPM060D)</code> 改成新宏 <code>LCD_USING_EPD_MYEDP</code>。② 填波形数组：全刷 <code>[32][256]</code>、局刷 <code>[12][256]</code>，数据来自新屏波形文档。③ 改四函数：<code>epd_wave_table_get_frames</code> 按温区选表；<code>epd_get_timing_config</code> 把 <code>sclk_freq</code> 改为 18；<code>epd_get_vcom_voltage</code> 改为 <code>return 1800;</code>；<code>epd_wave_table_fill_lut</code> 一般不动。④ 在 <code>project/Kconfig.proj</code> 的 choice 里加 <code>config LCD_USING_EPD_MYEDP</code>（<code>select</code> 触控/EPD 宏/总线宏），并补 <code>LCD_HOR_RES_MAX = 1234</code>、<code>LCD_VER_RES_MAX = 567</code>、<code>LCD_DPI = 300</code>，最后跑 menuconfig 验证。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：为项目做一次真实的二次开发 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>从下面挑一件真的动手做，并记录过程：① 用第 15 章的结论给 <code>disk/</code> 里重复的样书去重（想一想：删掉哪一份、改不改 SConstruct）；② 找一块真实的墨水屏，照 16.3 的四步配方移植；③ 给天气功能写一页 README 文档（它现在完全没被文档承认）。做完后在报告里说明：你改了什么、怎么验证的。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>① 去重的关键是"打包入口"在 <code>FileSystemBuild("../disk", env)</code>，删文件即可，不用改脚本；③ 天气的代码证据在第 15 章已经备齐（<code>wheather.c</code>、PAN 依赖、状态机）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 删除 <code>disk/pg43-images.epub</code>（它与 <code>oebps.epub</code> MD5 相同，是冗余副本），保留 <code>oebps.epub</code> 与 <code>no_oebps.epub</code>；因为 <code>disk/</code> 是整目录打包，删文件即可让镜像瘦身，<code>SConstruct</code> 无需改动。② 移植按四步配方，验证点是"先只亮全刷、再验证局刷残影、最后 menuconfig 确认选项"。③ 给天气写文档时，把链路写清楚：设备无 WiFi，天气依赖手机蓝牙网关（PAN），未连接时显示"尚未获取天气"；并如实标注 API key 是硬编码在固件里的风险（这是第 15 章盘点出的真实事实）。三项任选其一，重点是"改了什么 + 怎么验证"的闭环。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>hexo-next主题配置 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="主要记录一下自己在搭建个人博客的时候，一些配置，基本上是查阅别人的文章，这里记录一下 hexo安装 hexo安装 next主题设置 next主题设置 ​ next主题的设置都是在next/_config.yml中设置。 添加LocalSea">
+  <meta name="keywords" content="next">
+  <link rel="canonical" href="https://aigcwei.cn/notes/tools/hexo-next主题配置.html">
+  <meta property="og:title" content="hexo-next主题配置">
+  <meta property="og:description" content="主要记录一下自己在搭建个人博客的时候，一些配置，基本上是查阅别人的文章，这里记录一下 hexo安装 hexo安装 next主题设置 next主题设置 ​ next主题的设置都是在next/_config.yml中设置。 添加LocalSea">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/tools/hexo-next主题配置.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>hexo-next主题配置</h1>
+          <div class="article-meta"><span>2020-05-07</span><span class="tag">next</span></div>
+        </header>
+        <div class="article-body">
+<p>主要记录一下自己在搭建个人博客的时候，一些配置，基本上是查阅别人的文章，这里记录一下</p>
+<h3>hexo安装</h3>
+<p><a href="https://www.jianshu.com/p/eded1dd2d794">hexo安装</a></p>
+<p><a href="https://www.jianshu.com/p/b20fc983005f">next主题设置</a></p>
+<h3>next主题设置</h3>
+<p>​	next主题的设置都是在<code>next/_config.yml</code>中设置。</p>
+<h4>添加LocalSearch搜索</h4>
+<pre><code>
+ npm install hexo-generator-searchdb --save
+ 编辑主题配置文件，启用本地搜素
+ # Local search
+local_search:
+  enable: true
+</code></pre>
+<h4>网站访问量统计</h4>
+<p><img src="../../images/blog/baidu.png" alt="baidu.png"></p>
+<h4>阅读次数统计</h4>
+<p><a href="https://www.cnblogs.com/lijianming180/p/12433189.html">LeanCloud添加阅读次数</a></p>
+<h4>添加评论</h4>
+<p><a href="https://blog.csdn.net/jiunian_2761/article/details/97388997">valine</a></p>
+<h4>域名申请</h4>
+<p><a href="https://blog.csdn.net/linshuhe1/article/details/73013730">域名申请</a></p>
+<h4>谷歌检索</h4>
+<p><a href="https://www.itrhx.com/2019/09/17/A48-submit-search-engine-inclusion/">谷歌检索</a></p>
+<h4>永久文章链接</h4>
+<p><a href="https://www.jianshu.com/p/c7de2ae59975">abbrlink</a></p>
+<h4>404</h4>
+<p><a href="https://www.jianshu.com/p/2349c763cc02">404错误</a></p>
+<h4>码云+GitHub部署</h4>
+<p><img src="../../images/blog/gitee.png" alt="gitee.png"></p>
+<pre><code>
+需要在站点配置文件中配置gitee和GitHub的仓库地址
+然后就可以部署了，不过我们在gitee上部署后，每次都需要手动的去更新gitee page，才能生效
+</code></pre>
+<h4>图片浏览放大功能fancybox</h4>
+<pre><code>
+cd next/source/lib
+git clone https://github.com/theme-next/theme-next-fancybox3 fancybox
+#ps:注意fancybox和next/_config.uml里面的名字保持一致
+更改next/_config.uml文件；
+fancybox： true
+</code></pre>
+<h4>文字数量和阅读时长</h4>
+<ol><li>在博客目录下安装下面插件</li></ol>
+<p>   ~~~ npm install hexo-symbols-count-time --save</p>
+<p>   ~~~</p>
+<ol><li>在博客站点配置文件中添加</li></ol>
+<p>   ~~~</p>
+<p>   #估算一篇文章需要阅读的时间 symbols_count_time: symbols: true time: true total_symbols: true total_time: true exclude_codeblock: false awl: 4 wpm: 275 suffix: "mins."</p>
+<p>   ~~~</p>
+<h4>next7之后阅读全文设置</h4>
+<p>在博客目录下执行</p>
+<pre><code>
+npm install hexo-excerpt --save
+</code></pre>
+<p>在站点配置文件中添加</p>
+<pre><code>
+#阅读全文
+excerpt:
+  depth: 1
+  excerpt_excludes: []
+  more_excludes: []
+  hideWholePostExcerpts: true
+</code></pre>
+<p>在主题配置文件中将<code>excerpt_description</code>改为<code>true</code></p>
+<h4>添加本站运行时间</h4>
+<p>​	修改<strong>/blog/themes/next/layout/_partials/footer.swig</strong>文件，在末尾加入如下代码</p>
+<pre><code>
+&lt;br /&gt;
+&lt;!-- 网站运行时间的设置 --&gt;
+&lt;span id=&quot;timeDate&quot;&gt;载入天数...&lt;/span&gt;
+&lt;span id=&quot;times&quot;&gt;载入时分秒...&lt;/span&gt;
+&lt;script&gt;
+    var now = new Date();
+    function createtime() {
+        var grt= new Date(&quot;04/21/2019 15:54:40&quot;);//此处修改你的建站时间或者网站上线时间
+        now.setTime(now.getTime()+250);
+        days = (now - grt ) / 1000 / 60 / 60 / 24; dnum = Math.floor(days);
+        hours = (now - grt ) / 1000 / 60 / 60 - (24 * dnum); hnum = Math.floor(hours);
+        if(String(hnum).length ==1 ){hnum = &quot;0&quot; + hnum;} minutes = (now - grt ) / 1000 /60 - (24 * 60 * dnum) - (60 * hnum);
+        mnum = Math.floor(minutes); if(String(mnum).length ==1 ){mnum = &quot;0&quot; + mnum;}
+        seconds = (now - grt ) / 1000 - (24 * 60 * 60 * dnum) - (60 * 60 * hnum) - (60 * mnum);
+        snum = Math.round(seconds); if(String(snum).length ==1 ){snum = &quot;0&quot; + snum;}
+        document.getElementById(&quot;timeDate&quot;).innerHTML = &quot;本站已安全运行 &quot;+dnum+&quot; 天 &quot;;
+        document.getElementById(&quot;times&quot;).innerHTML = hnum + &quot; 小时 &quot; + mnum + &quot; 分 &quot; + snum + &quot; 秒&quot;;
+    }
+setInterval(&quot;createtime()&quot;,250);
+&lt;/script&gt;
+</code></pre>
+<h4>添加字数统计和阅读时长</h4>
+<p>在站点目录下安装</p>
+<pre><code>
+npm install hexo-symbols-count-time --save
+</code></pre>
+<p>在站点配置文件中添加配置</p>
+<pre><code>
+#估算一篇文章需要阅读的时间
+symbols_count_time:
+  #文章内是否显示
+  symbols: true
+  time: true
+   # 网页底部是否显示
+  total_symbols: false
+  total_time: true
+  exclude_codeblock: false
+  awl: 4
+  wpm: 275
+  suffix: &quot;mins.&quot;
+</code></pre>
+<h4>文章加密功能</h4>
+<p>​	<a href="https://github.com/D0n9X1n/hexo-blog-encrypt/blob/master/ReadMe.zh.md">详细内容参考</a></p>
+<p>​	在站点目录下安装</p>
+<pre><code>
+npm install --save hexo-blog-encrypt
+</code></pre>
+<p>​	在站点配置文件中添加</p>
+<pre><code>
+encrypt:
+  enable: true
+  abstract: 这是一篇加密文章，内容可能是个人情感宣泄或者收费技术。如果你确实想看，请与我联系。
+  message: 您好, 这里需要密码。
+  theme: Flip
+  wrong_pass_message: 抱歉, 这个密码看着不太对, 请再试试.
+  wrong_hash_message: 抱歉, 这个文章不能被校验, 不过您还是能看看解密后的内容.
+</code></pre>
+<p>​	然后在你的文章的头部添加上对应的字段，如 password, abstract, message</p>
+<ul><li>password: 是该博客加密使用的密码</li><li>abstract: 是该博客的摘要，会显示在博客的列表页</li><li>message: 这个是博客查看时，密码输入框上面的描述性文字</li></ul>
+<pre><code>
+---
+title: 文章加密
+date: 2019-01-04T22:20:13.000Z
+category: 教程
+tags:
+  - 博客
+  - Hexo
+password: 123456
+abstract: 密码：123456
+message:  输入密码，查看文章
+---
+</code></pre>
+<h4>动态背景</h4>
+<ul><li><a href="https://github.com/theme-next/theme-next-canvas-nest">Canvas-nest</a></li><li><a href="https://github.com/theme-next/theme-next-three">JavaScript 3D library</a></li><li><a href="https://github.com/theme-next/theme-next-canvas-ribbon">Canvas-ribbon</a></li></ul>
+<p>按需选择，我选择的是canvas-ribbon，需要安装模块到<strong>theme/next/source/lib</strong>文件夹下。</p>
+<pre><code>
+cd themes/next
+git clone https://github.com/theme-next/theme-next-canvas-ribbon source/lib/canvas-ribbon
+</code></pre>
+<p>Enable module in <strong>NexT</strong> <code>_config.yml</code> file:</p>
+<pre><code>
+canvas_ribbon:
+  enable: true
+</code></pre>
+<p><strong>And, if you wants to use the CDN, then need to set:</strong></p>
+<pre><code>
+vendors:
+  ...
+  canvas_ribbon: //cdn.jsdelivr.net/gh/theme-next/theme-next-canvas-ribbon@1/canvas-ribbon.js
+</code></pre>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

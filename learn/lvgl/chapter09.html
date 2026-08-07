@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第9章：动画与过渡 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="9" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：动画与过渡</h1>
+  <p class="chapter-subtitle">画是死的，动起来才有生命——给每一帧注入插值</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：赋予画面生命，研究插值曲线如同研究人体比例</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一幅画的价值在于'呼吸感'。LVGL 的动画不是炫技，而是把'状态变化'翻译成人眼能读懂的过渡——就像我解剖人体是为了画准一个手势，你研究缓动曲线，是为了让一个按钮的弹跳、一个面板的淡入都有生命。别让 UI 蹦跳，让它生长。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 动画的本质：lv_anim 是一次"可复用的插值描述" ========== -->
+  <h2>9.1 动画的本质：lv_anim 是一次"可复用的插值描述"</h2>
+
+  <p>动画的通用定义只有一句：<strong>在给定时间内，把一个数值从起点插值到终点</strong>。LVGL 把"这一次插值"完整描述成一个 <code>lv_anim_t</code> 结构体：动画谁（<code>var</code>）、每帧怎么执行（<code>exec_cb</code>）、从哪到哪（<code>values</code>）、花多久（<code>duration</code>）、沿什么曲线（<code>path_cb</code>）、要不要循环（<code>repeat_count</code>）。把这些字段填好后交给 <code>lv_anim_start(&amp;a)</code>，库就接管了后续每一帧。类型、全部 setter 与内置路径函数都声明在 <code>include/lvgl/core/lv_anim.h</code>，实现与全局刷新定时器在 <code>src/misc/lv_anim.c</code>——动画随屏幕刷新逐帧推进，因此它的顺滑度天然跟刷新率走。</p>
+
+  <p>使用套路是固定的五步：<code>lv_anim_t a; lv_anim_init(&amp;a);</code> 先初始化（把结构体清零并填默认值）→ <code>lv_anim_set_var(&amp;a, obj);</code> 指定被动画的对象 → <code>lv_anim_set_values(&amp;a, start, end);</code> 与 <code>lv_anim_set_duration(&amp;a, ms);</code> 定数值范围与时长 → <code>lv_anim_set_exec_cb(&amp;a, anim_x_cb);</code> 绑定执行函数 → <code>lv_anim_start(&amp;a);</code> 启动。exec_cb 的签名是 <code>void (*)(void * var, int32_t value)</code>，LVGL 官方注释明确写着它"与 <code>lv_xxx_set_yyy(obj, value)</code> 这类 setter 兼容"——所以 <code>lv_obj_set_x</code>、<code>lv_obj_set_width</code> 这类函数都能直接拿来当执行回调。</p>
+
+<pre><code><span class="cmt">/* 五步套路：让标签在 500ms 内从当前位置滑到 x=100（参考 lv_example_anim_1.c） */</span>
+<span class="kw">static</span> <span class="kw">void</span> anim_x_cb(<span class="kw">void</span> * var, <span class="type">int32_t</span> v)
+{
+    <span class="fn">lv_obj_set_x</span>((<span class="type">lv_obj_t</span> *) var, v);  <span class="cmt">/* LVGL 每帧调用，v 是当前插值 */</span>
+}
+
+<span class="type">lv_anim_t</span> a;
+<span class="fn">lv_anim_init</span>(&amp;a);                                      <span class="cmt">/* ① 初始化 */</span>
+<span class="fn">lv_anim_set_var</span>(&amp;a, label);                           <span class="cmt">/* ② 动画谁 */</span>
+<span class="fn">lv_anim_set_values</span>(&amp;a, <span class="fn">lv_obj_get_x</span>(label), <span class="num">100</span>);   <span class="cmt">/* ③ 从哪到哪 */</span>
+<span class="fn">lv_anim_set_duration</span>(&amp;a, <span class="num">500</span>);                      <span class="cmt">/* ④ 多久 */</span>
+<span class="fn">lv_anim_set_exec_cb</span>(&amp;a, anim_x_cb);                  <span class="cmt">/* ⑤ 每帧执行 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_overshoot</span>);
+<span class="fn">lv_anim_start</span>(&amp;a);                                   <span class="cmt">/* 启动：栈上 a 之后可丢弃 */</span></code></pre>
+
+<pre><code><span class="cmt">/* exec_cb 的三种写法 */</span>
+<span class="cmt">/* 1) 直接复用 LVGL setter（签名兼容） */</span>
+<span class="fn">lv_anim_set_exec_cb</span>(&amp;a, (<span class="type">lv_anim_exec_xcb_t</span>) <span class="fn">lv_obj_set_x</span>);     <span class="cmt">/* 水平移动 */</span>
+
+<span class="cmt">/* 2) 一个值驱动两个属性时，自己包一层 */</span>
+<span class="kw">static</span> <span class="kw">void</span> anim_size_cb(<span class="kw">void</span> * var, <span class="type">int32_t</span> v)
+{
+    <span class="fn">lv_obj_set_size</span>((<span class="type">lv_obj_t</span> *) var, v, v);   <span class="cmt">/* 宽高同步变化 */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>核心方法</th><th>作用</th></tr>
+    <tr><td><code>lv_anim_init()</code></td><td>初始化结构体并填默认值</td></tr>
+    <tr><td><code>lv_anim_set_var()</code></td><td>指定被动画的对象 / 变量</td></tr>
+    <tr><td><code>lv_anim_set_values()</code></td><td>起始值与结束值</td></tr>
+    <tr><td><code>lv_anim_set_duration()</code></td><td>动画时长（毫秒）</td></tr>
+    <tr><td><code>lv_anim_set_exec_cb()</code></td><td>每帧执行函数</td></tr>
+    <tr><td><code>lv_anim_set_path_cb()</code></td><td>缓动曲线</td></tr>
+    <tr><td><code>lv_anim_start()</code></td><td>启动动画，返回库内动画实例</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p><code>lv_anim_start()</code> 返回的是库内部管理的动画实例，栈上那个 <code>a</code> 启动后就不再需要。同一块 <code>lv_anim_t</code> 可以反复复用——但每次复用前记得重新 <code>lv_anim_init()</code>，否则上一轮的字段会残留成"没说的秘密"。</p>
+  </div>
+
+  <!-- ========== 9.2 easing 曲线：给插值配上"性格" ========== -->
+  <h2>9.2 easing 曲线：给插值配上"性格"</h2>
+
+  <p>什么都不指定时，动画是匀速的——即内置路径 <code>lv_anim_path_linear</code>。但真实世界很少匀速：起步的汽车、落地的皮球，都有自己的"加速度"。LVGL 内置 8 条路径函数，通过 <code>lv_anim_set_path_cb(&amp;a, path_cb)</code> 选择：<code>lv_anim_path_linear</code>（匀速）、<code>lv_anim_path_ease_in</code>（慢起快落）、<code>lv_anim_path_ease_out</code>（快起慢停）、<code>lv_anim_path_ease_in_out</code>（两头慢中间快）、<code>lv_anim_path_overshoot</code>（终点过冲后回弹）、<code>lv_anim_path_bounce</code>（三次弹跳）、<code>lv_anim_path_step</code>（结束瞬间跳到终值）、<code>lv_anim_path_custom_bezier3</code>（自定义贝塞尔）。</p>
+
+  <p>需要更精细的"性格"时，请贝塞尔出场。<code>lv_anim_path_custom_bezier3</code> 配合 <code>lv_anim_set_bezier3_param(&amp;a, x1, y1, x2, y2)</code> 自定义四个控制点（值域 0..1024，<code>examples/anim/lv_example_anim_3.c</code> 甚至做了一个带实时曲线预览的编辑器）；更省事的是直接用现成宏 <code>LV_ANIM_SET_EASE_OUT_BACK(&amp;a)</code>、<code>LV_ANIM_SET_EASE_IN_OUT_BACK(&amp;a)</code>——这些宏把 easings.net 的贝塞尔参数写进 <code>a-&gt;parameter.bezier3</code>，再配 <code>custom_bezier3</code> 路径使用。<code>examples/anim/lv_example_anim_1.c</code> 正是用 <code>lv_anim_path_overshoot</code> 让标签"冲过头再弹回来"，一下子就显得有弹性。</p>
+
+<pre><code><span class="cmt">/* 8 条内置路径：换一条曲线，节奏就换一种性格 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_linear</span>);      <span class="cmt">/* 匀速直线 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_ease_in</span>);     <span class="cmt">/* 慢起快落 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_ease_out</span>);    <span class="cmt">/* 快起慢停 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_ease_in_out</span>); <span class="cmt">/* 两头慢、中间快 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_overshoot</span>);   <span class="cmt">/* 终点过冲再回弹 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_bounce</span>);      <span class="cmt">/* 弹跳落地 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_step</span>);        <span class="cmt">/* 结束瞬间跳变 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_custom_bezier3</span>); <span class="cmt">/* 自定义贝塞尔 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 自定义贝塞尔：四个控制点（参考 lv_example_anim_3.c，值域 0..1024） */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_custom_bezier3</span>);
+<span class="fn">lv_anim_set_bezier3_param</span>(&amp;a, <span class="num">200</span>, <span class="num">0</span>, <span class="num">800</span>, <span class="num">1024</span>);
+
+<span class="cmt">/* 或用现成宏：先把路径设为 custom_bezier3，再套宏写入参数 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_custom_bezier3</span>);
+<span class="kw">LV_ANIM_SET_EASE_OUT_BACK</span>(&amp;a);      <span class="cmt">/* easeOutBack：冲过头再回来 */</span>
+<span class="kw">LV_ANIM_SET_EASE_IN_OUT_BACK</span>(&amp;a);   <span class="cmt">/* easeInOutBack：进出都带回弹 */</span></code></pre>
+
+  <table>
+    <tr><th>路径函数</th><th>效果</th></tr>
+    <tr><td><code>lv_anim_path_linear</code></td><td>匀速直线</td></tr>
+    <tr><td><code>lv_anim_path_ease_in</code></td><td>慢起快落</td></tr>
+    <tr><td><code>lv_anim_path_ease_out</code></td><td>快起慢停</td></tr>
+    <tr><td><code>lv_anim_path_ease_in_out</code></td><td>两头慢、中间快（S 形）</td></tr>
+    <tr><td><code>lv_anim_path_overshoot</code></td><td>终点过冲后回弹</td></tr>
+    <tr><td><code>lv_anim_path_bounce</code></td><td>三次弹跳</td></tr>
+    <tr><td><code>lv_anim_path_step</code></td><td>结束瞬间跳到终值</td></tr>
+    <tr><td><code>lv_anim_path_custom_bezier3</code></td><td>自定义贝塞尔曲线</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>选曲线要看"叙事"：<code>ease_in</code> 适合进场（物体从静止开始加速），<code>ease_out</code> 适合离场与收尾（快进慢停最自然），<code>overshoot</code> / <code>bounce</code> 用于强调"存在感"。一律用 <code>linear</code> 会让界面显得生硬——但一律用 <code>bounce</code> 同样是一场灾难。</p>
+  </div>
+
+  <!-- ========== 9.3 播放控制：延迟、回放、循环与暂停 ========== -->
+  <h2>9.3 播放控制：延迟、回放、循环与暂停</h2>
+
+  <p>一段动画的生命周期可以精细调控：<code>lv_anim_set_delay(&amp;a, ms)</code> 延迟启动；<code>lv_anim_set_reverse_duration(&amp;a, ms)</code> 正向结束后自动反向播放（0 关闭）；<code>lv_anim_set_reverse_delay(&amp;a, ms)</code> 正反向之间的停顿；<code>lv_anim_set_repeat_count(&amp;a, n)</code> 设置重复次数，传 <code>LV_ANIM_REPEAT_INFINITE</code>（值 0xFFFFFFFF）即无限循环；<code>lv_anim_set_repeat_delay(&amp;a, ms)</code> 控制两轮之间的间隔。这里有个版本细节：v9 里旧名 <code>lv_anim_set_reverse_time</code> 已在头文件里标记"即将移除"，一律改用 <code>lv_anim_set_reverse_duration</code>。</p>
+
+  <p><code>examples/anim/lv_example_anim_2.c</code> 是"控制组合"的样板：一个红色圆形对象，"放大到 50 + 右移到 240"两段动画并行播放，<code>ease_in_out</code> 曲线、300ms 反向、100ms 反向延迟、500ms 轮间停顿、无限循环——而且同一个 <code>lv_anim_t</code> 被复用两次：先配 <code>anim_size_cb</code> 启动一次，再改 <code>exec_cb</code> 为 <code>anim_x_cb</code>、改 <code>values</code> 启动第二次。运行中还能中途干预：<code>lv_anim_pause()</code> 暂停、<code>lv_anim_resume()</code> 恢复、<code>lv_anim_pause_for(&amp;a, ms)</code> 暂停指定时长后自动继续（<code>lv_example_anim_4.c</code> 在动画启动 200ms 后让它暂停 1000ms 再继续）；<code>lv_anim_delete(var, exec_cb)</code> 按目标对象清理动画，<code>lv_anim_count_running()</code> 查询当前运行数量。</p>
+
+<pre><code><span class="cmt">/* 参考 examples/anim/lv_example_anim_2.c：放大 + 右移并行、无限循环 */</span>
+<span class="type">lv_anim_t</span> a;
+<span class="fn">lv_anim_init</span>(&amp;a);
+<span class="fn">lv_anim_set_var</span>(&amp;a, obj);
+<span class="fn">lv_anim_set_values</span>(&amp;a, <span class="num">10</span>, <span class="num">50</span>);
+<span class="fn">lv_anim_set_duration</span>(&amp;a, <span class="num">1000</span>);
+<span class="fn">lv_anim_set_reverse_delay</span>(&amp;a, <span class="num">100</span>);    <span class="cmt">/* 正向结束后停 100ms */</span>
+<span class="fn">lv_anim_set_reverse_duration</span>(&amp;a, <span class="num">300</span>);  <span class="cmt">/* 反向播放 300ms */</span>
+<span class="fn">lv_anim_set_repeat_delay</span>(&amp;a, <span class="num">500</span>);      <span class="cmt">/* 一轮结束后停 500ms */</span>
+<span class="fn">lv_anim_set_repeat_count</span>(&amp;a, <span class="kw">LV_ANIM_REPEAT_INFINITE</span>); <span class="cmt">/* 无限循环 */</span>
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_ease_in_out</span>);
+
+<span class="fn">lv_anim_set_exec_cb</span>(&amp;a, anim_size_cb);    <span class="cmt">/* 第一段：放大 */</span>
+<span class="fn">lv_anim_start</span>(&amp;a);
+<span class="fn">lv_anim_set_exec_cb</span>(&amp;a, anim_x_cb);      <span class="cmt">/* 复用同一配置，改 exec_cb 再启动 */</span>
+<span class="fn">lv_anim_set_values</span>(&amp;a, <span class="num">10</span>, <span class="num">240</span>);
+<span class="fn">lv_anim_start</span>(&amp;a);</code></pre>
+
+<pre><code><span class="cmt">/* 运行中干预：先记住库内的动画实例（参考 lv_example_anim_4.c） */</span>
+<span class="type">lv_anim_t</span> * anim = <span class="fn">lv_anim_start</span>(&amp;a);
+<span class="fn">lv_anim_pause_for</span>(anim, <span class="num">1000</span>);  <span class="cmt">/* 暂停 1000ms 后自动恢复 */</span>
+<span class="fn">lv_anim_pause</span>(anim);              <span class="cmt">/* 暂停 */</span>
+<span class="fn">lv_anim_resume</span>(anim);             <span class="cmt">/* 恢复 */</span>
+
+<span class="cmt">/* 清理与查询 */</span>
+<span class="fn">lv_anim_delete</span>(obj, anim_x_cb);   <span class="cmt">/* 删除 obj 上以 anim_x_cb 执行的所有动画 */</span>
+<span class="fn">lv_anim_delete</span>(obj, <span class="kw">NULL</span>);      <span class="cmt">/* 删除 obj 上的全部动画 */</span>
+<span class="type">uint16_t</span> n = <span class="fn">lv_anim_count_running</span>();  <span class="cmt">/* 当前运行中的动画数量 */</span></code></pre>
+
+  <table>
+    <tr><th>播放控制 API</th><th>作用</th></tr>
+    <tr><td><code>lv_anim_set_delay()</code></td><td>启动前延迟</td></tr>
+    <tr><td><code>lv_anim_set_reverse_duration()</code></td><td>反向播放时长（0 关闭）</td></tr>
+    <tr><td><code>lv_anim_set_repeat_count()</code></td><td>重复次数，<code>LV_ANIM_REPEAT_INFINITE</code> 无限</td></tr>
+    <tr><td><code>lv_anim_pause()</code> / <code>lv_anim_resume()</code></td><td>暂停 / 恢复</td></tr>
+    <tr><td><code>lv_anim_pause_for()</code></td><td>暂停指定毫秒后自动恢复</td></tr>
+    <tr><td><code>lv_anim_delete()</code></td><td>按对象 / 执行函数删除动画</td></tr>
+    <tr><td><code>lv_anim_count_running()</code></td><td>运行中动画数量</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>暂停与恢复操作的对象是 <code>lv_anim_start()</code> 返回的<strong>库内实例</strong>，不是栈上那份"配方"——直接 <code>lv_anim_pause(&amp;a)</code> 是无效的。这是动画 API 里最容易被忽略的一个"真相"。</p>
+  </div>
+
+  <!-- ========== 9.4 lv_anim_timeline：把多段动画编成一支交响曲 ========== -->
+  <h2>9.4 lv_anim_timeline：把多段动画编成一支交响曲</h2>
+
+  <p>单个 <code>lv_anim_t</code> 只描述一段插值，而复杂的入场动画往往是"多个对象、错峰开始"。<code>lv_anim_timeline_t</code> 把多段动画编成一条时间轴：<code>lv_anim_timeline_create()</code> 创建；<code>lv_anim_timeline_add(at, start_time, &amp;a)</code> 把一段动画按"相对时间轴的毫秒偏移"挂进去；<code>lv_anim_timeline_start(at)</code> 让整条时间轴按编排播放。实现在 <code>src/misc/lv_anim_timeline.c</code>，头文件是 <code>include/lvgl/core/lv_anim_timeline.h</code>。</p>
+
+  <p><code>examples/anim/lv_example_anim_timeline_1.c</code> 是完整范例：3 个对象的宽高动画分别从 0ms / 200ms / 400ms 错峰开始，宽度用 <code>lv_anim_path_overshoot</code>、高度用 <code>lv_anim_path_ease_out</code>，外加一条 700ms 的进度条动画。时间轴还内置"播放控制"：<code>lv_anim_timeline_pause(at)</code> 暂停、<code>lv_anim_timeline_set_reverse(at, true)</code> 反向播放、<code>lv_anim_timeline_set_progress(at, p)</code> 直接跳到进度 p（取值 0..<code>LV_ANIM_TIMELINE_PROGRESS_MAX</code>=0xFFFF）——把 <code>set_progress</code> 接在滑块上，就能做出"拖动预览"的效果。</p>
+
+<pre><code><span class="cmt">/* 参考 examples/anim/lv_example_anim_timeline_1.c：三段动画错峰入场 */</span>
+<span class="kw">static</span> <span class="kw">void</span> set_width(<span class="type">lv_anim_t</span> * var, <span class="type">int32_t</span> v)
+{
+    <span class="fn">lv_obj_set_width</span>((<span class="type">lv_obj_t</span> *) var-&gt;var, v);
+}
+
+<span class="type">lv_anim_timeline_t</span> * at = <span class="fn">lv_anim_timeline_create</span>();
+
+<span class="type">lv_anim_t</span> a;
+<span class="fn">lv_anim_init</span>(&amp;a);
+<span class="fn">lv_anim_set_var</span>(&amp;a, obj1);
+<span class="fn">lv_anim_set_values</span>(&amp;a, <span class="num">0</span>, <span class="num">90</span>);
+<span class="fn">lv_anim_set_custom_exec_cb</span>(&amp;a, set_width);
+<span class="fn">lv_anim_set_path_cb</span>(&amp;a, <span class="fn">lv_anim_path_overshoot</span>);
+<span class="fn">lv_anim_set_duration</span>(&amp;a, <span class="num">300</span>);
+<span class="fn">lv_anim_timeline_add</span>(at, <span class="num">0</span>, &amp;a);      <span class="cmt">/* 第 0ms 开始 */</span>
+
+<span class="type">lv_anim_t</span> b;
+<span class="fn">lv_anim_init</span>(&amp;b);
+<span class="fn">lv_anim_set_var</span>(&amp;b, obj2);           <span class="cmt">/* 同样的配置，换对象 */</span>
+<span class="fn">lv_anim_set_values</span>(&amp;b, <span class="num">0</span>, <span class="num">90</span>);
+<span class="fn">lv_anim_set_custom_exec_cb</span>(&amp;b, set_width);
+<span class="fn">lv_anim_set_path_cb</span>(&amp;b, <span class="fn">lv_anim_path_overshoot</span>);
+<span class="fn">lv_anim_set_duration</span>(&amp;b, <span class="num">300</span>);
+<span class="fn">lv_anim_timeline_add</span>(at, <span class="num">200</span>, &amp;b);    <span class="cmt">/* 第 200ms 开始 */</span>
+
+<span class="fn">lv_anim_timeline_start</span>(at);          <span class="cmt">/* 整条时间轴播放 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 时间轴的播放控制：暂停 / 反向 / 拖进度 */</span>
+<span class="fn">lv_anim_timeline_pause</span>(at);
+<span class="fn">lv_anim_timeline_set_reverse</span>(at, <span class="kw">true</span>);   <span class="cmt">/* 反向播放 */</span>
+
+<span class="cmt">/* 配合滑块做"拖动预览"：进度 0..LV_ANIM_TIMELINE_PROGRESS_MAX(0xFFFF) */</span>
+<span class="type">int32_t</span> progress = <span class="fn">lv_slider_get_value</span>(slider);
+<span class="fn">lv_anim_timeline_set_progress</span>(at, (<span class="type">uint16_t</span>) progress);</code></pre>
+
+  <table>
+    <tr><th>时间轴 API</th><th>作用</th></tr>
+    <tr><td><code>lv_anim_timeline_create()</code></td><td>创建时间轴</td></tr>
+    <tr><td><code>lv_anim_timeline_add(at, start_time, &amp;a)</code></td><td>把一段动画挂进时间轴</td></tr>
+    <tr><td><code>lv_anim_timeline_start()</code></td><td>整体播放</td></tr>
+    <tr><td><code>lv_anim_timeline_pause()</code></td><td>暂停</td></tr>
+    <tr><td><code>lv_anim_timeline_set_reverse()</code></td><td>反向播放</td></tr>
+    <tr><td><code>lv_anim_timeline_set_progress()</code></td><td>跳转播放进度</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>时间轴的 <code>start_time</code> 只决定"何时开始"，每段动画自己的曲线与时长仍然独立配置。同一支时间轴里完全可以混合 <code>overshoot</code> 与 <code>ease_out</code>——"起落错落"的层次感，正来自每段各自的呼吸。</p>
+  </div>
+
+  <!-- ========== 9.5 样式过渡：让"状态变化"自己会动 ========== -->
+  <h2>9.5 样式过渡：让"状态变化"自己会动</h2>
+
+  <p>除了主动播放，LVGL 还能让"样式值的变化"自动动画化，这就是过渡（transition）。三步走：先用 <code>lv_style_prop_t</code> 数组声明要过渡的属性（如 <code>{ LV_STYLE_BG_COLOR, LV_STYLE_BG_OPA, 0 }</code>，<strong>末位必须是 0</strong> 作哨兵）；再用 <code>lv_style_transition_dsc_init(&amp;tr, props, path_cb, time, delay, user_data)</code> 初始化描述符；最后 <code>lv_obj_set_style_transition(obj, &amp;tr, selector)</code> 把它挂到对象上。此后该对象相关样式一变，变化就被自动补帧成平滑渐变——按钮按下时背景从灰渐变到高亮，而不是"啪"地跳过去。描述符与初始化函数定义在 <code>include/lvgl/core/lv_style.h</code>，属性 <code>LV_STYLE_TRANSITION</code> 及配套 setter 由 <code>lv_style_gen.h</code> 生成。</p>
+
+  <p>过渡与动画的分工要分清：<code>lv_anim</code> 是"你主动播放一段动画"；过渡是"样式值变化时自动动画化"，把"结果"变成"过程"。曲线的选择参数同样来自 <code>lv_anim_path_*</code> 系列。一个值得注意的细节是：本版本里坐标 X / Y 也是样式属性——<code>lv_obj_set_x()</code> 底层写的就是 <code>LV_STYLE_X</code>，所以位置变化同样能被过渡动画化。想关掉某次操作自带的补帧，用 <code>LV_ANIM_OFF</code>（类型 <code>lv_anim_enable_t</code>，与 <code>LV_ANIM_ON</code> 相对），例如 <code>lv_slider_set_value(slider, 50, LV_ANIM_OFF)</code> 就是"直接跳到 50，不做过渡"。</p>
+
+<pre><code><span class="cmt">/* 让按钮按下时背景色平滑渐变，而不是瞬间跳变 */</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">lv_style_prop_t</span> trans_props[] = { <span class="kw">LV_STYLE_BG_COLOR</span>, <span class="kw">LV_STYLE_BG_OPA</span>, <span class="num">0</span> };
+<span class="kw">static</span> <span class="type">lv_style_transition_dsc_t</span> trans;
+
+<span class="fn">lv_style_transition_dsc_init</span>(&amp;trans, trans_props, <span class="fn">lv_anim_path_ease_out</span>, <span class="num">200</span>, <span class="num">0</span>, <span class="kw">NULL</span>);
+<span class="fn">lv_obj_set_style_transition</span>(btn, &amp;trans, <span class="num">0</span>);   <span class="cmt">/* 挂到对象上（selector 0） */</span>
+
+<span class="cmt">/* 之后改变背景色：变化会被自动补帧 */</span>
+<span class="fn">lv_obj_set_style_bg_color</span>(btn, <span class="fn">lv_color_hex</span>(<span class="num">0x00ff00</span>), <span class="kw">LV_STATE_PRESSED</span>);</code></pre>
+
+<pre><code><span class="cmt">/* LV_ANIM_OFF / LV_ANIM_ON：lv_anim_enable_t 类型，控制"是否补帧" */</span>
+<span class="fn">lv_slider_set_value</span>(slider, <span class="num">50</span>, <span class="kw">LV_ANIM_OFF</span>);   <span class="cmt">/* 直接跳到 50 */</span>
+<span class="fn">lv_slider_set_value</span>(slider, <span class="num">50</span>, <span class="kw">LV_ANIM_ON</span>);    <span class="cmt">/* 带过渡效果 */</span>
+
+<span class="cmt">/* 关键认知：过渡只作用于"样式属性"；本版本连坐标都是样式属性 */</span>
+<span class="fn">lv_obj_set_x</span>(obj, <span class="num">100</span>);   <span class="cmt">/* 底层写 LV_STYLE_X，位置也能被过渡动画化 */</span></code></pre>
+
+  <table>
+    <tr><th>维度</th><th>lv_anim</th><th>样式过渡</th></tr>
+    <tr><td>触发方式</td><td>主动 <code>lv_anim_start()</code></td><td>样式值变化时自动</td></tr>
+    <tr><td>作用对象</td><td>任意 setter / 变量</td><td>样式属性</td></tr>
+    <tr><td>曲线</td><td><code>lv_anim_set_path_cb()</code></td><td><code>lv_style_transition_dsc_init()</code> 的 path 参数</td></tr>
+    <tr><td>典型用途</td><td>位置、入场出场、循环</td><td>状态切换（按下 / 聚焦）的平滑</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>过渡描述符要挂在"属性变化发生"的那个对象上，想让所有状态都生效就用 selector 0。属性数组必须以 0 结尾——漏掉哨兵，库会读到数组边界之外，行为未定义。这跟上一章 Grid 轨道数组的 <code>LV_GRID_TEMPLATE_LAST</code> 是同一个设计思路。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：让一个标签滑进屏幕 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建一个标签，初始放在屏幕外（x = -200），启动后用它滑到 x = 50。要求：时长 600ms，曲线 <code>lv_anim_path_ease_out</code>。写出完整代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回忆五步套路：<code>lv_anim_init</code> → <code>lv_anim_set_var</code> → <code>lv_anim_set_values(-200, 50)</code> 与 <code>lv_anim_set_duration(600)</code> → <code>lv_anim_set_exec_cb(anim_x_cb)</code> → <code>lv_anim_set_path_cb(lv_anim_path_ease_out)</code> → <code>lv_anim_start</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>static void anim_x_cb(void * var, int32_t v) { lv_obj_set_x((lv_obj_t *)var, v); }</code>；然后 <code>lv_anim_t a; lv_anim_init(&amp;a); lv_anim_set_var(&amp;a, label); lv_anim_set_values(&amp;a, -200, 50); lv_anim_set_duration(&amp;a, 600); lv_anim_set_exec_cb(&amp;a, anim_x_cb); lv_anim_set_path_cb(&amp;a, lv_anim_path_ease_out); lv_anim_start(&amp;a);</code>。<code>ease_out</code> 让滑动"快进慢停"，收尾最自然。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：做一个"弹跳落地"的按钮 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>创建一个按钮，让它从屏幕上方（y = -80）落到 y = 150。要求：曲线 <code>lv_anim_path_bounce</code>，时长 800ms，落定后反向弹回 <code>lv_anim_set_reverse_duration</code> 400ms，并重复 3 次。写出核心代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>lv_anim_set_values(&amp;a, -80, 150)</code>；exec_cb 里调 <code>lv_obj_set_y</code>；加 <code>lv_anim_set_path_cb(&amp;a, lv_anim_path_bounce)</code>、<code>lv_anim_set_reverse_duration(&amp;a, 400)</code>、<code>lv_anim_set_repeat_count(&amp;a, 3)</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_anim_t a; lv_anim_init(&amp;a); lv_anim_set_var(&amp;a, btn); lv_anim_set_values(&amp;a, -80, 150); lv_anim_set_duration(&amp;a, 800); lv_anim_set_exec_cb(&amp;a, anim_y_cb); lv_anim_set_path_cb(&amp;a, lv_anim_path_bounce); lv_anim_set_reverse_duration(&amp;a, 400); lv_anim_set_repeat_count(&amp;a, 3); lv_anim_start(&amp;a);</code>。注意反向播放用的还是正向后半程的曲线，落定-弹回的整体节奏由 <code>bounce</code> + <code>reverse</code> 共同决定。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：三张卡片依次"长大"入场 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 <code>lv_anim_timeline</code> 做三张卡片的错峰入场：三个 <code>lv_obj</code> 依次从宽度 0 长到 90px，起始偏移分别为 0ms、200ms、400ms，每段时长 300ms、曲线 <code>lv_anim_path_overshoot</code>。写出时间轴编排的核心代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>lv_anim_timeline_create()</code> → 为每个对象配置一段动画（<code>lv_anim_set_values(0, 90)</code>、<code>lv_anim_set_custom_exec_cb(set_width)</code>、300ms、overshoot）→ <code>lv_anim_timeline_add(at, offset, &amp;a)</code> → <code>lv_anim_timeline_start(at)</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>复用 9.4 的 <code>set_width(lv_anim_t * var, int32_t v)</code>。为 obj1/obj2/obj3 各配置一段几乎相同的动画，分别 <code>lv_anim_timeline_add(at, 0, &amp;a)</code>、<code>lv_anim_timeline_add(at, 200, &amp;b)</code>、<code>lv_anim_timeline_add(at, 400, &amp;c)</code>，最后 <code>lv_anim_timeline_start(at)</code>。偏移只决定"何时开始"，三段各自的曲线与时长独立生效——这就是时间轴相对"一把梭合到一起"的优势。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：事件 + 动画 + 过渡的合奏 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>做一个"开关控制的面板"：一个开关（<code>LV_STATE_CHECKED</code>）切换一个面板的左右位置；同时面板本身在按下状态有背景色过渡。要求：(1) 开关的 <code>LV_EVENT_VALUE_CHANGED</code> 回调里启动动画，checked 时面板用 <code>lv_anim_path_overshoot</code> 滑到 x=100、否则用 <code>lv_anim_path_ease_in</code> 滑回屏幕外；(2) 面板挂一个背景色过渡，按下时平滑变色。写出关键代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 <code>lv_example_anim_1.c</code>：回调里用 <code>lv_obj_has_state(sw, LV_STATE_CHECKED)</code> 分支，再 <code>lv_anim_start(&amp;a)</code>；过渡用 9.5 的三步：属性数组 → <code>lv_style_transition_dsc_init</code> → <code>lv_obj_set_style_transition</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>回调：<code>if(lv_obj_has_state(sw, LV_STATE_CHECKED)) { lv_anim_init(&amp;a); lv_anim_set_var(&amp;a, panel); lv_anim_set_values(&amp;a, lv_obj_get_x(panel), 100); lv_anim_set_duration(&amp;a, 500); lv_anim_set_exec_cb(&amp;a, anim_x_cb); lv_anim_set_path_cb(&amp;a, lv_anim_path_overshoot); lv_anim_start(&amp;a); } else { /* ease_in 滑回屏幕外 */ }</code>。过渡：<code>static const lv_style_prop_t props[] = { LV_STYLE_BG_COLOR, 0 }; static lv_style_transition_dsc_t tr; lv_style_transition_dsc_init(&amp;tr, props, lv_anim_path_ease_out, 200, 0, NULL); lv_obj_set_style_transition(panel, &amp;tr, 0);</code>，再在 <code>LV_STATE_PRESSED</code> 下改背景色。两个机制各司其职：位置用 <code>lv_anim</code> 主动播放，状态色用过渡自动平滑。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

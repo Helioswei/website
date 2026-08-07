@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第15章：未实现与待完善 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="15" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：未实现与待完善</h1>
+  <p class="chapter-subtitle">「费曼说：你真正懂一件事，不是能复述它，而是能从证据里重建它。」这一章给这台阅读器做一次"未实现体检"——不是 git 仓库意味着什么（15.1）、天气功能到底写了多少（15.2）、18 处 TODO 与 RT_ASSERT(0) 都藏在哪（15.3）、如果你是维护者先动哪里（15.4）。不批评，只盘点，然后给你一份"先做哪个"的清单。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理——判断"做没做完"不看文档承诺，只看代码证据</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「把『这真的做完了吗』当成一个问题问到底，就是这一章的方法。一台机器有没有做完，不能问它的说明书，要问它的证据：有没有历史（15.1）？说明书跟不跟得上机器（15.1）？零件上有没有写着『此处未完工』的标签（15.3）？我们不是来批评这台阅读器的——每一处『没做完』都是最诚实的一课，因为真正的工程师不是把产品吹成完美，而是能把『缺什么、差在哪、先补哪』说得一清二楚。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 为什么说「没做完」：信号盘点 ========== -->
+  <h2>15.1 为什么说「没做完」：信号盘点</h2>
+
+  <p>用第一性原理判断"一个项目做完了吗"，答案不在 README 里，而在三个问题里：<strong>它有版本历史吗？文档跟得上代码吗？代码里有没有"占位 / 跳过"的痕迹？</strong>这三问，这台阅读器全都露出马脚。第一条：整个 <code>EPD_Reader-main</code> 目录<strong>不是一个 git 仓库</strong>——在根目录执行 <code>git rev-parse --is-inside-work-tree</code>，直接回答 <code>fatal: not a git repository</code>。没有提交历史、没有标签、没有 blame，你就无从知道"这段代码是什么时候、因为什么、由谁写成这样"——对一个要拿来做二次开发的项目，这是最大的考古障碍。</p>
+
+  <p>第二条是文档与代码的漂移。第 14.3 章已经对质过两处：README 说主页面 <strong>3 个入口</strong>，代码枚举 <code>MainOption</code> 里是 <strong>4 个</strong>（多了一个「查看天气」<code>OPTION_WEATHER</code>）；README 的功能设置列了 <strong>5 项</strong>，<code>render_settings_page</code> 实际画了 <strong>6 行</strong>（多了一行「蓝牙」<code>SET_BLUETOOTH</code>）。文档写出来就注定过时，这个道理第 14 章讲过；把它当成"没做完"的信号，理由很朴素：<strong>一个还在快速改动的项目，文档才总是追不上代码</strong>。文档滞后本身不是罪，但它揭示的是"项目仍处于演进中，而不是冻结发布"。</p>
+
+  <p>第三条最直观，也是全文最好的线索：<code>src/</code> 里有个功能叫"天气"，文件却叫 <code>wheather.c</code> / <code>wheather.h</code>——<strong>weather 的拼写错误</strong>。一个拼错的文件名能一直留在仓库里，说明这里缺少 code review、CI、lint 这类"外部约束"：没人逐行看过、没人因为"这名字一看就不对"而拦住它。更妙的是，README 的「目录结构」树里根本没有天气这条（15.2 会展开），而 <code>src/SConscript</code> 的编译列表里明明写着 <code>'wheather.c'</code>——<strong>代码在编、文档没写</strong>。三个信号合在一起，指向同一个判断：这更接近一份"可运行的工作原型"，而不是一份"发布态的产品"。</p>
+
+<pre><code><span class="cmt"># 信号 1：整个项目不是 git 仓库 —— 没有历史、没有 blame、没有标签</span>
+$ git rev-parse --is-inside-work-tree
+fatal: not a git repository (or any of the parent directories): .git
+
+<span class="cmt"># 信号 2：README 说主页面 3 个入口，代码枚举里是 4 个（14.3 已对质）</span>
+$ grep -n <span class="str">"主页面包含"</span> README.md
+<span class="num">41</span>:主页面包含 <span class="num">3</span> 个入口：
+$ grep -n <span class="str">"OPTION_WEATHER"</span> src/epub_screen.h
+<span class="num">13</span>:  OPTION_WEATHER,   <span class="cmt"># 第 4 个入口，README 没提</span>
+
+<span class="cmt"># 信号 3：功能文件连名字都是拼错的（weather → wheather）</span>
+$ ls src/ | grep -i wheather
+wheather.c   wheather.h</code></pre>
+
+<pre><code><span class="cmt"># src/SConscript：天气文件确实在编译列表里 —— 代码在编，文档却没写</span>
+src = [<span class="str">'main.cpp'</span>, <span class="str">'UIRegionsManager.cpp'</span>, <span class="str">'epub_screen.cpp'</span>,
+       <span class="str">'epub_mem.c'</span>, <span class="str">'epub_fonts.c'</span>, <span class="str">'font_manager.c'</span>,
+       <span class="str">'ft_dfs_bridge.c'</span>, <span class="str">'reading_settings.cpp'</span>,
+       <span class="str">'pan.c'</span>, <span class="str">'wheather.c'</span>]   <span class="cmt">← 拼错名的天气模块</span>
+
+<span class="cmt"># README「当前功能」里 grep 不到任何 weather / 天气 —— 写了代码，忘了写文档</span>
+$ grep -in <span class="str">"weather\|天气"</span> README.md
+<span class="cmt">（无输出）</span></code></pre>
+
+  <table>
+    <tr><th>信号</th><th>证据</th><th>含义</th></tr>
+    <tr><td>不是 git 仓库</td><td><code>git rev-parse</code> → fatal</td><td>没有历史 / blame / 标签，无法考古</td></tr>
+    <tr><td>README 比代码旧</td><td>主页面 3→4 入口、功能设置 5→6 行</td><td>项目还在快速变动，文档追不上</td></tr>
+    <tr><td>文件名拼错</td><td><code>wheather.c/.h</code></td><td>缺 code review / CI 等外部约束</td></tr>
+    <tr><td>文档漏了已编代码</td><td><code>SConscript</code> 编了 <code>wheather.c</code>，README 目录树没有</td><td>代码与文档各说各话</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把"信号"想成一件事的证据链：一个信号可能被多种解释，但四个信号指向同一个方向时，结论就很稳了。判断项目成熟度，最便宜的方法不是读文档，而是看这四样——git 历史、README 与代码的吻合度、拼写/命名一致性、代码里 TODO 的数量。花十分钟看这四样，你对一个陌生仓库的理解，会比读两小时文档更深。</p>
+  </div>
+
+  <!-- ========== 15.2 天气功能：wheather.c 写了多少，缺了什么 ========== -->
+  <h2>15.2 天气功能：wheather.c 写了多少，缺了什么</h2>
+
+  <p>用第一性原理拆"一次天气请求"，最少需要五件事：<strong>联网、发 HTTP、收 JSON、解析 JSON、把结果画到界面</strong>。逐一对 <code>src/wheather.c</code> 查账：联网靠 <code>pan_service_*</code>（PAN，即"手机当网关"的蓝牙网络服务，第 14 章提过它的开关）；发请求用 <code>webclient_request</code> 拼 GET URL；收数据有 <code>weather_check_internet_access</code> 先做 DNS 检查；解析用 <code>http_weather_data_parse</code> 走 cJSON；界面侧 <code>epub_screen.cpp</code> 有 <code>WEATHER_PAGE</code> 和 3 张天气卡片（<code>weather_sync_cards_from_snapshot</code>）。五脏俱全，甚至还有重试循环（3 次 × 1.5 秒）和一个改城市的 FINSH 命令 <code>weather_city</code>。那它为什么还排在"未实现"这一章？</p>
+
+  <p>第一层缺口：<strong>它绑死了 PAN</strong>。<code>weather_run_once</code> 的第一步就是 <code>if (!pan_service_is_pan_connected())</code>——没连上手机网关，直接 <code>weather_set_status("蓝牙未连接"/"网络未连接")</code> 并 <code>return -1</code>。这台阅读器本身没有 WiFi 模块，上网必须借一部手机的蓝牙中转；在"离线电纸书"的定位下，天气是一个<strong>依赖外部设备才能触发的可选功能</strong>。从"产品功能"角度看它写得不算少，从"独立阅读器"角度看它始终悬空——设备上不接手机，主页面那个「查看天气」入口永远只会显示 <code>g_weather_snapshot</code> 的默认状态"尚未获取天气"。</p>
+
+  <p>第二层缺口：<strong>配置全部写死在代码里</strong>。<code>WEATHER_KEY_ID</code>（心知天气的 API key）、默认城市 <code>nanjing</code>、语言 <code>zh-Hans&amp;unit=c</code> 都是 <code>#define</code> 常量。API key 是敏感凭证，写进固件等于随镜像分发给所有人；换城市要么重新烧固件，要么在串口敲 FINSH 命令 <code>weather_city &lt;城市&gt;</code>。更要命的是 README「当前功能」根本没有天气这一条——<strong>代码在、页面在、文档却没有</strong>。一个"写了但没被文档承认"的功能，是"半成品"最典型的定义：它不崩，但它也不属于产品。</p>
+
+<pre><code><span class="cmt">/* src/wheather.c：天气功能的全部"配置"都写死在这几行 #define 里 */</span>
+<span class="kw">#define</span> GET_URL_LEN_MAX   <span class="num">256</span>
+<span class="kw">#define</span> GET_URI           <span class="str">"http://%s/v3/weather/now.json?key=%s&amp;location=%s&amp;language=%s"</span>
+<span class="kw">#define</span> WEATHER_HOST          <span class="str">"api.seniverse.com"</span>    <span class="cmt">// 心知天气 API 域名</span>
+<span class="kw">#define</span> WEATHER_KEY_ID        <span class="str">"SO23_Gmly2oK3kMf4"</span>  <span class="cmt">// API key：明文躺在固件里</span>
+<span class="kw">#define</span> WEATHER_CITY_ID_DEFAULT <span class="str">"nanjing"</span>          <span class="cmt">// 默认城市：南京</span>
+<span class="kw">#define</span> WEATHER_LANGUAGE_ID   <span class="str">"zh-Hans&amp;unit=c"</span>      <span class="cmt">// 中文 + 摄氏度</span>
+
+<span class="cmt">/* 全局快照：valid 为假，status 默认"尚未获取天气" */</span>
+<span class="kw">static</span> weather_snapshot_t g_weather_snapshot = {
+    RT_FALSE,
+    -<span class="num">1</span>,
+    <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>, <span class="str">""</span>,
+    <span class="str">"尚未获取天气"</span>
+};</code></pre>
+
+<pre><code><span class="cmt">/* src/wheather.c：weather_run_once —— 第一步就卡在 PAN（手机蓝牙网关）上 */</span>
+<span class="type">int</span> <span class="fn">weather_run_once</span>(<span class="type">void</span>)
+{
+    <span class="type">int</span> result = -<span class="num">1</span>; <span class="type">int</span> retry;
+    <span class="kw">const</span> <span class="type">int</span> retry_count = <span class="num">3</span>;      <span class="cmt">// 最多重试 3 次</span>
+    <span class="kw">const</span> <span class="type">int</span> retry_delay_ms = <span class="num">1500</span>;
+
+    <span class="kw">for</span> (retry = <span class="num">0</span>; retry &lt; retry_count; ++retry) {
+        <span class="kw">if</span> (!pan_service_is_pan_connected()) {
+            weather_set_status(pan_service_is_bt_connected()
+                                 ? <span class="str">"网络未连接"</span> : <span class="str">"蓝牙未连接"</span>);
+            <span class="kw">return</span> -<span class="num">1</span>;   <span class="cmt">// 没有手机网关，直接放弃</span>
+        }
+        <span class="cmt">/* 中间省略：get_weather() 发 HTTP → http_weather_data_parse() 解析 */</span>
+        <span class="cmt">/* 失败则 weather_set_status("等待网络就绪") 并 mdelay 重试 */</span>
+        ...
+    }
+    <span class="kw">return</span> result;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/wheather.c：解析心知天气 JSON —— 只有走通到这儿，snapshot 才变"有效" */</span>
+<span class="kw">static</span> <span class="type">int</span> <span class="fn">http_weather_data_parse</span>(<span class="type">char</span> *json_data)
+{
+    cJSON *root = cJSON_Parse(json_data);
+    <span class="kw">if</span> (!root) { weather_set_status(<span class="str">"天气数据解析失败"</span>); <span class="kw">return</span> -<span class="num">1</span>; }
+
+    cJSON *results = cJSON_GetObjectItem(root, <span class="str">"results"</span>);
+    <span class="kw">if</span> (!cJSON_IsArray(results) || cJSON_GetArraySize(results) &lt;= <span class="num">0</span>) { <span class="cmt">/* 返回为空 */</span> }
+
+    <span class="cmt">/* 逐字段取出：location 的 name/country/path/timezone，now 的 text/code/temperature */</span>
+    weather_copy_json_string(parsed_snapshot.location, ..., cJSON_GetObjectItem(location, <span class="str">"name"</span>));
+    weather_copy_json_string(parsed_snapshot.weather_text, ..., cJSON_GetObjectItem(now, <span class="str">"text"</span>));
+    weather_copy_json_string(parsed_snapshot.temperature, ..., cJSON_GetObjectItem(now, <span class="str">"temperature"</span>));
+    ...
+    parsed_snapshot.valid = RT_TRUE;     <span class="cmt">// 唯一的"成功"标记</span>
+    parsed_snapshot.last_result = <span class="num">0</span>;
+    g_weather_snapshot = parsed_snapshot;
+    cJSON_Delete(root);                  <span class="cmt">// 每次 cJSON_Parse 都要手动释放</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>天气链路五环</th><th>实现（wheather.c）</th><th>依赖 / 缺口</th></tr>
+    <tr><td>联网</td><td><code>pan_service_is_pan_connected()</code></td><td>必须手机蓝牙网关，否则"蓝牙未连接"</td></tr>
+    <tr><td>发 HTTP</td><td><code>webclient_request(GET_URI)</code></td><td>设备无 WiFi 模块，只能借手机网络</td></tr>
+    <tr><td>收数据</td><td><code>weather_check_internet_access</code>（DNS）</td><td>域名解析失败即放弃</td></tr>
+    <tr><td>解析 JSON</td><td><code>http_weather_data_parse</code>（cJSON）</td><td>字段不全会置 invalid</td></tr>
+    <tr><td>展示</td><td><code>WEATHER_PAGE</code> + 3 张卡片</td><td>snapshot 不 valid 时只显示"尚未获取天气"</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把"天气没做完"翻译成一句话，就是<strong>依赖链断了一头</strong>：阅读器 → 手机蓝牙网关 → 手机的网络 → 心知天气 API。链上任何一环断掉，结果都是同一个"尚未获取天气"。这是判断"功能半成品"的通用办法——画一条从"用户按按钮"到"数据上屏"的链路，数一数每一环依赖什么、缺什么。链越长、外部依赖越多，功能就越"悬"。你想真正理解一个功能，就该把它的链路画出来，而不是只看它有没有代码。</p>
+  </div>
+
+  <!-- ========== 15.3 代码里的 TODO 与 Not implemented yet ========== -->
+  <h2>15.3 代码里的 TODO 与 Not implemented yet</h2>
+
+  <p>对项目自己的源码做一次 <code>grep -rn "TODO"</code>，排除第三方库 miniz，能数出 <strong>18 处</strong>。它们不是等量齐观的：有的只是"下一步想做的事"（优化待办），有的却是"功能缺口"（撞上就崩或根本没有），还有一处 <code>RT_ASSERT(0)//Not implemented yet</code> 是作者用"断言崩掉"代替"实现"的诚实表达。先把三处最"功能化"的挑出来说。</p>
+
+  <p>第一处在渲染器。<code>SF32PaperRenderer.h</code> 的析构函数只有一行注释 <code>// TODO: cleanup and shutdown?</code>——渲染器没有真正的析构清理：<code>rt_device_find("lcd")</code> 打开的 LCD 设备，之后没有对应的关闭回收；同类的还有 <code>TouchControls.h</code> 类头部的自白——<code>// TODO - we should move the rendering out of this class...</code>，"渲染应该移出这个类，让它只做触控检测"，但基类 <code>render()</code> / <code>renderPressedState()</code> 仍是空实现，绘制的活实际落在了别处（第 13 章说过命中检测在 <code>SF32_TouchControls</code>）。两处都是<strong>职责没有收口</strong>的痕迹：类是开好的口子，活没干完。</p>
+
+  <p>最硬的一处在显示驱动。<code>epd_display.c</code> 的 <code>CopyToMixedGrayBuffer</code> 里，当图层格式是 <code>LCDC_PIXEL_FORMAT_MONO</code>（1bpp 单色）时，直接 <code>RT_ASSERT(0);//Not implemented yet</code>。第 4.3 章讲过它的邻居——A4（4bpp 灰阶）路径有完整实现；换句话说，<strong>"1 位深度的混合灰度路径根本没写，撞上就崩"</strong>。结合 <code>Kconfig.proj</code> 里的 <code>EPDIY_EPUB_1BPP / 4BPP</code> 二选一，含义是：选 1bpp 帧缓冲的配置会走到这段死路。驱动里能留下 <code>RT_ASSERT(0)</code>，是作者用"崩掉"代替"实现"的诚实表达——但这条路确实是断的，这就是"功能缺口"，不是代码风格问题。</p>
+
+<pre><code><span class="cmt">/* src/boards/SF32PaperRenderer.h：析构函数只有一个问号 */</span>
+<span class="kw">class</span> SF32PaperRenderer : <span class="kw">public</span> EpdiyFrameBufferRenderer {
+<span class="kw">private</span>:
+  rt_device_t lcd_device = NULL;
+  <span class="type">uint8_t</span> idle_mode_on = <span class="num">0</span>;
+<span class="kw">public</span>:
+  ...
+  ~SF32PaperRenderer()
+  {
+    <span class="cmt">// TODO: cleanup and shutdown?</span>   <span class="cmt">← 设备打开后没有对应的关闭清理</span>
+  }
+  ...
+};
+
+<span class="cmt">/* src/boards/controls/TouchControls.h：职责没收口的自白 */</span>
+<span class="cmt">// TODO - we should move the rendering out of this class so that it's only doing the touch detection</span>
+<span class="kw">class</span> TouchControls {
+<span class="kw">public</span>:
+  <span class="kw">virtual</span> <span class="type">void</span> <span class="fn">render</span>(Renderer *renderer) {}                     <span class="cmt">// 空实现</span>
+  <span class="kw">virtual</span> <span class="type">void</span> <span class="fn">renderPressedState</span>(Renderer *renderer, UIAction action, <span class="type">bool</span> state = <span class="kw">true</span>) {}
+  ...
+};</code></pre>
+
+<pre><code><span class="cmt">/* src/boards/display_dbi/epd_display.c：CopyToMixedGrayBuffer 里的"没写完" */</span>
+<span class="kw">static</span> <span class="type">void</span> <span class="fn">CopyToMixedGrayBuffer</span>(LCDC_HandleTypeDef *hlcdc, <span class="kw">const</span> <span class="type">uint8_t</span> *RGBCode,
+                                <span class="type">uint16_t</span> Xpos0, <span class="type">uint16_t</span> Ypos0, <span class="type">uint16_t</span> Xpos1, <span class="type">uint16_t</span> Ypos1)
+{
+    <span class="type">uint32_t</span> total_pixels = LCD_HOR_RES_MAX * LCD_VER_RES_MAX;
+    RT_ASSERT((total_pixels % <span class="num">4</span>) == <span class="num">0</span>); <span class="cmt">// 必须是 4 像素的倍数</span>
+
+    <span class="kw">if</span> (hlcdc-&gt;Layer[HAL_LCDC_LAYER_DEFAULT].data_format == LCDC_PIXEL_FORMAT_MONO)
+    {
+        RT_ASSERT(<span class="num">0</span>);<span class="cmt">//Not implemented yet</span>   <span class="cmt">← 1bpp 单色路径：撞上就崩</span>
+    }
+    <span class="kw">else if</span> (hlcdc-&gt;Layer[HAL_LCDC_LAYER_DEFAULT].data_format == LCDC_PIXEL_FORMAT_A4)
+    {
+        <span class="cmt">/* 4bpp 灰阶路径：正常实现（16 位 → 32 位像素打包）*/</span>
+        ...
+    }
+    <span class="kw">else</span>
+        RT_ASSERT(<span class="num">0</span>);   <span class="cmt">// 其他格式也是断言兜底</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* 其余 TODO 的位置与性质（grep -rn TODO，排除 miniz，共 18 处） */</span>
+lib/Epub/EpubList/EpubToc.cpp:<span class="num">64</span>   <span class="cmt">// 目录渲染"基本是列表渲染的复制"，未复用</span>
+lib/Epub/RubbishHtmlParser/blocks/TextBlock.cpp:<span class="num">53</span>  <span class="cmt">// "还有别的空白符要处理吗？"</span>
+sf32-oed-epd_base/bsp_power.c:<span class="num">100</span>/<span class="num">108</span>   <span class="cmt">// SDIO 电源上/下电 —— 占位 TODO</span>
+sf32-oed-epd_base/bsp_lcd_tp.c:<span class="num">58</span>        <span class="cmt">// "Setup TP power down pin" —— 触控断电引脚</span>
+sf32-oed-epd_base/bsp_board.h:<span class="num">37</span>/<span class="num">40</span>     <span class="cmt">// HEAP_END 宏后挂着一个 TODO:</span>
+sf32-oed-epd_base/bsp_init.c:<span class="num">166</span>/<span class="num">172</span>   <span class="cmt">// FLASH1 时钟切换 / pin 未恢复 两处 TODO</span>
+<span class="cmt">// 注意：以上 4 个板级文件在 sf32-oed-epd_v12_spi 里各有 7 行相同 TODO</span>
+<span class="cmt">// （18 = 3 处功能 TODO + 4 个 lib/boards 文件 + 基板 7 行 + v12_spi 7 行）</span></code></pre>
+
+  <table>
+    <tr><th>类别</th><th>位置</th><th>性质</th></tr>
+    <tr><td>功能缺口</td><td><code>epd_display.c</code> 的 MONO 分支 <code>RT_ASSERT(0)</code></td><td>1bpp 混合灰度没实现，撞上就崩</td></tr>
+    <tr><td>职责没收口</td><td><code>SF32PaperRenderer.h</code> 析构 / <code>TouchControls.h</code></td><td>清理与渲染职责悬空，只有注释</td></tr>
+    <tr><td>优化待办</td><td><code>EpubToc.cpp</code> / <code>TextBlock.cpp</code></td><td>渲染复用、空白符边界</td></tr>
+    <tr><td>板级占位</td><td><code>bsp_power.c</code> / <code>bsp_lcd_tp.c</code> / <code>bsp_board.h</code> / <code>bsp_init.c</code></td><td>SDIO 电源、TP 断电引脚、HEAP_END 等</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>读 TODO 的第一课是<strong>先分类，再恐慌</strong>：<code>RT_ASSERT(0)//Not implemented yet</code> 这类"功能缺口"决定你能不能走某条路径，撞上就是崩溃，优先级最高；"优化待办"只是影响好不好用，优先级次之；板级占位 TODO（SDIO 电源、TP 断电引脚）往往是"当前板子没用到，先留个口子"，真实影响要看对应外设开没开。学会一眼把 TODO 分成这三类，你读陌生代码的恐惧就少一半。</p>
+  </div>
+
+  <!-- ========== 15.4 可完善的清单：如果你是维护者 ========== -->
+  <h2>15.4 可完善的清单：如果你是维护者</h2>
+
+  <p>把前两节的缺口收拢成一份"待办清单"，按<strong>对用户体验的影响</strong>分三梯队。第一梯队（影响能不能用）：<strong>① 1bpp 混合灰度路径</strong>——<code>CopyToMixedGrayBuffer</code> 的 MONO 分支一进就崩，等于把 <code>EPDIY_EPUB_1BPP</code> 这个配置位直接废掉；<strong>② 天气的 PAN 依赖</strong>——没有手机蓝牙网关，主页面第 4 个入口永远显示"尚未获取天气"。这两条，一条是"会崩的路径"，一条是"看起来有、其实没接通的承诺"。</p>
+
+  <p>第二梯队（影响好不好用）：<strong>③ 分页断行质量</strong>——<code>layout_one_block</code> 是逐行硬排的，一行放不下就 <code>pages.push_back(new Page())</code> 另起一页，没有任何"段落保持 / 孤行控制"：标题可能孤零零落在页尾，段落第一行可能悬在页面最底行；<strong>④ 封面加载开销</strong>——书库页每次重绘，都对当前页每一本 <code>new Epub(path)</code> + <code>epub-&gt;load()</code> 重新解包、取封面、解码、画完再释放，有可见的内存峰值与延迟；封面缺失（<code>Epub.cpp</code> 只打 "Missing cover"）或解码失败时，只能得到 <code>Renderer::draw_image</code> 画的一个占位矩形。这两条不致命，但直接决定"翻书库"顺不顺畅。</p>
+
+  <p>第三梯队（工程卫生）：<strong>⑤ CSS</strong>——<code>RubbishHtmlParser</code> 是"不做 CSS、只认标准标签"的（第 1 章就说过），段间距全靠 <code>m_layout_y += m_layout_line_height * 0.8</code> 这个固定值糊弄，依赖 CSS 排版的 EPUB 读起来会挤；<strong>⑥ 蓝牙</strong>——功能设置里的开关能切 <code>pan_service_set_enabled</code>，但整机除了天气，没有第二个功能用到蓝牙，投入产出比很低；<strong>⑦ 文档同步</strong>——README 的入口数、设置项数、天气、深睡眠时长全部漂移，值得统一改一次（第 14 章已经抓了几处）。最后，把 <code>bsp_power.c</code> / <code>bsp_lcd_tp.c</code> 里那几处板级占位 TODO 补掉。如果你是维护者，第一性原理的排序是：<strong>先止血（①），再治本（②），最后美容（③④⑤⑥⑦）</strong>——先保证不崩，再让名实相符，最后才谈体验与卫生。</p>
+
+<pre><code><span class="cmt">/* lib/Epub/RubbishHtmlParser/RubbishHtmlParser.cpp：逐行硬排，放不下就开新页 */</span>
+<span class="kw">void</span> RubbishHtmlParser::layout_one_block(Block *block)
+{
+    block-&gt;layout(m_layout_renderer, m_layout_epub);   <span class="cmt">// 阶段 1：先排版</span>
+    ...
+    <span class="kw">if</span> (block-&gt;getType() == BlockType::TEXT_BLOCK)
+    {
+        TextBlock *textBlock = (TextBlock *)block;
+        <span class="kw">for</span> (<span class="type">int</span> i = <span class="num">0</span>; i &lt; (<span class="type">int</span>)textBlock-&gt;line_breaks.size(); i++)
+        {
+            <span class="kw">if</span> (m_layout_y + <span class="num">2</span> * m_layout_line_height &gt; m_layout_page_height)
+            {
+                pages.push_back(<span class="kw">new</span> Page());   <span class="cmt">// 行放不下 → 另起一页</span>
+                m_layout_y = <span class="num">0</span>;
+            }
+            pages.back()-&gt;elements.push_back(<span class="kw">new</span> PageLine(textBlock, i, m_layout_y));
+            m_layout_y += m_layout_line_height;   <span class="cmt">// 逐行累加，没有段落保持/孤行控制</span>
+        }
+        m_layout_y += m_layout_line_height * <span class="num">0.8</span>;   <span class="cmt">// 粗糙的段间距（代替 CSS margin）</span>
+    }
+    ...
+}</code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/EpubList/EpubList.cpp：书库页每次重绘都重新解包封面 */</span>
+<span class="kw">for</span> (<span class="type">int</span> i = start_index; i &lt; start_index + EPUBS_PER_PAGE &amp;&amp; i &lt; state.num_epubs; i++)
+{
+    <span class="kw">if</span> (current_page != state.previous_rendered_page) {
+        Epub *epub = <span class="kw">new</span> Epub(state.epub_list[i].path);
+        epub-&gt;load();                          <span class="cmt">// 整本解包，只为拿一张封面</span>
+        <span class="type">size_t</span> image_data_size = <span class="num">0</span>;
+        <span class="type">uint8_t</span> *image_data = epub-&gt;get_item_contents(
+            epub-&gt;get_cover_image_item(), &amp;image_data_size);
+        renderer-&gt;draw_image(epub-&gt;get_cover_image_item(),
+            image_data, image_data_size, image_xpos, image_ypos, image_width, image_height);
+        epub_mem_free(image_data);             <span class="cmt">// 画完即释放</span>
+    }
+    ...
+}
+
+<span class="cmt">/* lib/Epub/Renderer/Renderer.cpp：封面解不出来 → 画一个占位矩形兜底 */</span>
+<span class="kw">void</span> Renderer::draw_image(<span class="kw">const</span> <span class="type">std::string</span> &amp;filename, <span class="kw">const</span> <span class="type">uint8_t</span> *data, <span class="type">size_t</span> data_size, ...)
+{
+    ImageHelper *helper = get_image_helper(filename, data, data_size);
+    <span class="kw">if</span> (!helper || !helper-&gt;render(data, data_size, <span class="kw">this</span>, x, y, width, height))
+        draw_rect(x + <span class="num">20</span>, y + <span class="num">20</span>, width - <span class="num">40</span>, height - <span class="num">40</span>);   <span class="cmt">// 占位矩形</span>
+}</code></pre>
+
+  <table>
+    <tr><th>梯队</th><th>待办</th><th>代码证据</th></tr>
+    <tr><td>第一（能用）</td><td>补 1bpp 混合灰度路径</td><td><code>CopyToMixedGrayBuffer</code> 的 MONO 分支 <code>RT_ASSERT(0)</code></td></tr>
+    <tr><td>第一（能用）</td><td>天气的 PAN 依赖取舍（去或兜底）</td><td><code>weather_run_once</code> 首行 <code>pan_service_is_pan_connected</code></td></tr>
+    <tr><td>第二（好用）</td><td>分页断行质量（段落/孤行控制）</td><td><code>layout_one_block</code> 逐行硬排</td></tr>
+    <tr><td>第二（好用）</td><td>封面加载开销（缓存 / 懒加载）</td><td><code>EpubList.cpp</code> 每本 <code>new Epub + load</code></td></tr>
+    <tr><td>第三（卫生）</td><td>CSS / 蓝牙 / 文档同步</td><td><code>RubbishHtmlParser</code> 不做 CSS、<code>SET_BLUETOOTH</code>、README 漂移</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>这份清单里的每一条都<strong>可以在源码里指认到具体位置</strong>——这就是它比泛泛的"优化建议"值钱的地方。维护真实项目的顺序几乎总是"先修会崩的，再补没接通的，最后才谈体验"，而"先做什么"的判断标准不是代码量，而是<strong>用户会不会在某个路径上直接撞墙</strong>。照 15.4 的三梯队顺序走，就是一次标准的排障优先级训练。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>费曼讲物理时最爱说："如果你不能把它解释清楚，你就还没真正懂它。"对维护者这个身份也一样：<strong>如果你不能把"为什么先做这一条"解释清楚，你就还没真正懂这个项目</strong>。把 15.4 的清单合上，自己排一次序，再和上面的三梯队对一遍——差在哪里，哪里就是你还没读懂的地方。这就是第一性原理的用法：不是记住结论，而是能独立推出结论。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：找三个 TODO <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>在 <code>src/boards/SF32PaperRenderer.h</code>、<code>src/boards/controls/TouchControls.h</code>、<code>src/boards/display_dbi/epd_display.c</code> 各找一个 TODO 或 "Not implemented yet"，并分别说清它意味着什么（功能缺口 / 职责没收口 / 优化待办）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 <code>grep -n "TODO"</code> 定位；对照 15.3 的三分类（功能缺口 / 职责没收口 / 优化待办）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>SF32PaperRenderer.h</code> 析构函数：<code>// TODO: cleanup and shutdown?</code>——渲染器没有真正的清理逻辑，属于职责没收口；<code>TouchControls.h</code> 头部：渲染应移出本类，但基类 <code>render()</code> 仍是空实现，同样属职责没收口；<code>epd_display.c</code> 的 <code>CopyToMixedGrayBuffer</code> MONO 分支：<code>RT_ASSERT(0);//Not implemented yet</code>——1bpp 混合灰度没实现，撞上就崩，属于功能缺口。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：天气的依赖链 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>src/wheather.c</code>：<code>weather_run_once</code> 的第一步判断是什么？为什么没有手机蓝牙网关，天气就永远拿不到数据？API key 写在哪里、有什么风险？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 <code>pan_service_is_pan_connected()</code> 与 <code>pan_service_is_bt_connected()</code> 的分支；API key 在 <code>WEATHER_KEY_ID</code> 宏里。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>第一步判断 <code>pan_service_is_pan_connected()</code>，为假就 <code>weather_set_status("蓝牙未连接"/"网络未连接")</code> 并返回 -1。因为设备没有 WiFi 模块，联网必须经手机蓝牙网关（PAN），网关不连，后面发 HTTP、解析全无从谈起。API key 写在 <code>WEATHER_KEY_ID "SO23_Gmly2oK3kMf4"</code>，随固件一起烧进镜像、随镜像分发——key 等于公开，任何人都能拿着它调用心知天气 API 计费，属于敏感凭证泄露风险。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：RT_ASSERT(0) 何时触发 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>epd_display.c</code> 的 <code>RT_ASSERT(0);//Not implemented yet</code> 在什么图层格式下会触发？它与 <code>Kconfig.proj</code> 里哪个二选一宏（<code>EPDIY_EPUB_1BPP / 4BPP</code>）对应？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 <code>CopyToMixedGrayBuffer</code> 的 <code>data_format == LCDC_PIXEL_FORMAT_MONO</code> 分支；再回 <code>Kconfig.proj</code> 查 1BPP 宏的生效条件。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>当图层格式为 <code>LCDC_PIXEL_FORMAT_MONO</code>（1bpp 单色）时触发；<code>LCDC_PIXEL_FORMAT_A4</code>（4bpp 灰阶）路径有完整实现。<code>Kconfig.proj</code> 里 <code>EPDIY_EPUB_1BPP</code> 在 <code>LCD_USING_EPD_OPMO37A3</code>（SPI 小屏）时被默认选中——即选 1bpp 帧缓冲的配置会走到这段断言，属于功能缺口而非代码风格问题。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：为项目排一次优先级 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>假设你是这台阅读器的维护者，只有一周时间。把 15.4 的三梯队清单排成"每天做什么"的具体计划，并给出排序理由。针对"分页断行"这一条，你能在 <code>layout_one_block</code> 里加什么最小的改动，避免标题孤零零落在页尾？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先保"不崩"，再保"名实相符"，最后体验；孤行问题可以想到"断页前先看下一行是不是段落尾 / 标题行至少带两行正文"这类启发式。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>排序参考：第 1-2 天补 <code>CopyToMixedGrayBuffer</code> 的 MONO 路径（会崩）；第 3-4 天处理天气（去掉入口或给离线兜底"天气需连接手机"，二者取一，名实相符）；第 5-6 天做分页启发式与封面缓存（体验）；第 7 天统一改 README 并补板级占位 TODO（卫生）。分页最小改动：在 <code>layout_one_block</code> 断页前，若下一行是某段落的最后一行、或当前页只剩一行容量时，提前换页（"keep-with-next"思路），代码上只需在 <code>m_layout_y + 2 * line_height &gt; page_height</code> 的判断前加一个"预留行数"的阈值判断。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

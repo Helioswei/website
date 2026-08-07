@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cpp-gtest集成Lcov代码覆盖率测试 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="​ 做好了单元测试但是别人并不知道我们的单元测试做的如何，是否覆盖了所有的需要被测试的类方法或者变量等，所以我们需要对单测case做一个覆盖率统计。其实本质就是看代码执行时候运行了你需要测试文件里面的所有代码，比如switch分支 if分支">
+  <meta name="keywords" content="">
+  <link rel="canonical" href="https://aigcwei.cn/notes/cpp/gtest集成Lcov代码覆盖率测试.html">
+  <meta property="og:title" content="cpp-gtest集成Lcov代码覆盖率测试">
+  <meta property="og:description" content="​ 做好了单元测试但是别人并不知道我们的单元测试做的如何，是否覆盖了所有的需要被测试的类方法或者变量等，所以我们需要对单测case做一个覆盖率统计。其实本质就是看代码执行时候运行了你需要测试文件里面的所有代码，比如switch分支 if分支">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/cpp/gtest集成Lcov代码覆盖率测试.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>cpp-gtest集成Lcov代码覆盖率测试</h1>
+          <div class="article-meta"><span>2021-02-08</span></div>
+        </header>
+        <div class="article-body">
+<p>​	做好了单元测试但是别人并不知道我们的单元测试做的如何，是否覆盖了所有的需要被测试的类方法或者变量等，所以我们需要对单测case做一个覆盖率统计。其实本质就是看代码执行时候运行了你需要测试文件里面的所有代码，比如switch分支 if分支等。</p>
+<h3>环境配置</h3>
+<h4>安装下载lcov</h4>
+<p>	http://ltp.sourceforge.net/coverage/lcov.php，有rpm包和源码包。（以源码包为例）</p>
+<p>解压lcov-x.xx.tar.gz，进入源码包，执行make install 在命令行执行lcov -v，正确输出版本号即安装成功</p>
+<h4>增加Lcov编译选项</h4>
+<p>​	在项目顶层目录CmakeLists.txt中添加以下编译指令：</p>
+<pre><code>
+# coverage option
+OPTION (ENABLE_COVERAGE &quot;Use gcov&quot; ON)
+MESSAGE(STATUS ENABLE_COVERAGE=${ENABLE_COVERAGE})
+IF(ENABLE_COVERAGE)
+    SET(CMAKE_CXX_FLAGS &quot;${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage&quot;)
+    SET(CMAKE_C_FLAGS &quot;${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage&quot;)
+    SET(CMAKE_EXE_LINKER_FLAGS &quot;${CMAKE_EXE_LINKER_FLAGS} -fprofile-arcs -ftest-coverage&quot;)
+ENDIF()
+</code></pre>
+<h3>使用方式</h3>
+<ol><li>将cmake编译选项设置为-DENABLE_COVERAGE=OFF …，或者将顶层目录CmakeLists.txt中OPTION (ENABLE_COVERAGE “Use gcov” OFF)编译选项手动设置为ON；</li></ol>
+<ol><li>编译产生<code>.gcno</code>文件，运行则产生<code>.gcda</code>（与.gcno对应）文件；</li></ol>
+<p>   - 我们使用的是<code>cmake编译</code>，则编译后生成的.gcno文件存在build目录下的每个项目中，例如：&lt;img src="../../images/cpp/gcno.png" alt="gcno" style="zoom:75%;" /&gt;</p>
+<p>   - <code>运行</code>我们的测试代码才会产生.gcda文件，如图是运行后产生的。</p>
+<p>     - 若用户进程<code>并非调用 exit 正常退出</code>，覆盖率统计数据就无法输出，也就无从生成报告了。后台服务程序若非专门设计，一旦启动就很少主动退出，用 kill 杀死进程强制退出时就不会调用 exit，因此没有覆盖率统计结果产生。所以必须当前进程退出后才会产生.gcda文件。</p>
+<ol><li>使用Lcov生成覆盖率统计文件；</li></ol>
+<p>   ~~~shell lcov -d cmake-build-debug -t test -o test.info -b . -c  --no-external</p>
+<p>   ~~~</p>
+<p>   命令参数含义解释如下：</p>
+<p>   - -d src_dir： 待覆盖率测试的源码目录，本工程设置为cmake-build-debug；</p>
+<p>   - -t ‘test’: 目标的名称，此处为test；</p>
+<p>   - -o ‘test.info’: 生成的覆盖率文件，可自定义，可不带引号；</p>
+<p>   - -b .：相对目录的起始位置；</p>
+<p>   - -c: capture，采集覆盖率；</p>
+<p>   因为我们是cmake进行编译的，所以我们可以直接在build目录下使用lcov命令生成覆盖率报表</p>
+<p>   ~~~shell lcov -c -o result.info  -b . -d .</p>
+<p>   ~~~</p>
+<ol><li>使用genhtml生成覆盖率报表</li></ol>
+<p>   ~~~ genhtml -o report test.info</p>
+<p>   ~~~</p>
+<p>   - -o result: 输出的目标文件夹，可带路径，此处为当前目录下的result目录；</p>
+<p>   - test.info: 覆盖率的统计文件；</p>
+<p>   如果我们需要对覆盖率报表进行过滤，比如把include文件或者系统的文件给过滤掉，可以使用下面的命令</p>
+<p>   ~~~shell lcov --remove result.info  '/usr/*' '*/inc/*' -o finalresult.info genhtml finalresult.info  -o cppreport</p>
+<p>   ~~~</p>
+<ol><li>html报表生成如下，这个是未过滤的。<img src="../../images/cpp/html.png" alt="html.png"></li></ol>
+<p>相关文章参考：</p>
+<ul><li><a href="https://blog.csdn.net/weixin_43892514/article/details/107822769">这篇文章</a>对lcov讲解的比较详细以及cmake添加的选项比较好用，但是对生成的.gcno和.gcda文件在哪里没有说明，对于我这个初学者来说比较的蒙。</li><li><a href="https://www.cnblogs.com/zhaoxd07/p/5608177.html">这篇文章</a>对文件生成的位置有详细的说明。</li></ul>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章：输入控制：三按键导航 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="5" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：输入控制——三按键导航</h1>
+  <p class="chapter-subtitle">一台没有触屏、没有键盘的阅读器，凭什么只用三个按键就完成"找书、翻页、返回"的全部操作？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析，把每个输入当作一条线索</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案要讲证据，调试要讲因果。这部阅读器的"操作系统"只有三个按键，可每一次按键落下，都要穿过中断、去抖、消息队列、状态机，最后才在屏幕上留下一道痕迹。跟着这条『输入 → 事件 → 状态 → 渲染』的链路一路追下去，你会发现再简单的交互，背后都藏着一套严丝合缝的系统。今天我们就来当一回大理寺的仵作，把这条链路一帧一帧地验尸。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 三按键的职责 ========== -->
+  <h2>5.1 阅读器的人机交互：UP / DOWN / SELECT 三按键的职责</h2>
+
+  <p>上一章你已经在 <code>Board.h</code> 里见过 <code>get_button_controls()</code> 这个纯虚方法，它承诺"每一块板子都提供一套按键控制"。现在把这套交互放到用户面前，本质上只有一句话：<strong>三个按键，映射到两个世界</strong>。在书目列表里，<code>UP</code>/<code>DOWN</code> 移动选中项，<code>SELECT</code> 打开选中的书；在阅读模式里，<code>UP</code>/<code>DOWN</code> 翻页，<code>SELECT</code> 返回书目。README 把这套语义写得非常直白：UP 是"在书单里上移、或阅读时翻上一页"，DOWN 是"下移、或翻下一页"，SELECT 是"打开选中的书、或从阅读模式回到书单"。</p>
+
+  <p>但代码里，这套语义不是散落在三四处硬编码的，而是收敛成一种叫 <code>UIAction</code> 的<strong>规范化动作</strong>。它在 <code>src/boards/controls/Actions.h</code> 里定义，只有 <code>NONE</code>、<code>UP</code>、<code>DOWN</code>、<code>SELECT</code> 四种取值。硬件层负责把"哪个引脚被按下"翻译成 UIAction，UI 层只认 UIAction 不认引脚——于是换一块板子、换一组 GPIO，界面代码一行都不用动。这个"把底层信号抽象成语义动作"的中间层，正是狄仁杰断案时最看重的那份"人证物证分离"。</p>
+
+<pre><code><span class="cmt">/* src/boards/controls/Actions.h：按键动作的"规范说法" */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+  NONE,              <span class="cmt">// 无动作（例如被触摸唤醒、单纯的重绘请求）</span>
+  UP,                <span class="cmt">// 书单上移 / 上一页</span>
+  DOWN,              <span class="cmt">// 书单下移 / 下一页</span>
+  SELECT,            <span class="cmt">// 打开选中的书 / 阅读中返回书目</span>
+  LAST_INTERACTION
+} UIAction;
+
+<span class="kw">typedef</span> std::function&lt;<span class="kw">void</span>(UIAction)&gt; ActionCallback_t; <span class="cmt">// 动作回调</span></code></pre>
+
+  <p>这份分工落到 <code>main.cpp</code> 的三个 handler 上，每一层都是"查表办事"。列表态 <code>handleEpubList</code> 收到 UP/DOWN 就调 <code>epub_list-&gt;prev()/next()</code> 移动高亮，收到 SELECT 就构造一个 <code>EpubToc</code> 并切换状态；目录态 <code>handleEpubTableContents</code> 与阅读态 <code>handleEpub</code> 各自实现自己的 UP/DOWN/SELECT 语义。三张"按键→行为"的对照表合起来，就是 5.1 开头那句"两个世界"的完整注解。</p>
+
+<pre><code><span class="cmt">/* main.cpp：列表态里，一次 UIAction 落到书单上（节选） */</span>
+<span class="kw">switch</span> (action)
+{
+<span class="kw">case</span> UP:
+  epub_list-&gt;prev();              <span class="cmt">// 选中项上移</span>
+  <span class="kw">break</span>;
+<span class="kw">case</span> DOWN:
+  epub_list-&gt;next();              <span class="cmt">// 选中项下移</span>
+  <span class="kw">break</span>;
+<span class="kw">case</span> SELECT:
+  ui_state = SELECTING_TABLE_CONTENTS;  <span class="cmt">// 打开书 → 先进章节目录</span>
+  contents = <span class="kw">new</span> EpubToc(epub_list_state.epub_list[epub_list_state.selected_item],
+                          epub_index_state, renderer);
+  contents-&gt;load();
+  handleEpubTableContents(renderer, NONE, <span class="kw">true</span>);
+  <span class="kw">return</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>按键</th><th>列表态 SELECTING_EPUB</th><th>阅读态 READING_EPUB</th></tr>
+    <tr><td><code>UP</code></td><td>选中项上移</td><td>翻上一页（到节首则回上一节末页）</td></tr>
+    <tr><td><code>DOWN</code></td><td>选中项下移</td><td>翻下一页（跨过节尾自动续读）</td></tr>
+    <tr><td><code>SELECT</code></td><td>打开选中的书 → 进入目录</td><td>返回书目列表</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>注意 SELECT 在列表态打开的并不是"直接开始读"，而是先进入<strong>章节目录</strong>（<code>EpubToc</code>），让你选择从哪一章开始。这个细节在 README 的按钮说明里没提，只有读 <code>handleEpubList</code> 源码才能看见——又是文档比代码滞后的一处。啃源码时别放过这种"多一跳"。</p>
+  </div>
+
+  <!-- ========== 5.2 按键电路与电平 ========== -->
+  <h2>5.2 按键电路与电平：active high vs active low</h2>
+
+  <p>物理世界里，一个<strong>按键</strong>（物理按钮：按下时让电路导通、松开后断开）只有两种状态：<strong>按下</strong>与<strong>松开</strong>。但同一件事放到单片机的 GPIO 引脚上，却有两种截然相反的接法——差别全在引脚读到哪种<strong>电平</strong>（高/低电平，说白了就是引脚上量到 3.3V 还是 0V）。如果按键一端接地、另一端接 GPIO 并外接（或启用内部）上拉电阻，那么松开时引脚读到高电平、按下时被拉到低电平——这叫<strong>低电平有效（active low）</strong>：说人话就是"按下时引脚读到低电平，这次按压才有效"；反过来，按键一端接电源、引脚下拉，松开读低、按下读高，就是<strong>高电平有效（active high）</strong>——按下时引脚读到高电平才算有效。项目里的 <code>active_level</code> 参数，就是告诉驱动"按下时引脚到底是 0 还是 1"。</p>
+
+  <p>这个选择不是随心所欲的，它直接决定了硬件的接法，进而决定了软件配置。看 <code>GPIOButton</code> 构造函数：它根据 <code>active_level</code> 二选一地设置内部电阻——低有效配上拉（<code>GPIO_PULLUP_ONLY</code>），高有效配下拉（<code>GPIO_PULLDOWN_ONLY</code>）；中断触发类型同样二选一——低有效用 <code>GPIO_INTR_LOW_LEVEL</code>，高有效用 <code>GPIO_INTR_HIGH_LEVEL</code>。注意这里用的是<strong>电平触发</strong>而不是边沿触发，原因在 5.3 揭晓。更深一层，低有效按键在深睡眠时只能靠 ULP 协处理器唤醒，高有效则可以用更省事的 EXT1 唤醒——这个差异到第 15 章会展开，现在先记住"电平决定唤醒路线"这条线索。</p>
+
+<pre><code><span class="cmt">/* GPIOButton.cpp：根据 active_level 一次性配好电阻与中断类型 */</span>
+GPIOButton::GPIOButton(gpio_num_t gpio_pin, <span class="type">int</span> active_level, ButtonCallback_t callback)
+    : gpio_pin(gpio_pin), active_level(active_level), callback(callback)
+{
+  gpio_set_direction(gpio_pin, GPIO_MODE_INPUT);
+  <span class="cmt">// active_level==0（低有效）拉上；==1（高有效）拉下</span>
+  gpio_set_pull_mode(gpio_pin, active_level == <span class="num">0</span> ? GPIO_PULLUP_ONLY : GPIO_PULLDOWN_ONLY);
+  gpio_isr_handler_add(gpio_pin, button_interrupt_handler, this);
+  button_pressed = <span class="kw">false</span>;
+  <span class="cmt">// 电平触发：按下保持 0（或 1），松开回到另一电平</span>
+  gpio_set_intr_type(gpio_pin, active_level == <span class="num">0</span> ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+  gpio_intr_enable(gpio_pin);
+}</code></pre>
+
+  <p>具体到每一块板子，答案写在各自的 <code>src/boards/</code> 实现里。LilyGo T5 4.7" 与 M5 Paper 都是<strong>低电平有效</strong>，EPDiy V6 是<strong>高电平有效</strong>（而且 UP/DOWN 走 I2C 扩展的 PCA9555，只给 SELECT 留了一个 GPIO）。细心的你还会发现一个彩蛋：板子里定义的宏叫 <code>BUTONS_ACTIVE_LEVEL</code>——注意是 <code>BUTON</code> 少了两个字符，既不是 <code>BUTTONS_ACTIVE_LEVEL</code>，也没按 README 里写的用 <code>-DBUTONS_ACTIVE_LEVEL=0</code> 编译期注入，而是直接 <code>#define</code> 写死在板子文件里。真实项目里的拼写与注释，往往没有教科书那么工整。</p>
+
+<pre><code><span class="cmt">/* src/boards/Lilygo_t5_47.cpp：导航按键的引脚与有效电平 */</span>
+<span class="cmt">// setup the pins to use for navigation</span>
+<span class="kw">#define</span> BUTTON_UP_GPIO_NUM     GPIO_NUM_34
+<span class="kw">#define</span> BUTTON_DOWN_GPIO_NUM   GPIO_NUM_39
+<span class="kw">#define</span> BUTTON_SELECT_GPIO_NUM GPIO_NUM_35
+<span class="cmt">// buttons are low when pressed</span>
+<span class="kw">#define</span> BUTONS_ACTIVE_LEVEL <span class="num">0</span>   <span class="cmt">// 低电平有效（拼写少了个 T，照搬原仓库）</span></code></pre>
+
+  <table>
+    <tr><th>配置项</th><th>低电平有效（active_level=0）</th><th>高电平有效（active_level=1）</th></tr>
+    <tr><td>按下时引脚电平</td><td>0（被拉低）</td><td>1（被拉高）</td></tr>
+    <tr><td>内部电阻</td><td>上拉 <code>GPIO_PULLUP_ONLY</code></td><td>下拉 <code>GPIO_PULLDOWN_ONLY</code></td></tr>
+    <tr><td>触发中断类型</td><td><code>GPIO_INTR_LOW_LEVEL</code></td><td><code>GPIO_INTR_HIGH_LEVEL</code></td></tr>
+    <tr><td>深睡眠唤醒路线</td><td>ULP 协处理器</td><td>EXT1 唤醒</td></tr>
+    <tr><td>本项目实际板子</td><td>LilyGo T5 4.7"、M5 Paper</td><td>EPDiy V6（仅 SELECT）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>要确认一块板子的按键到底是高有效还是低有效，最快的方法是查该板 PCB 的原理图：按键是否把引脚接地（多为低有效）、是否有上/下拉电阻。其次才是在代码里找 <code>BUTONS_ACTIVE_LEVEL</code> 的定义。本例 README 让你加 <code>-DBUTONS_ACTIVE_LEVEL=0</code> 编译宏，可仓库里根本没有这个宏——三块板全是直接 <code>#define</code>。文档漂移无处不在，以代码为准。</p>
+  </div>
+
+  <!-- ========== 5.3 GPIOButtonControls 实现 ========== -->
+  <h2>5.3 GPIOButtonControls：去抖与按下/释放检测</h2>
+
+  <p>机械按键有一个天敌叫<strong>抖动</strong>：触点接触的瞬间，金属簧片会高速弹跳几十毫秒，导致同一个按键在极短时间内被"读"到很多次电平翻转。如果直接在这些翻转上触发动作，一次按键会被翻译成四五次"上一页"，用户就会看到画面连跳好几页。所以任何正经的按键驱动，第一件事都是<strong>去抖</strong>（debounce，把按键抖动造成的多次触发过滤掉，让一次物理按压只算一次）。最常见的做法是"检测到电平变化后延时十几毫秒再读一次"，本项目的做法却更有嵌入式味道：<strong>用时间戳判断一次按压的时长</strong>。</p>
+
+  <p>看 <code>GPIOButton::handle_interrupt()</code> 的逻辑：它维护一个 <code>button_pressed</code> 标志位和 <code>button_press_start</code> 时间戳，每次中断都让引脚在"按下"与"松开"两种触发类型间翻转。按下时记下起始时刻，松开时计算持续时长——只有当 <code>松开时刻 - 按下时刻 &gt; BUTTON_DEBOUNCE</code> 时才把这次按压算作有效，调用回调。抖动的本质是毫秒级的快速翻转，不可能超过去抖阈值，所以它天然被过滤掉；而真正的长按（哪怕只持续 100 ms）则稳稳通过。</p>
+
+<pre><code><span class="cmt">// GPIOButton.cpp：BUTTON_DEBOUNCE 单位是微秒</span>
+<span class="cmt">// 注释写的是 "100 ms"，但 50000 µs = 50 ms——又一个注释与代码不符</span>
+<span class="kw">const</span> <span class="type">int</span> BUTTON_DEBOUNCE = <span class="num">50000</span>;
+
+<span class="kw">void</span> GPIOButton::handle_interrupt()
+{
+  <span class="kw">if</span> (button_pressed)
+  {
+    <span class="cmt">// 已按下 → 现在必是松开：看按了多久</span>
+    button_pressed = <span class="kw">false</span>;
+    int64_t release = esp_timer_get_time();
+    <span class="kw">if</span> (release - button_press_start &gt; BUTTON_DEBOUNCE)
+    {
+      callback();                      <span class="cmt">// 按压够久，算一次有效动作</span>
+    }
+    gpio_set_intr_type(gpio_pin, active_level == <span class="num">0</span> ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+  }
+  <span class="kw">else</span>
+  {
+    <span class="cmt">// 未按下 → 现在必是按下：记下起始时刻</span>
+    button_pressed = <span class="kw">true</span>;
+    button_press_start = esp_timer_get_time();
+    gpio_set_intr_type(gpio_pin, active_level == <span class="num">0</span> ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL);
+  }
+}</code></pre>
+
+  <p>为什么用"电平触发 + 时长判定"而不是"边沿触发"？代码注释给了答案：edge interrupts seem to be flaky（边沿中断似乎不太可靠）。电平触发在引脚状态稳定时只触发一次，而边沿触发可能漏掉、重复触发；再加上 ESP32 的中断服务函数运行在 IRAM、不能做耗时操作，所以中断里只记时间戳，把"判定"留在中断上下文中完成，也算量小可控。整个检测是<strong>无阻塞</strong>的：没有 <code>delay()</code>，只读一次 <code>esp_timer_get_time()</code>，把对主线程的影响压到最低。</p>
+
+  <p>三路按键由 <code>GPIOButtonControls</code> 统一创建：构造时对 <code>up</code>/<code>down</code>/<code>select</code> 三个 GPIO 各 new 一个 <code>GPIOButton</code>，并把各自的回调包装成"往 <code>on_action</code> 里塞一个 <code>UIAction</code>"。而 <code>on_action</code> 来自板子的 <code>get_button_controls()</code>——它是个 lambda，把 UIAction 通过 <code>xQueueSend</code> 扔进 FreeRTOS 消息队列。这里的每一次按键就是一条<strong>事件</strong>（"刚发生了什么"的通知），<strong>队列</strong>（queue）则是存放这些事件、先进先出的"待办清单"：中断只管往队尾投，主程序忙完一件再取一件，来得再急也不怕丢。于是按键与 UI 之间隔着一道"队列缓冲"，中断里只入队，主任务排队出队，天然解耦了实时中断与慢速渲染。</p>
+
+<pre><code><span class="cmt">/* GPIOButtonControls.cpp：三个 GPIOButton + 三条回调，统一汇入 on_action */</span>
+GPIOButtonControls::GPIOButtonControls(
+    gpio_num_t gpio_up, gpio_num_t gpio_down, gpio_num_t gpio_select,
+    <span class="type">int</span> active_level, ActionCallback_t on_action)
+    : gpio_up(gpio_up), gpio_down(gpio_down), gpio_select(gpio_select),
+      active_level(active_level), on_action(on_action)
+{
+  gpio_install_isr_service(<span class="num">0</span>);
+  up = <span class="kw">new</span> GPIOButton(gpio_up, active_level, [<span class="kw">this</span>]() { <span class="kw">this</span>-&gt;on_action(UIAction::UP); });
+  down = <span class="kw">new</span> GPIOButton(gpio_down, active_level, [<span class="kw">this</span>]() { <span class="kw">this</span>-&gt;on_action(UIAction::DOWN); });
+  select = <span class="kw">new</span> GPIOButton(gpio_select, active_level, [<span class="kw">this</span>]() { <span class="kw">this</span>-&gt;on_action(UIAction::SELECT); });
+}
+
+<span class="cmt">/* Lilygo_t5_47.cpp：板子把"动作"对接进消息队列 */</span>
+<span class="kw">return</span> <span class="kw">new</span> GPIOButtonControls(
+    BUTTON_UP_GPIO_NUM, BUTTON_DOWN_GPIO_NUM, BUTTON_SELECT_GPIO_NUM,
+    BUTONS_ACTIVE_LEVEL,
+    [ui_queue](UIAction action) { xQueueSend(ui_queue, &amp;action, <span class="num">0</span>); });</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>去抖的阈值单位要盯紧：<code>BUTTON_DEBOUNCE</code> 配合 <code>esp_timer_get_time()</code>（返回微秒），所以 <code>50000</code> 是 <strong>50 毫秒</strong>，而它头顶的注释却写着 "100 ms"。这个项目里"注释与代码打架"已经第二次出现了（上一处是深睡眠 30 秒 vs 120 秒）。嵌入式里时间单位尤其容易埋雷：微秒、毫秒、系统 tick 混在一起，读代码永远先确认单位。</p>
+  </div>
+
+  <!-- ========== 5.4 状态机 ========== -->
+  <h2>5.4 状态机：列表态 ↔ 阅读态的按键路由</h2>
+
+  <p>同一个 UP 键，在书单里是"上移"，在阅读里是"上一页"——它凭什么知道自己该干嘛？答案是：<strong>UI 层有一个当前状态，按键行为完全由这个状态决定</strong>。这种"程序守在几个状态里、收到事件就在状态之间切换"的设计，就叫<strong>状态机</strong>（state machine，一个在不同"状态"之间按事件跳转的模型）。这个状态就是 <code>main.cpp</code> 顶部的 <code>UIState</code>，共三态：<code>SELECTING_EPUB</code>（书目列表）、<code>SELECTING_TABLE_CONTENTS</code>（章节目录）、<code>READING_EPUB</code>（阅读）。注意它挂在 <code>RTC_NOINIT_ATTR</code> 上——这段内存深睡眠期间不断电，醒来后设备还记得自己在哪个界面。这与第 15 章的深睡眠紧密相关。</p>
+
+  <p>路由的总开关是 <code>handleUserInteraction()</code>：进来先看 <code>ui_state</code> 在哪，再把动作派发给对应的 handler。于是"三按键"复用出三层界面，每次按键都像一次"案件移送"：大理寺先看卷宗编号（状态），再决定派哪个衙役（handler）处理。SELECT 的三种去处也因此一目了然——列表态进目录、目录态进阅读、阅读态删掉 reader 回列表。这套状态机简单到只有一条链路，却是全书交互的地基。</p>
+
+<pre><code><span class="cmt">/* main.cpp：三态状态机 + 路由总开关（节选） */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+  SELECTING_EPUB,           <span class="cmt">// 书目列表</span>
+  SELECTING_TABLE_CONTENTS, <span class="cmt">// 章节目录</span>
+  READING_EPUB              <span class="cmt">// 阅读</span>
+} UIState;
+
+<span class="ann">RTC_NOINIT_ATTR</span> UIState ui_state = SELECTING_EPUB;
+<span class="ann">RTC_DATA_ATTR</span> EpubListState epub_list_state;
+<span class="ann">RTC_DATA_ATTR</span> EpubTocState epub_index_state;
+
+<span class="kw">void</span> handleUserInteraction(Renderer *renderer, UIAction ui_action, <span class="type">bool</span> needs_redraw)
+{
+  <span class="kw">switch</span> (ui_state)
+  {
+  <span class="kw">case</span> READING_EPUB:            handleEpub(renderer, ui_action); <span class="kw">break</span>;
+  <span class="kw">case</span> SELECTING_TABLE_CONTENTS: handleEpubTableContents(renderer, ui_action, needs_redraw); <span class="kw">break</span>;
+  <span class="kw">case</span> SELECTING_EPUB:
+  <span class="kw">default</span>:                       handleEpubList(renderer, ui_action, needs_redraw); <span class="kw">break</span>;
+  }
+}</code></pre>
+
+  <p>把整条"按键 → 屏幕"的流水线串起来看：<code>GPIOButton</code> 的中断服务函数在 IRAM 里翻转触发类型、记下时间戳；去抖通过时长判定完成后，回调把 UIAction 塞进 <code>ui_queue</code>（容量 10 个的 FreeRTOS 队列）；主任务 <code>main_task</code> 阻塞在 <code>xQueueReceive</code> 上，一旦取出动作就调用 <code>handleUserInteraction</code>，最后 <code>renderer-&gt;flush_display()</code> 把新画面刷上墨水屏。从引脚电平变化到屏幕定格，一条单向、无环的管线，谁都不越界。这也解释了为什么读取可以放心阻塞等待——墨水屏更新本来就是秒级操作。</p>
+
+  <p>还有一个细节值得注意：<strong>按键也负责把设备从深睡眠叫醒</strong>。入睡前 <code>button_controls-&gt;setup_deep_sleep()</code> 会按有效电平配置唤醒（低有效走 ULP、高有效走 EXT1）；醒来后先 <code>did_wake_from_deep_sleep()</code> 判断是不是按键唤醒，若是则 <code>hydrate()</code> 恢复屏幕画面、<code>get_deep_sleep_action()</code> 把"刚才按的是哪个键"翻译成一次 UIAction 直接执行——于是你按一下 UP，屏幕从上一页醒来，无缝继续。这套唤醒机制是第 15 章的主角，这里先记住：三按键不仅管导航，还管"叫醒服务"。</p>
+
+<pre><code><span class="cmt">/* main.cpp：主任务里的一条流水线 */</span>
+xQueueHandle ui_queue = xQueueCreate(<span class="num">10</span>, <span class="kw">sizeof</span>(UIAction));   <span class="cmt">// 最多缓存 10 个动作</span>
+ButtonControls *button_controls = board-&gt;get_button_controls(ui_queue);
+
+<span class="kw">while</span> (esp_timer_get_time() - last_user_interaction &lt; <span class="num">120</span> * <span class="num">1000</span> * <span class="num">1000</span>)
+{
+  UIAction ui_action = NONE;
+  <span class="kw">if</span> (xQueueReceive(ui_queue, &amp;ui_action, pdMS_TO_TICKS(<span class="num">60000</span>)) == pdTRUE)
+  {
+    <span class="kw">if</span> (ui_action != NONE)
+    {
+      last_user_interaction = esp_timer_get_time();   <span class="cmt">// 刷新"空闲倒计时"</span>
+      handleUserInteraction(renderer, ui_action, <span class="kw">false</span>); <span class="cmt">// 按当前状态路由</span>
+    }
+  }
+  renderer-&gt;flush_display();
+}</code></pre>
+
+  <table>
+    <tr><th>当前状态</th><th>UP</th><th>DOWN</th><th>SELECT</th></tr>
+    <tr><td><code>SELECTING_EPUB</code>（列表）</td><td>选中项上移</td><td>选中项下移</td><td>打开选中书 → 目录态</td></tr>
+    <tr><td><code>SELECTING_TABLE_CONTENTS</code>（目录）</td><td>目录项上移</td><td>目录项下移</td><td>跳到所选章节 → 阅读态</td></tr>
+    <tr><td><code>READING_EPUB</code>（阅读）</td><td>上一页</td><td>下一页</td><td>返回书目 → 列表态</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>这版仓库的三态状态机里，SELECT 从列表态进去的<strong>不是</strong>直接阅读，而是章节目录。如果你在别处看到"SELECT 直接进入阅读"的表述（包括 README 的按钮说明），那都是对旧版或简化版的描述——以 <code>main.cpp</code> 的 <code>handleEpubList</code> 为准：SELECT → <code>SELECTING_TABLE_CONTENTS</code>。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：三按键职责 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用自己的话，分别说出 <code>UP</code> / <code>DOWN</code> / <code>SELECT</code> 在书目列表态和阅读态下各自的职责。为什么要把动作抽象成 <code>UIAction</code> 而不是直接在各处读写 GPIO？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 5.1 的表格与 README 的三行按钮说明；想想换一块板子时，哪些代码会变、哪些不用变。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>列表态：UP/DOWN 移动书单选中项，SELECT 打开选中书（进章节目录）；阅读态：UP/DOWN 翻上一页/下一页，SELECT 返回书目。抽象成 <code>UIAction</code> 后，硬件层只负责"把引脚变化翻译成动作"，UI 层只认动作——换板子、换引脚，界面代码与状态机一行都不用改，实现了"人证（动作）与物证（引脚）分离"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：电平与去抖 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>GPIOButton.cpp</code>，回答：(a) <code>active_level</code> 为 0 与 1 时，内部电阻分别怎么配、触发什么类型的中断？(b) 本项目为什么用"电平触发 + 时长判定"而不是延时去抖或边沿触发？(c) <code>BUTTON_DEBOUNCE = 50000</code> 实际是多久？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>注意 <code>esp_timer_get_time()</code> 的单位；看中断函数里如何切换触发类型、如何用时间戳过滤抖动。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 低有效（0）配 <code>GPIO_PULLUP_ONLY</code>、触发 <code>GPIO_INTR_LOW_LEVEL</code>；高有效（1）配 <code>GPIO_PULLDOWN_ONLY</code>、触发 <code>GPIO_INTR_HIGH_LEVEL</code>。(b) 边沿中断在抖动下"似乎不太可靠"（源码注释原话），而电平触发在状态稳定时只触发一次；中断里若用 <code>delay()</code> 去抖会在 IRAM 里阻塞，所以改用时间戳：按下记起点、松开算时长，只有时长超过 <code>BUTTON_DEBOUNCE</code> 才视为有效按下，天然滤掉毫秒级抖动。(c) 50000 配合微秒计时 = <strong>50 ms</strong>（头顶注释写 "100 ms"，是文档/注释漂移的又一例）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：追中断链路 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把一次"阅读中按 DOWN"的完整旅程写下来，从引脚电平变化开始，到屏幕翻页结束，标注每一步在哪个文件。特别说明中断服务函数为什么不能调用 <code>delay()</code> 或打印日志。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>线索顺序：<code>GPIOButton.cpp</code> → <code>GPIOButtonControls.cpp</code> → 板子的 <code>get_button_controls()</code>（lambda 入队）→ <code>main.cpp</code> 的 <code>xQueueReceive</code> → <code>handleUserInteraction</code> → <code>handleEpub</code> → <code>reader-&gt;next()</code> → 渲染。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>引脚被拉至有效电平 → <code>GPIOButton::handle_interrupt()</code>（IRAM 中断）翻转触发类型、记下按下时刻 → 松开时校验时长超过 <code>BUTTON_DEBOUNCE</code> 后调用回调 → 回调经 <code>GPIOButtonControls</code> 转发为 <code>on_action(UIAction::DOWN)</code> → 板子的 lambda 把动作 <code>xQueueSend</code> 进 <code>ui_queue</code> → 主任务 <code>xQueueReceive</code> 取出 → <code>handleUserInteraction</code> 按 <code>ui_state</code> 路由到 <code>handleEpub</code> → <code>reader-&gt;next()</code> 推进页码 → 重绘并 <code>flush_display()</code>。中断服务函数运行在 ISR 上下文，必须短小、可重入，不能 <code>delay()</code>（会阻塞整个系统）也不能直接打日志/操作文件系统，所以它只干"记时间戳、翻转触发类型"这种微操。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：状态机推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>画出 <code>SELECTING_EPUB → SELECTING_TABLE_CONTENTS → READING_EPUB</code> 的完整状态转移图，标注每个转移由哪个 handler 触发、SELECT 每次按下分别做了什么。再回答：状态为什么必须放在 <code>RTC_NOINIT_ATTR</code> / <code>RTC_DATA_ATTR</code> 内存里？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>转移都发生在 SELECT 的 <code>case</code> 分支里；想想设备进入深睡眠后普通内存会发生什么，RTC 域为什么能保住这些状态。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>三处转移：列表态按 SELECT → <code>handleEpubList</code> 构造 <code>EpubToc</code>、置 <code>ui_state=SELECTING_TABLE_CONTENTS</code>；目录态按 SELECT → <code>handleEpubTableContents</code> 构造 <code>EpubReader</code>、<code>set_state_section</code> 定位章节、置 <code>READING_EPUB</code>；阅读态按 SELECT → <code>handleEpub</code> 删除 <code>reader</code>、置 <code>SELECTING_EPUB</code> 并重绘书单。因为设备会深睡眠，普通内存（RAM）掉电即失，而 <code>RTC_NOINIT_ATTR</code>/<code>RTC_DATA_ATTR</code> 放在不断电的 RTC 域：醒来后设备依然记得"我在哪个界面、读哪本书、翻到第几页"，才能无缝续读。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

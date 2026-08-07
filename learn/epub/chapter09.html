@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第9章：HTML 解析器 RubbishHtmlParser - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="9" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：HTML 解析器——RubbishHtmlParser</h1>
+  <p class="chapter-subtitle">一份 XHTML 里有几十种<strong>标签</strong>，我们只留七种；其余的全部排除。（说人话：XHTML 是 HTML 的严格写法，而 <strong>HTML</strong> 就是网页的标记语言——用一对对尖括号标签描述文字结构；标签是像 <code>&lt;p&gt;</code>、<code>&lt;b&gt;</code> 这样被尖括号包起来的名字，元素则指标签连同它包住的那段内容。）</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「排除一切不可能的，剩下的即使再不可思议，那也是真相。上一章我们拿到了一份 XHTML 口供——可它太啰嗦了：几十种标签、几百条样式、甚至还有一整张 table 数据表。嵌入式处理器没有耐心听完所有废话。所以我只留下能划分段落的、能加粗倾斜的、能放图片的、能换行的几种标签，其余一律排除。这个方法很蠢，蠢到作者干脆把解析器命名为 Rubbish（垃圾）。可正是这份"主动变蠢"的克制，让一整章 HTML 变成一串干净的 blocks——也才让换行、分页、渲染全都变得可能。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 为什么叫 Rubbish ========== -->
+  <h2>9.1 为什么叫 "Rubbish"：只取最小必要标签</h2>
+
+  <p>名字就暴露了一切。<code>RubbishHtmlParser.h</code> 的头注释是一句大实话：<em>a very stupid xhtml parser - it will probably work for very simple cases but will probably fail for complex ones</em>（一个非常愚蠢的 XHTML 解析器——对付简单情况大概够用，复杂情况大概会挂）。作者不装不端，直接在类注释里承认这是个"垃圾解析器"。可垃圾不等于没用：README 说得很明白，"I've limited our parsing to a set of minimum tags that are enough to give us the basic structure of the book without making things too complicated"（我把解析限制在一组最小标签上，足以还原书的基本结构，又不会把事情搞复杂）。在嵌入式上，划定范围本身就是一种设计。</p>
+
+  <p>为什么"不解析 CSS"反而是加分项？<strong>CSS</strong>（说人话：控制网页样式的语言，字号、颜色、行距都归它管；本项目故意不解析它）是 EPUB 排版的真正主力，可它对嵌入式几乎全是负担：字号、行距、margin、颜色……每一项都对应额外的解析器与运行时开销。而电纸屏是单色的，项目只内置 4 种字体<strong>样式</strong>（说人话：样式就是粗体、斜体这类文字属性；这里内置 regular / bold / italic / bold-italic 四种，README 原话 "I've only included 4 font styles"）。所以 README 直接承认："we just use the standard HTML tags such as <code>&lt;h1&gt;</code>, <code>&lt;h2&gt;</code> etc. and <code>&lt;b&gt;</code> and <code>&lt;i&gt;</code>"（只用 h1、h2 这类标准标签和 b、i）。把 CSS 整个排除掉，不是做不到，而是"在约束下主动选择不做"——这正是第 1 章讲的约束匹配。</p>
+
+  <p>具体留哪些？看 <code>RubbishHtmlParser.cpp</code> 开头的六张标签表，一张表一类职责：<code>HEADER_TAGS</code>（h1–h6）、<code>BLOCK_TAGS</code>（p、li、div、br）、<code>BOLD_TAGS</code>（b）、<code>ITALIC_TAGS</code>（i）、<code>IMAGE_TAGS</code>（img），外加一张特殊的 <code>SKIP_TAGS</code>（head、table）。前五张是"认识谁"，最后一张是"不认识谁"——见到就整棵子树都不理。整个解析器的全部"知识"，就是这六张小小的字符串数组，外加一个 <code>matches()</code> 助手函数。在动手看表之前，先分清两个概念：<strong>块级标签</strong>（说人话：占一整行、自成一段的标签，如 p、h1、div）与<strong>行内标签</strong>（说人话：不另起一行、嵌在文本里只改样式的标签，如 b、i）。下面这张表，就是把六张表里的标签按这两类归了归类。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：整个解析器的"全部知识"——六张标签表 */</span>
+<span class="kw">const</span> <span class="type">char</span> *HEADER_TAGS[] = {<span class="str">"h1"</span>, <span class="str">"h2"</span>, <span class="str">"h3"</span>, <span class="str">"h4"</span>, <span class="str">"h5"</span>, <span class="str">"h6"</span>};
+<span class="kw">const</span> <span class="type">char</span> *BLOCK_TAGS[]  = {<span class="str">"p"</span>, <span class="str">"li"</span>, <span class="str">"div"</span>, <span class="str">"br"</span>};
+<span class="kw">const</span> <span class="type">char</span> *BOLD_TAGS[]   = {<span class="str">"b"</span>};
+<span class="kw">const</span> <span class="type">char</span> *ITALIC_TAGS[] = {<span class="str">"i"</span>};
+<span class="kw">const</span> <span class="type">char</span> *IMAGE_TAGS[]  = {<span class="str">"img"</span>};
+<span class="kw">const</span> <span class="type">char</span> *SKIP_TAGS[]   = {<span class="str">"head"</span>, <span class="str">"table"</span>};</code></pre>
+
+<pre><code><span class="cmt"># README · "Parsing the ePub contents"：作者自己列出的最小标签集</span>
+<span class="cmt"># - Block tags  &lt;div&gt;, &lt;p&gt;, &lt;h1&gt;, &lt;h2&gt; etc...</span>
+<span class="cmt"># - Inline tags &lt;b&gt;, &lt;i&gt;</span>
+<span class="cmt"># - Images     &lt;img&gt;</span>
+<span class="cmt"># - Line breaks &lt;br&gt;</span>
+<span class="cmt"># - The CSS content of the ePub file is not parsed（CSS 不解析）</span></code></pre>
+
+  <table>
+    <tr><th>分类</th><th>标签</th><th>解析器的动作</th></tr>
+    <tr><td>块级（正文）</td><td><code>p</code> / <code>li</code> / <code>div</code></td><td>结束当前文本块，新建一个两端对齐（JUSTIFIED）文本块</td></tr>
+    <tr><td>块级（标题）</td><td><code>h1</code>–<code>h6</code></td><td>标记粗体，新建一个居中对齐（CENTER_ALIGN）文本块</td></tr>
+    <tr><td>换行</td><td><code>br</code></td><td>结束当前块，沿用原样式另起一块</td></tr>
+    <tr><td>行内</td><td><code>b</code> / <code>i</code></td><td>只翻转样式标志（<code>is_bold</code> / <code>is_italic</code>），不新建块</td></tr>
+    <tr><td>图片</td><td><code>img</code></td><td>读 <code>src</code>，新建一个 <code>ImageBlock</code></td></tr>
+    <tr><td>跳过</td><td><code>head</code> / <code>table</code></td><td>整棵子树忽略，不产生任何块</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>为什么连 <code>&lt;table&gt;</code> 都要排除？因为表格是 HTML 里结构最复杂的元素之一：<code>tr</code> / <code>td</code> / <code>th</code>、跨行跨列、边框合并，真要渲染一张表，工作量几乎等于重写一个小型排版引擎。古登堡书偶尔出现表格，但绝大多数正文段落并不依赖它。排除 table 与排除 CSS 是同一个逻辑：用 1% 的代码量实现 99% 的阅读体验，剩下 1% 的场景直接放弃。排除，也是一种能力。</p>
+  </div>
+
+  <!-- ========== 9.2 解析策略 ========== -->
+  <h2>9.2 解析策略：块级起新块、行内并入当前块</h2>
+
+  <p>核心策略只有两条。第一条：<strong>遇到块级标签，结束手头的块、另起一个块</strong>；第二条：<strong>遇到行内标签（b / i），不新建块，只改变"后续文本的样式"这一状态，文本继续并入当前块</strong>。整个实现里只有两个成员 <code>is_bold</code> / <code>is_italic</code> 承担"当前样式"的职责。这两条规则，就构成了从 XHTML 流式结构到 blocks 序列的全部转换逻辑。</p>
+
+  <p>代码落在三个回调里。因为 <code>RubbishHtmlParser</code> 继承自 <code>tinyxml2::XMLVisitor</code>，TinyXML2 遍历 DOM 时会回调它：<strong>进入元素</strong>调用 <code>VisitEnter</code>、<strong>遇到文本节点</strong>调用 <code>Visit</code>、<strong>离开元素</strong>调用 <code>VisitExit</code>。<code>VisitEnter</code> 里用 <code>matches()</code> 判断标签名属于哪张表并做出动作，<code>VisitExit</code> 里把 <code>is_bold</code> / <code>is_italic</code> 复位，<code>Visit</code> 里把文本连同当前样式一起交给 <code>addText</code>——样式像接力棒一样，从进入标签一路传到文本节点。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：VisitEnter —— 见标签行事（节选，图片分支见 9.3） */</span>
+<span class="kw">bool</span> RubbishHtmlParser::VisitEnter(<span class="kw">const</span> tinyxml2::XMLElement &amp;element,
+                                    <span class="kw">const</span> tinyxml2::XMLAttribute *firstAttribute)
+{
+  <span class="kw">const</span> <span class="type">char</span> *tag_name = element.Name();
+  <span class="cmt">/* ① 图片：建 ImageBlock（完整代码见 9.3） */</span>
+  <span class="kw">if</span> (matches(tag_name, IMAGE_TAGS, NUM_IMAGE_TAGS)) { <span class="cmt">/* ... */</span> }
+  <span class="kw">else if</span> (matches(tag_name, SKIP_TAGS, NUM_SKIP_TAGS))
+    <span class="kw">return</span> <span class="kw">false</span>;                  <span class="cmt">// ② head / table：整棵子树跳过</span>
+  <span class="kw">else if</span> (matches(tag_name, HEADER_TAGS, NUM_HEADER_TAGS))
+  {
+    is_bold = <span class="kw">true</span>;                  <span class="cmt">// ③ 标题一律按粗体处理</span>
+    startNewTextBlock(CENTER_ALIGN);  <span class="cmt">//    且居中对齐</span>
+  }
+  <span class="kw">else if</span> (matches(tag_name, BLOCK_TAGS, NUM_BLOCK_TAGS))
+  {
+    <span class="kw">if</span> (strcmp(tag_name, <span class="str">"br"</span>) == <span class="num">0</span>)
+      startNewTextBlock(currentTextBlock-&gt;get_style());  <span class="cmt">// ④ br：沿用样式换行</span>
+    <span class="kw">else</span>
+      startNewTextBlock(JUSTIFIED);   <span class="cmt">//    p / li / div：两端对齐新块</span>
+  }
+  <span class="kw">else if</span> (matches(tag_name, BOLD_TAGS, NUM_BOLD_TAGS))
+    is_bold = <span class="kw">true</span>;                 <span class="cmt">// ⑤ 行内：只翻样式标志</span>
+  <span class="kw">else if</span> (matches(tag_name, ITALIC_TAGS, NUM_ITALIC_TAGS))
+    is_italic = <span class="kw">true</span>;
+  <span class="kw">return</span> <span class="kw">true</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：块的生命周期 + 文本并入 */</span>
+<span class="type">void</span> RubbishHtmlParser::startNewTextBlock(BLOCK_STYLE style)
+{
+  <span class="kw">if</span> (currentTextBlock)
+  {
+    <span class="kw">if</span> (currentTextBlock-&gt;is_empty())   <span class="cmt">// 手头是空块 → 不新建，改样式复用</span>
+    {
+      currentTextBlock-&gt;set_style(style);
+      <span class="kw">return</span>;
+    }
+    <span class="kw">else</span>
+      currentTextBlock-&gt;finish();     <span class="cmt">// 非空 → 封口，结束当前块</span>
+  }
+  currentTextBlock = <span class="kw">new</span> TextBlock(style);   <span class="cmt">// 新建一块，挂进 blocks 尾部</span>
+  blocks.push_back(currentTextBlock);
+}
+
+<span class="cmt">/* 文本节点：连同当前样式并入当前块 */</span>
+<span class="kw">bool</span> RubbishHtmlParser::Visit(<span class="kw">const</span> tinyxml2::XMLText &amp;text)
+{
+  addText(text.Value(), is_bold, is_italic);
+  <span class="kw">return</span> <span class="kw">true</span>;
+}</code></pre>
+
+  <p>"带样式并入"落在 <code>addText</code> 里：它先把文本里的 HTML 实体（如 <code>&amp;amp;</code>、<code>&amp;quot;</code>）用 <code>replace_html_entities()</code> 还原成真实字符，再调 <code>currentTextBlock-&gt;add_span(text, is_bold, is_italic)</code> 把文本与样式一起交给文本块。样式不是"整段记住"的，而是<strong>逐词记录</strong>的——下一章会看到，<code>add_span</code> 里每个词都存一个样式位掩码（<code>BOLD_SPAN</code> / <code>ITALIC_SPAN</code>），排版时量宽度要按词带样式量。这一环的粒度，直接决定了第 10 章算法的输入。</p>
+
+  <table>
+    <tr><th>回调</th><th>时机</th><th>职责</th></tr>
+    <tr><td><code>VisitEnter</code></td><td>进入元素</td><td>按标签名建块 / 跳过子树 / 翻样式标志</td></tr>
+    <tr><td><code>Visit</code></td><td>遇到文本节点</td><td>把文本连同当前样式并入当前块</td></tr>
+    <tr><td><code>VisitExit</code></td><td>离开元素</td><td>复位 <code>is_bold</code> / <code>is_italic</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p><code>startNewTextBlock</code> 里那句"空块复用"是全文件最精巧的 5 行。看 <code>&lt;div&gt;&lt;/div&gt;&lt;p&gt;text&lt;/p&gt;</code>：解析器一开始就备好了一个空块，进入 <code>&lt;div&gt;</code> 时它还是空的，直接改样式复用；到 <code>&lt;p&gt;</code> 依旧复用——直到真的文字 "text" 进来，这个块才被填上内容。如果每次都新建块，这段 HTML 会留下两个"没有任何词"的空壳，分页时每个空壳都会被当作需要换行的占位，页面上凭空多出空行、页数虚增。复用空块，正是为"块级标签里没有文字"的常见情况兜底。</p>
+  </div>
+
+  <!-- ========== 9.3 数据结构 ========== -->
+  <h2>9.3 数据结构：blocks 列表（文本块 / 图片块）</h2>
+
+  <p>解析的产物是 <code>std::list&lt;Block *&gt; blocks</code>——一个链表，每一项是一块内容。<code>Block</code> 是抽象基类，只声明四个纯虚方法（<code>layout</code>、<code>render</code>、<code>dump</code>、<code>getType</code>）加一个可覆盖的 <code>finish()</code>；<code>BlockType</code> 枚举只有两个值：<code>TEXT_BLOCK</code> 和 <code>IMAGE_BLOCK</code>。也就是说，整章电子书在解析之后被抽象成了"文本块 / 图片块"两种元素，其余全部被排除——这种极端的二元抽象，让后续 layout 与 render 的代码可以写得非常平直。</p>
+
+  <p>文本块是重头戏。<code>TextBlock</code> 把一段连续文本切成一串单词，记录每个词的宽度、x 坐标与样式位掩码，并用公开的 <code>line_breaks</code> 向量记下"每一行最后一个词的下标"。这些就是第 10 章换行算法要用到的全部原料。图片块则简单得多：<code>ImageBlock</code> 只存一个 <code>m_src</code>（图片路径），layout 时交给 renderer 读宽高、按比例缩放、水平居中——它自身不参与任何"断行"的智力活动。</p>
+
+<pre><code><span class="cmt">/* Block.h：块是内容的最小单位，只分两种类型 */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+  TEXT_BLOCK,
+  IMAGE_BLOCK
+} BlockType;
+
+<span class="kw">class</span> Block
+{
+<span class="kw">public</span>:
+  <span class="kw">virtual</span> ~Block() {}
+  <span class="kw">virtual</span> <span class="type">void</span> layout(Renderer *renderer, Epub *epub, <span class="type">int</span> max_width = -<span class="num">1</span>) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="type">void</span> dump() = <span class="num">0</span>;
+  <span class="kw">virtual</span> BlockType getType() = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="type">bool</span> isEmpty() = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="type">void</span> finish(){};
+};</code></pre>
+
+<pre><code><span class="cmt">/* TextBlock.h：一段文本 = 一串词 + 一堆逐词度量数据 */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+  BOLD_SPAN = <span class="num">1</span>,
+  ITALIC_SPAN = <span class="num">2</span>,
+} SPAN_STYLE;
+
+<span class="kw">typedef</span> <span class="kw">enum</span>
+{
+  JUSTIFIED = <span class="num">0</span>,      <span class="cmt">/* 两端对齐（正文默认） */</span>
+  LEFT_ALIGN = <span class="num">1</span>,
+  CENTER_ALIGN = <span class="num">2</span>,   <span class="cmt">/* 居中（标题） */</span>
+  RIGHT_ALIGN = <span class="num">3</span>,
+} BLOCK_STYLE;
+
+<span class="kw">class</span> TextBlock : <span class="kw">public</span> Block
+{
+  std::vector&lt;<span class="kw">const</span> <span class="type">char</span> *&gt; spans;       <span class="cmt">/* 原始文本片段 */</span>
+  std::vector&lt;<span class="kw">const</span> <span class="type">char</span> *&gt; words;       <span class="cmt">/* 切好的每个词 */</span>
+  std::vector&lt;uint16_t&gt; word_widths;  <span class="cmt">/* 每个词的像素宽度 */</span>
+  std::vector&lt;uint16_t&gt; word_xpos;    <span class="cmt">/* 每个词的 x 坐标 */</span>
+  std::vector&lt;uint8_t&gt; word_styles;   <span class="cmt">/* 每个词的样式掩码 */</span>
+  BLOCK_STYLE style;
+  <span class="cmt">/* …… 其余方法见 TextBlock.h …… */</span>
+<span class="kw">public</span>:
+  std::vector&lt;uint16_t&gt; line_breaks;  <span class="cmt">/* 每行最后一个词的下标 */</span>
+};</code></pre>
+
+  <p>一个容易忽略的细节是<strong>图片路径拼接</strong>。EPUB 章节 HTML 里的 <code>&lt;img src=&quot;images/foo.jpg&quot;&gt;</code> 是相对路径，而 zip 里的真实路径是 <code>OEBPS/text/images/foo.jpg</code>。解析器在创建图片块时拼的是 <code>m_base_path + src</code>：<code>EpubReader</code> 创建 parser 前先算出章节文件所在目录作为 base_path（<code>item.substr(0, item.find_last_of('/') + 1)</code>），再传进构造函数。这样图片块才能用完整路径去 <code>get_item_contents</code> 取数据。单元测试 <code>test/rubbish_html_parser.cpp</code> 恰好验证了这一点：同一份 HTML，先传 base_path 为空、再传 <code>"HTML/"</code>，两次都断言第 6 个块是图片，<code>m_src</code> 分别是 <code>test.png</code> 与 <code>HTML/test.png</code>。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：图片作为块 —— base_path + src 拼出完整路径 */</span>
+<span class="kw">if</span> (matches(tag_name, IMAGE_TAGS, NUM_IMAGE_TAGS))
+{
+  <span class="kw">const</span> <span class="type">char</span> *src = element.Attribute(<span class="str">"src"</span>);
+  <span class="kw">if</span> (src)
+  {
+    <span class="cmt">// 若手头有个空文本块，先把它从列表里扔掉，免得留空壳</span>
+    BLOCK_STYLE style = currentTextBlock-&gt;get_style();
+    <span class="kw">if</span> (currentTextBlock-&gt;is_empty())
+    {
+      blocks.pop_back();
+      delete currentTextBlock;
+      currentTextBlock = <span class="kw">nullptr</span>;
+    }
+    blocks.push_back(<span class="kw">new</span> ImageBlock(m_base_path + src));  <span class="cmt">// 图片块</span>
+    startNewTextBlock(style);                  <span class="cmt">// 恢复一个同样式的新文本块</span>
+  }
+  <span class="kw">else</span>
+    ESP_LOGE(TAG, <span class="str">"Could not find src attribute"</span>);
+}</code></pre>
+
+  <table>
+    <tr><th>结构 / 成员</th><th>类型</th><th>说明</th></tr>
+    <tr><td><code>blocks</code></td><td><code>std::list&lt;Block *&gt;</code></td><td>章节内容的有序列表：文本块 / 图片块</td></tr>
+    <tr><td><code>currentTextBlock</code></td><td><code>TextBlock *</code></td><td>当前正在累积文本的块</td></tr>
+    <tr><td><code>spans</code></td><td><code>vector&lt;const char *&gt;</code></td><td>TextBlock 内的原始文本片段</td></tr>
+    <tr><td><code>words</code></td><td><code>vector&lt;const char *&gt;</code></td><td>切好的词（指向 spans 内副本）</td></tr>
+    <tr><td><code>word_widths</code></td><td><code>vector&lt;uint16_t&gt;</code></td><td>每个词的像素宽度</td></tr>
+    <tr><td><code>word_styles</code></td><td><code>vector&lt;uint8_t&gt;</code></td><td>每个词的样式掩码（BOLD_SPAN / ITALIC_SPAN）</td></tr>
+    <tr><td><code>line_breaks</code></td><td><code>vector&lt;uint16_t&gt;</code></td><td>每行最后一个词的下标</td></tr>
+    <tr><td><code>m_base_path</code></td><td><code>std::string</code></td><td>章节文件所在目录，用于拼图片完整路径</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>注意图片处理里那句 <code>blocks.pop_back(); delete currentTextBlock;</code>——它假定 <code>currentTextBlock</code> 一定是列表的最后一个元素。这个假定依赖一条"隐式不变量"：<code>parse()</code> 一开始就 <code>startNewTextBlock(JUSTIFIED)</code>，此后每个新块都 <code>push_back</code> 到链表尾部，所以 currentTextBlock 永远是"最新压进去的那一个"。一旦哪天有人提前建块、打乱顺序，这个 <code>pop_back</code> 就会删错对象。这类靠注释与约定维持的脆弱不变量，正是手写解析器里最危险的地方——也是单元测试存在的理由。</p>
+  </div>
+
+  <!-- ========== 9.4 从 XHTML 到可布局块序列 ========== -->
+  <h2>9.4 从 XHTML 到可布局块序列</h2>
+
+  <p>把整条链路串起来。<code>parse()</code> 用 <code>tinyxml2::XMLDocument doc(false, tinyxml2::COLLAPSE_WHITESPACE)</code> 建文档、<code>doc.Parse(html, length)</code> 整段解析、再 <code>doc.Accept(this)</code> 触发访问者遍历——这三个调用，就是"XHTML → blocks"的全部入口。注意 <code>COLLAPSE_WHITESPACE</code>：TinyXML2 在解析阶段就把文本节点里多余的空白折叠掉了，只保留有效字符，解析器自己无需再处理首尾空白。构造函数 <code>RubbishHtmlParser(html, length, base_path)</code> 一进来就调用 <code>parse()</code>，也就是说：<strong>对象构造完成的一刻，blocks 列表已经就绪</strong>。</p>
+
+  <p>入口在哪调用？<code>EpubReader::parse_and_layout_current_section()</code>。它先 <code>get_spine_item(state.current_section)</code> 拿到当前章节的文件路径、算出 base_path，再 <code>get_item_contents(item)</code> 把整章 XHTML 读进一块堆内存，然后 <code>new RubbishHtmlParser(html, strlen(html), base_path)</code>；解析完立刻 <code>free(html)</code> 归还原文，再 <code>parser-&gt;layout(renderer, epub)</code> 让每个块自行计算换行与图片尺寸，最后用 <code>parser-&gt;get_page_count()</code> 记下本章节的页数。注意日志里那一串 <code>esp_get_free_heap_size()</code>——"读入原文 / 解析 / 布局"三个阶段各吃多少 PSRAM，作者都留了日志，正是为了回答第 1 章那个问题：解析到底有多吃内存。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：XHTML → blocks 的入口 */</span>
+<span class="type">void</span> RubbishHtmlParser::parse(<span class="kw">const</span> <span class="type">char</span> *html, <span class="type">int</span> length)
+{
+  startNewTextBlock(JUSTIFIED);              <span class="cmt">/* 先备好第一个文本块 */</span>
+  tinyxml2::XMLDocument doc(<span class="kw">false</span>, tinyxml2::COLLAPSE_WHITESPACE);
+  doc.Parse(html, length);                   <span class="cmt">/* 整段解析成 DOM 树 */</span>
+  doc.Accept(<span class="kw">this</span>);                       <span class="cmt">/* 访问者模式遍历全树 */</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* EpubReader.cpp：解析 + 布局一个章节（节选） */</span>
+std::string item = epub-&gt;get_spine_item(state.current_section);
+std::string base_path = item.substr(<span class="num">0</span>, item.find_last_of(<span class="str">'/'</span>) + <span class="num">1</span>);
+<span class="type">char</span> *html = <span class="kw">reinterpret_cast</span>&lt;<span class="type">char</span> *&gt;(epub-&gt;get_item_contents(item));
+ESP_LOGD(TAG, <span class="str">"After read html: %d"</span>, esp_get_free_heap_size());
+parser = <span class="kw">new</span> RubbishHtmlParser(html, strlen(html), base_path);
+<span class="kw">free</span>(html);                            <span class="cmt">/* 原文用完立即归还 */</span>
+ESP_LOGD(TAG, <span class="str">"After parse: %d"</span>, esp_get_free_heap_size());
+parser-&gt;layout(renderer, epub);          <span class="cmt">/* 交给每个块去算行、量图片 */</span>
+ESP_LOGD(TAG, <span class="str">"After layout: %d"</span>, esp_get_free_heap_size());
+state.pages_in_current_section = parser-&gt;get_page_count();</code></pre>
+
+  <p>结果可以验证。<code>test/rubbish_html_parser.cpp</code> 喂给解析器一段只有 7 个块的 HTML，断言 <code>get_blocks().size() == 7</code>。为什么是 7？因为 <code>&lt;head&gt;</code> 里的 <code>&lt;title&gt;</code> 被 SKIP_TAGS 跳过，不产生块；剩下的 h1、p、p、div、h2、img、p 依次对应 7 个块，其中第 6 个是 <code>ImageBlock</code>（索引从 0 数起，位置在 "A sub heading" 之后、最后一个 p 之前）。这段测试只跑在本机 CPU 上、不碰真屏幕——因为 TestRenderer 把 <code>get_text_width</code> 直接实现成 <code>strlen(text)</code>，把 <code>get_page_width/height</code> 定死成 100，算法在内存里就能完整跑一遍。这是"解析与布局与硬件解耦"的最好示范。</p>
+
+<pre><code><span class="cmt">/* test/rubbish_html_parser.cpp：一段恰好 7 个块的测试 HTML */</span>
+<span class="kw">const</span> <span class="type">char</span> *html =
+    <span class="str">"&lt;html&gt;&lt;head&gt;&lt;title&gt;Test&lt;/title&gt;&lt;/head&gt;&lt;body&gt;"</span>
+    <span class="str">"&lt;h1&gt;This is a title&lt;/h1&gt;"</span>   <span class="cmt">/* 块1：标题（CENTER_ALIGN + 粗体） */</span>
+    <span class="str">"&lt;p&gt;Text&lt;/p&gt;"</span>                <span class="cmt">/* 块2 */</span>
+    <span class="str">"&lt;p&gt;Some more text&lt;/p&gt;"</span>      <span class="cmt">/* 块3 */</span>
+    <span class="str">"&lt;div&gt;A block of text&lt;/div&gt;"</span> <span class="cmt">/* 块4 */</span>
+    <span class="str">"&lt;h2&gt;A sub heading&lt;/h2&gt;"</span>     <span class="cmt">/* 块5：标题 */</span>
+    <span class="str">"&lt;img src=\"test.png\" /&gt;"</span>   <span class="cmt">/* 块6：图片块 */</span>
+    <span class="str">"&lt;p&gt;Bananas!&lt;/p&gt;"</span>            <span class="cmt">/* 块7 */</span>
+    <span class="str">"&lt;/body&gt;&lt;/html&gt;"</span>;
+
+RubbishHtmlParser parser(html, strlen(html), <span class="str">"HTML/"</span>);
+parser.layout(<span class="kw">new</span> TestRenderer(), <span class="kw">new</span> Epub(<span class="str">"test"</span>));
+TEST_ASSERT_EQUAL(<span class="num">7</span>, parser.get_blocks().size());
+<span class="cmt">/* 第 6 个块应为图片，路径是 base_path + src */</span>
+<span class="kw">auto</span> iterator = parser.get_blocks().begin();
+std::advance(iterator, <span class="num">5</span>);
+Block *img_block = *iterator;
+TEST_ASSERT_EQUAL(BlockType::IMAGE_BLOCK, img_block-&gt;getType());
+TEST_ASSERT_EQUAL_STRING(<span class="str">"HTML/test.png"</span>,
+                         <span class="kw">reinterpret_cast</span>&lt;ImageBlock *&gt;(img_block)-&gt;m_src.c_str());</code></pre>
+
+  <table>
+    <tr><th>阶段</th><th>日志</th><th>观察什么</th></tr>
+    <tr><td>读入原文</td><td><code>After read html</code></td><td>整章 XHTML 占用的堆内存</td></tr>
+    <tr><td>解析</td><td><code>After parse</code></td><td>DOM 树 + blocks 的峰值占用</td></tr>
+    <tr><td>布局</td><td><code>After layout</code></td><td>换行 / 图片缩放后的最终占用</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>为什么要让 TinyXML2 折叠空白（<code>COLLAPSE_WHITESPACE</code>）？因为 XHTML 为了可读性布满了换行与缩进——一个 <code>&lt;p&gt;</code> 标签可能跨了五行。若不折叠，这些空白会被当成真实文本塞进 blocks，排版时出现莫名其妙的间距。折叠后，文本节点干净了，<code>add_span</code> 只需要再处理"词与词之间那一个空格"。这一层处理放在解析器里而不是布局器里，正是为了让第 10 章的换行算法拿到一份"几乎不需要预处理"的词表。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：数 blocks <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>给定 HTML：<code>&lt;p&gt;Hello&lt;/p&gt;&lt;b&gt;World&lt;/b&gt;&lt;i&gt;!&lt;/i&gt;&lt;p&gt;Next&lt;/p&gt;</code>。推断解析器会生成几个块？<code>&lt;b&gt;</code> / <code>&lt;i&gt;</code> 里的文本进到哪个块？它们的样式位掩码各是多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回忆 9.2 的两条策略：块级标签才起新块，行内标签（b/i）只是翻样式标志。数一数有几个块级标签。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>共 2 个文本块。第一个块由 <code>&lt;p&gt;</code> 建立，文本依次并入 "Hello"、"World"、"!"（b/i 不新建块）；第二个块由最后一个 <code>&lt;p&gt;</code> 建立，含 "Next"。按词记录的样式掩码分别是：Hello→0、World→1（BOLD_SPAN）、!→2（ITALIC_SPAN）、Next→0。关键结论：块数由块级标签决定，行内标签只影响词的样式位。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：为什么要跳过 head / table <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>读 <code>RubbishHtmlParser.cpp</code> 的 <code>SKIP_TAGS</code> 与 <code>VisitEnter</code>，回答：为什么 <code>&lt;head&gt;</code>（含 <code>&lt;title&gt;</code>）和 <code>&lt;table&gt;</code> 要被整个跳过？如果 head 不跳，会发生什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 head 里装的是"关于页面"的信息还是"页面正文"；table 要正确渲染需要处理什么结构。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>&lt;head&gt;</code> 里是 title、meta 等"页面元信息"，不构成阅读正文，若不跳过，书名等文本会被当成正文块，章节开头出现一串无意义文字；<code>&lt;table&gt;</code> 结构复杂（行 / 列 / 合并单元格），在单色电纸屏上渲染成本极高，而绝大多数正文不依赖它。机制上，<code>VisitEnter</code> 对 SKIP_TAGS 返回 <code>false</code>，TinyXML2 就不会进入该子树继续遍历——相当于整段忽略，既不建块也不收集文本。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：空块复用 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>分析 <code>startNewTextBlock</code>：为什么 <code>&lt;div&gt;&lt;/div&gt;&lt;p&gt;text&lt;/p&gt;</code> 最终只产生一个块？如果去掉"空块复用"逻辑，会带来什么问题？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>关注 <code>is_empty()</code> 与 <code>set_style</code> 的分支；再想想分页时每个文本块会贡献什么。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>解析器一开始就备好了一个空块，进入 <code>&lt;div&gt;</code> 与 <code>&lt;p&gt;</code> 时它都是空的，连续两次 <code>set_style</code> 复用同一个块，直到文字 "text" 进入才真正填充——所以最终只有 1 个块。若去掉复用逻辑，每个"没有文字内容"的块级标签都会 push 一个空 TextBlock，这段 HTML 会留下两个 0 词的空壳；分页时（见第 11 章）每个空块都会被当作需要另起一行的占位，页面上凭空多出空行、页数虚增。9.4 测试里的 7 个块，正是"复用空块"之后的结果。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：给解析器加 &lt;strong&gt; 支持 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用最少改动让解析器支持 <code>&lt;strong&gt;</code>（加粗）与 <code>&lt;em&gt;</code>（斜体）。然后分析：这种"标志式"样式处理（两个 <code>bool</code>）对嵌套 <code>&lt;b&gt;&lt;i&gt;text&lt;/i&gt;&lt;/b&gt;</code> 的局限在哪？乱序闭合时会出什么错？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>改一行数组即可：在 <code>BOLD_TAGS</code> 里加 "strong"、<code>ITALIC_TAGS</code> 里加 "em"。局限分析想想 <code>is_bold</code> / <code>is_italic</code> 是"标志"还是"栈"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>功能上只需把 <code>BOLD_TAGS</code> 改为 <code>{"b", "strong"}</code>、<code>ITALIC_TAGS</code> 改为 <code>{"i", "em"}</code> 即可。局限在于 <code>is_bold</code> / <code>is_italic</code> 是"标志"而非"样式栈"：规范嵌套 <code>&lt;b&gt;a&lt;i&gt;b&lt;/i&gt;c&lt;/b&gt;</code> 时，VisitExit 顺序恰好把两个标志各自复位，没问题；但若 HTML 乱序闭合（如 <code>&lt;i&gt;&lt;b&gt;x&lt;/i&gt;y&lt;/b&gt;</code>），<code>&lt;/i&gt;</code> 会先把 <code>is_italic</code> 复位，而 <code>&lt;b&gt;</code> 还没闭合，样式就串了。真正的 HTML 解析器必须用栈记录样式上下文。这里"标志法"只是够用就好。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

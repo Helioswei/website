@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第11章：UI 状态机总览 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="11" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：UI 状态机总览</h1>
+  <p class="chapter-subtitle">「运筹帷幄之中，决胜千里之外」——指挥一场战役，先要看清整张棋盘：据点有几个（状态）、棋子怎么走（事件分发）、从哪走到哪（迁移）。这章我们像排兵布阵一样，把整套 UI 的骨架——十二个页面状态、一条主循环、一张迁移图——一次性摆上沙盘。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄——先看清十二个据点、一条传令线、一张迁移图，再谈各个击破</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「行军布阵，首重全局。这套 UI 有十二个据点，分守三处：阅读主线上的书库、目录、阅读、阅读设置，是进攻的主力（第 12 章）；主页面、设置、天气两页，是殿后的辎重；欢迎、低电量、充电、关机四页，是守夜的精锐。主将传令靠一条主循环（11.3），落子靠迁移表（11.4）。先把这张图背熟，再谈各个击破。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 11.1 为什么用状态机 ========== -->
+  <h2>11.1 为什么用状态机</h2>
+
+  <p>一台设备开机之后要面对多少种"屏幕"？数一数：主页面、书库、目录、阅读、阅读设置、功能设置、天气、城市选择、欢迎、低电量、充电、关机——整整十二种。如果每段代码都"想画谁就画谁"，页面之间随意乱跳，很快就会失控：从阅读页能不能直接进天气？从低电量页还能不能翻书？这些规则必须被明确写下来。<strong>状态机</strong>（state machine）就是干这个的。说人话：把"此刻我显示在哪个页面"单独拎出来存成一个变量，再把"在某个页面上遇到某个动作该转到哪"全部列成一张规则表，设备任何时刻<strong>处于且仅处于</strong>其中一个状态，页面切换只能按表来。前几章讲过"状态机"这个词，这里把它彻底铺开。</p>
+
+  <p>状态机的好处，第一条是<strong>页面多、迁移清晰</strong>。十二个页面如果靠散落各处的 if/else 判断"现在在哪、该去哪"，代码会纠缠成一团；而把所有跳转规则收敛到一处——`handleUserInteraction` 里的一个大 `switch (ui_state)`——任何一个页面在任何一个动作下会去往哪里，一眼就能查。第二条是<strong>防止非法迁移</strong>：低电量状态下，即使有按键消息进来，外层先 `return` 拦掉，阅读页根本收不到——非法操作在入口就被挡下（11.3 会看到这段代码）。第三条，`ui_state` 这个变量是切换页面的"唯一真相"：它一改，下一次事件里整个界面就换到新页面；想看现在在哪一页，读它就行。</p>
+
+  <p>其实状态机的骨架是从上游 ESP32 项目（atomic14/diy-esp32-epub-reader）继承来的：上游只有三个状态——`SELECTING_EPUB → SELECTING_TABLE_CONTENTS → READING_EPUB`，用来串"找书 → 目录 → 阅读"这条主线。本项目把它扩展到十二个状态，主线原样保留，前后又接上了系统页与低功耗页。理解了这条演进，你就明白为什么主线三态的函数名、变量名全都沿用了上游的命名：`handleEpubList`、`handleEpubTableContents`、`handleEpub`——第 12 章我们和这三个老熟人还会反复照面。</p>
+
+  <p>状态机里还有两个词先铺平。<strong>事件分发</strong>（dispatch）说人话，就是把"发生了什么"交给"当前该管这件事的页面"：按键、触控、电池消息统统先汇成统一的 `UIAction`，再由主循环转给当前状态的处理函数。<strong>迁移</strong>（transition）就是"从状态 A 跳到状态 B"这一次切换，通常伴随一次重绘。后文凡是说"xx 页迁到 xx 页"，指的就是 `ui_state` 这个变量被改成新值的那一瞬间。</p>
+
+<pre><code><span class="cmt">/* src/type.h：AppUIState——整套 UI 的"据点清单"（节选） */</span>
+<span class="kw">typedef enum</span> {
+  MAIN_PAGE,                <span class="cmt">// 新主页面</span>
+  SELECTING_EPUB,           <span class="cmt">// 电子书列表页面(书库)</span>
+  SELECTING_TABLE_CONTENTS, <span class="cmt">// 电子书目录页面</span>
+  READING_EPUB,             <span class="cmt">// 阅读页面</span>
+  READING_SETTINGS,         <span class="cmt">// 阅读设置页面（字体/字号/行距/边距）</span>
+  SETTINGS_PAGE,            <span class="cmt">// 通用功能设置页面</span>
+  WELCOME_PAGE,             <span class="cmt">// 欢迎页面</span>
+  LOW_POWER_PAGE,           <span class="cmt">// 低电量页面</span>
+  CHARGING_PAGE,            <span class="cmt">// 充电页面</span>
+  SHUTDOWN_PAGE             <span class="cmt">// 关机页面</span>
+} AppUIState;</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：一个状态变量 + 一台"总开关"（事件分发的一瞥） */</span>
+AppUIState ui_state = MAIN_PAGE;   <span class="cmt">// 当前状态：同一时刻只有一个</span>
+
+<span class="kw">void</span> handleUserInteraction(Renderer *renderer, UIAction ui_action, <span class="kw">bool</span> needs_redraw)
+{
+    <span class="kw">if</span> (battery &amp;&amp; battery-&gt;get_low_power_state() == <span class="num">1</span>)
+    {
+        rt_kprintf(<span class="str">"low power state\n"</span>);
+        <span class="kw">return</span>;   <span class="cmt">// 低电量：任何普通操作都在入口被拦下</span>
+    }
+    <span class="kw">switch</span> (ui_state)
+    {
+    <span class="kw">case</span> MAIN_PAGE:
+      handleMainPage(renderer, ui_action, needs_redraw);
+      <span class="kw">break</span>;
+    <span class="kw">case</span> READING_EPUB:
+      handleEpub(renderer, ui_action);
+      <span class="kw">break</span>;
+    <span class="cmt">/* SELECTING_EPUB / SETTINGS_PAGE / WEATHER_PAGE ... 完整分发见 11.3 */</span>
+    }
+}</code></pre>
+
+  <table>
+    <tr><th>关键词</th><th>人话解释</th><th>在本项目里的对应物</th></tr>
+    <tr><td>状态</td><td>设备此刻所处的界面，同一时刻有且只有一个</td><td><code>AppUIState</code> 枚举变量 <code>ui_state</code></td></tr>
+    <tr><td>事件</td><td>一次输入或系统通知，统一成一种类型上报</td><td><code>UIAction</code>（按键 / 触控 / 电池消息）</td></tr>
+    <tr><td>迁移</td><td>从状态 A 跳到状态 B 的一次切换</td><td><code>ui_state = 新值</code> + 重绘</td></tr>
+    <tr><td>事件分发</td><td>把动作交给当前该管它的页面去处理</td><td><code>handleUserInteraction</code> 的 <code>switch</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>把状态机当成棋盘来记：状态是据点，事件是棋子的走法，迁移是落子。写代码之前，先在纸上把十二个据点、每一条走法画清楚——棋盘画对了，写代码只是照着棋谱抄一遍。这也是"运筹帷幄"的本来意思：先算全局，再动子。</p>
+  </div>
+
+  <!-- ========== 11.2 全部状态：十二个据点 ========== -->
+  <h2>11.2 全部状态：十二个据点</h2>
+
+  <p>README 的「UI 页面与状态机」一节列了一份状态清单，我们直接对着源码验证——`src/type.h` 里的 `AppUIState` 枚举才是权威。它一共十二个状态，恰好分成三组。<strong>阅读主线</strong>：`MAIN_PAGE`（主页面）、`SELECTING_EPUB`（书库）、`SELECTING_TABLE_CONTENTS`（目录）、`READING_EPUB`（阅读）、`READING_SETTINGS`（阅读设置）。<strong>系统服务</strong>：`SETTINGS_PAGE`（功能设置）、`WEATHER_PAGE`（天气）、`WEATHER_CITY_PAGE`（城市选择）。<strong>低功耗与电源</strong>：`WELCOME_PAGE`（欢迎 / 熄屏）、`LOW_POWER_PAGE`（低电量）、`CHARGING_PAGE`（充电）、`SHUTDOWN_PAGE`（关机）。</p>
+
+  <p>注意一处文档与代码的差异：README 的「当前 UI 状态」只列了十项，把 `WEATHER_PAGE` 和 `WEATHER_CITY_PAGE` 漏掉了——但 `type.h` 里它们赫然在列，主循环里也确有 `case WEATHER_PAGE` 的分支。这是全书反复出现的"文档漂移"老毛病：<strong>以源码为准</strong>。真正权威的清单永远在枚举定义里，README 只能当速查卡片。</p>
+
+  <p>每个状态背后都有一个"绘制 + 处理"的配对函数，第 10 章已经逐个见过：主页面 `render_main_page` / `handleMainPage`，功能设置页 `render_settings_page` / `handleSettingsPage`，天气页 `handleWeatherPage` / `handleWeatherCityPage`（以上都在 `epub_screen.cpp`）；书库页 `handleEpubList`、目录页 `handleEpubTableContents`、阅读页 `handleEpub`（内部再交给 `reader-&gt;render()`，都在 `main.cpp`）；阅读设置页 `reading_settings_draw` / `reading_settings_handle_action`（`reading_settings.cpp`）；欢迎 / 低电量 / 充电 / 关机四页则是 `draw_welcome_page` / `draw_low_power_page` / `draw_charge_page` / `draw_shutdown_page`（`main.cpp`）。可见"一个状态 = 一个页面 = 一对函数"的映射非常整齐。</p>
+
+  <p>怎么把这些枚举变成串口日志里看得懂的字符串？`main.cpp` 里有现成的 `getCurrentPageName()`：一个 `switch` 把每个 `AppUIState` 映射回它的名字，方便在日志里追踪"现在在哪一页"。调试状态机时，这个函数几乎是第一件武器——先知道自己在哪，才知道下一步该往哪走。</p>
+
+<pre><code><span class="cmt">/* src/type.h：AppUIState 全量枚举（共 12 个状态） */</span>
+<span class="kw">typedef enum</span> {
+  MAIN_PAGE,               <span class="cmt">// 新主页面</span>
+  SELECTING_EPUB,          <span class="cmt">// 电子书列表页面(书库)</span>
+  SELECTING_TABLE_CONTENTS,<span class="cmt">// 电子书目录页面</span>
+  READING_EPUB,            <span class="cmt">// 阅读页面</span>
+  READING_SETTINGS,        <span class="cmt">// 阅读设置页面（字体/字号/行距/边距）</span>
+  SETTINGS_PAGE,           <span class="cmt">// 通用功能设置页面</span>
+  WEATHER_PAGE,            <span class="cmt">// 查看天气页面</span>
+  WEATHER_CITY_PAGE,       <span class="cmt">// 天气城市选择页面</span>
+  WELCOME_PAGE,            <span class="cmt">// 欢迎页面</span>
+  LOW_POWER_PAGE,          <span class="cmt">// 低电量页面</span>
+  CHARGING_PAGE,           <span class="cmt">// 充电页面</span>
+  SHUTDOWN_PAGE            <span class="cmt">// 关机页面</span>
+} AppUIState;</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：把状态枚举变成日志里的字符串 */</span>
+<span class="kw">const char</span>* getCurrentPageName() {
+  <span class="kw">switch</span> (ui_state)
+  {
+    <span class="kw">case</span> MAIN_PAGE:      <span class="kw">return</span> <span class="str">"MAIN_PAGE"</span>;
+    <span class="kw">case</span> SELECTING_EPUB: <span class="kw">return</span> <span class="str">"SELECTING_EPUB"</span>;
+    <span class="kw">case</span> READING_EPUB:   <span class="kw">return</span> <span class="str">"READING_EPUB"</span>;
+    <span class="kw">case</span> WELCOME_PAGE:   <span class="kw">return</span> <span class="str">"WELCOME_PAGE"</span>;
+    <span class="kw">case</span> LOW_POWER_PAGE: <span class="kw">return</span> <span class="str">"LOW_POWER_PAGE"</span>;
+    <span class="cmt">/* ... READING_SETTINGS / SHUTDOWN_PAGE 等其余分支 ... */</span>
+    <span class="kw">default</span>:              <span class="kw">return</span> <span class="str">"UNKNOWN_PAGE"</span>;
+  }
+}</code></pre>
+
+  <table>
+    <tr><th>分组</th><th>状态</th><th>一句话职责</th></tr>
+    <tr><td>阅读主线</td><td><code>MAIN_PAGE</code></td><td>新主页面：四个入口，默认开机进入</td></tr>
+    <tr><td>阅读主线</td><td><code>SELECTING_EPUB</code></td><td>书库：每页 4 本，选书进入目录</td></tr>
+    <tr><td>阅读主线</td><td><code>SELECTING_TABLE_CONTENTS</code></td><td>目录：每页 6 项，选章节跳读</td></tr>
+    <tr><td>阅读主线</td><td><code>READING_EPUB</code></td><td>阅读：逐页翻书 + 覆盖操作层</td></tr>
+    <tr><td>阅读主线</td><td><code>READING_SETTINGS</code></td><td>阅读设置：字体 / 字号 / 行距 / 边距</td></tr>
+    <tr><td>系统服务</td><td><code>SETTINGS_PAGE</code></td><td>功能设置：触控、超时、全刷、蓝牙</td></tr>
+    <tr><td>系统服务</td><td><code>WEATHER_PAGE</code> / <code>WEATHER_CITY_PAGE</code></td><td>天气与城市选择（README 漏列的两位）</td></tr>
+    <tr><td>低功耗与电源</td><td><code>WELCOME_PAGE</code></td><td>欢迎 / 熄屏：空闲超时进入</td></tr>
+    <tr><td>低功耗与电源</td><td><code>LOW_POWER_PAGE</code></td><td>低电量：抑制普通操作</td></tr>
+    <tr><td>低功耗与电源</td><td><code>CHARGING_PAGE</code></td><td>充电：插电且处于低电量时进入</td></tr>
+    <tr><td>低功耗与电源</td><td><code>SHUTDOWN_PAGE</code></td><td>关机：长时间无交互，随后深睡眠</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>据点要分清主次。阅读主线五页是你天天要见的，低功耗四页是守夜的，天气两页是客串的。画状态图时先画主线，再挂系统页，最后挂电源页——顺序对了，图就不乱。至于那两位"漏列"的天气状态，记住一条铁律：<strong>文档会过期，枚举不会</strong>。</p>
+  </div>
+
+  <!-- ========== 11.3 主循环：事件分发与状态切换 ========== -->
+  <h2>11.3 主循环：事件分发与状态切换</h2>
+
+  <p>有了据点和迁移规则，谁来"驱动"这台机器？答案是 `main.cpp` 里的 `main_task` 主循环。启动顺序很直白：`Board::factory()` 造出板子 → `power_up()` 上电 → 创建渲染器 → 启动文件系统 → 初始化 FreeType 字体管理器 → 建消息队列 <code>ui_queue = rt_mq_create("ui_act", sizeof(UIAction), 10, 0)</code>（RT-Thread 的<strong>消息队列</strong>，深度 10，一条消息就是一个 `UIAction`）→ 再拿到电池、按键、触控三个控制对象。第 5 章讲过，按键、触控、电池都不是直接调用 UI 函数，而是把动作 `rt_mq_send` 进这个队列——这就是"事件"统一上报的入口。</p>
+
+  <p>主循环的骨架是"阻塞等消息 + 收到就处理"。`rt_mq_recv(ui_queue, ...)` 最多等 500ms；取到消息后，先处理两类<strong>电池事件</strong>：`MSG_UPDATE_CHARGE_STATUS`（满电清图标，第 10 章的 `charge_full` 就住在这里）和 `MSG_BATTERY_CHECK`（周期电量巡检，若电量 &lt;2% 且未充电，就置低电量状态并 `rt_mq_send` 出 `MSG_DRAW_LOW_POWER_PAGE` 等页面消息）——这两类都以 `continue` 跳过普通操作。真正的<strong>用户事件</strong>（按键、触控、覆盖层）走另一个分支：`board-&gt;wakeup_filesystem()` 唤醒 SD 卡 → 若当前在 `WELCOME_PAGE` 就先 `back_to_main_page()` 回主页 → 刷新 `last_user_interaction` → `touch_controls-&gt;renderPressedState(...)` → 最后交给 `handleUserInteraction(renderer, ui_action, false)`。</p>
+
+  <p>`handleUserInteraction` 就是那台"总开关"——一个巨大的 `switch (ui_state)`，把当前状态分发给对应的页面处理函数；页面函数内部再改 `ui_state` 完成迁移。它还顺带做两件跨页面的事：一是在入口拦掉低电量状态下的普通操作（11.1 提过）；二是用 `rt_kprintf("Renderer time=%d \r\n", rt_tick_get() - start_tick)` 打印这一帧 UI 处理耗时，让你在串口里直接看到每页渲染有多贵。以功能设置页为例：`handleSettingsPage` 的返回值就是它跟总开关"说话"的暗号——`0` 继续留在设置页、`1` 回主页、`2` 进阅读设置，总开关据此改 `ui_state`。</p>
+
+  <p>主循环的"休息"逻辑也在这层。循环顶部先查一次超时：距上次交互达到 `screen_get_timeout_shutdown_minutes()`（默认值来自 `screen_init(TIMEOUT_SHUTDOWN_TIME)`），就 `draw_welcome_page(battery)` 进入熄屏；而整个 `while` 循环的边界条件是 <code>60 * 1000 * 60 * TIMEOUT_SHUTDOWN_TIME</code>（= 5 小时）——5 小时内始终无交互，循环退出，画关机页、进深睡眠。一层是"熄屏"，一层是"关机"，两层超时在同一段代码里各司其职。注意一个有意思的细节：`screen_init` 的形参名在头文件里写成 `default_timeout_hours`（小时），实现却按分钟使用，`screen_init(TIMEOUT_SHUTDOWN_TIME)` 实参是 5——默认熄屏超时实际上是 5 分钟，而宏注释写的却是"小时"。又一个注释与实现不符的活例子。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：建队列，等消息（主循环骨架） */</span>
+ui_queue = rt_mq_create(<span class="str">"ui_act"</span>, <span class="kw">sizeof</span>(UIAction), <span class="num">10</span>, <span class="num">0</span>);   <span class="cmt">// 深度 10 的动作队列</span>
+
+<span class="kw">while</span> ((rt_tick_get_millisecond() - last_user_interaction &lt; <span class="num">60</span> * <span class="num">1000</span> * <span class="num">60</span> * TIMEOUT_SHUTDOWN_TIME))
+{
+  uint32_t msg_data;
+  <span class="kw">if</span> (rt_mq_recv(ui_queue, &amp;msg_data, <span class="kw">sizeof</span>(uint32_t), rt_tick_from_millisecond(<span class="num">500</span>)) == RT_EOK)
+  {
+    UIAction ui_action = (UIAction)msg_data;
+    <span class="kw">if</span> (ui_action == MSG_UPDATE_CHARGE_STATUS) { <span class="cmt">/* 满电清图标 */</span> <span class="kw">continue</span>; }
+    <span class="kw">if</span> (ui_action == MSG_BATTERY_CHECK)        { <span class="cmt">/* ADC 电量巡检 */</span> <span class="kw">continue</span>; }
+    <span class="kw">if</span> (ui_action == MSG_DRAW_LOW_POWER_PAGE ||
+        ui_action == MSG_DRAW_CHARGE_PAGE ||
+        ui_action == MSG_DRAW_WELCOME_PAGE)     { <span class="cmt">/* 画电源页 */</span> }
+    <span class="kw">else</span>
+    {
+        board-&gt;wakeup_filesystem();
+        <span class="kw">if</span> (ui_action != NONE)
+        {
+            <span class="kw">if</span> (ui_state == WELCOME_PAGE) { back_to_main_page(); <span class="kw">continue</span>; }
+            last_user_interaction = rt_tick_get_millisecond();
+            handleUserInteraction(renderer, ui_action, <span class="kw">false</span>);   <span class="cmt">// 交给总开关</span>
+        }
+    }
+  }
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：handleUserInteraction 的分发骨架（节选） */</span>
+<span class="kw">switch</span> (ui_state)
+{
+<span class="kw">case</span> SETTINGS_PAGE:
+{
+  <span class="type">int</span> settings_result = handleSettingsPage(renderer, ui_action, needs_redraw);
+  <span class="kw">if</span> (settings_result == <span class="num">1</span>)
+  {
+    ui_state = MAIN_PAGE;                       <span class="cmt">// 回主页</span>
+    handleMainPage(renderer, NONE, <span class="kw">true</span>);
+  }
+  <span class="kw">else if</span> (settings_result == <span class="num">2</span>)
+  {
+    g_state_before_settings = SETTINGS_PAGE;
+    ui_state = READING_SETTINGS;                <span class="cmt">// 进阅读设置</span>
+    reading_settings_draw(renderer);
+  }
+  <span class="kw">break</span>;
+}
+<span class="kw">case</span> READING_SETTINGS:
+{
+  <span class="kw">bool</span> still_in_settings = reading_settings_handle_action(renderer, ui_action);
+  <span class="kw">if</span> (!still_in_settings) {
+    <span class="kw">if</span> (g_state_before_settings == READING_EPUB) {
+      ui_state = READING_EPUB;                  <span class="cmt">// 从阅读页进来 → 回阅读页</span>
+      <span class="cmt">/* 用锚点恢复阅读位置（第 9 章）... */</span>
+    } <span class="kw">else</span> {
+      ui_state = SETTINGS_PAGE;                 <span class="cmt">// 从设置页进来 → 回设置页</span>
+      (void)handleSettingsPage(renderer, NONE, <span class="kw">true</span>);
+    }
+  }
+  <span class="kw">return</span>;
+}
+<span class="kw">case</span> SELECTING_EPUB:
+<span class="kw">default</span>:
+    handleEpubList(renderer, ui_action, needs_redraw);
+    <span class="kw">break</span>;
+}
+rt_kprintf(<span class="str">"Renderer time=%d \r\n"</span>, rt_tick_get() - start_tick);</code></pre>
+
+  <table>
+    <tr><th>消息 / 动作</th><th>来源</th><th>主循环处理</th></tr>
+    <tr><td><code>MSG_UPDATE_CHARGE_STATUS</code></td><td>电池满电 / 掉出满电</td><td>清充电图标 / 重绘状态栏，<code>continue</code></td></tr>
+    <tr><td><code>MSG_BATTERY_CHECK</code></td><td>周期电量巡检</td><td>ADC 计算，按电量发页面消息，<code>continue</code></td></tr>
+    <tr><td><code>MSG_DRAW_LOW_POWER_PAGE</code> 等三个</td><td>巡检时按电量发出</td><td><code>draw_xxx_page</code>，切到对应电源页</td></tr>
+    <tr><td>用户 <code>UIAction</code>（<code>UP/DOWN/SELECT/SELECT_BOX/UPGLIDE</code>…）</td><td>按键 / 触控</td><td><code>handleUserInteraction</code> 分发给当前状态页面</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>主循环是全军的中军大帐：消息是军情，`switch` 是把军情分发给各营主将（页面函数）。排查"按了键没反应"，按这个顺序问三句：军情到了没有（队列收到消息了吗）？分到哪一营了（`ui_state` 现在是谁）？主将办完没有（页面函数有没有改对状态）？三步查完，多半就有答案。</p>
+  </div>
+
+  <!-- ========== 11.4 状态迁移图：从哪走到哪 ========== -->
+  <h2>11.4 状态迁移图：从哪走到哪</h2>
+
+  <p>现在把全部迁移画成一张图。<strong>开机</strong>：`main_task` 里 `ui_state = MAIN_PAGE`（若是深睡眠唤醒则先从 `hydrate()` 恢复），默认落在主页面——README 明说"默认开机进入 MAIN_PAGE"。（对比上游 ESP32 项目默认进 `SELECTING_EPUB`，这是移植时改的，第 1 章提过。默认进主页面，是因为本项目把主页面当成了"总入口"，书库只是它的一个分岔。）</p>
+
+  <p><strong>主页面四个入口</strong>（`handleUserInteraction` 的 `MAIN_PAGE` 分支）：选中"打开书库"→ `SELECTING_EPUB`；选中"进入设置"→ `SETTINGS_PAGE`；选中"查看天气"→ `WEATHER_PAGE`；选中"继续阅读"（有记录时）→ `READING_EPUB`。设置页与天气页还能继续下钻：`SETTINGS_PAGE → READING_SETTINGS`（进入阅读设置子页）、`WEATHER_PAGE → WEATHER_CITY_PAGE`（切换城市），退出时再逐级返回。</p>
+
+  <p><strong>阅读主线</strong>是最长的一条链：`SELECTING_EPUB → SELECTING_TABLE_CONTENTS → READING_EPUB`（书库选书 → 目录选章节 → 阅读），这是第 12 章的主角。阅读页里通过覆盖操作层还能"回退"：进目录（→ `SELECTING_TABLE_CONTENTS`）、返回书库（→ `SELECTING_EPUB`）、进阅读设置（→ `READING_SETTINGS`，退出后按锚点回到原阅读位置）。阅读页按下 SELECT，或从书库页底部按"主页面"，都经 `back_to_main_page()` 回到 `MAIN_PAGE`；目录页底部中间按钮是"书库"而不是"主页面"，它回的是 `SELECTING_EPUB`（第 12 章细讲）。</p>
+
+  <p><strong>电源四页</strong>由电池状态和超时驱动，基本不靠用户按键（第 6 章详讲过）：空闲达到超时 → `WELCOME_PAGE`（熄屏，任意按键回主页）；电量 &lt;2% 且未充电 → `LOW_POWER_PAGE`；插入充电且此前处于低电量 → `CHARGING_PAGE`；电量回升则 → `WELCOME_PAGE`；5 小时完全无交互 → `SHUTDOWN_PAGE` 并深睡眠。把这张图完整列成迁移表，就是下面这样。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：主页面四个入口（MAIN_PAGE 分支） */</span>
+<span class="kw">case</span> MAIN_PAGE:
+  handleMainPage(renderer, ui_action, needs_redraw);
+  <span class="kw">if</span> (ui_action == SELECT &amp;&amp; screen_get_main_selected_option() == OPTION_ENTER_SETTINGS)
+  {
+    ui_state = SETTINGS_PAGE;
+    <span class="type">int</span> r = handleSettingsPage(renderer, NONE, <span class="kw">true</span>);
+    <span class="kw">if</span> (r == <span class="num">2</span>) { ui_state = READING_SETTINGS; reading_settings_draw(renderer); }
+  }
+  <span class="kw">else if</span> (ui_action == SELECT &amp;&amp; screen_get_main_selected_option() == OPTION_WEATHER)
+  {
+    ui_state = WEATHER_PAGE;
+    (void)handleWeatherPage(renderer, NONE, <span class="kw">true</span>);
+  }
+  <span class="kw">else if</span> (ui_action == SELECT &amp;&amp; screen_get_main_selected_option() == OPTION_CONTINUE_READING)
+  {
+    <span class="cmt">/* 有记录才进：重建 reader、恢复章节，详见第 12 章 */</span>
+  }
+  <span class="kw">else if</span> (ui_action == SELECT &amp;&amp; screen_get_main_selected_option() == OPTION_OPEN_LIBRARY)
+  {
+    ui_state = SELECTING_EPUB;
+    handleEpubList(renderer, NONE, <span class="kw">true</span>);
+  }
+  <span class="kw">break</span>;</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：两层超时——熄屏与关机 */</span>
+<span class="kw">while</span> ((rt_tick_get_millisecond() - last_user_interaction &lt; <span class="num">60</span> * <span class="num">1000</span> * <span class="num">60</span> * TIMEOUT_SHUTDOWN_TIME))
+{
+  <span class="cmt">// 第一层：达到超时设置 → 欢迎页（熄屏）</span>
+  <span class="kw">if</span> (rt_tick_get_millisecond() - last_user_interaction &gt;=
+      <span class="num">60</span> * <span class="num">1000</span> * screen_get_timeout_shutdown_minutes() &amp;&amp;
+      battery &amp;&amp; battery-&gt;get_low_power_state() != <span class="num">1</span> &amp;&amp;
+      ui_state != WELCOME_PAGE &amp;&amp; ui_state != CHARGING_PAGE &amp;&amp; ui_state != LOW_POWER_PAGE &amp;&amp;
+      screen_get_timeout_shutdown_minutes())
+  {
+    renderer-&gt;set_margin_bottom(<span class="num">0</span>);
+    draw_welcome_page(battery);
+  }
+  <span class="cmt">/* ... 取消息、处理动作（11.3） ... */</span>
+}
+<span class="cmt">// 第二层：while 条件不满足（5 小时无交互）→ 关机页 + 深睡眠</span>
+renderer-&gt;dehydrate();
+board-&gt;stop_filesystem();
+draw_shutdown_page();
+board-&gt;prepare_to_sleep();</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：MSG_BATTERY_CHECK 巡检，按电量迁移到电源页 */</span>
+ADCBattery* adc_battery = <span class="kw">static_cast</span>&lt;ADCBattery*&gt;(battery);
+<span class="kw">if</span> (percentage &lt; <span class="num">2</span> &amp;&amp; !is_charging &amp;&amp; adc_battery-&gt;get_low_power_state() != <span class="num">1</span>) {
+  adc_battery-&gt;set_low_power_state(<span class="num">1</span>);
+  UIAction msg = MSG_DRAW_LOW_POWER_PAGE;   <span class="cmt">// 低电量 → LOW_POWER_PAGE</span>
+  rt_mq_send(ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+} <span class="kw">else if</span> (is_charging &amp;&amp; adc_battery-&gt;get_low_power_state() == <span class="num">1</span>) {
+  UIAction msg = MSG_DRAW_CHARGE_PAGE;      <span class="cmt">// 插电充电 → CHARGING_PAGE</span>
+  rt_mq_send(ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+} <span class="kw">else if</span> (percentage &gt;= <span class="num">2</span> &amp;&amp; adc_battery-&gt;get_low_power_state() == <span class="num">1</span>) {
+  adc_battery-&gt;set_low_power_state(<span class="num">0</span>);
+  UIAction msg = MSG_DRAW_WELCOME_PAGE;     <span class="cmt">// 电量回升 → WELCOME_PAGE</span>
+  rt_mq_send(ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+}</code></pre>
+
+  <table>
+    <tr><th>起点</th><th>终点</th><th>触发条件</th><th>代码位置</th></tr>
+    <tr><td>（开机）</td><td><code>MAIN_PAGE</code></td><td>默认值 / 深睡眠唤醒后 <code>hydrate()</code></td><td><code>main_task</code></td></tr>
+    <tr><td><code>MAIN_PAGE</code></td><td><code>SELECTING_EPUB</code></td><td>选中"打开书库" + <code>SELECT</code></td><td><code>handleUserInteraction</code></td></tr>
+    <tr><td><code>MAIN_PAGE</code></td><td><code>SETTINGS_PAGE</code></td><td>选中"进入设置" + <code>SELECT</code></td><td><code>handleUserInteraction</code></td></tr>
+    <tr><td><code>MAIN_PAGE</code></td><td><code>WEATHER_PAGE</code></td><td>选中"查看天气" + <code>SELECT</code></td><td><code>handleUserInteraction</code></td></tr>
+    <tr><td><code>MAIN_PAGE</code></td><td><code>READING_EPUB</code></td><td>选中"继续阅读" + <code>SELECT</code>（有记录）</td><td><code>handleUserInteraction</code></td></tr>
+    <tr><td><code>SELECTING_EPUB</code></td><td><code>SELECTING_TABLE_CONTENTS</code></td><td>书库页 <code>SELECT</code> 选中书</td><td><code>handleEpubList</code></td></tr>
+    <tr><td><code>SELECTING_TABLE_CONTENTS</code></td><td><code>READING_EPUB</code></td><td>目录页 <code>SELECT</code> 选中章节</td><td><code>handleEpubTableContents</code></td></tr>
+    <tr><td><code>READING_EPUB</code></td><td><code>READING_SETTINGS</code></td><td>覆盖层"设置"</td><td><code>handleEpub</code></td></tr>
+    <tr><td><code>READING_EPUB</code></td><td><code>SELECTING_EPUB</code> / <code>SELECTING_TABLE_CONTENTS</code></td><td>覆盖层"书库"/"目录"或 <code>SELECT</code> 回主页</td><td><code>handleEpub</code></td></tr>
+    <tr><td>（任意）</td><td><code>WELCOME_PAGE</code></td><td>空闲达到超时设置（默认 5 分钟）</td><td>主循环顶部</td></tr>
+    <tr><td>（任意）</td><td><code>LOW_POWER_PAGE</code></td><td>电量 &lt;2% 且未充电</td><td><code>MSG_BATTERY_CHECK</code></td></tr>
+    <tr><td><code>LOW_POWER_PAGE</code></td><td><code>CHARGING_PAGE</code></td><td>插入充电</td><td><code>MSG_BATTERY_CHECK</code></td></tr>
+    <tr><td><code>LOW_POWER_PAGE</code></td><td><code>WELCOME_PAGE</code></td><td>电量回升 ≥2%</td><td><code>MSG_BATTERY_CHECK</code></td></tr>
+    <tr><td>（任意）</td><td><code>SHUTDOWN_PAGE</code></td><td>5 小时完全无交互</td><td><code>while</code> 退出后</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>表里"空闲达到超时设置（默认 5 分钟）"指的是熄屏超时，来自 <code>screen_get_timeout_shutdown_minutes()</code>；而"5 小时"是整机关机超时，来自 <code>while</code> 条件里的 <code>TIMEOUT_SHUTDOWN_TIME</code>。两者同名近义却完全不同——一个管"熄屏"，一个管"关机"。还有，头文件把 <code>screen_init</code> 形参注释成"小时"，实现却按分钟用：这些都是源码里如实存在的不一致，以行为表现为准。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>棋谱要背熟，更要会"读谱"。这张迁移表不用死记：主线是书库→目录→阅读，入口在主页面，退路是 <code>back_to_main_page</code>，守夜是那四张电源页。真要在代码里追一次迁移，就在 <code>handleUserInteraction</code> 的 <code>switch</code> 里打日志，看 <code>ui_state</code> 怎么从一个 case 跳到另一个 case——"运筹"的最高境界，是让状态自己告诉你它要去哪。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：清点据点 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>读 <code>src/type.h</code>，把 <code>AppUIState</code> 的十二个状态全部列出，并按"阅读主线 / 系统服务 / 低功耗与电源"三组归类。README 的「当前 UI 状态」漏掉了哪两个？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对着 11.2 的表格和枚举看；README 只列了十项。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>阅读主线：MAIN_PAGE、SELECTING_EPUB、SELECTING_TABLE_CONTENTS、READING_EPUB、READING_SETTINGS；系统服务：SETTINGS_PAGE、WEATHER_PAGE、WEATHER_CITY_PAGE；低功耗与电源：WELCOME_PAGE、LOW_POWER_PAGE、CHARGING_PAGE、SHUTDOWN_PAGE。README 漏掉了 WEATHER_PAGE 和 WEATHER_CITY_PAGE 两个天气状态——以源码枚举为准。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：追一次事件分发 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在书库页按一下 SELECT 进入目录页，把从"按键"到"页面切换"的完整链路写下来：消息队列、主循环、handleUserInteraction 分别扮演什么角色？哪一行代码真正完成了"迁移"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按键 → rt_mq_send 进 ui_queue → 主循环 rt_mq_recv 取出 → handleUserInteraction → switch 分发到 handleEpubList → 内部执行 ui_state = SELECTING_TABLE_CONTENTS。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>按键控件把动作打包成 UIAction 用 rt_mq_send 送进 ui_queue；主循环用 rt_mq_recv（500ms 超时）取出；handleUserInteraction 里 switch(ui_state) 分发给书库页 handleEpubList；handleEpubList 的 SELECT 分支执行 <code>ui_state = SELECTING_TABLE_CONTENTS</code> 并新建 EpubToc、重绘目录页。真正"完成迁移"的就是那一行 <code>ui_state = SELECTING_TABLE_CONTENTS</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：为什么入口先拦截 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>handleUserInteraction</code> 为什么在最开头检查 <code>battery-&gt;get_low_power_state() == 1</code> 就 return？这样设计的目的是什么？如果去掉这行，会出现什么问题？给出完整推理链。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>低电量时墨水屏刷新耗电又缓慢；阅读器要继续撑住最后一点电（第 6 章讲过）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>电量过低时，墨水屏每一次刷新都既耗电又慢，反复翻页可能让最后一点电瞬间耗尽、甚至来不及进入关机页就断电。所以在入口统一拦截：低电量状态下任何普通操作都直接 return，既不让页面被误唤醒，也抑制翻页消耗，把电留给关机流程和充电检测。若去掉这行，用户在低电量时仍能翻页、反复全刷，屏幕会在断电前无谓耗电——这正是"防止非法迁移"的落地：不是页面拒绝某个按键，而是整个状态机在入口就拒绝一切普通操作。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：文档与代码的偏差 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>本章发现两处文档与代码不一致：(1) README 列 10 个状态、代码有 12 个；(2) <code>screen_init</code> 头文件注释写"小时"、实现按"分钟"用。请分别说明"以哪个为准、为什么"，并给出你排查这类偏差的通用方法。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>代码是"行为本身"，文档是"人对行为的描述"；永远以源码为权威，再反向修正文档。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 以 type.h 枚举为准：运行时的迁移、分发全都走 AppUIState，README 只是少抄了两行；weather 两态在 handleUserInteraction 里确实有 case 分支，是真实存在的行为。(2) 以实现为准：screen_init 把实参当作分钟存进 timeout_shutdown_minutes，行为就是"默认熄屏超时 5 分钟"；头文件的"小时"注释是作者意图，不是行为。通用方法：凡是"行为"和"描述"冲突，先读代码确认行为，再决定是修文档还是修代码——在本项目里，教学习惯是如实标注差异，当作活教材。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

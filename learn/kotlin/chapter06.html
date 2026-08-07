@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章：协程入门 — Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="06" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+
+  <h1>第6章：协程入门</h1>
+  <p class="chapter-subtitle">一个厨师同时做五道菜的秘密 — 不需要更多的人，只需要更聪明的等待</p>
+
+  <!-- ==================== 导师卡片 ==================== -->
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>费曼 (Richard Feynman)</h3>
+        <p class="mentor-method">物理直觉，并发就像同时做菜</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>你见过一个厨师同时做五道菜吗？他不会傻等着水烧开——他会在等水烧开的时候去切菜，在等菜炖烂的时候去调酱汁。他只有一双手（一个线程），但他同时在"处理"五道菜。这就是协程的本质：不是增加更多的厨师，而是让一个厨师更聪明地利用等待时间。</p>
+      <p>如果你理解了"等待不等于空闲"这个道理，你就理解了协程的全部哲学。</p>
+    </div>
+  </div>
+
+  <!-- ==================== 6.1 ==================== -->
+  <h2>6.1 为什么需要协程</h2>
+
+  <h3>一个物理学家眼中的异步问题</h3>
+  <p>想象你在做一个物理实验。你点燃了酒精灯，需要等水加热到 100 度。在这段时间里，你会怎么做？</p>
+  <p>一个笨办法：<strong>死盯着温度计</strong>——你站在那里一动不动，什么都不做，直到水烧开。这就是<strong>阻塞式编程</strong>（blocking）。在 Android 中，如果你在主线程（UI 线程）上做网络请求或数据库查询，就相当于死盯着温度计——界面卡住了，用户什么都点不了，系统甚至会弹出"应用无响应"（ANR）。</p>
+  <p>一个聪明的办法：你对助手说"水开了告诉我"，然后你去做别的实验。但如果你有十个实验都在等待，每个都需要一个助手来喊你——这就是<strong>回调（Callback）</strong>模式。助手多了，沟通就乱了，这就是经典的<strong>回调地狱（Callback Hell）</strong>：</p>
+
+  <pre><code><span class="cmt">// 回调地狱示例（伪代码）</span>
+<span class="fn">fetchUser</span>(userId) { <span class="param">user</span> <span class="op">-></span>
+    <span class="fn">fetchOrders</span>(user.id) { <span class="param">orders</span> <span class="op">-></span>
+        <span class="fn">fetchOrderDetail</span>(orders[<span class="num">0</span>].id) { <span class="param">detail</span> <span class="op">-></span>
+            <span class="fn">fetchProduct</span>(detail.productId) { <span class="param">product</span> <span class="op">-></span>
+                <span class="cmt">// 终于拿到数据了...但代码已经嵌套了4层</span>
+                <span class="fn">updateUI</span>(product)
+            }
+        }
+    }
+}</code></pre>
+
+  <p>最聪明的办法呢？<strong>你自己就是那个聪明的厨师。</strong>你不需要助手帮你盯着，你只需要设好计时器，到点了自己回来看一眼。在等待期间，你可以自由地做别的事——这就是<strong>协程</strong>的工作方式。</p>
+
+  <h3>线程的代价：为什么不能多请几个厨师？</h3>
+  <p>你可能会想："多开几个线程不就行了？"这就像是说"多请几个厨师来帮忙"。听起来不错，但问题是：</p>
+  <ul>
+    <li><strong>厨师很贵</strong>（内存开销大）：每个线程默认占用约 1MB 栈内存，启动 1000 个线程就需要约 1GB 内存。你的厨房（手机）可放不下这么多人</li>
+    <li><strong>换人接手很慢</strong>（上下文切换）：操作系统在线程间切换需要保存和恢复寄存器状态——就像一个厨师把活交给另一个厨师，要交代清楚做到哪一步了</li>
+    <li><strong>厨师们会打架</strong>（线程安全问题）：多线程共享数据时需要加锁，容易出现死锁、竞态条件——两个厨师同时伸手去拿同一把刀</li>
+  </ul>
+
+  <h3>协程：一个聪明厨师的解决方案</h3>
+  <p>Kotlin 协程（Coroutines）是一种全新的并发方案。协程是<strong>轻量级的线程</strong>——更准确地说，它根本不是线程，它只是一段可以<strong>暂停</strong>和<strong>恢复</strong>的代码。一个线程可以运行成千上万个协程，就像一个厨师可以同时管理几十道菜。</p>
+  <p>协程最妙的地方在于：你<strong>用同步的写法做异步的事</strong>。代码看起来是一行一行顺序执行的，但底层其实在你"等待"的时候偷偷去做了别的事。</p>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：Kotlin 协程 vs C++20 Coroutines</p>
+    <p>C++20 也引入了协程，但它是非常底层的机制——你需要手动定义 <code>promise_type</code>、处理 <code>co_await</code>/<code>co_yield</code>/<code>co_return</code>、自己管理 <code>std::future</code> 和 <code>std::promise</code>。这就像给你一堆零件让你自己组装发动机。Kotlin 协程则是更高层的抽象，编译器帮你处理了所有底层细节——你只需要写一个 <code>suspend</code> 关键字，剩下的自动搞定。就好比 C++ 给你一堆齿轮和螺丝，而 Kotlin 直接给你一辆车。</p>
+  </div>
+
+  <h3>对比：回调 vs RxJava vs 协程</h3>
+
+  <p>先看回调风格——就像每个实验都喊一个助手来帮你盯着：</p>
+  <pre><code><span class="cmt">// 回调风格 — 嵌套深，错误处理散落各处</span>
+<span class="fn">fetchUser</span>(userId, <span class="kw">object</span> : <span class="type">Callback</span>&lt;<span class="type">User</span>&gt; {
+    <span class="kw">override fun</span> <span class="fn">onSuccess</span>(<span class="param">user</span>: <span class="type">User</span>) {
+        <span class="fn">fetchOrders</span>(user.id, <span class="kw">object</span> : <span class="type">Callback</span>&lt;<span class="type">List</span>&lt;<span class="type">Order</span>&gt;&gt; {
+            <span class="kw">override fun</span> <span class="fn">onSuccess</span>(<span class="param">orders</span>: <span class="type">List</span>&lt;<span class="type">Order</span>&gt;) { <span class="cmt">/* ... */</span> }
+            <span class="kw">override fun</span> <span class="fn">onError</span>(<span class="param">e</span>: <span class="type">Exception</span>) { <span class="cmt">/* 又一处错误处理 */</span> }
+        })
+    }
+    <span class="kw">override fun</span> <span class="fn">onError</span>(<span class="param">e</span>: <span class="type">Exception</span>) { <span class="cmt">/* 错误处理 */</span> }
+})</code></pre>
+
+  <p>再看 RxJava 风格——像一条流水线，但你得学会所有工位的操作手册：</p>
+  <pre><code><span class="cmt">// RxJava 风格 — 链式调用，但学习曲线陡峭</span>
+<span class="fn">fetchUser</span>(userId)
+    .<span class="fn">flatMap</span> { <span class="param">user</span> <span class="op">-></span> <span class="fn">fetchOrders</span>(user.id) }
+    .<span class="fn">flatMap</span> { <span class="param">orders</span> <span class="op">-></span> <span class="fn">fetchOrderDetail</span>(orders[<span class="num">0</span>].id) }
+    .<span class="fn">subscribeOn</span>(<span class="type">Schedulers</span>.<span class="fn">io</span>())
+    .<span class="fn">observeOn</span>(<span class="type">AndroidSchedulers</span>.<span class="fn">mainThread</span>())
+    .<span class="fn">subscribe</span>(
+        { <span class="param">detail</span> <span class="op">-></span> <span class="fn">updateUI</span>(detail) },
+        { <span class="param">error</span> <span class="op">-></span> <span class="fn">handleError</span>(error) }
+    )</code></pre>
+
+  <p>最后看协程风格——就像一个厨师的工作笔记，一步步写得清清楚楚：</p>
+  <pre><code><span class="cmt">// 协程风格 — 像写同步代码一样简洁</span>
+<span class="kw">suspend fun</span> <span class="fn">loadData</span>(<span class="param">userId</span>: <span class="type">String</span>) {
+    <span class="kw">try</span> {
+        <span class="kw">val</span> user <span class="op">=</span> <span class="fn">fetchUser</span>(userId)          <span class="cmt">// 挂起，等待结果</span>
+        <span class="kw">val</span> orders <span class="op">=</span> <span class="fn">fetchOrders</span>(user.id)     <span class="cmt">// 挂起，等待结果</span>
+        <span class="kw">val</span> detail <span class="op">=</span> <span class="fn">fetchOrderDetail</span>(orders[<span class="num">0</span>].id)
+        <span class="fn">updateUI</span>(detail)
+    } <span class="kw">catch</span> (<span class="param">e</span>: <span class="type">Exception</span>) {
+        <span class="fn">handleError</span>(e)                       <span class="cmt">// 统一错误处理</span>
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">费曼的直觉</p>
+    <p>协程代码看起来和同步代码几乎一样——就像厨师的菜谱上写着"第一步煮面、第二步炒菜"，但实际上厨师在煮面的空档已经在切菜了。编译器会帮你把 <code>suspend</code> 函数转换为状态机，自动处理"放下这道菜、去做那道菜"的切换逻辑。</p>
+  </div>
+
+  <table>
+    <tr>
+      <th>特性</th>
+      <th>回调</th>
+      <th>RxJava</th>
+      <th>协程</th>
+    </tr>
+    <tr>
+      <td>代码可读性</td>
+      <td>差（嵌套深）</td>
+      <td>中等（链式）</td>
+      <td>优秀（顺序）</td>
+    </tr>
+    <tr>
+      <td>错误处理</td>
+      <td>分散</td>
+      <td>统一（onError）</td>
+      <td>统一（try-catch）</td>
+    </tr>
+    <tr>
+      <td>学习曲线</td>
+      <td>低</td>
+      <td>高</td>
+      <td>中</td>
+    </tr>
+    <tr>
+      <td>取消支持</td>
+      <td>需手动实现</td>
+      <td>dispose()</td>
+      <td>内建支持</td>
+    </tr>
+    <tr>
+      <td>Kotlin 集成</td>
+      <td>一般</td>
+      <td>一般</td>
+      <td>原生支持</td>
+    </tr>
+  </table>
+
+  <!-- ==================== 6.2 ==================== -->
+  <h2>6.2 第一个协程</h2>
+
+  <h3>添加依赖</h3>
+  <p>在做实验之前，我们先把实验器材准备好。在 <code>build.gradle.kts</code>（Module 级别）中添加协程依赖：</p>
+
+  <pre><code><span class="cmt">// build.gradle.kts (Module :app)</span>
+<span class="fn">dependencies</span> {
+    <span class="cmt">// 协程核心库</span>
+    <span class="fn">implementation</span>(<span class="str">"org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3"</span>)
+    <span class="cmt">// Android 协程支持（提供 Dispatchers.Main）</span>
+    <span class="fn">implementation</span>(<span class="str">"org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"</span>)
+}</code></pre>
+
+  <h3>runBlocking: 点燃第一个酒精灯</h3>
+  <p>我们的第一个实验用 <code>runBlocking</code>——这是一个特殊的协程构建器，它会<strong>阻塞当前线程</strong>直到协程执行完毕。把它想象成"我要在这里做完这个实验才走"。它主要用于 <code>main</code> 函数和测试代码中，<strong>千万不要在 Android 的主线程使用</strong>，否则就回到"死盯温度计"了。</p>
+
+  <pre><code><span class="kw">import</span> kotlinx.coroutines.*
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="fn">println</span>(<span class="str">"协程开始 — 线程: ${Thread.currentThread().name}"</span>)
+    <span class="fn">delay</span>(<span class="num">1000</span>)  <span class="cmt">// 挂起 1 秒（不阻塞线程）</span>
+    <span class="fn">println</span>(<span class="str">"协程结束"</span>)
+}
+<span class="cmt">// 输出:
+// 协程开始 — 线程: main
+// （等待1秒）
+// 协程结束</span></code></pre>
+
+  <h3>launch: 同时点燃多个酒精灯</h3>
+  <p><code>launch</code> 是最常用的协程构建器。它启动一个新的协程但不返回结果——就像你点燃了一个酒精灯然后转身去做别的事。它返回一个 <code>Job</code> 对象，你可以用它来管理协程（比如取消它，或者等它完成）。</p>
+  <p>看看下面的例子，注意输出顺序——这是理解协程的关键时刻：</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="fn">println</span>(<span class="str">"主协程开始"</span>)
+
+    <span class="fn">launch</span> {
+        <span class="fn">delay</span>(<span class="num">1000</span>)
+        <span class="fn">println</span>(<span class="str">"子协程 1 完成"</span>)
+    }
+
+    <span class="fn">launch</span> {
+        <span class="fn">delay</span>(<span class="num">500</span>)
+        <span class="fn">println</span>(<span class="str">"子协程 2 完成"</span>)
+    }
+
+    <span class="fn">println</span>(<span class="str">"主协程继续执行（不会等待子协程）"</span>)
+}
+<span class="cmt">// 输出:
+// 主协程开始
+// 主协程继续执行（不会等待子协程）
+// 子协程 2 完成    ← 500ms 后
+// 子协程 1 完成    ← 1000ms 后</span></code></pre>
+
+  <p>看到了吗？"主协程继续执行"先打印出来了！这就像厨师点燃两个炉灶后，立刻去做其他事了，不会傻等其中任何一个。子协程 2 先完成，因为它只需要等 500 毫秒——哪道菜先好就先出哪道。</p>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：Thread vs Coroutine</p>
+    <p>C++ 的 <code>std::thread</code> 是真正的操作系统线程——每创建一个就像新雇一个厨师，占用真实的系统资源（约 1MB 栈内存）。Kotlin 协程则是用户态的轻量级任务，一个线程可以运行上万个协程。打个比方：C++ 的做法是一道菜请一个厨师（开一个线程），而 Kotlin 的做法是一个厨师管所有菜（一个线程跑多个协程）。后者的内存开销几乎可以忽略不计。</p>
+  </div>
+
+  <h3>delay vs Thread.sleep：暂停实验 vs 关掉实验室</h3>
+  <p>这个区别至关重要。<code>delay()</code> 是"暂停当前实验，去做别的"；<code>Thread.sleep()</code> 是"锁上实验室的门，谁都别想进来"。</p>
+
+  <table>
+    <tr>
+      <th>对比</th>
+      <th>delay()</th>
+      <th>Thread.sleep()</th>
+    </tr>
+    <tr>
+      <td>是否阻塞线程</td>
+      <td>不阻塞（挂起协程）</td>
+      <td>阻塞整个线程</td>
+    </tr>
+    <tr>
+      <td>其他协程能否运行</td>
+      <td>可以</td>
+      <td>不可以（线程被占用）</td>
+    </tr>
+    <tr>
+      <td>使用场景</td>
+      <td>协程中</td>
+      <td>普通线程代码</td>
+    </tr>
+    <tr>
+      <td>可取消</td>
+      <td>是</td>
+      <td>否</td>
+    </tr>
+  </table>
+
+  <div class="warning">
+    <p class="tip-title">注意</p>
+    <p>永远不要在协程中使用 <code>Thread.sleep()</code>！这就像厨师在等水烧开的时候把厨房门锁了——其他菜全部停摆。在协程中应该使用 <code>delay()</code>，这样线程可以在你"等待"的时候去服务其他协程。</p>
+  </div>
+
+  <!-- ==================== 6.3 ==================== -->
+  <h2>6.3 suspend 函数</h2>
+
+  <h3>暂停一个实验，去检查另一个</h3>
+  <p>挂起函数（suspend function）是协程的核心概念。用物理学家的话说：<code>suspend</code> 意味着"这个实验需要等待一段时间，我先去看看隔壁那个实验进展如何"。</p>
+  <p>被 <code>suspend</code> 关键字修饰的函数可以<strong>暂停执行</strong>并在稍后<strong>恢复执行</strong>，且不会阻塞线程。你可以把 <code>suspend</code> 理解为一个标记，告诉编译器："这个函数里有需要等待的操作——网络请求、数据库查询、文件读取——别让厨师干等着。"</p>
+
+  <h3>suspend 关键字</h3>
+  <pre><code><span class="cmt">// 用 suspend 关键字声明挂起函数</span>
+<span class="kw">suspend fun</span> <span class="fn">fetchUserFromNetwork</span>(<span class="param">userId</span>: <span class="type">String</span>): <span class="type">User</span> {
+    <span class="fn">delay</span>(<span class="num">2000</span>)  <span class="cmt">// 模拟网络延迟</span>
+    <span class="kw">return</span> <span class="type">User</span>(userId, <span class="str">"张三"</span>)
+}
+
+<span class="cmt">// 挂起函数只能在协程或另一个挂起函数中调用</span>
+<span class="kw">suspend fun</span> <span class="fn">loadUserData</span>() {
+    <span class="kw">val</span> user <span class="op">=</span> <span class="fn">fetchUserFromNetwork</span>(<span class="str">"001"</span>)  <span class="cmt">// OK: 在 suspend 函数中调用</span>
+    <span class="fn">println</span>(<span class="str">"用户: ${user.name}"</span>)
+}
+
+<span class="kw">fun</span> <span class="fn">normalFunction</span>() {
+    <span class="cmt">// val user = fetchUserFromNetwork("001")  // 编译错误！普通函数不能调用 suspend 函数</span>
+}</code></pre>
+
+  <h3>只能在协程或其他 suspend 函数中调用</h3>
+  <p>这是 Kotlin 编译器的强制规则——就像实验室的安全规范一样不可违背。为什么？因为挂起操作需要一个"协程上下文"来管理暂停和恢复。在普通函数中调用 <code>suspend</code> 函数，就像在没有实验台的地方做化学实验——编译器会果断阻止你。</p>
+
+  <div class="tip">
+    <p class="tip-title">费曼的类比</p>
+    <p>挂起函数就像一个需要等待的物理实验：你把样品放进离心机（开始网络请求），设好时间（等待响应），然后转身去写论文（线程执行其他协程）。离心机转完后，实验室系统会通知你"样品好了"（协程恢复执行）。你不需要站在离心机旁边干等——这就是<strong>非阻塞</strong>的含义。</p>
+  </div>
+
+  <h3>示例：模拟网络请求</h3>
+  <pre><code><span class="kw">import</span> kotlinx.coroutines.*
+
+<span class="cmt">// 数据类</span>
+<span class="kw">data class</span> <span class="type">User</span>(<span class="kw">val</span> <span class="param">id</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>)
+
+<span class="cmt">// 模拟网络请求的挂起函数</span>
+<span class="kw">suspend fun</span> <span class="fn">fetchUser</span>(<span class="param">id</span>: <span class="type">String</span>): <span class="type">User</span> {
+    <span class="fn">println</span>(<span class="str">"  开始请求用户 $id ..."</span>)
+    <span class="fn">delay</span>(<span class="num">1500</span>)  <span class="cmt">// 模拟 1.5 秒网络延迟</span>
+    <span class="fn">println</span>(<span class="str">"  用户 $id 请求完成"</span>)
+    <span class="kw">return</span> <span class="type">User</span>(id, <span class="str">"用户$id"</span>)
+}
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="fn">println</span>(<span class="str">"开始加载数据..."</span>)
+    <span class="kw">val</span> user <span class="op">=</span> <span class="fn">fetchUser</span>(<span class="str">"42"</span>)
+    <span class="fn">println</span>(<span class="str">"加载完成: ${user.name}"</span>)
+}
+<span class="cmt">// 输出:
+// 开始加载数据...
+//   开始请求用户 42 ...
+//   用户 42 请求完成
+// 加载完成: 用户42</span></code></pre>
+
+  <!-- ==================== 6.4 ==================== -->
+  <h2>6.4 协程构建器</h2>
+
+  <p>协程构建器就是你"启动实验"的方式。不同的构建器适用于不同的场景——有的实验你只要它做完就行（launch），有的实验你需要它的结果（async）。</p>
+
+  <h3>launch: 点火就走（Fire and Forget）</h3>
+  <p><code>launch</code> 启动一个新协程，不返回结果。它就像你点燃了一个酒精灯加热某个东西——你不需要从这个操作得到什么"返回值"，你只需要它默默完成。它返回一个 <code>Job</code> 对象，让你可以管理这个"实验进程"。</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> job: <span class="type">Job</span> <span class="op">=</span> <span class="fn">launch</span> {
+        <span class="fn">println</span>(<span class="str">"协程正在执行..."</span>)
+        <span class="fn">delay</span>(<span class="num">1000</span>)
+        <span class="fn">println</span>(<span class="str">"协程执行完毕"</span>)
+    }
+
+    <span class="fn">println</span>(<span class="str">"等待协程完成..."</span>)
+    job.<span class="fn">join</span>()  <span class="cmt">// 等待协程执行完毕</span>
+    <span class="fn">println</span>(<span class="str">"全部完成"</span>)
+}</code></pre>
+
+  <h3>async/await: 做实验并拿回结果</h3>
+  <p><code>async</code> 和 <code>launch</code> 类似，但它会返回一个 <code>Deferred&lt;T&gt;</code> 对象——这就像一张"实验结果取件单"。你可以在需要结果的时候调用 <code>await()</code> 来取走它。如果结果还没准备好，<code>await()</code> 会挂起等待（但不阻塞线程）。</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> deferred: <span class="type">Deferred</span>&lt;<span class="type">Int</span>&gt; <span class="op">=</span> <span class="fn">async</span> {
+        <span class="fn">println</span>(<span class="str">"正在计算..."</span>)
+        <span class="fn">delay</span>(<span class="num">1000</span>)
+        <span class="num">42</span>  <span class="cmt">// 返回值</span>
+    }
+
+    <span class="fn">println</span>(<span class="str">"等待结果..."</span>)
+    <span class="kw">val</span> result <span class="op">=</span> deferred.<span class="fn">await</span>()  <span class="cmt">// 挂起直到结果准备好</span>
+    <span class="fn">println</span>(<span class="str">"结果是: $result"</span>)
+}</code></pre>
+
+  <h3>并发执行：同时炒三道菜</h3>
+  <p>这是 <code>async</code> 最强大的用法——同时发起多个异步操作，等所有结果都准备好后再一起端上桌。这就是真正的"并发"：不是一道菜做完再做下一道，而是三个锅同时开火。</p>
+
+  <pre><code><span class="kw">suspend fun</span> <span class="fn">fetchUserProfile</span>(): <span class="type">String</span> {
+    <span class="fn">delay</span>(<span class="num">1000</span>)  <span class="cmt">// 模拟 1 秒</span>
+    <span class="kw">return</span> <span class="str">"用户资料"</span>
+}
+
+<span class="kw">suspend fun</span> <span class="fn">fetchUserOrders</span>(): <span class="type">String</span> {
+    <span class="fn">delay</span>(<span class="num">1200</span>)  <span class="cmt">// 模拟 1.2 秒</span>
+    <span class="kw">return</span> <span class="str">"订单列表"</span>
+}
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> startTime <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+
+    <span class="cmt">// 串行执行：总共需要 2.2 秒（一道菜做完再做下一道）</span>
+    <span class="cmt">// val profile = fetchUserProfile()</span>
+    <span class="cmt">// val orders = fetchUserOrders()</span>
+
+    <span class="cmt">// 并发执行：只需要约 1.2 秒（两道菜同时做，取最慢的）</span>
+    <span class="kw">val</span> profileDeferred <span class="op">=</span> <span class="fn">async</span> { <span class="fn">fetchUserProfile</span>() }
+    <span class="kw">val</span> ordersDeferred <span class="op">=</span> <span class="fn">async</span> { <span class="fn">fetchUserOrders</span>() }
+
+    <span class="kw">val</span> profile <span class="op">=</span> profileDeferred.<span class="fn">await</span>()
+    <span class="kw">val</span> orders <span class="op">=</span> ordersDeferred.<span class="fn">await</span>()
+
+    <span class="kw">val</span> elapsed <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>() <span class="op">-</span> startTime
+    <span class="fn">println</span>(<span class="str">"$profile + $orders, 耗时: ${elapsed}ms"</span>)
+}
+<span class="cmt">// 输出: 用户资料 + 订单列表, 耗时: ~1200ms</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">费曼的直觉</p>
+    <p>两个 <code>async</code> 同时启动，总耗时取决于最慢的那道菜，而非两者之和。这就像物理实验中的并行测量——同时测温度和压力，总时间是 max(测温时间, 测压时间)，而不是两者相加。这就是并发的威力。</p>
+  </div>
+
+  <h3>withContext: 换个实验室继续做</h3>
+  <p><code>withContext</code> 用来在协程中切换执行的线程。想象你在化学实验室做分析，但需要用到物理实验室的仪器——你端着样品走过去（切换线程），用完仪器后再走回来（切回原线程）。</p>
+
+  <pre><code><span class="kw">suspend fun</span> <span class="fn">loadDataFromDisk</span>(): <span class="type">String</span> {
+    <span class="kw">return</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.IO) {
+        <span class="cmt">// 这里运行在 IO 线程池</span>
+        <span class="fn">println</span>(<span class="str">"读取磁盘 — 线程: ${Thread.currentThread().name}"</span>)
+        <span class="fn">delay</span>(<span class="num">500</span>)
+        <span class="str">"磁盘数据"</span>
+    }
+    <span class="cmt">// 执行完自动切回原来的线程</span>
+}
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="fn">println</span>(<span class="str">"主线程: ${Thread.currentThread().name}"</span>)
+    <span class="kw">val</span> data <span class="op">=</span> <span class="fn">loadDataFromDisk</span>()
+    <span class="fn">println</span>(<span class="str">"回到主线程: ${Thread.currentThread().name}, 数据: $data"</span>)
+}</code></pre>
+
+  <!-- ==================== 6.5 ==================== -->
+  <h2>6.5 协程作用域与结构化并发</h2>
+
+  <h3>CoroutineScope: 实验室的管理制度</h3>
+  <p><code>CoroutineScope</code> 定义了协程的生命周期范围。在物理实验中，你不会让一个实验无人看管地一直运行——实验室关门了，所有实验都必须安全地停下来。<code>CoroutineScope</code> 就是这个"实验室管理制度"：作用域结束时，其中所有未完成的协程都会被取消。</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="cmt">// runBlocking 自身就是一个 CoroutineScope</span>
+
+    <span class="fn">launch</span> {
+        <span class="fn">delay</span>(<span class="num">200</span>)
+        <span class="fn">println</span>(<span class="str">"子协程 A"</span>)
+    }
+
+    <span class="fn">coroutineScope</span> {  <span class="cmt">// 创建一个新的作用域</span>
+        <span class="fn">launch</span> {
+            <span class="fn">delay</span>(<span class="num">500</span>)
+            <span class="fn">println</span>(<span class="str">"子协程 B（在 coroutineScope 内）"</span>)
+        }
+        <span class="fn">println</span>(<span class="str">"coroutineScope 开始"</span>)
+    }  <span class="cmt">// coroutineScope 会等待内部所有协程完成</span>
+
+    <span class="fn">println</span>(<span class="str">"所有都完成了"</span>)
+}</code></pre>
+
+  <h3>结构化并发：实验室的安全规范</h3>
+  <p>Kotlin 协程的一大设计原则是<strong>结构化并发</strong>（Structured Concurrency）。这就像一个严格的实验室管理规范：</p>
+  <ul>
+    <li>协程形成<strong>父子关系</strong>——在一个实验中启动的子实验，归主实验负责</li>
+    <li>父协程会等待所有子协程完成后才完成——实验负责人要等所有子实验做完才能签字</li>
+    <li>父协程被取消时，所有子协程也会被取消——实验室着火了，所有实验都要紧急停止</li>
+    <li>子协程抛出异常时，父协程也会被取消（默认行为）——一个子实验出了事故，整个实验项目要暂停审查</li>
+  </ul>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> parentJob <span class="op">=</span> <span class="fn">launch</span> {
+        <span class="kw">val</span> childA <span class="op">=</span> <span class="fn">launch</span> {
+            <span class="kw">repeat</span>(<span class="num">5</span>) { <span class="param">i</span> <span class="op">-></span>
+                <span class="fn">println</span>(<span class="str">"子协程 A: $i"</span>)
+                <span class="fn">delay</span>(<span class="num">300</span>)
+            }
+        }
+
+        <span class="kw">val</span> childB <span class="op">=</span> <span class="fn">launch</span> {
+            <span class="kw">repeat</span>(<span class="num">5</span>) { <span class="param">i</span> <span class="op">-></span>
+                <span class="fn">println</span>(<span class="str">"子协程 B: $i"</span>)
+                <span class="fn">delay</span>(<span class="num">300</span>)
+            }
+        }
+    }
+
+    <span class="fn">delay</span>(<span class="num">800</span>)
+    <span class="fn">println</span>(<span class="str">"取消父协程"</span>)
+    parentJob.<span class="fn">cancel</span>()  <span class="cmt">// 子协程 A 和 B 都会被取消</span>
+    <span class="fn">println</span>(<span class="str">"父协程已取消"</span>)
+}</code></pre>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：结构化并发</p>
+    <p>C++ 没有结构化并发的概念。当你用 <code>std::thread</code> 创建线程后，你必须手动调用 <code>join()</code> 或 <code>detach()</code>——如果忘了，程序直接崩溃（<code>std::terminate</code>）。这就像一个没有管理制度的实验室，每个实验做完了你得自己记着去收拾，忘了就出事故。Kotlin 的 <code>CoroutineScope</code> 自动管理所有子协程的生命周期：作用域结束时自动取消、自动等待，不需要你手动 join 每一个。安全、省心。</p>
+  </div>
+
+  <h3>GlobalScope 的陷阱：失控的实验</h3>
+
+  <div class="warning">
+    <p class="tip-title">不推荐使用 GlobalScope</p>
+    <p><code>GlobalScope</code> 启动的协程是顶级协程，不受任何父作用域管理。这就像在实验室外面的走廊上做实验——没人管你，也没人在实验室关门时提醒你停下。后果是：</p>
+    <ul>
+      <li>Activity/Fragment 销毁后，协程仍然在运行，可能导致<strong>内存泄漏</strong></li>
+      <li>无法通过取消父作用域来统一取消</li>
+      <li>违反了结构化并发的原则</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="cmt">// 不推荐</span>
+<span class="type">GlobalScope</span>.<span class="fn">launch</span> {
+    <span class="cmt">// 这个协程的生命周期与应用进程一样长</span>
+    <span class="cmt">// Activity 销毁后它还在跑 — 内存泄漏！</span>
+    <span class="fn">fetchData</span>()
+}
+
+<span class="cmt">// 推荐：使用与生命周期绑定的 scope</span>
+<span class="kw">class</span> <span class="type">MyViewModel</span> : <span class="type">ViewModel</span>() {
+    <span class="kw">fun</span> <span class="fn">loadData</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="cmt">// ViewModel 清除时，协程自动取消</span>
+            <span class="fn">fetchData</span>()
+        }
+    }
+}</code></pre>
+
+  <h3>Android 中的 viewModelScope 和 lifecycleScope</h3>
+  <p>Android Jetpack 提供了与生命周期绑定的协程作用域——就像不同等级的实验室门禁，到点了自动关门断电：</p>
+
+  <table>
+    <tr>
+      <th>作用域</th>
+      <th>所属组件</th>
+      <th>自动取消时机</th>
+    </tr>
+    <tr>
+      <td><code>viewModelScope</code></td>
+      <td>ViewModel</td>
+      <td>ViewModel 被清除时</td>
+    </tr>
+    <tr>
+      <td><code>lifecycleScope</code></td>
+      <td>Activity / Fragment</td>
+      <td>Lifecycle 进入 DESTROYED 状态时</td>
+    </tr>
+  </table>
+
+  <pre><code><span class="cmt">// 在 ViewModel 中使用</span>
+<span class="kw">class</span> <span class="type">UserViewModel</span> : <span class="type">ViewModel</span>() {
+    <span class="kw">fun</span> <span class="fn">loadUser</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="kw">val</span> user <span class="op">=</span> <span class="fn">repository</span>.<span class="fn">fetchUser</span>()
+            _userState.value <span class="op">=</span> user
+        }
+    }
+}
+
+<span class="cmt">// 在 Activity 中使用</span>
+<span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">AppCompatActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle</span>?) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+
+        lifecycleScope.<span class="fn">launch</span> {
+            <span class="kw">val</span> data <span class="op">=</span> <span class="fn">loadSomething</span>()
+            textView.text <span class="op">=</span> data
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">依赖</p>
+    <p>要使用 <code>viewModelScope</code> 和 <code>lifecycleScope</code>，需要添加对应的 Jetpack 依赖：</p>
+    <ul>
+      <li><code>androidx.lifecycle:lifecycle-viewmodel-ktx</code></li>
+      <li><code>androidx.lifecycle:lifecycle-runtime-ktx</code></li>
+    </ul>
+  </div>
+
+  <!-- ==================== 6.6 ==================== -->
+  <h2>6.6 调度器（Dispatchers）</h2>
+
+  <p>调度器决定了协程在<strong>哪个线程或线程池</strong>上执行。用厨房的比喻来说，调度器就是"在哪个灶台上做菜"——炒菜要用猛火灶（CPU 密集），炖汤可以用小火慢炖灶（IO 操作），摆盘装饰要在出菜口完成（UI 线程）。选错灶台，不仅效率低下，还可能出安全问题。</p>
+
+  <table>
+    <tr>
+      <th>调度器</th>
+      <th>用途</th>
+      <th>线程</th>
+    </tr>
+    <tr>
+      <td><code>Dispatchers.Main</code></td>
+      <td>更新 UI、处理用户交互</td>
+      <td>Android 主线程</td>
+    </tr>
+    <tr>
+      <td><code>Dispatchers.IO</code></td>
+      <td>网络请求、文件读写、数据库操作</td>
+      <td>共享的 IO 线程池（最多 64 个线程）</td>
+    </tr>
+    <tr>
+      <td><code>Dispatchers.Default</code></td>
+      <td>CPU 密集型计算（排序、解析 JSON 等）</td>
+      <td>共享线程池（线程数 = CPU 核心数）</td>
+    </tr>
+    <tr>
+      <td><code>Dispatchers.Unconfined</code></td>
+      <td>测试或特殊场景（不推荐日常使用）</td>
+      <td>不限定线程</td>
+    </tr>
+  </table>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：Dispatchers vs 线程池</p>
+    <p>Kotlin 的调度器概念类似于 C++ 中的线程池，比如 <code>boost::asio::thread_pool</code> 或 C++17 的 <code>std::execution</code> 提案。但 Kotlin 把这些封装得更简洁：你不需要手动创建线程池、管理任务队列、处理线程的生死——只需要指定 <code>Dispatchers.IO</code> 或 <code>Dispatchers.Default</code>，框架帮你搞定一切。C++ 里面你得写一堆样板代码来设置线程池，而 Kotlin 里只是一个参数的事。</p>
+  </div>
+
+  <h3>Dispatchers.Main: 出菜口（UI 线程）</h3>
+  <p>在 Android 中，所有 UI 更新必须在主线程执行——这就像菜做好了必须在出菜口装盘。<code>Dispatchers.Main</code> 将协程调度到主线程。</p>
+
+  <pre><code>viewModelScope.<span class="fn">launch</span>(<span class="type">Dispatchers</span>.Main) {
+    <span class="cmt">// 在主线程更新 UI</span>
+    progressBar.visibility <span class="op">=</span> <span class="type">View</span>.VISIBLE
+
+    <span class="kw">val</span> data <span class="op">=</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.IO) {
+        <span class="cmt">// 切换到 IO 线程做网络请求</span>
+        api.<span class="fn">fetchData</span>()
+    }
+
+    <span class="cmt">// 自动切回主线程</span>
+    textView.text <span class="op">=</span> data
+    progressBar.visibility <span class="op">=</span> <span class="type">View</span>.GONE
+}</code></pre>
+
+  <h3>Dispatchers.IO: 慢炖灶（网络 / 磁盘 IO）</h3>
+  <p>IO 操作（网络、文件、数据库）就像炖汤——大部分时间都在等待，不怎么占用厨师的精力。把这些任务交给 IO 调度器，主线程（主厨师）就不会被堵住。</p>
+
+  <pre><code><span class="kw">suspend fun</span> <span class="fn">readFile</span>(<span class="param">path</span>: <span class="type">String</span>): <span class="type">String</span> {
+    <span class="kw">return</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.IO) {
+        <span class="type">File</span>(path).<span class="fn">readText</span>()
+    }
+}</code></pre>
+
+  <h3>Dispatchers.Default: 猛火灶（CPU 密集计算）</h3>
+  <p>排序大数组、解析大型 JSON、图像处理——这些是需要厨师全力投入的"猛火爆炒"任务。Default 调度器的线程数等于 CPU 核心数，确保不会因为开太多线程反而拖慢系统。</p>
+
+  <pre><code><span class="kw">suspend fun</span> <span class="fn">sortLargeList</span>(<span class="param">list</span>: <span class="type">List</span>&lt;<span class="type">Int</span>&gt;): <span class="type">List</span>&lt;<span class="type">Int</span>&gt; {
+    <span class="kw">return</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.Default) {
+        list.<span class="fn">sorted</span>()  <span class="cmt">// CPU 密集计算</span>
+    }
+}</code></pre>
+
+  <h3>withContext 切换调度器：一个完整的做菜流程</h3>
+  <p>一个典型的 Android 数据加载流程——在出菜口（Main）开始准备，去后厨（IO）取原料，回到出菜口（Main）装盘：</p>
+
+  <pre><code><span class="kw">class</span> <span class="type">UserRepository</span> {
+    <span class="kw">suspend fun</span> <span class="fn">getUser</span>(<span class="param">id</span>: <span class="type">String</span>): <span class="type">User</span> {
+        <span class="kw">return</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.IO) {
+            <span class="cmt">// 在 IO 线程池执行网络请求</span>
+            api.<span class="fn">fetchUser</span>(id)
+        }
+    }
+}
+
+<span class="kw">class</span> <span class="type">UserViewModel</span>(<span class="kw">private val</span> <span class="param">repo</span>: <span class="type">UserRepository</span>) : <span class="type">ViewModel</span>() {
+    <span class="kw">fun</span> <span class="fn">loadUser</span>(<span class="param">id</span>: <span class="type">String</span>) {
+        viewModelScope.<span class="fn">launch</span> {  <span class="cmt">// 默认在 Main 线程</span>
+            _loading.value <span class="op">=</span> <span class="kw">true</span>
+            <span class="kw">val</span> user <span class="op">=</span> repo.<span class="fn">getUser</span>(id)  <span class="cmt">// 内部已切换到 IO</span>
+            _user.value <span class="op">=</span> user            <span class="cmt">// 回到 Main 线程更新 UI</span>
+            _loading.value <span class="op">=</span> <span class="kw">false</span>
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">最佳实践</p>
+    <p>让 Repository 层的函数内部使用 <code>withContext</code> 切换调度器，这样调用方不需要关心线程切换——就像你点菜时不需要知道厨师用的是猛火灶还是慢炖灶，菜端上来就行。这被称为<strong>"main-safety"</strong>（主线程安全）。</p>
+  </div>
+
+  <!-- ==================== 6.7 ==================== -->
+  <h2>6.7 实战：模拟异步数据加载</h2>
+
+  <h3>完整示例：一场精心安排的多道菜实验</h3>
+  <p>下面是一个完整的可运行示例，综合运用了前面所有知识。把它想象成一个厨师先去市场买菜（获取用户列表），然后同时处理每道菜的配料（并发获取详情）：</p>
+
+  <pre><code><span class="kw">import</span> kotlinx.coroutines.*
+
+<span class="cmt">// ===== 数据模型 =====</span>
+<span class="kw">data class</span> <span class="type">User</span>(
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">email</span>: <span class="type">String</span>
+)
+
+<span class="cmt">// ===== 模拟网络 API =====</span>
+<span class="kw">object</span> <span class="type">FakeApi</span> {
+
+    <span class="kw">suspend fun</span> <span class="fn">fetchUsers</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; {
+        <span class="fn">println</span>(<span class="str">"[API] 正在请求用户列表..."</span>)
+        <span class="fn">delay</span>(<span class="num">2000</span>)  <span class="cmt">// 模拟 2 秒网络延迟</span>
+        <span class="kw">return</span> <span class="fn">listOf</span>(
+            <span class="type">User</span>(<span class="num">1</span>, <span class="str">"张三"</span>, <span class="str">"zhangsan@example.com"</span>),
+            <span class="type">User</span>(<span class="num">2</span>, <span class="str">"李四"</span>, <span class="str">"lisi@example.com"</span>),
+            <span class="type">User</span>(<span class="num">3</span>, <span class="str">"王五"</span>, <span class="str">"wangwu@example.com"</span>)
+        )
+    }
+
+    <span class="kw">suspend fun</span> <span class="fn">fetchUserDetail</span>(<span class="param">userId</span>: <span class="type">Int</span>): <span class="type">String</span> {
+        <span class="fn">println</span>(<span class="str">"[API] 正在请求用户 $userId 的详情..."</span>)
+        <span class="fn">delay</span>(<span class="num">1000</span>)  <span class="cmt">// 模拟 1 秒延迟</span>
+        <span class="kw">return</span> <span class="str">"用户 $userId 的详细信息：VIP 会员，注册于 2024 年"</span>
+    }
+}
+
+<span class="cmt">// ===== 主程序 =====</span>
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="fn">println</span>(<span class="str">"===== 开始加载数据 ====="</span>)
+    <span class="kw">val</span> startTime <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+
+    <span class="cmt">// 第一步：获取用户列表</span>
+    <span class="kw">val</span> users <span class="op">=</span> <span class="type">FakeApi</span>.<span class="fn">fetchUsers</span>()
+    <span class="fn">println</span>(<span class="str">"[结果] 获取到 ${users.size} 个用户"</span>)
+
+    <span class="cmt">// 第二步：并发获取每个用户的详情</span>
+    <span class="kw">val</span> details <span class="op">=</span> users.<span class="fn">map</span> { <span class="param">user</span> <span class="op">-></span>
+        <span class="fn">async</span> {
+            <span class="type">FakeApi</span>.<span class="fn">fetchUserDetail</span>(user.id)
+        }
+    }.<span class="fn">map</span> { it.<span class="fn">await</span>() }  <span class="cmt">// 等待所有结果</span>
+
+    <span class="cmt">// 第三步：展示结果</span>
+    users.<span class="fn">forEachIndexed</span> { <span class="param">index</span>, <span class="param">user</span> <span class="op">-></span>
+        <span class="fn">println</span>(<span class="str">"  ${user.name} (${user.email})"</span>)
+        <span class="fn">println</span>(<span class="str">"    ${details[index]}"</span>)
+    }
+
+    <span class="kw">val</span> elapsed <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>() <span class="op">-</span> startTime
+    <span class="fn">println</span>(<span class="str">"===== 加载完成，总耗时: ${elapsed}ms ====="</span>)
+    <span class="cmt">// 总耗时约 3 秒（2秒列表 + 1秒详情并发），而非 5 秒（串行）</span>
+}
+<span class="cmt">// 输出:
+// ===== 开始加载数据 =====
+// [API] 正在请求用户列表...
+// [结果] 获取到 3 个用户
+// [API] 正在请求用户 1 的详情...
+// [API] 正在请求用户 2 的详情...
+// [API] 正在请求用户 3 的详情...
+//   张三 (zhangsan@example.com)
+//     用户 1 的详细信息：VIP 会员，注册于 2024 年
+//   李四 (lisi@example.com)
+//     用户 2 的详细信息：VIP 会员，注册于 2024 年
+//   王五 (wangwu@example.com)
+//     用户 3 的详细信息：VIP 会员，注册于 2024 年
+// ===== 加载完成，总耗时: ~3000ms =====</span></code></pre>
+
+  <p>注意到了吗？三个用户详情的请求是同时发出的（三道菜同时下锅），所以总共只花了约 1 秒而不是 3 秒。加上之前获取列表的 2 秒，总共约 3 秒——比串行的 5 秒快了将近一半。这就是一个聪明厨师的效率。</p>
+
+  <h3>错误处理：实验失败了怎么办</h3>
+  <p>做实验难免有失败的时候。协程中的错误处理非常直观——直接使用 <code>try-catch</code>，和同步代码完全一样。不需要学新的错误处理机制，用你已经熟悉的方式就好。这就是"用同步的写法做异步的事"的另一个好处。</p>
+
+  <pre><code><span class="kw">suspend fun</span> <span class="fn">riskyFetchUser</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> {
+    <span class="fn">delay</span>(<span class="num">500</span>)
+    <span class="kw">if</span> (id <span class="op">&lt;</span> <span class="num">0</span>) {
+        <span class="kw">throw</span> <span class="type">IllegalArgumentException</span>(<span class="str">"用户 ID 不能为负数: $id"</span>)
+    }
+    <span class="kw">return</span> <span class="type">User</span>(id, <span class="str">"用户$id"</span>, <span class="str">"user$id@example.com"</span>)
+}
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="cmt">// 方式一：直接 try-catch</span>
+    <span class="kw">try</span> {
+        <span class="kw">val</span> user <span class="op">=</span> <span class="fn">riskyFetchUser</span>(<span class="num">-1</span>)
+        <span class="fn">println</span>(<span class="str">"用户: ${user.name}"</span>)
+    } <span class="kw">catch</span> (<span class="param">e</span>: <span class="type">Exception</span>) {
+        <span class="fn">println</span>(<span class="str">"出错了: ${e.message}"</span>)
+    }
+
+    <span class="cmt">// 方式二：对 async 使用 try-catch</span>
+    <span class="kw">val</span> deferred <span class="op">=</span> <span class="fn">async</span> {
+        <span class="fn">riskyFetchUser</span>(<span class="num">-1</span>)
+    }
+    <span class="kw">try</span> {
+        <span class="kw">val</span> user <span class="op">=</span> deferred.<span class="fn">await</span>()  <span class="cmt">// 异常在 await() 时抛出</span>
+        <span class="fn">println</span>(<span class="str">"用户: ${user.name}"</span>)
+    } <span class="kw">catch</span> (<span class="param">e</span>: <span class="type">Exception</span>) {
+        <span class="fn">println</span>(<span class="str">"async 出错了: ${e.message}"</span>)
+    }
+}
+<span class="cmt">// 输出:
+// 出错了: 用户 ID 不能为负数: -1
+// async 出错了: 用户 ID 不能为负数: -1</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">费曼的直觉</p>
+    <p>对于 <code>launch</code>，异常会直接在协程内"爆炸"（实验当场出事）；对于 <code>async</code>，异常会延迟到 <code>await()</code> 调用时才"爆炸"（你去取实验结果时才发现出了问题）。两种情况都可以用 <code>try-catch</code> 这个"安全护具"来应对。</p>
+  </div>
+
+  <h3>取消协程：紧急叫停实验</h3>
+  <p>协程支持<strong>协作式取消</strong>——这就像实验室的紧急停止按钮，但它不是暴力断电（那会损坏仪器），而是在每个安全检查点（挂起点）通知协程"该停了"。调用 <code>cancel()</code> 后，协程会在下一个挂起点（如 <code>delay</code>、<code>yield</code>、<code>withContext</code>）检查取消状态并优雅地停止。</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> job <span class="op">=</span> <span class="fn">launch</span> {
+        <span class="kw">repeat</span>(<span class="num">10</span>) { <span class="param">i</span> <span class="op">-></span>
+            <span class="fn">println</span>(<span class="str">"正在处理: $i"</span>)
+            <span class="fn">delay</span>(<span class="num">300</span>)  <span class="cmt">// 这是一个挂起点，会检查取消状态</span>
+        }
+    }
+
+    <span class="fn">delay</span>(<span class="num">1000</span>)
+    <span class="fn">println</span>(<span class="str">"等够了，取消协程！"</span>)
+    job.<span class="fn">cancel</span>()   <span class="cmt">// 请求取消</span>
+    job.<span class="fn">join</span>()     <span class="cmt">// 等待取消完成</span>
+    <span class="cmt">// 也可以用 job.cancelAndJoin() 合并上面两步</span>
+    <span class="fn">println</span>(<span class="str">"协程已取消"</span>)
+}
+<span class="cmt">// 输出:
+// 正在处理: 0
+// 正在处理: 1
+// 正在处理: 2
+// 正在处理: 3
+// 等够了，取消协程！
+// 协程已取消</span></code></pre>
+
+  <div class="warning">
+    <p class="tip-title">注意：纯计算循环不会响应取消</p>
+    <p>如果协程中没有挂起点（比如纯 CPU 计算的循环），取消请求不会生效——就像你按了紧急停止按钮，但仪器上根本没装传感器。这时你需要手动检查取消状态：</p>
+  </div>
+
+  <pre><code><span class="kw">val</span> job <span class="op">=</span> <span class="fn">launch</span>(<span class="type">Dispatchers</span>.Default) {
+    <span class="kw">var</span> i <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">while</span> (isActive) {  <span class="cmt">// 手动检查协程是否仍在活跃</span>
+        i<span class="op">++</span>
+        <span class="cmt">// 纯 CPU 计算...</span>
+    }
+    <span class="fn">println</span>(<span class="str">"计算了 $i 次后被取消"</span>)
+}</code></pre>
+
+  <!-- ==================== 本章总结 ==================== -->
+  <h2>本章总结</h2>
+  <p>让我们用厨房的比喻来回顾本章学到的一切：</p>
+  <ul>
+    <li><strong>协程</strong>就是一个聪明的厨师——一个人管多道菜，利用等待时间去做别的事</li>
+    <li><strong>suspend 函数</strong>就是"暂停当前实验去检查另一个"——暂停不等于停止，线程可以去做别的</li>
+    <li><strong>launch</strong> 是"点火就走"；<strong>async/await</strong> 是"做实验并取回结果"</li>
+    <li><strong>withContext</strong> 是"端着样品去隔壁实验室用仪器"——切换线程并自动切回</li>
+    <li><strong>结构化并发</strong>是实验室的安全管理制度——父协程管理子协程的生死</li>
+    <li><strong>调度器</strong>决定在哪个灶台做菜：Main（出菜口/UI）、IO（慢炖灶/网络磁盘）、Default（猛火灶/CPU计算）</li>
+    <li>使用 <code>viewModelScope</code> 和 <code>lifecycleScope</code> 让实验室到点自动关门</li>
+    <li>错误处理直接用 <code>try-catch</code>（安全护具），取消用 <code>job.cancel()</code>（紧急停止按钮）</li>
+  </ul>
+
+  <div class="tip">
+    <p class="tip-title">费曼的总结</p>
+    <p>协程的核心思想其实很简单：<strong>等待不等于空闲</strong>。一个聪明的物理学家不会在等待实验结果时发呆，一个聪明的厨师不会在等水烧开时干站着。协程让你的代码也学会了这种智慧。在后续章节中，我们将结合 Retrofit、Room 等库，在实际的 Android 项目中用协程处理网络请求和数据库操作——到时候你会看到，这个聪明的厨师在真正的厨房里有多高效。</p>
+  </div>
+
+  <!-- ==================== 练习题 ==================== -->
+  <div class="exercise">
+    <h2>练习题</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：编写你的第一个挂起函数 <span class="difficulty difficulty-easy">基础</span></h3>
+      <p>编写一个挂起函数 <code>brewCoffee(type: String): String</code>，模拟冲泡咖啡的过程：打印"正在冲泡 {type} ..."，延迟 1.5 秒后返回"{type} 已做好"。然后在 <code>runBlocking</code> 中依次调用它两次（分别传入"拿铁"和"美式"），打印返回的结果。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+          <pre><code><span class="kw">import</span> kotlinx.coroutines.*
+
+<span class="kw">suspend fun</span> <span class="fn">brewCoffee</span>(<span class="param">type</span>: <span class="type">String</span>): <span class="type">String</span> {
+    <span class="fn">println</span>(<span class="str">"正在冲泡 $type ..."</span>)
+    <span class="fn">delay</span>(<span class="num">1500</span>)
+    <span class="kw">return</span> <span class="str">"$type 已做好"</span>
+}
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> coffee1 <span class="op">=</span> <span class="fn">brewCoffee</span>(<span class="str">"拿铁"</span>)
+    <span class="fn">println</span>(coffee1)
+    <span class="kw">val</span> coffee2 <span class="op">=</span> <span class="fn">brewCoffee</span>(<span class="str">"美式"</span>)
+    <span class="fn">println</span>(coffee2)
+}
+<span class="cmt">// 输出:
+// 正在冲泡 拿铁 ...
+// 拿铁 已做好
+// 正在冲泡 美式 ...
+// 美式 已做好
+// 总耗时约 3 秒（串行）</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：用 launch 和 async 实现并发 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>改进练习 1：用 <code>async</code> 同时冲泡"拿铁"和"美式"两杯咖啡，并在两杯都做好后打印结果。另外再用 <code>launch</code> 启动一个"清洗咖啡机"的后台任务（延迟 500ms 后打印"咖啡机已清洗"）。观察输出顺序，思考为什么"清洗咖啡机"在两杯咖啡之前完成。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+          <pre><code><span class="kw">import</span> kotlinx.coroutines.*
+
+<span class="kw">suspend fun</span> <span class="fn">brewCoffee</span>(<span class="param">type</span>: <span class="type">String</span>): <span class="type">String</span> {
+    <span class="fn">println</span>(<span class="str">"正在冲泡 $type ..."</span>)
+    <span class="fn">delay</span>(<span class="num">1500</span>)
+    <span class="kw">return</span> <span class="str">"$type 已做好"</span>
+}
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="cmt">// 后台任务：清洗咖啡机（不需要结果）</span>
+    <span class="fn">launch</span> {
+        <span class="fn">delay</span>(<span class="num">500</span>)
+        <span class="fn">println</span>(<span class="str">"咖啡机已清洗"</span>)
+    }
+
+    <span class="cmt">// 并发冲泡两杯咖啡（需要结果）</span>
+    <span class="kw">val</span> latte <span class="op">=</span> <span class="fn">async</span> { <span class="fn">brewCoffee</span>(<span class="str">"拿铁"</span>) }
+    <span class="kw">val</span> americano <span class="op">=</span> <span class="fn">async</span> { <span class="fn">brewCoffee</span>(<span class="str">"美式"</span>) }
+
+    <span class="fn">println</span>(<span class="str">"${latte.await()} & ${americano.await()}"</span>)
+}
+<span class="cmt">// 输出:
+// 正在冲泡 拿铁 ...
+// 正在冲泡 美式 ...
+// 咖啡机已清洗          ← 500ms 后
+// 拿铁 已做好 & 美式 已做好  ← 1500ms 后
+// 总耗时约 1.5 秒（并发），比串行的 3 秒快了一倍！</span></code></pre>
+          <p>"清洗咖啡机"只需要 500ms 就完成了，而两杯咖啡各需要 1500ms。三个任务同时启动，谁先做完谁先输出——这就是并发的魅力。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：理解调度器的用途 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为以下场景选择合适的调度器（<code>Dispatchers.Main</code>、<code>Dispatchers.IO</code>、<code>Dispatchers.Default</code>），并说明理由：</p>
+      <ol>
+        <li>从服务器下载一张图片</li>
+        <li>对下载的图片进行模糊处理（高斯模糊算法）</li>
+        <li>将处理后的图片显示在 <code>ImageView</code> 上</li>
+        <li>将处理后的图片保存到本地文件</li>
+      </ol>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+          <ol>
+            <li><strong>Dispatchers.IO</strong> — 下载图片是网络 IO 操作，大部分时间在等待服务器响应</li>
+            <li><strong>Dispatchers.Default</strong> — 高斯模糊是 CPU 密集型计算，需要大量运算</li>
+            <li><strong>Dispatchers.Main</strong> — 更新 UI 必须在主线程执行，这是 Android 的铁律</li>
+            <li><strong>Dispatchers.IO</strong> — 写文件是磁盘 IO 操作，不应该在主线程执行</li>
+          </ol>
+          <p>完整的代码流程大致如下：</p>
+          <pre><code>viewModelScope.<span class="fn">launch</span> {
+    <span class="cmt">// 1. IO 线程下载图片</span>
+    <span class="kw">val</span> rawImage <span class="op">=</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.IO) { <span class="fn">downloadImage</span>(url) }
+
+    <span class="cmt">// 2. Default 线程做图像处理</span>
+    <span class="kw">val</span> blurred <span class="op">=</span> <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.Default) { <span class="fn">applyBlur</span>(rawImage) }
+
+    <span class="cmt">// 3. Main 线程更新 UI</span>
+    imageView.setImageBitmap(blurred)
+
+    <span class="cmt">// 4. IO 线程保存文件</span>
+    <span class="fn">withContext</span>(<span class="type">Dispatchers</span>.IO) { <span class="fn">saveToFile</span>(blurred, path) }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：结构化并发与取消 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>编写一个程序，模拟"厨师同时做三道菜，但客人突然退单了"的场景：</p>
+      <ol>
+        <li>在 <code>runBlocking</code> 中用 <code>launch</code> 启动一个父协程</li>
+        <li>在父协程中用三个 <code>launch</code> 启动三道菜的制作（分别延迟 2秒、3秒、4秒），每道菜开始时打印"开始做 {菜名}"，完成时打印"{菜名} 做好了"</li>
+        <li>在主协程中等待 1.5 秒后取消父协程，模拟客人退单</li>
+        <li>观察输出，验证三道菜是否都被成功取消（没有打印"做好了"）</li>
+      </ol>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+          <pre><code><span class="kw">import</span> kotlinx.coroutines.*
+
+<span class="kw">fun</span> <span class="fn">main</span>() <span class="op">=</span> <span class="fn">runBlocking</span> {
+    <span class="kw">val</span> chef <span class="op">=</span> <span class="fn">launch</span> {
+        <span class="fn">launch</span> {
+            <span class="fn">println</span>(<span class="str">"开始做 宫保鸡丁"</span>)
+            <span class="fn">delay</span>(<span class="num">2000</span>)
+            <span class="fn">println</span>(<span class="str">"宫保鸡丁 做好了"</span>)
+        }
+        <span class="fn">launch</span> {
+            <span class="fn">println</span>(<span class="str">"开始做 红烧排骨"</span>)
+            <span class="fn">delay</span>(<span class="num">3000</span>)
+            <span class="fn">println</span>(<span class="str">"红烧排骨 做好了"</span>)
+        }
+        <span class="fn">launch</span> {
+            <span class="fn">println</span>(<span class="str">"开始做 清蒸鲈鱼"</span>)
+            <span class="fn">delay</span>(<span class="num">4000</span>)
+            <span class="fn">println</span>(<span class="str">"清蒸鲈鱼 做好了"</span>)
+        }
+    }
+
+    <span class="fn">delay</span>(<span class="num">1500</span>)
+    <span class="fn">println</span>(<span class="str">"客人退单了！取消所有菜品"</span>)
+    chef.<span class="fn">cancelAndJoin</span>()
+    <span class="fn">println</span>(<span class="str">"所有菜品已取消，清理厨房"</span>)
+}
+<span class="cmt">// 输出:
+// 开始做 宫保鸡丁
+// 开始做 红烧排骨
+// 开始做 清蒸鲈鱼
+// 客人退单了！取消所有菜品
+// 所有菜品已取消，清理厨房
+// （注意：没有任何"做好了"被打印——结构化并发确保了所有子协程都被成功取消）</span></code></pre>
+          <p>这就是结构化并发的威力：取消父协程，所有子协程自动被取消。不需要一个一个去停，不需要手动追踪哪些任务还在运行。实验室喊"紧急撤离"，所有实验自动安全关停。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ==================== 底部导航 ==================== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

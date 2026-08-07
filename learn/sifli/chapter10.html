@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第10章：渲染器与页面绘制 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="10" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：渲染器与页面绘制</h1>
+  <p class="chapter-subtitle">"艺术与工程，本是一体"——达芬奇画《蒙娜丽莎》要先调好画布、颜料与画笔；这章我们把电子书的"画布"（帧缓冲）、"画笔"（渲染器）、"颜料"（内置位图）一支支摆上台面，再看每一页是怎么一笔笔画出来的。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程——先有画布与画笔，才有画面；画得省、画得准，才是好画</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「工匠作画，先磨画布与画笔：画布是那块帧缓冲，画笔是那套渲染接口，颜料是内置的位图——这三样没齐，什么都画不出来。画布备好，再谈每一页怎么落笔（10.1-10.2）；颜料现成，再谈怎么摆进画面（10.3）。最后记住一句画训：墨水屏的每一笔都费电，<strong>只在真正该动笔时才动笔</strong>（10.4）。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 渲染器模块：帧缓冲、字体、图片合成 ========== -->
+  <h2>10.1 渲染器模块：帧缓冲、字体、图片合成</h2>
+
+  <p>README 的「目录结构」对 <code>lib/Epub/Renderer/</code> 只写了一句话：<strong>渲染器模块（帧缓冲、字体、图片合成）</strong>。六个字拆开看，正是这一章的三根柱子。先把术语铺平：<strong>帧缓冲</strong>（framebuffer）就是"屏幕所有像素在内存里的一张画布"——代码并不直接往屏幕写点，而是先把整页画进这块内存矩形，画完了再一次性地推给屏幕；<strong>合成</strong>（compositing）指把文字、位图、几何图形这些来源不同的元素，叠加画进同一块帧缓冲的过程。阅读器里所有的字、图、图标，最后都汇进同一张画布。</p>
+
+  <p>渲染器家族是一个三层继承链。最底层是抽象基类 <code>Renderer</code>（<code>Renderer.h</code>）：它把"画"这个动作拆成一堆纯虚原语——<code>draw_pixel</code>、<code>draw_text</code>、<code>draw_rect</code>、<code>fill_triangle</code>、<code>draw_image</code>、<code>show_img</code>、<code>clear_screen</code>、<code>flush_display</code> 等等，外加四边边距（<code>margin_top/bottom/left/right</code>，第 9 章设置的边距最终落在这里）和页面尺寸查询。中间层 <code>EpdiyFrameBufferRenderer</code> 把这个接口实现在<strong>帧缓冲 + FreeType 字形</strong>之上：构造函数里 <code>m_font_props = epd_font_properties_default()</code>、缺字回退 <code>fallback_glyph = '?'</code>、旋转设成 <code>EPD_ROT_INVERTED_PORTRAIT</code>，还预生成一条 <code>gamma_curve[256]</code> 伽马校正表（<code>GAMMA_VALUE = 1.0f / 0.8f</code>），让每个像素先过一遍灰阶校正再落笔。它持有四套字体指针（regular/bold/italic/bold_italic，本移植版为省内存四格都指向同一款 regular，见 <code>SF32Paper.cpp</code>），<code>draw_text</code> 最终调 <code>epd_write_string</code> 把字符串写进 <code>m_frame_buffer</code>。</p>
+
+  <p>再往下是两块板级渲染器。<code>SF32PaperRenderer</code>（SF32 板）在 <code>L2_NON_RET_BSS_SECT</code>（断电即失的普通 RAM 段）里声明了帧缓冲 <code>framebuffer1[EPD_WIDTH * EPD_HEIGHT / 2]</code>——注意 <code>/ 2</code>：这块屏幕是 <strong>4bpp 灰阶</strong>（每像素 4 位，16 级灰度，一个字节装两个像素），以 1032×758 的屏算，帧缓冲 ≈ 1032×758/2 ≈ 382 KiB（约 39 万字节）；<code>clear_screen</code> 就是 <code>memset(m_frame_buffer, 0xFF, ...)</code>（0xFF 每字节两像素全白）。<code>EpdiyRenderer</code>（通用 EPDiy 板）则负责最终刷屏：<code>flush_display</code> 里 <code>epd_hl_update_screen(&amp;m_hl, needs_gray_flush ? MODE_GC16 : MODE_DU, temperature)</code>——画面里有中间灰阶（抗锯齿文字、图片）就走 GC16 全刷，纯黑白就快得多走 DU 直接更新。<code>needs_gray</code> 这个标志，就是第 8 章那个 4bpp 字形缓存之外，渲染器自己记的"这页有没有灰"。</p>
+
+  <p>图片合成的入口在 <code>Renderer::draw_image</code>：先调 <code>get_image_helper</code> 根据文件后缀（<code>.jpg/.jpeg/.png</code>）或<strong>魔数</strong>（JPEG 开头 <code>FF D8 FF</code>、PNG 开头 <code>89 'P' 'N' 'G'</code>）挑出对应的 <code>JPEGHelper</code> / <code>PNGHelper</code>，解出尺寸、按显示区域缩放，然后<strong>逐像素</strong>回调 <code>renderer->draw_pixel</code> 把图片"糊"进帧缓冲。真彩色图片要转灰阶：<code>PNGHelper</code> 里一行 <code>gray = (r * 38 + g * 75 + b * 15) &gt;&gt; 7</code>——这是把 RGB 按人眼亮度权重压成 0–255 灰度的标准公式。解码失败就退而求其次画一个占位矩形。至此"帧缓冲 + 字体 + 图片合成"三根柱子都立起来了：任何页面，都只是往这张画布上添字、添图、添几何图形而已。</p>
+
+<pre><code><span class="cmt">/* lib/Epub/Renderer/Renderer.h：渲染抽象基类（节选） */</span>
+<span class="kw">class</span> Renderer
+{
+<span class="kw">protected</span>:
+  <span class="type">int</span> margin_top = <span class="num">0</span>;
+  <span class="type">int</span> margin_bottom = <span class="num">0</span>;
+  <span class="type">int</span> margin_left = <span class="num">0</span>;      <span class="cmt">// 第 9 章设置的边距落在这里</span>
+  <span class="type">int</span> margin_right = <span class="num">0</span>;
+
+<span class="kw">public</span>:
+  <span class="kw">virtual</span> <span class="kw">void</span> draw_pixel(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">uint8_t</span> color) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="type">int</span> get_text_width(<span class="kw">const char</span> *text, <span class="kw">bool</span> bold = <span class="kw">false</span>, <span class="kw">bool</span> italic = <span class="kw">false</span>) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="kw">void</span> draw_text(<span class="type">int</span> x, <span class="type">int</span> y, <span class="kw">const char</span> *text, <span class="kw">bool</span> bold = <span class="kw">false</span>, <span class="kw">bool</span> italic = <span class="kw">false</span>) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="kw">void</span> draw_rect(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height, <span class="type">uint8_t</span> color = <span class="num">0</span>) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="kw">void</span> fill_triangle(<span class="type">int</span> x0, <span class="type">int</span> y0, <span class="type">int</span> x1, <span class="type">int</span> y1,
+                                  <span class="type">int</span> x2, <span class="type">int</span> y2, <span class="type">uint8_t</span> color) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="kw">void</span> draw_image(<span class="kw">const std::string</span> &amp;filename, <span class="kw">const uint8_t</span> *data,
+                              <span class="type">size_t</span> data_size, <span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height);
+  <span class="kw">virtual</span> <span class="kw">void</span> show_img(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height,
+                            <span class="kw">const uint8_t</span> *img_buffer) = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="kw">void</span> clear_screen() = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="kw">void</span> flush_display(){};
+  <span class="kw">virtual</span> <span class="type">int</span> get_page_width() = <span class="num">0</span>;
+  <span class="kw">virtual</span> <span class="type">int</span> get_page_height() = <span class="num">0</span>;
+};</code></pre>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer.h：帧缓冲、清屏与刷屏 */</span>
+<span class="type">uint8_t</span> *m_frame_buffer;                    <span class="cmt">// 画布：4bpp 灰阶（每字节两像素）</span>
+
+<span class="kw">void</span> clear_screen()
+{
+    memset(m_frame_buffer, <span class="num">0xFF</span>, EPD_WIDTH * EPD_HEIGHT / <span class="num">2</span>);  <span class="cmt">// 全白</span>
+}
+<span class="cmt">/* EpdiyRenderer.h：最终刷屏，按有无灰阶选模式 */</span>
+<span class="kw">void</span> flush_display()
+{
+    epd_hl_update_screen(&amp;m_hl, needs_gray_flush ? MODE_GC16 : MODE_DU, temperature);
+    needs_gray_flush = <span class="kw">false</span>;
+}
+
+<span class="cmt">/* SF32PaperRenderer.h：帧缓冲在断电即失 RAM 段声明（1032×758 屏 ≈ 382 KiB） */</span>
+L2_NON_RET_BSS_SECT_BEGIN(frambuf)
+L2_NON_RET_BSS_SECT(frambuf, ALIGN(<span class="num">64</span>) <span class="kw">static uint8_t</span> framebuffer1[EPD_WIDTH * EPD_HEIGHT / <span class="num">2</span>]);
+L2_NON_RET_BSS_SECT_END</code></pre>
+
+  <table>
+    <tr><th>渲染器层</th><th>文件</th><th>职责</th></tr>
+    <tr><td>抽象基类</td><td><code>Renderer.h / Renderer.cpp</code></td><td>定义画图原语接口、四边边距、图片解码分派与占位回退</td></tr>
+    <tr><td>帧缓冲渲染器</td><td><code>EpdiyFrameBufferRenderer.h</code></td><td>帧缓冲（4bpp）、四套字体、伽马校正、灰阶检测</td></tr>
+    <tr><td>板级渲染器</td><td><code>SF32PaperRenderer.h / EpdiyRenderer.h</code></td><td>分配帧缓冲内存、驱动 LCD、按 GC16/DU 刷屏</td></tr>
+    <tr><td>图片解码</td><td><code>PNGHelper.cpp / JPEGHelper.cpp</code></td><td>PNG/JPEG 解码、缩放、RGB→灰阶、逐像素合成</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>先有画布，后有画面。整个阅读器没有哪一行代码"直接画屏"，全部画进 <code>m_frame_buffer</code>，画完才 <code>flush</code> 一次。这正是电子墨水屏的"绘一幅、裱一幅"工作方式——也让你所有页面都天然共享同一套画图接口。写任何 GUI 底层前，先想清楚：你的"画布"在哪？</p>
+  </div>
+
+  <!-- ========== 10.2 页面绘制：epub_screen.cpp 与各页面 ========== -->
+  <h2>10.2 页面绘制：各页面由谁画、由谁管</h2>
+
+  <p>画布和画笔备齐了，接下来看"每一页"怎么落笔。README 的「目录结构」说得清楚：<code>src/epub_screen.cpp</code> 负责<strong>各页面绘制与事件处理</strong>。翻它的源码，能看到一组"<code>render_xxx</code> 负责画、<code>handleXxxPage</code> 负责响应"的成对函数。<strong>主页面</strong>：<code>render_main_page</code> 画一个居中大标题 <code>"S I F L I"</code>、底部左右各一个 <code>&lt;</code> / <code>&gt;</code> 箭头和中间一行选项文本——选项由 <code>MainOption</code> 枚举决定：<code>打开书库 / 进入设置 / 查看天气 / 继续阅读</code>（无阅读记录时显示"无阅读记录"）；<code>handleMainPage</code> 响应 UP/DOWN 让选项循环切换，SELECT 则用 <code>rt_kprintf</code> 打印 1–4 表示选中哪个（真正的跳转由 <code>main.cpp</code> 的状态机接手）。<strong>功能设置页</strong>：<code>render_settings_page</code> 用 <code>draw_setting_row</code> 这个 lambda 逐行画"触控开关 / 超时关机 / 全刷周期 / 蓝牙 / 阅读设置 / 确认"，选中行画五层嵌套矩形高亮；<code>handleSettingsPage</code> 用返回值向外汇报——<code>0</code> 继续留在设置页、<code>1</code> 回主页、<code>2</code> 进阅读设置（第 9 章就是靠这个 2 进入的）。</p>
+
+  <p>剩下的页面分散在几处，但"画 + 管"的套路完全一致。<code>main.cpp</code> 用状态机把页面串起来（第 11 章会总览）：书库页 <code>handleEpubList</code>（每页 4 本 + 底部"上一页/主页面/下一页"）、目录页 <code>handleEpubTableContents</code>（每页 6 项）、阅读页 <code>handleEpub</code> 里 <code>reader->render()</code> 交给 <code>EpubReader</code>（含覆盖操作层）；<code>reading_settings.cpp</code> 管阅读设置页（第 9 章）；天气页 <code>handleWeatherPage</code> / <code>handleWeatherCityPage</code> 也住在 <code>epub_screen.cpp</code>。整个 <code>AppUIState</code> 枚举（<code>type.h</code>）列出 12 个页面状态：主页面、书库、目录、阅读、阅读设置、功能设置、天气、城市选择、欢迎、低电量、充电、关机——每一页都对应一对"绘制函数 + 事件处理函数"。</p>
+
+  <p>页面上还有一根"公共状态栏"：<code>draw_status_bar</code> 在页面顶部画电量与充电状态——电量画成右缘一块实时缩放的黑色矩形（<code>draw_battery_level</code>），充电时再叠一个闪电图标（<code>draw_lightning</code> 用两个三角形拼成），外加蓝牙开关与连接图标。它被几乎所有页面调用，是"合成"最直观的例子：电池、闪电、蓝牙、正文，全都在同一块画布上叠加。至于每个页面如何既画又登记触控区——<code>render_main_page</code> 里 <code>add_area(...)</code> 为箭头和选项登记可点击区域，事件来临时 <code>UIRegionsManager</code> 命中检测后转发给对应处理函数（第 5 章触控、第 13 章覆盖层都有它的戏份）。</p>
+
+<pre><code><span class="cmt">/* src/epub_screen.cpp：主页面选项文本（节选） */</span>
+<span class="kw">const char</span> *opt_text = <span class="kw">NULL</span>;
+<span class="kw">bool</span> has_continue_reading =
+    (epub_list_state.num_epubs &gt; <span class="num">0</span> &amp;&amp; g_last_read_index &gt;= <span class="num">0</span> &amp;&amp;
+     g_last_read_index &lt; epub_list_state.num_epubs);
+<span class="kw">switch</span> (main_option)
+{
+  <span class="kw">case</span> OPTION_OPEN_LIBRARY:     opt_text = <span class="str">"打开书库"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_ENTER_SETTINGS:   opt_text = <span class="str">"进入设置"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_WEATHER:          opt_text = <span class="str">"查看天气"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_CONTINUE_READING:
+    opt_text = has_continue_reading ? <span class="str">"继续阅读"</span> : <span class="str">"无阅读记录"</span>;
+    <span class="kw">break</span>;
+}
+<span class="cmt">/* 给箭头和选项登记触控区域（第 5 章的 UIRegionsManager） */</span>
+add_area(left_arrow_x, left_arrow_y, rect_w, rect_h);
+add_area(right_arrow_x, right_arrow_y, rect_w, rect_h);
+add_area(option_x, option_y, opt_w, opt_h);</code></pre>
+
+<pre><code><span class="cmt">/* src/epub_screen.cpp：功能设置页的返回值协议 */</span>
+<span class="cmt">// 返回值：0=继续，1=回主页，2=进阅读设置</span>
+<span class="type">int</span> handleSettingsPage(Renderer *renderer, UIAction action, <span class="kw">bool</span> needs_redraw)
+{
+    <span class="kw">switch</span> (action) {
+    <span class="kw">case</span> SELECT:
+        <span class="kw">if</span> (settings_selected_idx == SET_TOUCH) {
+            <span class="cmt">// 切换触控开关，同步触控硬件上电/下电 ...</span>
+        }
+        <span class="kw">if</span> (settings_selected_idx == SET_READING_SETTINGS)
+            <span class="kw">return</span> <span class="num">2</span>;      <span class="cmt">// 进阅读设置（第 9 章入口之一）</span>
+        <span class="kw">if</span> (settings_selected_idx == SET_CONFIRM)
+            <span class="kw">return</span> <span class="num">1</span>;      <span class="cmt">// 确认并回主页</span>
+        <span class="kw">break</span>;
+    <span class="cmt">/* UP/DOWN / SELECT_BOX / PREV_OPTION / NEXT_OPTION ... */</span>
+    }
+    <span class="kw">return</span> <span class="num">0</span>;                <span class="cmt">// 默认：继续留在设置页</span>
+}</code></pre>
+
+  <table>
+    <tr><th>页面</th><th>绘制 / 事件处理函数</th><th>所在文件</th></tr>
+    <tr><td>主页面</td><td><code>render_main_page</code> / <code>handleMainPage</code></td><td><code>epub_screen.cpp</code></td></tr>
+    <tr><td>功能设置页</td><td><code>render_settings_page</code> / <code>handleSettingsPage</code></td><td><code>epub_screen.cpp</code></td></tr>
+    <tr><td>天气页 / 城市选择</td><td><code>handleWeatherPage</code> / <code>handleWeatherCityPage</code></td><td><code>epub_screen.cpp</code></td></tr>
+    <tr><td>书库页</td><td><code>handleEpubList</code></td><td><code>main.cpp</code></td></tr>
+    <tr><td>目录页</td><td><code>handleEpubTableContents</code></td><td><code>main.cpp</code></td></tr>
+    <tr><td>阅读页</td><td><code>handleEpub</code> + <code>reader->render()</code></td><td><code>main.cpp</code> / <code>EpubReader.cpp</code></td></tr>
+    <tr><td>阅读设置页</td><td><code>reading_settings_draw</code> / <code>reading_settings_handle_action</code></td><td><code>reading_settings.cpp</code></td></tr>
+    <tr><td>欢迎 / 低电量 / 充电 / 关机</td><td><code>draw_welcome_page</code> 等</td><td><code>main.cpp</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>每一页都是一张"小画"：先 <code>fill_rect</code> 铺底色，再画标题、列表、图标，最后 <code>flush_display</code> 裱起来。页面之间靠状态机跳转、靠函数返回值说话（设置页的 0/1/2 就是它的"话"）。你在画自己的一页时，也可以套这个公式：铺底 → 构图 → 落款 → 刷屏。</p>
+  </div>
+
+  <!-- ========== 10.3 内置资源：src/assets/ 位图 C 数组 ========== -->
+  <h2>10.3 内置资源：src/assets/ 的位图 C 数组</h2>
+
+  <p>画到"欢迎 / 低电量 / 充电 / 关机"这几页时，画的不是文字，而是一整幅图。<strong>位图</strong>（bitmap）就是用像素点阵描述的画面数据——一格一个亮度值，跟文字用字形、图形用矢量完全不是一回事。这些图在 <code>src/assets/</code> 下以 <strong>C 数组</strong> 形式编译进固件：<code>welcome.c</code> 的 <code>welcome_map</code>（约 650×150 横幅，48,750 字节）、<code>low_power.c</code> 的 <code>low_power_map</code>、<code>chargeing.c</code> 的 <code>chargeing_map</code>、<code>shutdown.c</code> 的 <code>shutdown_map</code>（后三者都是 200×200，各 20,000 字节），外加 <code>bluetooth_icons.c</code> 的 <code>bluetooth_connected_map</code> / <code>bluetooth_disconnected_map</code>（24×24）。它们和内置字体一样走"编译期转数组"的路子——只是这次用的是 <code>scripts/imgconvert.py</code> 而不是字体脚本。</p>
+
+  <p>先看 <code>imgconvert.py</code> 把 PNG 变成数组的四个步骤：PIL 打开原图 → <code>im.convert(mode='L')</code> 转灰度 → <code>im.thumbnail(...)</code> 等比缩到显示尺寸 → 逐像素打包成 <strong>4bpp</strong>（每字节两个像素，高 4 位装第一个像素、低 4 位装第二个）。这解释了为什么内存里看到的都是 <code>0xFF</code> / <code>0x00</code> 这类字节：一个字节同时管着左右两个点的亮度。绘制时，<code>main.cpp</code> 的 <code>draw_welcome_page</code> / <code>draw_low_power_page</code> / <code>draw_charge_page</code> / <code>draw_shutdown_page</code> 套路完全一致：先铺满底色（欢迎页铺黑、关机页铺白），画上状态栏，再把 <code>xxx_map</code> 居中贴出——调用的是 <code>EpdiyFrameBufferRenderer::show_img</code>，底层是 <code>epd_draw_rotated_transparent_image</code>（以 <code>0xE0</code> 为透明色做合成），最后 <code>flush_display</code> / <code>request_flush</code> 一次性上屏。</p>
+
+  <p>还有一类"小图"藏在 <code>lib/Images/</code>：<code>hourglass.h</code>（100×100 沙漏）和 <code>warning.h</code>（100×100 警告）。<code>SF32Paper.cpp</code> 构造渲染器时把 <code>hourglass_data</code> 传给 <code>busy_icon</code> 参数，于是 <code>show_busy()</code> 在加载书、切字体等"忙"的时候，把沙漏居中画到画布上（第 9 章 <code>reading_settings_apply</code> 里那句 <code>renderer->show_busy()</code> 画的正是它）。这些 C 数组虽然看着又长又密，本质都是"颜料"：经过工具链压缩成二进制，随固件烧进 Flash，开机即用、不占 PSRAM——和内置字体的思路一脉相承。</p>
+
+<pre><code><span class="cmt">/* scripts/imgconvert.py：PNG → 灰度 → 4bpp C 数组（节选） */</span>
+<span class="kw">from</span> PIL <span class="kw">import</span> Image, ImageOps
+
+im = Image.open(args.inputfile)
+im = im.convert(mode=<span class="str">'L'</span>)                       <span class="cmt"># 转灰度</span>
+im.thumbnail((args.max_width, args.max_height), Image.ANTIALIAS)
+
+<span class="kw">for</span> y <span class="kw">in</span> range(<span class="num">0</span>, im.size[<span class="num">1</span>]):
+    <span class="kw">for</span> x <span class="kw">in</span> range(<span class="num">0</span>, im.size[<span class="num">0</span>]):
+        l = im.getpixel((x, y))
+        <span class="kw">if</span> x % <span class="num">2</span> == <span class="num">0</span>:
+            byte = l &gt;&gt; <span class="num">4</span>          <span class="cmt"># 高 4 位 = 第一个像素</span>
+        <span class="kw">else</span>:
+            byte |= l &amp; <span class="num">0xF0</span>       <span class="cmt"># 低 4 位 = 第二个像素</span>
+            f.write(<span class="str">"0x{:02X}, "</span>.format(byte))</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：关机页绘制（节选） */</span>
+<span class="kw">void</span> draw_shutdown_page()
+{
+    renderer-&gt;fill_rect(<span class="num">0</span>, <span class="num">0</span>, renderer-&gt;get_page_width(), renderer-&gt;get_page_height(), <span class="num">255</span>);  <span class="cmt">// 铺白</span>
+    renderer-&gt;set_margin_top(<span class="num">35</span>);
+    draw_status_bar(renderer, battery);                       <span class="cmt">// 顶部状态栏</span>
+    <span class="kw">const int</span> img_width = <span class="num">200</span>, img_height = <span class="num">200</span>;
+    EpdiyFrameBufferRenderer *fb_renderer =
+        <span class="kw">static_cast</span>&lt;EpdiyFrameBufferRenderer*&gt;(renderer);
+    fb_renderer-&gt;show_img(center_x - img_width / <span class="num">2</span>, center_y - img_height / <span class="num">2</span>,
+                          img_width, img_height, shutdown_map);   <span class="cmt">// 居中贴位图</span>
+    <span class="cmt">/* ... 画"请长按 Key1 开机"文字，最后 flush_display() */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>文件（src/assets/）</th><th>数组符号</th><th>尺寸（4bpp 字节）</th><th>用途</th></tr>
+    <tr><td><code>welcome.c</code></td><td><code>welcome_map</code></td><td>48,750（约 650×150）</td><td>欢迎 / 熄屏页横幅</td></tr>
+    <tr><td><code>low_power.c</code></td><td><code>low_power_map</code></td><td>20,000（200×200）</td><td>低电量页图标</td></tr>
+    <tr><td><code>chargeing.c</code></td><td><code>chargeing_map</code></td><td>20,000（200×200）</td><td>充电页图标</td></tr>
+    <tr><td><code>shutdown.c</code></td><td><code>shutdown_map</code></td><td>20,000（200×200）</td><td>关机页图标</td></tr>
+    <tr><td><code>bluetooth_icons.c</code></td><td><code>bluetooth_connected/disconnected_map</code></td><td>288（24×24）</td><td>状态栏蓝牙图标</td></tr>
+    <tr><td>lib/Images/<code>hourglass.h</code></td><td><code>hourglass_data</code></td><td>5,000（100×100）</td><td>忙碌图标（show_busy）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>颜料要备好，更要"画得对、存得省"。位图统一压成 4bpp 灰阶、一个字节管两个像素——画面只有 16 级灰，却能省下一半内存；开机即从 Flash 直读，不占 PSRAM。下次你要往固件里塞图片，先问自己：真的需要真彩色吗？压成灰阶省一半，值不值？</p>
+  </div>
+
+  <!-- ========== 10.4 刷新策略：只在真正变化时刷屏 ========== -->
+  <h2>10.4 刷新策略：避免无效刷新</h2>
+
+  <p>画布、画笔、颜料都齐了，最后一道功课是"<strong>什么时候才该动笔</strong>"。电子墨水屏的每一帧刷新都贵：全屏刷新要数百毫秒、且耗电（第 1 章讲过静态零功耗、翻页才耗电），所以刷得越少，越省电、越耐用。第 6 章讲电量管理时提过"充电状态变化可触发页面刷新（仅在百分比或充电状态真正变化时刷屏，避免无效刷新）"——这一节就落到代码上，看 <code>main.cpp</code> 怎么把"变化才刷"做成纪律。</p>
+
+  <p>第一个防无效刷新的哨兵是 <code>charge_full</code> 标志。<code>MSG_UPDATE_CHARGE_STATUS</code> 消息到达时，先查电量：<code>percentage &gt;= 98</code> 且 <code>charge_full == false</code>，才执行一次 <code>clear_charge_icon</code> + <code>request_flush</code>（把状态栏的闪电图标清掉），随即置 <code>charge_full = true</code>——之后同样的满电消息再来，直接 <code>continue</code> 跳过，不重复刷；只有电量掉回 <code>&lt; 98</code> 才复位 <code>charge_full</code> 并重绘状态栏。README 说的"电量满时（≥98%）自动清除充电图标"，背后就是"满了只刷一次"。</p>
+
+  <p>第二个哨兵是主循环末尾的电池比对。每一次循环都重读电量百分比和充电状态，但只有 <code>cur_percent != last_battery_percent || cur_charging != last_battery_charging</code> 时，才调用 <code>draw_status_bar</code> + <code>request_flush</code>，然后更新上次值。蓝牙也同理：<code>current_bluetooth_connected != last_bluetooth_connected</code> 才重画。这一整套"先比对、后刷新"的写法，把"状态有没有真变"当成刷屏的前置条件——状态没变，画面就不动，墨水屏继续零功耗定格，也不会有毫无意义的闪烁。</p>
+
+  <p>串起来看，这章就是达芬奇的"一幅画的诞生"：帧缓冲是画布，渲染器是画笔，位图是颜料，页面函数是构图，刷新纪律是"惜墨如金"。而这一切最终都服务于阅读这件事本身——字画得清楚、图画得省、屏刷得少。第 11 章我们会把这些页面放进完整的 UI 状态机里，看它们如何被统一调度。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：满电只清一次充电图标（MSG_UPDATE_CHARGE_STATUS） */</span>
+<span class="kw">if</span> (ui_action == MSG_UPDATE_CHARGE_STATUS)
+{
+    <span class="kw">if</span> (battery) {
+        <span class="type">int</span> percentage = battery-&gt;get_percentage();
+        <span class="kw">if</span> (percentage &gt;= <span class="num">98</span> &amp;&amp; charge_full == <span class="kw">false</span>) {
+            clear_charge_icon(renderer);          <span class="cmt">// 清掉闪电图标</span>
+            request_flush();                      <span class="cmt">// 只刷这一次</span>
+            charge_full = <span class="kw">true</span>;               <span class="cmt">// 之后满电消息直接跳过</span>
+        } <span class="kw">else if</span> (percentage &lt; <span class="num">98</span>) {
+            charge_full = <span class="kw">false</span>;              <span class="cmt">// 掉出满电，重新允许刷新</span>
+            draw_status_bar(renderer, battery);
+            request_flush();
+        }
+    }
+    <span class="kw">continue</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：主循环——状态真正变化才刷屏 */</span>
+<span class="cmt">// 电池状态 + 刷屏（仅在电量百分比或充电状态变化时才刷新）</span>
+<span class="kw">if</span> (battery) {
+    <span class="type">int</span> cur_percent = battery-&gt;get_percentage();
+    <span class="kw">bool</span> cur_charging = battery-&gt;is_charging();
+    <span class="kw">if</span> (cur_percent != last_battery_percent || cur_charging != last_battery_charging) {
+        draw_status_bar(renderer, battery);
+        request_flush();
+        last_battery_percent = cur_percent;
+        last_battery_charging = cur_charging;
+    }
+}
+<span class="cmt">// 蓝牙：连接状态变化才重画（节选）</span>
+<span class="kw">if</span> (current_bluetooth_connected != last_bluetooth_connected) {
+    g_bluetooth_connected = current_bluetooth_connected;
+    draw_status_bar(renderer, battery);
+    request_flush();
+    last_bluetooth_connected = current_bluetooth_connected;
+}</code></pre>
+
+  <table>
+    <tr><th>触发点</th><th>刷新条件</th><th>动作</th></tr>
+    <tr><td>满电消息</td><td><code>percentage >= 98</code> 且 <code>!charge_full</code></td><td>清充电图标 + 刷一次，置 <code>charge_full</code></td></tr>
+    <tr><td>掉出满电</td><td><code>percentage < 98</code></td><td>复位 <code>charge_full</code>，重绘状态栏 + 刷屏</td></tr>
+    <tr><td>主循环电池</td><td>百分比或充电状态真正变化</td><td><code>draw_status_bar</code> + <code>request_flush</code></td></tr>
+    <tr><td>蓝牙连接</td><td>连接状态变化</td><td>重画状态栏 + 刷屏</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>惜墨如金，是电子墨水屏的美德。状态没变就不刷新，画面定格、电量为零——这是第 6 章低功耗哲学在绘制层的落点。写任何"轮询式刷新"的代码，都该先画一条分界线：哪些信号值得刷新，哪些直接丢弃？一条 <code>charge_full</code>，就省下了几百次本可避免的全屏刷新。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：渲染器四层 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把 <code>Renderer</code>、<code>EpdiyFrameBufferRenderer</code>、<code>SF32PaperRenderer</code>、<code>EpdiyRenderer</code> 按"抽象基类 → 帧缓冲渲染器 → 板级渲染器"的顺序排好，并各自说一句职责。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 10.1 的表格：接口定义、画布 + 字体 + 灰阶、内存分配 + 刷屏。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>Renderer</code>（抽象基类）定义画图原语接口与边距；<code>EpdiyFrameBufferRenderer</code> 在 4bpp 帧缓冲上实现这些原语、管四套字体与伽马校正；<code>SF32PaperRenderer</code>（SF32 板）在断电即失 RAM 段分配帧缓冲并接 LCD 驱动；<code>EpdiyRenderer</code>（通用 EPDiy 板）负责按有无灰阶选 <code>MODE_GC16</code>/<code>MODE_DU</code> 刷屏。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：帧缓冲与 4bpp <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为什么帧缓冲是 <code>EPD_WIDTH * EPD_HEIGHT / 2</code> 字节？以 1032×758 的屏幕算，帧缓冲约多大？<code>clear_screen</code> 为什么是 <code>memset(..., 0xFF, ...)</code>？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>4bpp 每像素 4 位、每字节两像素；0xFF 即每字节两像素全白。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>屏幕是 4bpp 灰阶（每像素 4 位 = 16 级灰度），一个字节装两个像素，所以字节数是像素数的一半。1032×758/2 = 391,128 字节 ≈ 382 KiB。<code>clear_screen</code> 把整块画布置成 <code>0xFF</code>——4 位全是 1 表示白色，一个字节的两个像素同时变白，即"整屏清成白纸"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：图片合成 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>get_image_helper</code> 如何判断一张图该用 JPEG 还是 PNG 解码器？真彩色图片进帧缓冲前为什么、以及如何转成灰阶？解码失败时渲染器怎么兜底？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先看文件后缀，再看数据头魔数（JPEG 为 FF D8 FF、PNG 为 89 'P' 'N' 'G'）；灰阶公式是 r*38 + g*75 + b*15 再右移 7 位；失败画占位矩形。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>按优先级：文件名含 <code>.jpg/.jpeg/.png</code>，或数据开头是 JPEG 魔数 <code>FF D8 FF</code> / PNG 魔数 <code>89 'P' 'N' 'G'</code>，命中即创建并复用对应 <code>ImageHelper</code>。墨水屏是灰阶的，所以解码后逐像素用 <code>gray = (r*38 + g*75 + b*15) &gt;&gt; 7</code> 把人眼加权亮度压成 0–255 灰阶，再 <code>draw_pixel</code> 画进帧缓冲；解码失败则在目标区域画一个占位矩形（<code>draw_image</code> 里的兜底）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：刷新纪律 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>结合第 6 章，说明 <code>charge_full</code> 标志为什么能"避免无效刷新"。如果把主循环里"百分比或充电状态变化才刷新"改成"每次都刷新"，会有什么后果？请给出完整推理链。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>电子墨水屏全刷数百毫秒、且每次刷新都耗电；满电后状态不再变，反复刷只会白耗电并造成闪烁。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>电子墨水屏刷新一帧要数百毫秒并耗电（第 1、6 章），静态定格零功耗。<code>charge_full</code> 让"满电"这个状态只生效一次：第一次 ≥98% 时清图标并刷屏、置位，之后同样的满电消息直接跳过，不再重复刷；只有掉到 98% 以下才复位，保证下次满电还能再清一次。若改成每次都刷新，充电状态不变时仍会反复全屏刷新——既白白消耗电池，又让屏幕无谓闪烁，还拖慢主循环。这条"先比对、后刷新"的纪律，本质是把低功耗的账算到每一帧上。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

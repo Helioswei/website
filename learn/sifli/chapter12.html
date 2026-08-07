@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第12章：书库、目录与阅读流程 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="12" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第12章：书库、目录与阅读流程</h1>
+  <p class="chapter-subtitle">「狄仁杰断案，重流程、重证据」——读完一本书，像破一件案子：先过书库这道"案卷架"（12.2），再翻目录这本"卷宗索引"（12.3），最后才进阅读页这个"庭审现场"（12.1）。中间的每个按钮、每下触控，都有代码作证；案子的尾声，还有一桩"旧案重审"——继续阅读（12.4）。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析——把阅读流程拆成"书库 → 目录 → 阅读"三个环节，逐环取证，最后回看"继续阅读"这份记录</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「查案重流程，办案重证据。这套阅读流程就是一条完整的证据链：书库页是案卷架，目录页是卷宗索引，阅读页是庭审现场——三者一环扣一环（12.1），每次翻页、每个按钮、每下触控，都能在源码里找到对应的证词（12.2-12.3）。最后还有一桩旧案重审：继续阅读（12.4），要翻开上次没读完的那一页，得先弄清那份"卷宗"从哪写、从哪读、何时失效。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 12.1 阅读主流程：书库 → 目录 → 阅读 ========== -->
+  <h2>12.1 阅读主流程：书库 → 目录 → 阅读</h2>
+
+  <p>README 的「书库页与目录页」开门见山：<strong>阅读流程：书库页 → 目录页 → 阅读页</strong>。在书库页选中书籍后，将先进入目录页，再由目录页选择章节跳入阅读。也就是说，读一本书要过两道"门"：先在书库里挑书，再在目录里挑章节，然后才真正进入阅读。这不是多此一举——对一本动辄几十章的书，直接进阅读页让用户从第一页翻起反而低效，先在目录里定位章节，阅读体验好得多。</p>
+
+  <p>状态迁移上，这条主线对应 `handleEpubList` 和 `handleEpubTableContents` 两个函数的 `SELECT` 分支。书库页里按下 SELECT：`ui_state = SELECTING_TABLE_CONTENTS`，新建 `EpubToc`、`load()`、重绘目录页。目录页里再按 SELECT：`ui_state = READING_EPUB`，新建 `EpubReader`，用 <code>set_state_section(contents-&gt;get_selected_toc())</code> 把阅读起点定位到选中的章节，然后 `load()` 进入阅读。两个"关口"各司其职：书库管"读哪本"，目录管"从哪章起"。</p>
+
+  <p>这条主线和上游 ESP32 项目一脉相承——上游的三态状态机（`SELECTING_EPUB → SELECTING_TABLE_CONTENTS → READING_EPUB`）就是这三页，连两个状态结构体也原样继承：`EpubListState`（书库状态：当前选中项、书的总数、最多 20 本书的路径 / 标题 / 当前章节 / 当前页码）和 `EpubTocState`（目录状态：当前选中项、上次渲染页），在 `main.cpp` 里都声明成普通全局变量。值得一提的小差异：`State.h` 里还留着上游 "this is held in the RTC memory" 的注释，但本移植版并没有把它们放进 RTC 内存——又一次"注释跟着代码搬了家、含义却没跟上"。</p>
+
+  <p>另一个差异在入口：上游开机直接进书库页，本项目默认进主页面，再由主页面"打开书库"进入这条主线（第 11 章的迁移表已经画过）。所以完整的一条阅读路径是：<strong>主页面 → 书库 → 目录 → 阅读</strong>——主页面是多出来的一道总闸，书库只是它的一个分岔。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：书库页选中书籍 → 进入目录页（handleEpubList 的 SELECT） */</span>
+<span class="kw">else</span>
+{
+    ui_state = SELECTING_TABLE_CONTENTS;
+    contents = <span class="kw">new</span> EpubToc(epub_list_state.epub_list[epub_list_state.selected_item],
+                               epub_index_state, renderer);
+    contents-&gt;load();
+    contents-&gt;set_needs_redraw();
+    handleEpubTableContents(renderer, NONE, <span class="kw">true</span>);
+    <span class="kw">return</span>;
+}
+<span class="kw">break</span>;</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：目录页选中章节 → 跳入阅读页（handleEpubTableContents 的 SELECT） */</span>
+<span class="kw">else</span>
+{
+  ui_state = READING_EPUB;
+  reader = <span class="kw">new</span> EpubReader(epub_list_state.epub_list[epub_list_state.selected_item], renderer);
+  reader-&gt;set_state_section(contents-&gt;get_selected_toc());   <span class="cmt">// 从选中的章节开始</span>
+  reader-&gt;load();
+  g_last_read_index = epub_list_state.selected_item;          <span class="cmt">// 记下"最近一次阅读"（12.4）</span>
+  <span class="kw">delete</span> contents;
+  handleEpub(renderer, NONE);
+  <span class="kw">return</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>环节</th><th>对应状态</th><th>做什么</th><th>处理函数</th></tr>
+    <tr><td>书库页</td><td><code>SELECTING_EPUB</code></td><td>挑书：每页 4 本</td><td><code>handleEpubList</code></td></tr>
+    <tr><td>目录页</td><td><code>SELECTING_TABLE_CONTENTS</code></td><td>挑章节：每页 6 项</td><td><code>handleEpubTableContents</code></td></tr>
+    <tr><td>阅读页</td><td><code>READING_EPUB</code></td><td>逐页读书 + 覆盖操作层</td><td><code>handleEpub</code> / <code>reader-&gt;render()</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>破案先看流程。书库→目录→阅读这条链是整套 UI 的"脊椎"，所有页面都挂在它旁边——画流程图时先画这条链，再把设置、天气、电源页当成支线挂上去。记住一句口诀：书库管"读哪本"，目录管"从哪章起"，阅读管"读到哪"。</p>
+  </div>
+
+  <!-- ========== 12.2 书库页：每页 4 项、底部三按钮 ========== -->
+  <h2>12.2 书库页：每页 4 项、底部三按钮</h2>
+
+  <p>书库页的数据在 `EpubListState`（`EpubList/State.h`）：`num_epubs` 是书的总数，`selected_item` 是当前选中的书，`epub_list[]` 最多装 20 本（`MAX_EPUB_LIST_SIZE = 20`），每本记录路径、标题、当前章节、当前页码。显示时按 `EPUBS_PER_PAGE = 4` 分页（`EpubList.cpp` 顶部 <code>#define EPUBS_PER_PAGE 4</code>）：<code>cell_height = (屏高 - 底部按钮区 - 底部间距) / 4</code>，每个单元格画封面（`get_cover_image_item` + `draw_image`）加书名，并为每一项注册一个触控区域（<code>static_add_area(..., (i % 4))</code>，页内偏移 0–3）。</p>
+
+  <p>底部是一排三个等宽按钮：<strong>上一页 / 主页面 / 下一页</strong>，注册为触控区域 4 / 5 / 6。选中的按钮画五层嵌套边框高亮，未选中的画细描边。交互逻辑全在 `handleEpubList`：上下键移动选中项，走到页首 / 页尾继续按，就切入底部按钮选择模式（`library_bottom_mode = true`），`library_bottom_idx` 取 0 / 1 / 2 对应三个按钮；再按 SELECT，`library_bottom_idx == 1` 回主页面（`back_to_main_page()`），`== 0` / `== 2` 翻上一页 / 下一页。翻页的本质是重设 <code>selected_item = 新页的起始索引</code> 并 `set_needs_redraw()`。</p>
+
+  <p>触控走的是"<strong>先选中再确认</strong>"机制（README 明说"以降低误触"），代码在 `SF32_TouchControls.cpp`。第一次点某本书：把 `book_index` 记为这一页内的偏移（0–3），置 `waiting_for_confirmation = true`，发出 `SELECT_BOX` 动作——书库页收到后 `epub_list-&gt;switch_book(global_index)` 把选中框移到这本书。第二次点<strong>同一本</strong>：这次才发出 `SELECT`，书库页转入目录页。想换书？点另一本，`waiting_for_confirmation` 重新记为那本书。两次点击必须命中同一本才生效——这就是"先选中，再确认"。</p>
+
+<pre><code><span class="cmt">/* lib/Epub/EpubList/EpubList.cpp：书库页，每页 4 本 + 底部三按钮 */</span>
+<span class="kw">#define</span> EPUBS_PER_PAGE <span class="num">4</span>
+...
+<span class="type">int</span> current_page = state.selected_item / EPUBS_PER_PAGE;
+<span class="type">int</span> cell_height = (renderer-&gt;get_page_height() - bottom_area_height - bottom_margin) / EPUBS_PER_PAGE;
+<span class="type">int</span> start_index = current_page * EPUBS_PER_PAGE;
+<span class="kw">for</span> (<span class="type">int</span> i = start_index; i &lt; start_index + EPUBS_PER_PAGE &amp;&amp; i &lt; state.num_epubs; i++)
+{
+  <span class="cmt">/* 画封面 + 书名 ... */</span>
+  static_add_area(area_x, area_y_start, area_w, area_h, (i % <span class="num">4</span>));   <span class="cmt">// 触控区域：页内偏移 0-3</span>
+}
+<span class="cmt">/* 底部三按钮：上一页 / 主页面 / 下一页 */</span>
+draw_button(btn_x0, <span class="str">"上一页"</span>, m_bottom_mode &amp;&amp; m_bottom_idx == <span class="num">0</span>);
+draw_button(btn_x1, <span class="str">"主页面"</span>, m_bottom_mode &amp;&amp; m_bottom_idx == <span class="num">1</span>);
+draw_button(btn_x2, <span class="str">"下一页"</span>, m_bottom_mode &amp;&amp; m_bottom_idx == <span class="num">2</span>);
+static_add_area(btn_x0, btn_y, btn_w, btn_h, <span class="num">4</span>);   <span class="cmt">// 上一页</span>
+static_add_area(btn_x1, btn_y, btn_w, btn_h, <span class="num">5</span>);   <span class="cmt">// 主页面</span>
+static_add_area(btn_x2, btn_y, btn_w, btn_h, <span class="num">6</span>);   <span class="cmt">// 下一页</span></code></pre>
+
+<pre><code><span class="cmt">/* src/boards/controls/SF32_TouchControls.cpp：书库页触控"先选中再确认" */</span>
+<span class="kw">if</span> (waiting_for_confirmation &amp;&amp; last_clicked_book_index == clicked_book_index)
+{
+    book_index = clicked_book_index;
+    library_bottom_mode = <span class="kw">false</span>;
+    action = SELECT;                    <span class="cmt">// 第二次点同一本 → 确认，进目录</span>
+    waiting_for_confirmation = <span class="kw">false</span>;
+    last_clicked_book_index = -<span class="num">1</span>;
+}
+<span class="kw">else</span>
+{
+    book_index = clicked_book_index;
+    last_clicked_book_index = clicked_book_index;
+    waiting_for_confirmation = <span class="kw">true</span>;
+    action = SELECT_BOX;                <span class="cmt">// 第一次点 → 先选中（移选框）</span>
+}</code></pre>
+
+  <table>
+    <tr><th>参数</th><th>值</th></tr>
+    <tr><td>每页项数</td><td><code>EPUBS_PER_PAGE = 4</code></td></tr>
+    <tr><td>底部按钮</td><td>上一页 / 主页面 / 下一页</td></tr>
+    <tr><td>底部按钮触控区域</td><td>4 / 5 / 6</td></tr>
+    <tr><td>底部选择模式</td><td><code>library_bottom_mode</code> / <code>library_bottom_idx</code>（0 / 1 / 2）</td></tr>
+    <tr><td>触控页内偏移</td><td><code>book_index</code>（0–3）</td></tr>
+    <tr><td>列表项触控区域</td><td><code>(i % 4)</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>断案讲证据：两次点击必须是同一本，才配得上"确认"二字。这套"先选中再确认"是为墨水屏量身定做的——它刷新慢、点错成本高，宁可按两下，也不让你随手误触就跳页。任何"容易误触的确认动作"，都值得借鉴这一招。</p>
+  </div>
+
+  <!-- ========== 12.3 目录页：每页 6 项、选中章节跳读 ========== -->
+  <h2>12.3 目录页：每页 6 项、选中章节跳读</h2>
+
+  <p>目录页与书库页长得几乎一样，只是项更小、更密：`ITEMS_PER_PAGE = 6`（`EpubToc.cpp` 顶部 <code>#define ITEMS_PER_PAGE 6</code>），每行画一个章节标题，并为每一项注册触控区域 <code>(i % 6)</code>。底部三按钮变成 <strong>上一页 / 书库 / 下一页</strong>，注册为触控区域 6 / 7 / 8——注意中间按钮从"主页面"换成了"书库"：从目录再回主页要绕远路，回书库更常用，所以 README 明说"底部支持'上一页 / 书库 / 下一页'"。</p>
+
+  <p>交互在 `handleEpubTableContents`，套路与书库页几乎逐行一致：`toc_bottom_mode` / `toc_bottom_idx` 管底部三按钮，上下键走到页首 / 页尾切入底部模式；`toc_bottom_idx == 1` 回书库（`ui_state = SELECTING_EPUB`），`== 0` / `== 2` 翻页。触控同样先选中再确认：第一次点某项发出 `SELECT_BOX`，`toc_index` 记下页内偏移（0–5），把 <code>epub_index_state.selected_item = global_index</code> 并 `contents-&gt;switch_book(global_index)` 移选框；第二次点同一项才发出 `SELECT`。</p>
+
+  <p>目录页 `SELECT` 的"正事"是<strong>跳读</strong>：`ui_state = READING_EPUB`，新建 `EpubReader`，`set_state_section(contents-&gt;get_selected_toc())` 把阅读起点设为选中的章节，`load()` 后进入阅读，并顺手更新 `g_last_read_index`。`get_selected_toc()` 返回当前选中目录项对应的章节号——这正是"选中章节跳读"的落点，和 12.1 那段代码是同一段。目录页与书库页共享同一套"列表 + 底部按钮 + 先选中再确认"的骨架，只换了每页项数、中间按钮和触控区域编号。</p>
+
+<pre><code><span class="cmt">/* lib/Epub/EpubList/EpubToc.cpp：目录页，每页 6 项 + 底部三按钮 */</span>
+<span class="kw">#define</span> ITEMS_PER_PAGE <span class="num">6</span>
+...
+<span class="type">int</span> cell_height = (renderer-&gt;get_page_height() - bottom_area_height - bottom_margin) / ITEMS_PER_PAGE;
+<span class="type">int</span> start_index = current_page * ITEMS_PER_PAGE;
+<span class="kw">for</span> (<span class="type">int</span> i = start_index; i &lt; start_index + ITEMS_PER_PAGE &amp;&amp; i &lt; epub-&gt;get_toc_items_count(); i++)
+{
+  <span class="cmt">/* 画章节标题 ... */</span>
+  static_add_area(area_start_x, area_start_y, area_end_x - area_start_x, area_end_y - area_start_y, (i % ITEMS_PER_PAGE));
+}
+<span class="cmt">/* 底部三按钮：上一页 / 书库 / 下一页（与书库页不同，中间是"书库"） */</span>
+draw_button(btn_x0, <span class="str">"上一页"</span>, m_bottom_mode &amp;&amp; m_bottom_idx == <span class="num">0</span>);
+draw_button(btn_x1, <span class="str">"书库"</span>,   m_bottom_mode &amp;&amp; m_bottom_idx == <span class="num">1</span>);
+draw_button(btn_x2, <span class="str">"下一页"</span>, m_bottom_mode &amp;&amp; m_bottom_idx == <span class="num">2</span>);
+static_add_area(btn_x0, btn_y, btn_w, btn_h, <span class="num">6</span>);   <span class="cmt">// 上一页</span>
+static_add_area(btn_x1, btn_y, btn_w, btn_h, <span class="num">7</span>);   <span class="cmt">// 书库</span>
+static_add_area(btn_x2, btn_y, btn_w, btn_h, <span class="num">8</span>);   <span class="cmt">// 下一页</span></code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：目录页触控"选中"（handleEpubTableContents 的 SELECT_BOX） */</span>
+<span class="kw">case</span> SELECT_BOX:
+    <span class="kw">if</span> (toc_bottom_mode) { toc_bottom_mode = <span class="kw">false</span>; }
+    current_page = epub_index_state.selected_item / <span class="num">6</span>;
+    start_index = current_page * <span class="num">6</span>;
+    global_index = start_index + toc_index;                 <span class="cmt">// 全局索引 = 页起点 + 页内偏移</span>
+    <span class="kw">if</span> (global_index &lt; contents-&gt;get_items_count() &amp;&amp; contents-&gt;get_items_count() &gt; <span class="num">0</span>)
+    {
+        epub_index_state.selected_item = global_index;
+        <span class="kw">switch</span> (toc_index)
+        {
+            <span class="kw">case</span> <span class="num">0</span>: <span class="kw">case</span> <span class="num">1</span>: <span class="kw">case</span> <span class="num">2</span>:
+            <span class="kw">case</span> <span class="num">3</span>: <span class="kw">case</span> <span class="num">4</span>: <span class="kw">case</span> <span class="num">5</span>:
+                contents-&gt;switch_book(global_index); <span class="kw">break</span>;   <span class="cmt">// 把选中框移过去</span>
+            <span class="kw">default</span>: <span class="kw">break</span>;
+        }
+    }
+    <span class="kw">break</span>;</code></pre>
+
+  <table>
+    <tr><th>参数</th><th>值</th></tr>
+    <tr><td>每页项数</td><td><code>ITEMS_PER_PAGE = 6</code></td></tr>
+    <tr><td>底部按钮</td><td>上一页 / 书库 / 下一页</td></tr>
+    <tr><td>底部按钮触控区域</td><td>6 / 7 / 8</td></tr>
+    <tr><td>底部选择模式</td><td><code>toc_bottom_mode</code> / <code>toc_bottom_idx</code>（0 / 1 / 2）</td></tr>
+    <tr><td>触控页内偏移</td><td><code>toc_index</code>（0–5）</td></tr>
+    <tr><td>列表项触控区域</td><td><code>(i % 6)</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>目录页是卷宗索引：项更小、更密，一个屏幕能装下六条线索。两页长得像不是巧合——书库与目录共用同一套"列表 + 底部按钮 + 先选中再确认"的骨架，只换了每页项数和中间按钮。识别这种"同一骨架、不同参数"的复用，正是系统分析的基本功。</p>
+  </div>
+
+  <!-- ========== 12.4 「继续阅读」：接着上次读 ========== -->
+  <h2>12.4 「继续阅读」：接着上次读</h2>
+
+  <p>README「主页面」交代了"继续阅读"的规则：<strong>基于本次运行期间最近一次成功进入阅读的书籍索引，并自动恢复到上次所在章节；若当前无可用记录，则显示"无阅读记录"</strong>。关键词是"本次运行期间"——实现它的 `g_last_read_index` 只是一个普通全局变量（<code>int g_last_read_index = -1</code>，`-1` 表示无记录），不是 `RTC_DATA_ATTR` 那种掉电保留的内存，所以每次重启都复位为 `-1`，记录只在一次开机内有效。这和第 9 章的阅读设置（持久化到 `/settings.cfg`）正好形成对照：<strong>设置跨重启，续读记录不跨重启</strong>。</p>
+
+  <p>它什么时候被写入？两处。`handleEpub` 首次创建 `reader` 时：<code>g_last_read_index = epub_list_state.selected_item</code>；目录页 `SELECT` 跳读时也赋一次（12.1 那段代码里就有）。总之每次真正"进入阅读"，索引都会刷新为当前这本书。主页面 `render_main_page` 据此决定选项文本：<code>num_epubs &gt; 0 &amp;&amp; g_last_read_index &gt;= 0 &amp;&amp; g_last_read_index &lt; num_epubs</code> 为真显示"继续阅读"，否则显示"无阅读记录"。</p>
+
+  <p>选中它之后，`handleUserInteraction` 的 `MAIN_PAGE` 分支这样接：先复查 `g_last_read_index` 是否合法（越界就 `return`，什么都不做），然后从 <code>epub_list[g_last_read_index]</code> 重建 `EpubReader`，<code>set_state_section(last_item.current_section)</code> 恢复到最后一次进入的章节，`load()`，`ui_state = READING_EPUB`。`current_section` 是 `EpubListItem` 里记录"当前阅读章节编号（从 0 开始）"的字段——"自动恢复到上次所在章节"靠的就是它。注意：这里恢复的是"章节"，结构体里的页码字段 `current_page` 在此路径并不读取——要精确定位到段内某一页，还得靠第 9 章的锚点机制（`save_anchor` / `restore_by_anchor`）。</p>
+
+<pre><code><span class="cmt">/* src/epub_screen.cpp：主页面选项文本——有记录才显示"继续阅读" */</span>
+<span class="kw">extern</span> EpubListState epub_list_state;
+<span class="kw">bool</span> has_continue_reading =
+    (epub_list_state.num_epubs &gt; <span class="num">0</span> &amp;&amp; g_last_read_index &gt;= <span class="num">0</span> &amp;&amp;
+     g_last_read_index &lt; epub_list_state.num_epubs);
+<span class="kw">switch</span> (main_option)
+{
+  <span class="kw">case</span> OPTION_OPEN_LIBRARY:     opt_text = <span class="str">"打开书库"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_ENTER_SETTINGS:   opt_text = <span class="str">"进入设置"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_WEATHER:          opt_text = <span class="str">"查看天气"</span>; <span class="kw">break</span>;
+  <span class="kw">case</span> OPTION_CONTINUE_READING:
+    opt_text = has_continue_reading ? <span class="str">"继续阅读"</span> : <span class="str">"无阅读记录"</span>;
+    <span class="kw">break</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：选中"继续阅读"→ 恢复上次章节并进入阅读 */</span>
+<span class="kw">else if</span> (ui_action == SELECT &amp;&amp; screen_get_main_selected_option() == OPTION_CONTINUE_READING)
+{
+  <span class="kw">if</span> (!(g_last_read_index &gt;= <span class="num">0</span> &amp;&amp; g_last_read_index &lt; epub_list_state.num_epubs)) {
+    <span class="kw">return</span>;                               <span class="cmt">// 无记录 / 越界：直接忽略</span>
+  }
+  <span class="kw">if</span> (reader) { <span class="kw">delete</span> reader; reader = <span class="kw">nullptr</span>; }
+  <span class="type">int</span> last_idx = g_last_read_index;
+  EpubListItem &amp;last_item = epub_list_state.epub_list[last_idx];
+  reader = <span class="kw">new</span> EpubReader(last_item, renderer);
+  reader-&gt;set_state_section(last_item.current_section);   <span class="cmt">// 恢复上次章节</span>
+  reader-&gt;load();
+  ui_state = READING_EPUB;
+  handleEpub(renderer, NONE);
+}</code></pre>
+
+  <table>
+    <tr><th><code>g_last_read_index</code> 取值</th><th>含义</th><th>主页面显示</th></tr>
+    <tr><td><code>-1</code>（初始值）</td><td>本次运行还没有过阅读记录</td><td>无阅读记录</td></tr>
+    <tr><td><code>≥ 0</code> 且 <code>&lt; num_epubs</code></td><td>最近一次进入阅读的书索引</td><td>继续阅读</td></tr>
+    <tr><td>越界</td><td>记录失效（书库内容已变化）</td><td>显示"无阅读记录"，且拒绝跳转（直接 <code>return</code>）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>旧案重审要看卷宗，继续阅读要看记录。`g_last_read_index` 这份"卷宗"只存在于本次开机——想让它跨重启，就得挪进 RTC 内存或写进文件，跟第 9 章把设置写进 `/settings.cfg` 是同一个道理。读懂了这份卷宗从哪写、从哪读、何时失效，你就掌握了"状态要不要持久化"的取舍：设置值得存，临时续读记录未必。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：走一遍主流程 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>按 README「书库页与目录页」，写出阅读主流程的三步，并说明每一步对应哪个状态、由哪个处理函数负责。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>书库 → 目录 → 阅读，对应 SELECTING_EPUB / SELECTING_TABLE_CONTENTS / READING_EPUB。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>书库页（SELECTING_EPUB，handleEpubList）→ 目录页（SELECTING_TABLE_CONTENTS，handleEpubTableContents）→ 阅读页（READING_EPUB，handleEpub / reader-&gt;render()）。在书库页选中书籍后先进入目录页，再由目录页选择章节跳入阅读。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：先选中再确认 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>书库页触控为什么用"先选中再确认"？第一次点击和第二次点击分别发出哪个 UIAction？代码是怎么保证"两次必须是同一本"才生效的？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>SF32_TouchControls.cpp 里用 waiting_for_confirmation 和 last_clicked_book_index 两个变量；第一次发 SELECT_BOX，第二次发 SELECT。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>墨水屏刷新慢、误触代价高，先点一次把选中框移过去、再点一次确认，能显著降低误触跳页。第一次点击发 SELECT_BOX（置 waiting_for_confirmation = true、记下 last_clicked_book_index）；只有第二次点击的 clicked_book_index 等于 last_clicked_book_index 时才发 SELECT 进入目录页；若点了另一本，waiting 状态被重置为那本书，仍需再点一次确认。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：两页异同 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>书库页与目录页共享哪些"骨架"？在哪些参数上不同（每页项数、底部按钮、触控区域编号）？这种复用有什么好处？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对比 12.2 与 12.3 的两张参数表：底部按钮的"中间键"一个写主页面、一个写书库。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>共享骨架：列表单元格布局、底部三按钮选择模式（xxx_bottom_mode / xxx_bottom_idx）、触控"先选中再确认"、翻页即重设 selected_item。差异：书库每页 4 项（EPUBS_PER_PAGE=4）、底部"上一页 / 主页面 / 下一页"、区域 4/5/6；目录每页 6 项（ITEMS_PER_PAGE=6）、底部"上一页 / 书库 / 下一页"、区域 6/7/8。复用让两页的交互心智模型一致，用户学会一页就等于学会两页，代码也便于对照排查。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：卷宗的取舍 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>「继续阅读」为什么只恢复到"章节"而不是"页码"？如果要求跨重启也能继续阅读，需要改哪些地方？请给出方案，并说明它与第 9 章设置持久化的异同。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>g_last_read_index 是普通变量、重启即 -1；current_section 在 EpubListItem 里，但 CONTINUE_READING 只 set_state_section；要跨重启需把索引写进文件或 RTC 内存。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>继续阅读走的是 set_state_section(last_item.current_section)，只恢复章节；段内精确到页要动用第 9 章的锚点机制（save_anchor / restore_by_anchor），普通续读不读 current_page 字段。要跨重启：把 g_last_read_index（以及需要的话 current_section / 锚点）写进 RTC 内存（RTC_DATA_ATTR）或仿照 /settings.cfg 持久化到文件，开机加载并校验索引仍在 epub_list 范围内。与第 9 章的异同：都是"把状态存下来、下次恢复"，但设置是全局配置、跨重启必须保留，续读是临时便利、作者选择只在本次运行有效——这本身就是一次"值不值得持久化"的工程取舍。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

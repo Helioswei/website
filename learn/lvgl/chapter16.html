@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第16章：生态、成长路线与资源 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="16" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第16章：生态、成长路线与资源</h1>
+  <p class="chapter-subtitle">最后一章不教你新 API——把官方资源、工具链、贡献指南串成一张地图，再给你一条可执行的学习路线</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：教是最好的学</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「十五章下来，你已经能把一个库拆开讲清楚。可真正检验你学会了没有，是你能不能把它教给下一个人——或者，先教会你自己。学任何技术都不该只盯着源码：官方文档怎么用、社区在哪里、别人怎么贡献、该往哪条路线走，这些才是让知识真正『长在你身上』的部分。今天，我们把这些拼图一片片摆好，最后交给你自己来排。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 16.1 官方资源地图：README 是入口 ========== -->
+  <h2>16.1 官方资源地图：README 是入口</h2>
+
+  <p>面对一个新项目，大多数人会直接扑向源码。但费曼的路线是反过来的：<strong>先读 README</strong>——它是作者写给世界的"第一封信"，短短几屏就把"这是什么、能做什么、去哪学、怎么参与"全部交代清楚。<code>lvgl-master/README.md</code> 正是这样。它最顶上是一排链接：<strong>Docs</strong>（官方文档）、<strong>Forum</strong>（社区论坛）、<strong>Blog</strong>（新闻与文章）、<strong>Services</strong>（专业服务）。这四件套就是 LVGL 生态的"入口四连"，从「查资料」到「找人聊」到「看动态」再到「买服务」，一条龙。</p>
+
+<pre><code><span class="cmt">&lt;!-- README.md 顶栏：四个官方入口（真实源码节选） --&gt;</span>
+&lt;a href=<span class="str">"https://lvgl.io/docs"</span>&gt;Docs&lt;/a&gt; •
+&lt;a href=<span class="str">"https://forum.lvgl.io"</span>&gt;Forum&lt;/a&gt; •
+&lt;a href=<span class="str">"https://blog.lvgl.io"</span>&gt;Blog&lt;/a&gt; •
+&lt;a href=<span class="str">"https://lvgl.io/services"</span>&gt;Services&lt;/a&gt;</code></pre>
+
+  <p>再往下，README 用一个锚点导航把全文切成七个段落：Overview、Features、LVGL Pro、Examples、Integration、Contributing、License。别小看这七个锚点——它们恰好对应了官方认为的"七个学习层次"：先知道是什么，再看能做什么，然后是进阶工具、示例、集成、贡献与许可。你在本书里的每一章，几乎都能在这张表上找到位置：第 1–9 章是 Features 与 Examples 的展开，第 15 章对应 Integration，而本章（第 16 章）要讲的 LVGL Pro、Contributing 与 License，正是最后三格。</p>
+
+  <table>
+    <tr><th>README 锚点</th><th>讲什么</th><th>本书对应</th></tr>
+    <tr><td>Overview</td><td>简介、硬件需求、广泛采用</td><td>第 1 章</td></tr>
+    <tr><td>Features</td><td>控件、样式、布局、渲染、数据绑定</td><td>第 3–11 章</td></tr>
+    <tr><td>LVGL Pro</td><td>专业工具链（Editor / Viewer / Figma / CLI）</td><td>第 12 章、16.3</td></tr>
+    <tr><td>Examples</td><td>C 与 XML 示例（100+）</td><td>第 13 章</td></tr>
+    <tr><td>Integration</td><td>预集成平台、内置驱动、手动移植</td><td>第 15 章</td></tr>
+    <tr><td>Contributing</td><td>如何参与贡献</td><td>16.4</td></tr>
+    <tr><td>License</td><td>许可证与商用条款</td><td>16.5</td></tr>
+  </table>
+
+  <p>最后还有一个"隐藏入口"：README 顶栏第二行是一排语言切换链接——中文、日文、韩文、葡萄牙文、希伯来文，每一条都指向 <code>docs/</code> 下的一个文件。这就是 16.2 的主角：官方文档库。先记住"README → docs/"这条通路，你就掌握了打开整个官方知识库的钥匙。</p>
+
+<pre><code><span class="cmt"># 多语言 README（docs/ 目录下，README.md 顶栏的链接目标）</span>
+docs/README_zh.md     <span class="cmt">中文</span>
+docs/README_ja.md     <span class="cmt">日本語</span>
+docs/README_ko.md     <span class="cmt">한국어</span>
+docs/README_pt_BR.md  <span class="cmt">Português（巴西）</span>
+docs/README_he.md     <span class="cmt">עברית（希伯来语）</span></code></pre>
+
+  <!-- ========== 16.2 文档库 docs/：官方字典与中文 README ========== -->
+  <h2>16.2 文档库 docs/：官方字典与中文 README</h2>
+
+  <p>打开 <code>lvgl-master/docs/</code>，你会看到一套"小而整"的文档组织。除了上面那五个语言版 README，还有 <code>README.md</code>（英文 README 在 docs 内的副本，链接反指回仓库根）、<code>CODE_OF_CONDUCT.md</code>（社区行为准则——它告诉你这个社区"该怎么相处"，是贡献者必读的第一份文件）、<code>Doxyfile</code>（Doxygen 文档生成配置，API 参考文档就是用它从 <code>src/</code> 头文件注释生成出来的）、<code>xml_to_md.py</code>（一个把 XML 转成 Markdown 的小工具），以及 <code>src/</code>（文档源文件目录）。</p>
+
+<pre><code>docs/
+├── README.md           <span class="cmt">英文 README（docs 内副本）</span>
+├── README_zh.md        <span class="cmt">中文版（约 15 kB）</span>
+├── README_ja.md        <span class="cmt">日本語版</span>
+├── README_ko.md        <span class="cmt">한국어版</span>
+├── README_pt_BR.md     <span class="cmt">Português 版</span>
+├── README_he.md        <span class="cmt">עברית 版</span>
+├── CODE_OF_CONDUCT.md  <span class="cmt">社区行为准则</span>
+├── Doxyfile            <span class="cmt">Doxygen 文档配置</span>
+├── xml_to_md.py        <span class="cmt">XML→Markdown 转换工具</span>
+└── src/                <span class="cmt">文档源文件</span></code></pre>
+
+  <p>中文读者最该认识的，是 <code>docs/README_zh.md</code>。它是英文 README 的忠实翻译：标题译作「轻量级多功能图形库」，顶栏四个入口依次是 文档 / 论坛 / 博客 / 服务，语言切换链里自己那一项用粗体标出「中文」，其余语言则链回各自的翻译文件。逐段对照它和英文版，你会发现一个细节：<strong>它保留了大量英文原文做"术语锚点"</strong>——中文翻译不会让你迷路，而英文术语帮你对齐到源码里的真实名字，这正是读中译文档该有的姿势。</p>
+
+<pre><code><span class="cmt">&lt;!-- docs/README_zh.md 顶栏（真实源码节选） --&gt;</span>
+&lt;a href=<span class="str">"../README.md"</span>&gt;EN&lt;/a&gt; •
+&lt;b&gt;中文&lt;/b&gt; •
+&lt;a href=<span class="str">"./README_ja.md"</span>&gt;日本語&lt;/a&gt; •
+&lt;a href=<span class="str">"./README_ko.md"</span>&gt;한국어&lt;/a&gt;</code></pre>
+
+  <p>把 <code>docs/</code> 和 <code>README.md</code> 连起来看，就拼出了官方知识体系的最小闭环：<strong>README 是"门厅"，docs/ 是"书架"，而 API 参考文档（由 Doxyfile 驱动）是"字典"</strong>。遇到不认识的函数，先查字典；想了解某个功能的整体思路，翻书架；想快速判断这个项目值不值得深入，看门厅就够。本书前十五章里出现的所有 API，本质上都是这三层官方资源的具体化——你现在回头看，会发现每一章的内容都能在这套体系里找到"源头"。</p>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>读文档最忌讳"只读一本"：同一份内容，英文 README、中文 README、API 文档三处各读一遍，讲出来的效果完全不同。中文帮你快速建立直觉，英文帮你对准术语，API 文档帮你核实细节——把三本并排摊开读，就是在做一次"教给未来的自己"的预习。</p>
+  </div>
+
+  <!-- ========== 16.3 社区与工具链：LVGL Pro 全家桶 ========== -->
+  <h2>16.3 社区与工具链：LVGL Pro 全家桶</h2>
+
+  <p>官方资源不只是文档，还有一套面向生产环境的专业工具链——<strong>LVGL Pro</strong>。README「LVGL Pro」一节开宗明义：纯手写 C 在项目变大后会越来越慢、越来越难保持一致，而 Pro 让你<strong>可视化地构建可复用组件与屏幕</strong>，一处管理数据绑定、翻译、动画与测试，再导出<strong>纯 LVGL C 代码</strong>——不引入任何额外运行时或依赖，能直接嵌进你现有的工程。它由四件套组成：Editor（桌面编辑器，核心）、Online Viewer（浏览器版）、Figma Plugin（Figma 设计稿一键导入）、CLI Tool（在 CI/CD 里生成代码并跑测试）。</p>
+
+  <p>本仓库 <code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code> 目录，就是这套工具链里 CLI 一员的真身——第 12 章已经详细拆过它的 <code>lved-cli.js</code>。这里再从"生态"的视角把它摆进整张地图：<code>lved-cli.js</code>（约 18 MB）是打包为单文件的 Node.js CLI，<code>lvgl-resources.zip</code>（约 16 MB）是生成代码时需要的资源包，<code>bin/resvgjs.darwin-arm64.node</code> 是 macOS Apple Silicon 上的 SVG 栅格化原生模块——文件名里的 <code>darwin-arm64</code> 恰好印证了 README 那句"按平台分发"。</p>
+
+<pre><code><span class="cmt"># LVGL_Pro_CLI 实际目录结构（本仓库内）</span>
+LVGL_Pro_CLI-2.0.2-rc1-darwin/
+├── bin/
+│   └── resvgjs.darwin-arm64.node   <span class="cmt">SVG 栅格化原生模块（Apple Silicon）</span>
+├── lved-cli.js                     <span class="cmt">单文件 Node CLI（约 18 MB）</span>
+└── lvgl-resources.zip              <span class="cmt">生成代码所需 LVGL 资源（约 16 MB）</span></code></pre>
+
+  <p>把四件套和命令行对应起来，就是一条完整的"设计 → 预览 → 生成 → 回归"流水线：在 Figma 里画界面，用 Plugin 一键搬进 Editor；在 Editor（或浏览器里的 Online Viewer）里调整组件、绑好数据；提交时用 CLI 在 CI 里 <code>generate</code> 出 C 代码、<code>compile</code> 验编译、<code>run-test</code> 跑交互回归。你在第 12 章已经亲手跑过 <code>generate</code>——现在把它放进团队流程里看，它就不再是"一个命令"，而是整条生态流水线上承上启下的一环。</p>
+
+<pre><code><span class="param">$</span> node lved-cli.js --help          <span class="cmt"># 7 个顶层命令：generate/compile/validate/...</span>
+<span class="param">$</span> node lved-cli.js generate <span class="param">&lt;project-path&gt;</span>   <span class="cmt"># XML → C 代码</span>
+<span class="param">$</span> node lved-cli.js compile <span class="param">&lt;project-path&gt;</span>    <span class="cmt"># 编译校验</span>
+<span class="param">$</span> node lved-cli.js screenshot <span class="param">&lt;project-path&gt;</span> <span class="cmt"># 出界面预览图</span></code></pre>
+
+  <table>
+    <tr><th>工具</th><th>定位</th><th>README 里的描述</th></tr>
+    <tr><td>Editor</td><td>桌面端可视化构建</td><td>"The heart of LVGL Pro"（核心）</td></tr>
+    <tr><td>Online Viewer</td><td>浏览器运行 Editor</td><td>无需安装，可打开 GitHub 工程共享</td></tr>
+    <tr><td>Figma Plugin</td><td>设计稿一键导入</td><td>"Move a Figma design to LVGL Pro with one click"</td></tr>
+    <tr><td>CLI Tool</td><td>CI/CD 生成与测试</td><td>Generate C code and run tests in CI/CD</td></tr>
+  </table>
+
+  <!-- ========== 16.4 贡献与质量：让代码经得起检查 ========== -->
+  <h2>16.4 贡献与质量：让代码经得起检查</h2>
+
+  <p>一个开源项目的"生命力"很大程度体现在它的<strong>贡献入口</strong>上。README「Contributing」一节说得很直白：LVGL 是开放项目，贡献方式多到超乎想象——从宣传你的项目、写示例、改进文档、修 bug，到在 LVGL 组织下托管自己的项目都算数。而官方文档的「Contributing」专页则是流程细则。落到仓库里，这套"如何加入"的规则就具体化成 <code>.github/</code> 目录：<code>ISSUE_TEMPLATE/</code> 下有 <code>bug-report.yml</code>、<code>feat-planning.yml</code>、<code>dev-discussion.yml</code>（bug、新功能、开发者讨论各一条轨道），<code>pull_request_template.md</code> 是 PR 模板，<code>CODEOWNERS</code> 声明各目录的负责人，还有 <code>dependabot.yml</code>、<code>FUNDING.yml</code> 等配套文件。</p>
+
+  <p>真正让"贡献"有质量下限的，是仓库根的两件"检查武器"：<code>.pre-commit-config.yaml</code> 和 <code>scripts/</code>。前者定义了提交前自动跑的一串钩子——去行尾空白（pre-commit-hooks 的 <code>trailing-whitespace</code>）、用 <code>astyle</code> 格式化 C 源码（<code>scripts/code-format.cfg</code>）、校验模板文件与文件名一致（<code>scripts/lv_templ_check.py</code>）、抓拼写错误（typos）。后者则是一整个"质检工具箱"，从 C 静态分析到文档链接检查再到 SBOM 生成，分工极细。</p>
+
+<pre><code><span class="cmt"># .pre-commit-config.yaml（真实源码节选）</span>
+repos:
+-   repo: <span class="str">https://github.com/pre-commit/pre-commit-hooks</span>
+    rev: v3.2.0
+    hooks:
+    -   id: <span class="str">trailing-whitespace</span>
+-   repo: local
+    hooks:
+    -   id: <span class="str">format-source</span>
+        name: Formatting source files
+        entry: <span class="str">astyle --options=scripts/code-format.cfg</span></code></pre>
+
+  <p>这些脚本不是摆设——<code>.github/workflows/</code> 里 30+ 个 CI 工作流把它们一个个接上了流水线。你可以看到 <code>check_style.yml</code>、<code>check_templ.yml</code>、<code>check_cppcheck.yml</code>、<code>ccpp.yml</code>（主 C/C++ 构建矩阵）、<code>build_hardware.yml</code>（真实硬件构建）、<code>perf_emulation.yml</code>（性能测试）、<code>makefiles.yml</code>、<code>release.yml</code>（发版）……名字本身就是一张"发布流水线地图"。换句话说：你在本地改代码，pre-commit 先拦一道；推上去，CI 再兜底一道。理解了这套双保险，你提交的第一个 PR 就会"身板笔直"。</p>
+
+<pre><code><span class="cmt"># scripts/ 里的检查类脚本（真实文件，节选）</span>
+scripts/check_cppcheck.py       <span class="cmt">C 静态分析（cppcheck）</span>
+scripts/check_doc_links.py      <span class="cmt">文档链接完整性检查</span>
+scripts/code-format.py          <span class="cmt">代码格式检查</span>
+scripts/commit_msg_check.py     <span class="cmt">提交信息规范检查</span>
+scripts/lv_templ_check.py       <span class="cmt">模板文件与文件名一致性</span>
+scripts/generate_copyrights.py  <span class="cmt">生成 COPYRIGHTS.md</span>
+scripts/generate_sbom.py        <span class="cmt">生成 SBOM 清单</span>
+scripts/kconfig_verify.py       <span class="cmt">Kconfig 配置校验</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>想判断一个项目"值不值得参与"，最省力的一招：数它 <code>.github/workflows/</code> 里有多少个检查工作流。检查越多，说明维护者越把质量当回事，你的贡献被认真对待的概率就越高。下次你提交 PR 前，先把 <code>.pre-commit-config.yaml</code> 里每一项在本地跑一遍——把"检查"从 CI 的职责变成你自己的习惯。</p>
+  </div>
+
+  <!-- ========== 16.5 许可证、安全与合规 ========== -->
+  <h2>16.5 许可证、安全与合规</h2>
+
+  <p>用任何库之前，都要先搞清楚"法律上能不能用"。LVGL 主库走的是 <strong>MIT 许可证</strong>——仓库根的 <code>LICENCE.txt</code> 写明版权归属 <code>Copyright (c) 2025 LVGL Kft</code>，正文是那句著名的"你可以自由使用、复制、修改、合并、发布、分发、再许可和/或出售本软件副本"。README「License」一节把它翻译成大白话：<strong>开源项目和商业产品都能免版税使用</strong>。这是 LVGL 能铺进无数量产设备的底气。</p>
+
+<pre><code><span class="cmt"># LICENCE.txt（真实源码节选）</span>
+MIT licence
+Copyright (c) 2025 LVGL Kft
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, ...</code></pre>
+
+  <p>但"主库是 MIT"不等于"所有文件都是"。LVGL 捆绑了一堆第三方库，它们的许可证各不相同——仓库用 <code>COPYRIGHTS.md</code> 一份一份列清楚，每条注明 SPDX 许可证表达式、代码路径与来源。比如 LodePNG（PNG 解码）是 Zlib、QR Code 是 MIT、TinyTTF 是 <code>MIT OR Unlicense</code>、TJPGD 是 <code>LicenseRef-TJpgDec</code>。README 说得很务实：这些库大多 MIT 兼容，"你可以放心使用 LVGL 及其依赖"——但"放心"的前提是这份清单。</p>
+
+<pre><code><span class="cmt">## LodePNG (PNG decoder)</span>
+- Path: src/libs/lodepng
+- Source: <span class="str">https://github.com/lvandeve/lodepng</span>
+- License: Zlib
+
+<span class="cmt">## QR Code (QR code generator)</span>
+- Path: src/libs/qrcode
+- License: MIT</code></pre>
+
+  <p>安全与合规还有两个配套文件。<code>SECURITY.md</code> 定义漏洞披露流程：安全问题<strong>不要开公开 Issue</strong>，而是发邮件到 <code>security@lvgl.io</code>，并提供受影响的版本/配置、影响描述、复现步骤；它支持协调披露，还提到仓库发布了机器可读的 <strong>SBOM（SPDX 3.0.1）</strong>——就在 <code>sbom/</code> 目录——以及人类可读的组件清单 <code>COPYRIGHTS.md</code>，并说明如何满足欧盟《网络弹性法案》（CRA）的要求。另外注意：<strong>LVGL Pro 的许可与主库是分开的</strong>——Community 与 Evaluation 级别对非商业用途免费（学习、爱好、评估都算），商用需要付费许可。</p>
+
+  <table>
+    <tr><th>对象</th><th>许可证 / 条款</th><th>依据文件</th></tr>
+    <tr><td>LVGL 主库</td><td>MIT（开源与商用均可）</td><td>LICENCE.txt</td></tr>
+    <tr><td>捆绑第三方库</td><td>各自独立，多为 MIT 兼容</td><td>COPYRIGHTS.md</td></tr>
+    <tr><td>SBOM 清单</td><td>SPDX 3.0.1 机器可读</td><td>sbom/、SECURITY.md</td></tr>
+    <tr><td>LVGL Pro 工具</td><td>Community/Evaluation 免费；商用付费</td><td>README「License」</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>把"LVGL 主库是 MIT"和"LVGL Pro 需付费"这两件事分开记。主库随便用，但 Pro 的 Editor/CLI 是独立产品线：非商用免费，商用要按官方定价付费。给公司做产品前，先去官网看一遍 Pricing 与许可证条款，别让工具链的许可证变成法务风险。</p>
+  </div>
+
+  <!-- ========== 16.6 成长路线：从模拟器到量产 ========== -->
+  <h2>16.6 成长路线：从模拟器到量产</h2>
+
+  <p>资源认完了，最后把这一切收束成一条<strong>可执行的学习路线</strong>。本书的章节顺序本身就有参考价值，但真正上手时可以压缩成五个阶段：<strong>模拟器入手 → src 子系统深入 → examples/demos 拆解 → 真机移植 → 用 LVGL Pro 提效</strong>。第一阶段用 README 里的 Simulator 项目把环境跑通、先看到像素；第二阶段按「core → widgets → draw → layouts」的顺序把源码读透——这正是第 1 章那张子系统地图的深化；第三阶段从「读」走向「改」，在 <code>examples/</code> 与 <code>demos/</code>（widgets、music、benchmark…）里挑一个逐函数拆解。</p>
+
+<pre><code><span class="cmt"># 五阶段成长路线（每阶段对应仓库里的一组真实素材）</span>
+第 1 阶段  模拟器入手           <span class="cmt">README「Simulator project」→ examples/ 先跑起来</span>
+第 2 阶段  src 子系统深入       <span class="cmt">core → widgets → draw → layouts 逐层读懂</span>
+第 3 阶段  examples/demos 拆解  <span class="cmt">从读代码到改代码，再到自己写</span>
+第 4 阶段  真机移植             <span class="cmt">env_support/ + lv_conf.h 裁剪 + 驱动接入</span>
+第 5 阶段  LVGL Pro 提效        <span class="cmt">XML 描述界面，CLI 生成 C 代码，CI 回归</span></code></pre>
+
+  <p>第四阶段是很多人的分水岭：把代码从模拟器搬到真机。别怕——第 15 章的结论在这里依然成立：<strong>变的是驱动与配置（<code>lv_conf.h</code> 裁剪、显示/输入驱动、构建系统），不变的是 UI 层代码</strong>。<code>env_support/</code> 下的 CMake 脚本与各平台接入文件就是你的"移植脚手架"。到了第五阶段，你已经能熟练手写 C，此时引入 LVGL Pro 不是为了偷懒，而是把「可视化设计 + CLI 生成 + CI 回归」沉淀成团队产能——工具是放大器，不是拐杖。</p>
+
+  <p>路线知道了，还得落到日历上。费曼的方法论是<strong>「教是最好的学」</strong>：任何知识，讲给一个完全不懂的人（哪怕是一只橡皮鸭）能讲明白，才算真学会。所以每个阶段都要有<strong>可度量的交付物</strong>——不是"读了源码"，而是"写得出逐函数注释的源码"。下面这张四周计划只是示例骨架，它的意义在于示范「阶段 → 目标 → 交付物」的写法，你完全可以根据自己的基础重排。</p>
+
+<pre><code><span class="cmt"># 示例：4 周「从零到上手」学习计划（交付物驱动，可自行调整）</span>
+第 1 周  跑通模拟器 + 3 个 example   <span class="cmt">交付物：能口述 lv_timer_handler 主循环</span>
+第 2 周  5 个控件 + Flex/Grid + 事件  <span class="cmt">交付物：一个可交互的小面板</span>
+第 3 周  拆解 demos/widgets 一个 demo <span class="cmt">交付物：逐函数注释版源码</span>
+第 4 周  真机移植 + LVGL Pro CLI    <span class="cmt">交付物：真机跑通的界面 + 生成代码对照</span></code></pre>
+
+  <table>
+    <tr><th>阶段</th><th>目标</th><th>仓库素材</th></tr>
+    <tr><td>模拟器</td><td>像素先跑起来</td><td>README「Simulator」、examples/</td></tr>
+    <tr><td>子系统深入</td><td>读懂对象 / 渲染 / 布局</td><td>src/core、src/widgets、src/draw、src/layouts</td></tr>
+    <tr><td>拆解示例</td><td>从读代码到改代码</td><td>examples/、demos/（widgets/music/benchmark…）</td></tr>
+    <tr><td>真机移植</td><td>硬件上稳定运行</td><td>env_support/、lv_conf_template.h</td></tr>
+    <tr><td>工具提效</td><td>可视化 + 自动化</td><td>LVGL_Pro_CLI-2.0.2-rc1-darwin/、.github/workflows/</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>学习计划最大的敌人是"伪完成"——读了一遍源码就以为自己懂了。给你一个检验标准：每周结束时，用三句话向一个完全不懂的人讲清这周学到的东西。讲不清楚的地方，就是下周的复习重点。第十六章是本书的终点，但按费曼的方法，它也是你真正学习 LVGL 的起点——去把这十五章教给别人吧。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：官方资源地图 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>lvgl-master/README.md</code>，找出：(1) 顶栏四个官方入口链接分别是什么、各自用来做什么；(2) 七个章节锚点里，哪些已经在本教程前十五章出现过；(3) 语言切换链接指向 <code>docs/</code> 下的哪五个文件。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>顶栏第一行四个链接、第二行是语言切换；锚点导航在 README 中部偏上，七个英文单词。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) Docs（官方文档）、Forum（社区论坛）、Blog（新闻与文章）、Services（专业服务）；(2) Overview（第 1 章）、Features（第 3–11 章）、Examples（第 13 章）、Integration（第 15 章），而 LVGL Pro / Contributing / License 正是本章主题；(3) <code>docs/README_zh.md</code>、<code>docs/README_ja.md</code>、<code>docs/README_ko.md</code>、<code>docs/README_pt_BR.md</code>、<code>docs/README_he.md</code>。核心启示：README 锚点就是官方为你预设的"学习目录"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：工具链与 CI 盘点 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>结合 <code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code> 与 <code>lvgl-master/.github/workflows/</code>，回答：(1) CLI 四件套里的「CLI Tool」对应本仓库的哪个文件？它至少能完成哪两类工作？(2) <code>.github/workflows/</code> 里与「代码格式」「C 静态分析」「发版」直接对应的三个工作流文件名是什么？(3) 为什么 CI 里的检查脚本大多能在 <code>scripts/</code> 里找到同一份实现？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>CLI 入口看 <code>lved-cli.js</code>（第 12 章跑过 generate）；工作流文件名的动词就是它的职责（check_*/build_*/release）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 对应 <code>lved-cli.js</code>（Node CLI），至少能「生成 C 代码」（<code>generate</code>）与「编译 / 静态校验 / 出图 / 跑交互回归」（<code>compile</code>、<code>validate</code>、<code>screenshot</code>、<code>run-test</code> 等）；(2) <code>check_style.yml</code>、<code>check_cppcheck.yml</code>、<code>release.yml</code>；(3) 因为 CI 与本地共用同一套检查逻辑——<code>.pre-commit-config.yaml</code> 和 <code>scripts/</code> 是"单一事实来源"，工作流只是把它们挂上流水线，保证本地与 CI 行为一致。核心启示：好的工程把"质量规则"沉淀成可复用的脚本，而不是散落在 CI 配置里。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：提交一个控件前的质量关 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>假设你想给 <code>src/widgets/</code> 贡献一个新控件。对照 <code>.pre-commit-config.yaml</code> 与 <code>scripts/</code>，列出提交前你至少要通过的 3 类检查，并说明每一条规则背后的动机。再想想：为什么 <code>format-source</code> 钩子明确 exclude 了 <code>src/libs/</code> 与 <code>tests/test_images</code>？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>钩子有：格式、拼写、模板一致性；注意 <code>scripts/code-format.cfg</code>、typos、<code>lv_templ_check.py</code>。exclude 列表往往指向"第三方代码 / 生成的资源"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>至少三类：(1) 格式——<code>format-source</code> 用 <code>astyle --options=scripts/code-format.cfg</code> 保证提交的 C 代码风格统一（动机：多贡献者协作时，统一风格才能让 diff 干净、评审聚焦于逻辑）；(2) 拼写——typos 钩子抓注释/字符串里的拼写错误（动机：仓库还配套 <code>.typos.toml</code> 白名单，说明官方很在意文档与注释质量）；(3) 模板一致性——<code>lv_templ_check.py</code> 校验模板文件与文件名一致（动机：LVGL 有 <code>lv_templ.c/h</code> 模板文化，文件名、函数名、头文件保护宏必须严格对应，否则会污染公共 API）。exclude 掉 <code>src/libs/</code> 是因为那是捆绑的第三方代码，不该用 LVGL 的格式规则去改；exclude <code>tests/test_images</code> 是因为那是生成的测试图片资源而非手写源码。核心启示：每一条检查都是"防止一类真实事故"，理解动机才能写出不需要被拦的代码。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：制定你的个人学习计划 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>结合 16.6 的五阶段成长路线，为自己制定一份 <strong>4 周个人学习计划</strong>。要求包含：每个阶段的<strong>目标</strong>、<strong>仓库里的具体素材</strong>（文件 / 目录 / 示例名）、<strong>可度量的交付物</strong>，以及每周结束时的<strong>验收标准</strong>（例如"能否用三句话讲清楚本周所学"）。写完后再对照练习 1–3，看你的计划里是否覆盖了"读官方文档 + 用工具链 + 走一遍质量检查"这三件事。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 16.6 的示例骨架，但要把"交付物"写得更具体——例如"手写一个带 Flex 布局的 320×240 面板并截图保存"就比"学会布局"可度量。仓库素材用真实路径：<code>examples/widgets/</code>、<code>demos/widgets/</code>、<code>env_support/</code>、<code>lv_conf_template.h</code>、<code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>一个合格的示例（可自由替换）：第 1 周「模拟器入门」——目标：跑通环境、看到像素；素材：README「Simulator project」、<code>examples/get_started/</code>；交付物：模拟器里跑起 3 个 example 并截图；验收：能用三句话讲清 <code>lv_timer_handler()</code> 主循环。第 2 周「核心机制」——目标：掌握对象 / 控件 / 布局 / 事件；素材：<code>src/core</code>、<code>src/widgets</code>、<code>src/layouts</code>；交付物：一个可交互小面板（滑块 + 标签 + Flex 布局）；验收：能向他人演示并讲解每个回调。第 3 周「拆解示例」——目标：从读代码到改代码；素材：<code>demos/widgets/</code>；交付物：逐函数注释版源码 + 一个自己的改动；验收：能回答"这个 demo 的控件树怎么组织的"。第 4 周「真机移植 + 工具链」——目标：硬件跑起来、体验 Pro 提效；素材：<code>env_support/</code>、<code>lv_conf_template.h</code>、<code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code>；交付物：真机跑通的界面 + <code>lved generate</code> 的生成代码对照；验收：能讲清"变的是驱动与配置，不变的是 UI 层代码"。评判标准不是进度快慢，而是每个阶段都有拿得出手的交付物。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

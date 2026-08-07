@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章：开发环境搭建与第一个程序 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="2" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：开发环境搭建与第一个程序</h1>
+  <p class="chapter-subtitle">工欲善其事，必先利其器：把 lv_conf、CMake 与 SDL 模拟器串成一条链，跑起第一个界面</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「学 LVGL 的头一个小时，别急着写控件。先把三样家伙什儿摆齐：一份被激活的 <code>lv_conf.h</code>、一条能把库编进你工程的 CMake 链、一个能在电脑上画窗口的 SDL 模拟器。工具不顺，后面每一章都会在编译错误上浪费时间。工欲善其事，必先利其器——这一章，我们把『器』磨好。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 2.1 配置：lv_conf.h 是一切行为的开关 ========== -->
+  <h2>2.1 配置：lv_conf.h 是一切行为的开关</h2>
+
+  <p>上一章提到过 <code>lv_conf_template.h</code> 是配置模板，这一章我们真正动手。流程正如 README「Porting manually」一节所说：<strong>把 <code>lv_conf_template.h</code> 复制成 <code>lv_conf.h</code>，再把开头的 <code>#if 0</code> 改成 <code>#if 1</code></strong> 以启用整份配置。为什么是改这一行？因为整个配置文件的正文都被包在 <code>#if 0</code> 条件块里——不改这一行，后面几千行宏定义统统不生效，LVGL 会退回到内置默认值。</p>
+
+  <pre><code><span class="cmt"># 复制模板为 lv_conf.h（在 lvgl 目录旁）</span>
+cp lv_conf_template.h lv_conf.h
+
+<span class="cmt"># 用编辑器打开，找到第一处条件编译，把 0 改成 1：</span>
+<span class="kw">#if 0</span> <span class="cmt">/* Set this to "1" to enable content */</span>   <span class="op">--&gt;</span>   <span class="kw">#if 1</span></code></pre>
+
+  <p>配置生效后，LVGL 几乎所有行为都由这里的宏控制。它们大体分两类：<strong><code>LV_USE_*</code> 功能开关</strong>（要不要编译某个模块）与<strong>资源参数</strong>（内存池多大、色深多少、用哪种渲染后端）。一个关键常量是 <code>LV_COLOR_DEPTH</code>，默认 <code>16</code>，它决定每个像素占几个字节（16 位 = 2 字节，32 位 = 4 字节），直接关系到 2.4 节渲染缓冲的字节数。</p>
+
+  <pre><code><span class="cmt">/* lv_conf.h（节选）：功能开关都是 LV_USE_* 形式 */</span>
+<span class="kw">#define</span> <span class="kw">LV_COLOR_DEPTH</span> <span class="num">16</span>    <span class="cmt">/* 色深：每像素 2 字节 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_DRAW_SW</span> <span class="num">1</span>    <span class="cmt">/* 软件渲染后端 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_BUTTON</span> <span class="num">1</span>    <span class="cmt">/* button 控件 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_LABEL</span> <span class="num">1</span>     <span class="cmt">/* label 控件 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_SDL</span> <span class="num">0</span>       <span class="cmt">/* SDL 桌面模拟器：2.3 节再打开 */</span></code></pre>
+
+  <p>模板里几乎每个宏都带注释说明用途，默认配置（<code>#if 1</code> 后原样保留）通常就能编译跑起来。新手最常见的两个误区：一是改了 <code>lv_conf.h</code> 却忘了重新编译（这些是编译期宏，不是运行期设置）；二是盲目把一堆 <code>LV_USE_*</code> 全部置 1——每开一个模块就多一分 Flash 与 RAM 开销，按需裁剪才是正道。</p>
+
+  <table>
+    <tr><th>配置宏</th><th>默认值</th><th>作用</th></tr>
+    <tr><td><code>LV_COLOR_DEPTH</code></td><td>16</td><td>颜色位深，决定每像素字节数（16→2B，32→4B）</td></tr>
+    <tr><td><code>LV_USE_DRAW_SW</code></td><td>1</td><td>软件渲染后端（LVGL 内置，最通用）</td></tr>
+    <tr><td><code>LV_USE_BUTTON</code></td><td>1</td><td>button 控件模块</td></tr>
+    <tr><td><code>LV_USE_LABEL</code></td><td>1</td><td>label 控件模块</td></tr>
+    <tr><td><code>LV_USE_SDL</code></td><td>0</td><td>SDL2 桌面模拟器驱动</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p><code>lv_conf.h</code> 是编译期配置，改完必须重新编译。想快速验证你的配置有没有语法问题，可以先把 <code>#if 0</code> 改成 <code>#if 1</code> 后单独编译 lvgl 库本身（见 2.2）——它比任何编辑器都更早告诉你错在哪。</p>
+  </div>
+
+  <!-- ========== 2.2 构建：用 CMake 把 lvgl 编进你的工程 ========== -->
+  <h2>2.2 构建：用 CMake 把 lvgl 编进你的工程</h2>
+
+  <p>LVGL 原生支持 CMake，集成方式极简。官方文档 <code>docs/src/integration/building/cmake.mdx</code> 给出的最小接入就是在你工程的 <code>CMakeLists.txt</code> 里加一句 <code>add_subdirectory(lvgl)</code>，然后链接生成的 <code>lvgl</code> 目标即可。这个目标由 <code>lvgl-master/env_support/cmake/main.cmake</code> 用 <code>add_library(lvgl ${SOURCES})</code> 定义（同时注册了别名 <code>lvgl::lvgl</code>），它已经把 <code>src/</code> 下的源码按配置编译好、公共头文件路径也排好了。</p>
+
+  <pre><code><span class="cmt"># 你的 CMakeLists.txt：默认方式，lv_conf.h 放在 lvgl/ 目录旁</span>
+<span class="fn">add_subdirectory</span>(lvgl)
+<span class="fn">target_link_libraries</span>(my_app lvgl)
+
+<span class="cmt"># 如果你的 lv_conf.h 在别处，先告诉 CMake 它在哪里：</span>
+<span class="fn">set</span>(<span class="kw">LV_BUILD_CONF_PATH</span> /abs/path/to/lv_conf.h)
+<span class="fn">add_subdirectory</span>(lvgl)</code></pre>
+
+  <p>配置文件的定位方式不止一种。除了把 <code>lv_conf.h</code> 放在 lvgl 目录旁（默认查找），还可以用 <code>LV_BUILD_CONF_PATH</code> 直接指定文件路径，或用 <code>LV_BUILD_CONF_DIR</code> 指定它所在目录（需配合 <code>LV_CONF_INCLUDE_SIMPLE</code>）。这两种路径类变量也都能在命令行用 <code>-D</code> 传参——这是 CI 或脚本化构建最常用的方式，main.cmake 里甚至会把相对路径转换为绝对路径并打印一行 <code>Using configuration:</code> 方便确认。</p>
+
+  <pre><code><span class="cmt"># 命令行方式：配置 + 构建（Ninja 示例）</span>
+cmake -B build -DLV_BUILD_CONF_PATH=/abs/path/to/lv_conf.h
+cmake --build build</code></pre>
+
+  <table>
+    <tr><th>CMake 变量</th><th>作用</th></tr>
+    <tr><td><code>LV_BUILD_CONF_PATH</code></td><td>直接指定 <code>lv_conf.h</code> 的文件路径（相对路径会转为绝对）</td></tr>
+    <tr><td><code>LV_BUILD_CONF_DIR</code></td><td>指定包含 <code>lv_conf.h</code> 的目录（配合 <code>LV_CONF_INCLUDE_SIMPLE</code>）</td></tr>
+    <tr><td><code>LV_BUILD_USE_KCONFIG</code></td><td>改用 Kconfig 作为配置系统（默认 OFF）</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>LV_BUILD_CONF_PATH</code> 与 <code>LV_BUILD_CONF_DIR</code> <strong>不能同时使用</strong>——main.cmake 里对同时设置直接 <code>FATAL_ERROR</code>。二选一，优先用 <code>LV_BUILD_CONF_PATH</code>。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>只想编译 lvgl 仓库自身来验证配置，也可以不进任何工程：<code>cmake -B build && cmake --build build</code>。仓库自带 <code>CMakePresets.json</code>（<code>linux-base</code>、<code>windows-base</code> 等预设），用来快速确认你的 <code>lv_conf.h</code> 能不能编过。</p>
+  </div>
+
+  <!-- ========== 2.3 模拟器：SDL 驱动把 PC 变成一块屏幕 ========== -->
+  <h2>2.3 模拟器：SDL 驱动把 PC 变成一块屏幕</h2>
+
+  <p>在真机屏幕上调试 UI 很麻烦：要烧固件、看串口、备一块开发板。LVGL 官方的解法是<strong>桌面模拟器</strong>——README「Integration」把 SDL 明确列在 Simulator / desktop 一类：在 PC 上开一个窗口当屏幕，鼠标当触摸。这套驱动的源码就在 <code>lvgl-master/src/drivers/sdl/</code>，包含 <code>lv_sdl_window.c</code>（窗口）、<code>lv_sdl_mouse.c</code>（鼠标）、<code>lv_sdl_keyboard.c</code>（键盘）等文件，对应公开头文件在 <code>include/lvgl/drivers/sdl/</code>。</p>
+
+  <p>启用方式分两步。第一步在 <code>lv_conf.h</code> 里把 <code>LV_USE_SDL</code> 从 <code>0</code> 改成 <code>1</code>，并按需配置 <code>LV_SDL_INCLUDE_PATH</code>（默认 <code>"SDL2/SDL.h"</code>）等子选项；第二步保证本机装了 SDL2 开发库——CMake 在 <code>env_support/cmake/dependencies.cmake</code> 里检测到 <code>CONFIG_LV_USE_SDL</code>（即 <code>lv_conf.h</code> 中 <code>LV_USE_SDL</code> 预处理后的 CMake 内部变量）后，会走 <code>find_package</code> → <code>pkg-config</code> → <code>FetchContent</code> 的顺序自动解析 SDL2 依赖。</p>
+
+  <pre><code><span class="cmt">/* lv_conf.h：打开桌面模拟器 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_SDL</span> <span class="num">1</span>
+<span class="kw">#define</span> <span class="kw">LV_SDL_INCLUDE_PATH</span> <span class="str">"SDL2/SDL.h"</span>
+<span class="kw">#define</span> <span class="kw">LV_SDL_RENDER_MODE</span> <span class="kw">LV_DISPLAY_RENDER_MODE_DIRECT</span></code></pre>
+
+  <p>读一读 <code>lv_sdl_window.c</code> 的 <code>lv_sdl_window_create()</code> 你会发现一个关键事实：<strong>SDL 驱动替你完成了 2.4 节要手写的那一大半初始化</strong>。它内部会调用 <code>SDL_Init()</code>、<code>lv_tick_set_cb(SDL_GetTicks)</code>（自动把时基接到 SDL 的毫秒时钟）、<code>lv_display_create()</code>，还会建一个事件处理 timer 把 SDL 事件转成鼠标/键盘输入。所以模拟器代码里，你只需要开窗口、补一个输入设备，剩下的交给驱动。</p>
+
+  <pre><code><span class="cmt">/* 模拟器主程序：SDL 驱动已把 tick、display 都接好了 */</span>
+<span class="fn">lv_init</span>();
+
+<span class="type">lv_display_t</span> * disp = <span class="fn">lv_sdl_window_create</span>(<span class="num">480</span>, <span class="num">320</span>);
+<span class="fn">lv_sdl_mouse_create</span>();       <span class="cmt">/* 鼠标当触摸 */</span>
+<span class="fn">lv_sdl_keyboard_create</span>();    <span class="cmt">/* 键盘输入 */</span>
+
+<span class="cmt">/* UI 照常写在活跃屏上 */</span>
+<span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_center</span>(btn);
+
+<span class="kw">while</span>(<span class="num">1</span>) {
+    <span class="fn">lv_timer_handler</span>();
+    SDL_Delay(<span class="num">5</span>);
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>模拟器只负责开发期调试，它替你写的 <code>lv_tick_set_cb</code>、flush 回调、触摸回调在真机上统统要自己实现。正因如此，2.4 的最小程序（<strong>不用</strong> SDL、走原生 API）才是你移植到任何屏幕的通用模板——模拟器只是把同一套东西预组装好给你看。</p>
+  </div>
+
+  <!-- ========== 2.4 最小程序：从 lv_init 到屏幕上出现按钮 ========== -->
+  <h2>2.4 最小程序：从 lv_init 到屏幕上出现按钮</h2>
+
+  <p>现在抛开模拟器，看一个<strong>不依赖任何平台驱动</strong>的最小程序——它来自 README「Porting manually」的 C 示例，是所有 LVGL 移植的骨架。流程固定五步：<code>lv_init()</code> 初始化全局 → <code>lv_tick_set_cb()</code> 注册毫秒时基 → <code>lv_display_create()</code> 创建显示 → <code>lv_display_set_buffers()</code> 分配渲染缓冲 → <code>lv_display_set_flush_cb()</code> 注册刷屏回调，然后就能在 <code>lv_screen_active()</code> 上创建控件，最后进主循环不断调用 <code>lv_timer_handler()</code>。</p>
+
+  <pre><code><span class="cmt">/* 最小程序（裸机 + 任一屏）：五步初始化 + UI + 主循环 */</span>
+<span class="kw">#include</span> <span class="str">"lvgl/lvgl.h"</span>
+
+<span class="kw">#define</span> <span class="kw">TFT_HOR_RES</span> <span class="num">320</span>
+<span class="kw">#define</span> <span class="kw">TFT_VER_RES</span> <span class="num">240</span>
+
+<span class="kw">static</span> <span class="type">uint32_t</span> my_tick_cb(<span class="kw">void</span>)   <span class="cmt">/* 返回系统毫秒数 */</span>
+{
+    <span class="kw">return</span> my_get_millisec();
+}
+
+<span class="kw">void</span> main(<span class="kw">void</span>)
+{
+    my_hardware_init();
+
+    <span class="fn">lv_init</span>();                          <span class="cmt">/* 1. 初始化 LVGL 全局状态 */</span>
+    <span class="fn">lv_tick_set_cb</span>(my_tick_cb);        <span class="cmt">/* 2. 注册毫秒时基 */</span>
+
+    <span class="type">lv_display_t</span> * disp = <span class="fn">lv_display_create</span>(TFT_HOR_RES, TFT_VER_RES);
+
+    <span class="kw">static</span> <span class="type">uint8_t</span> buf[TFT_HOR_RES * TFT_VER_RES / <span class="num">10</span> * <span class="num">2</span>];
+    <span class="fn">lv_display_set_buffers</span>(disp, buf, <span class="kw">NULL</span>, <span class="kw">sizeof</span>(buf),
+                           <span class="kw">LV_DISPLAY_RENDER_MODE_PARTIAL</span>);
+
+    <span class="fn">lv_display_set_flush_cb</span>(disp, my_flush_cb);
+
+    <span class="type">lv_obj_t</span> * btn  = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+    <span class="fn">lv_obj_center</span>(btn);
+    <span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(btn);
+    <span class="fn">lv_label_set_text</span>(label, <span class="str">"Hello LVGL!"</span>);
+
+    <span class="kw">while</span>(<span class="num">1</span>) {                 <span class="cmt">/* 3. 主循环驱动渲染/动画/事件 */</span>
+        <span class="fn">lv_timer_handler</span>();
+        my_sleep_ms(<span class="num">5</span>);
+    }
+}</code></pre>
+
+  <p>最难理解的一步是 flush 回调。<code>lv_display_set_buffers</code> 分配的只是 LVGL 内部画图用的内存；真正把图像送进屏幕（帧缓冲或 LCD 控制器）靠的是你注册的 <code>my_flush_cb</code>——它的签名是 <code>void (*)(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)</code>，LVGL 每次渲染完一块区域就把坐标 <code>area</code> 和像素数据 <code>px_map</code> 交给你，你把它写进屏幕，然后务必调用 <code>lv_display_flush_ready(disp)</code> 告诉 LVGL"这块刷完了，可以继续画下一块"。</p>
+
+  <pre><code><span class="cmt">/* flush 回调：把 px_map 画到 area 区域，并回执 lv_display_flush_ready */</span>
+<span class="kw">static</span> <span class="kw">void</span> my_flush_cb(<span class="type">lv_display_t</span> * <span class="param">disp</span>, <span class="kw">const</span> <span class="type">lv_area_t</span> * <span class="param">area</span>,
+                         <span class="type">uint8_t</span> * <span class="param">px_map</span>)
+{
+    <span class="cmt">/* 写屏代码：把 px_map 拷贝到 area->x1..x2, y1..y2 对应的屏幕位置 */</span>
+
+    <span class="fn">lv_display_flush_ready</span>(disp);   <span class="cmt">/* 通知 LVGL 本区域已刷完 */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>调用</th><th>职责</th></tr>
+    <tr><td><code>lv_init()</code></td><td>初始化全局状态（内存、timer、draw 等子系统）</td></tr>
+    <tr><td><code>lv_tick_set_cb()</code></td><td>注册毫秒级时基，LVGL 借此计算时间/动画</td></tr>
+    <tr><td><code>lv_display_create(w, h)</code></td><td>创建一块 display 并附带一个默认屏幕</td></tr>
+    <tr><td><code>lv_display_set_buffers(...)</code></td><td>指定渲染缓冲与渲染模式（PARTIAL/DIRECT/FULL）</td></tr>
+    <tr><td><code>lv_display_set_flush_cb(...)</code></td><td>注册"把缓冲刷到屏幕"的回调</td></tr>
+    <tr><td><code>lv_timer_handler()</code></td><td>驱动重绘、动画与事件处理（主循环每次调用）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>屏幕白屏或花屏，九成是缓冲尺寸与 <code>LV_COLOR_DEPTH</code> 不匹配：16 位色深每像素 2 字节，32 位是 4 字节。partial 模式的 1/10 屏只是"最少够用"，<code>LV_DISPLAY_RENDER_MODE_PARTIAL</code> 会拿更小缓冲做局部刷新——先跑通，再谈性能。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：激活配置 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把 <code>lvgl-master/lv_conf_template.h</code> 复制为你的 <code>lv_conf.h</code>，找到开头的 <code>#if 0</code> 并改成 <code>#if 1</code>。然后回答两个问题：当前 <code>LV_COLOR_DEPTH</code> 的值是多少？<code>LV_USE_SDL</code> 的值是多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>在文件里搜索 <code>#define LV_COLOR_DEPTH</code> 和 <code>#define LV_USE_SDL</code>，注意它们各自的分隔注释块。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>LV_COLOR_DEPTH</code> 为 <code>16</code>（每像素 2 字节）；<code>LV_USE_SDL</code> 为 <code>0</code>（默认关闭）。若打算在 PC 上跑模拟器，需改为 <code>1</code> 并确认 <code>LV_SDL_INCLUDE_PATH</code> 指向本机 SDL2 头文件。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：CMake 集成最小工程 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>写一个最小工程把 lvgl 集成进来：一个 <code>CMakeLists.txt</code> + 一个 <code>main.c</code>，链接 <code>lvgl</code> 目标；再把 <code>lv_conf.h</code> 从"lvgl 目录旁"挪到外部路径，改用 <code>LV_BUILD_CONF_PATH</code> 指向它。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>接入只需 <code>add_subdirectory(lvgl)</code> + <code>target_link_libraries(my_app lvgl)</code>；配置文件定位用 <code>set(LV_BUILD_CONF_PATH ...)</code> 或命令行 <code>-DLV_BUILD_CONF_PATH=...</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>最小 <code>CMakeLists.txt</code>：<code>add_subdirectory(lvgl)</code>、<code>add_executable(my_app main.c)</code>、<code>target_link_libraries(my_app lvgl)</code>，并在前面加 <code>set(LV_BUILD_CONF_PATH /path/outside/lv_conf.h)</code>（若文件不在 lvgl 目录旁）。等价命令行写法：<code>cmake -B build -DLV_BUILD_CONF_PATH=/path/outside/lv_conf.h</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：改分辨率与缓冲 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把 2.4 最小程序的分辨率从 320×240 改成 480×320，并同步调整 <code>buf</code> 数组。请说明为什么 16 位色深下缓冲大小是 <code>480 * 320 / 10 * 2</code>，如果换成 <code>LV_COLOR_DEPTH 32</code> 又该是多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>partial 模式只需 1/10 屏幕的缓冲；每像素字节数 = <code>LV_COLOR_DEPTH / 8</code>。想想 <code>/10</code> 和 <code>*2</code> 各代表什么。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>static uint8_t buf[480 * 320 / 10 * 2];</code> —— 总面积 480×320，partial 模式取 1/10 为工作区，乘以每像素 2 字节（16 位色深）。若 <code>LV_COLOR_DEPTH</code> 为 32，则每像素 4 字节，改为 <code>480 * 320 / 10 * 4</code>。注意 <code>sizeof(buf)</code> 会随数组自动变化，别把常量写死。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：读懂 SDL 驱动 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>打开 <code>lvgl-master/src/drivers/sdl/lv_sdl_window.c</code>，通读 <code>lv_sdl_window_create()</code>：列出它替你自动完成的初始化步骤；然后反推——如果去掉 SDL、换成真实屏幕，你需要自己补齐的 checklist 是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>观察它内部调了哪些 <code>lv_*</code> API（tick、display、timer、indev）；再对照 2.4 的五步流程和 README 里触摸设备的写法。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>SDL 驱动自动完成：<code>SDL_Init()</code> 初始化 SDL；<code>lv_tick_set_cb(SDL_GetTicks)</code> 接入毫秒时基；<code>lv_display_create(hor, ver)</code> 创建显示；建事件处理 timer 把 SDL 事件分发为鼠标/键盘输入。真机 checklist：屏幕驱动初始化 → <code>lv_tick_set_cb()</code>（用系统毫秒）→ <code>lv_display_create()</code> → <code>lv_display_set_buffers()</code> → <code>lv_display_set_flush_cb()</code> → 触摸 <code>lv_indev_create()</code> + <code>LV_INDEV_TYPE_POINTER</code> 回调 → 主循环 <code>lv_timer_handler()</code>。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

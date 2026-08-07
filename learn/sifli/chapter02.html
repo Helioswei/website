@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章：平台与构建：SiFli SDK + SCons - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="2" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：平台与构建——SiFli SDK + SCons</h1>
+  <p class="chapter-subtitle">换平台第一关：用一套新工具链，把代码变成能烧进芯片的固件</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上章我们看清了要搬什么，这章就来打造能搬的『车』。你不必迷恋工具本身，但必须认得工具的门道：SCons 是怎么把几千个源文件串成一条线的、board 参数背后那块板子的脾气、menuconfig 里每个开关对应芯片里的哪块硬件。工具认得清，动手才不慌。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 2.1 构建工具链：SCons 与 SiFli SDK ========== -->
+  <h2>2.1 构建工具链：SCons 与 SiFli SDK</h2>
+
+  <p>先认主角。<strong>SCons</strong> 是什么？一句话说人话：一个用 Python 写的<strong>构建系统</strong>（构建系统是"把源代码编译成可执行程序"的流水线总管，传统上由 Make 或 CMake 扮演）。它用 <code>SConstruct</code> / <code>SConscript</code> 两个文件描述"怎么编"，而这两个文件本身就是 Python 脚本——所以它比 Make 的语法灵活得多，还能直接调用 Python 生态里的工具。它跟编译器（比如 GCC）是两回事：编译器负责把 <code>.c</code> 变成 <code>.o</code>，SCons 负责决定"哪些文件要编、按什么顺序、编完放哪"。上季我们用 PlatformIO 时，这些工作被藏起来了；这季 SCons 把它们全摊在你面前。</p>
+
+  <p>第二个主角是 <strong>SiFli SDK</strong>。前面说过，SDK 是芯片厂商提供的"软件开发工具包"。思澈的这份 SDK 特别之处在于：它是<strong>基于 RT-Thread 定制的</strong>一套固件开发框架（RT-Thread 是一个国产开源实时操作系统，类似 FreeRTOS，但自带文件系统、消息队列等组件），官方一句话总结："使用它可以快速开发运行于思澈科技芯片平台的应用程序"。它之于 SF32，就像 ESP-IDF 之于 ESP32、HAL 库之于 STM32——芯片寄存器、外设驱动、启动代码、量产工具全在里面，应用工程师主要写自己的业务逻辑，需要外设时调 SDK 的 API。本仓库用的是 <code>v2.5.0</code> 版本（见 SDK 根目录 <code>version.txt</code>）。</p>
+
+  <p>在敲任何构建命令之前，有一个绕不开的步骤：<strong>设置环境变量 <code>SIFLI_SDK</code></strong>。SCons 脚本要靠它找到 SDK 装在哪。Windows 上在 SDK 根目录运行 <code>set_env.bat</code>（PowerShell 用户用 <code>export.ps1</code>），Linux/macOS 上 <code>source ./export.sh</code>。如果你跳过这步直接 <code>scons</code>，SConstruct 会当场报错并提示你去跑 <code>set_env.bat</code>——这不是 bug，是构建系统的"前门"。</p>
+
+  <p>最后认识一下 <code>epdiy-epub/project/</code> 里的构建文件族：<code>SConstruct</code> 是整个构建的入口（相当于 Make 的 Makefile 顶层）；<code>SConscript</code> 负责把 SDK、<code>lib/</code>、<code>src/</code>、<code>font/</code> 各子工程拉进来；<code>Kconfig.proj</code> 是项目级配置（2.4 讲）；还有一个容易被忽视的 <code>rtconfig.py</code>——芯片型号、核、目标名、编译器都声明在板级配置目录（如 <code>sf32-oed-epd_v11/hcpu/rtconfig.py</code>），构建时会被读进 SCons 环境。理解"配置放哪"比背命令重要得多。</p>
+
+  <table>
+    <tr><th>角色</th><th>本季用的工具</th><th>它做什么</th></tr>
+    <tr><td>构建系统</td><td>SCons</td><td>调度编译：读 SConstruct / SConscript，按依赖关系编译、链接</td></tr>
+    <tr><td>编译器 / 链接器</td><td>GCC 系（rtconfig.py 里声明）</td><td>把 <code>.c/.cpp</code> 编成机器码并链接成固件</td></tr>
+    <tr><td>固件开发框架</td><td>SiFli SDK（基于 RT-Thread）</td><td>芯片驱动、RTOS、中间件，类似 ESP-IDF 之于 ESP32</td></tr>
+    <tr><td>项目配置</td><td>Kconfig + proj.conf / board.conf</td><td>编译期的开关，决定编进哪些驱动与功能</td></tr>
+    <tr><td>构建入口</td><td>project/SConstruct</td><td>把 SDK + 库 + 应用 + 字体 + 文件系统镜像串成一条线</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># Windows（在 SiFli-SDK 根目录执行；PowerShell 用 export.ps1）</span>
+set_env.bat
+
+<span class="cmt"># Linux / macOS</span>
+source ./export.sh</code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/project/SConstruct（节选：先检查 SDK 环境变量）</span>
+SIFLI_SDK = os.getenv(<span class="str">'SIFLI_SDK'</span>)
+<span class="kw">if</span> <span class="kw">not</span> SIFLI_SDK:
+    print(<span class="str">"Please run set_env.bat in root folder of SIFLI SDK to set environment."</span>)
+    exit()</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>别被 SCons 和 Make 的差别吓到——它们的核心概念完全一样：都有"入口脚本""目标""依赖"。你只要记住三个词：<code>SConstruct</code>（入口）、<code>SConscript</code>（子模块脚本）、<code>rtconfig.py</code>（工具链与芯片信息）。遇到不认识的 SCons 语法，去查 Python，因为 SCons 脚本就是 Python。</p>
+  </div>
+
+  <!-- ========== 2.2 板级配置与编译：board、hcpu/lcpu 与多板 ========== -->
+  <h2>2.2 板级配置与编译：board、hcpu/lcpu 与多板</h2>
+
+  <p>什么是<strong>板级配置</strong>？一句话：针对"某一块具体的开发板"，把芯片引脚、外设、内存布局等硬件差异整理成一份配置，编译时据此生成合适的固件。芯片可以相同，板子却各有各的接法——就像同一颗 CPU，不同厂商的主板排线不同。本项目一口气带了 <strong>四套板级配置</strong>：<code>sf32-oed-epd_base</code>（V1.1 与 V1.2 共用的公共配置）、<code>sf32-oed-epd_v11</code>（V1.1）、<code>sf32-oed-epd_v12</code>（V1.2）、<code>sf32-oed-epd_v12_spi</code>（V1.2 但墨水屏走 SPI 接口）。v11、v12 两套的 <code>Kconfig.board</code> 都只有一行 <code>source "../sf32-oed-epd_base/Kconfig.board"</code>，把公共配置引进来；而 <code>v12_spi</code> 自成一派，不 source base，直接在自己的 <code>Kconfig.board</code> 里写死了触控、EPD 的各引脚号。</p>
+
+  <p>编译命令长这样，<strong>必须在 <code>epdiy-epub/project</code> 目录下执行</strong>：</p>
+
+  <pre><code><span class="cmt"># 在 epdiy-epub/project 目录下</span>
+scons --board=sf32-oed-epd_v11 --board_search_path=.. -j8</code></pre>
+
+  <p>拆开看三个参数：<code>--board=sf32-oed-epd_v11</code> 告诉 SCons"给哪块板子编"，它会在搜索路径里找名为 <code>sf32-oed-epd_v11</code> 的板级配置目录；<code>--board_search_path=..</code> 是搜索路径，指向上一级目录——也就是 <code>epdiy-epub/</code> 根目录，四套板级配置都在那；<code>-j8</code> 是"8 个任务并行编译"（j 是 job 的缩写，跟 Make 的 <code>-j</code> 一个意思，能明显加速）。想给 V1.2 板编译，把 <code>--board</code> 换成 <code>sf32-oed-epd_v12</code> 或 <code>sf32-oed-epd_v12_spi</code> 即可。编译产物会生成在 <code>project/build_sf32-oed-epd_v11_hcpu/</code> 这类以 <code>build_&lt;板名&gt;_hcpu</code> 命名的目录里。</p>
+
+  <p>这里的 <code>hcpu</code> 后缀引出一个 SiFli 平台的招牌概念：<strong>双核（HCPU + LCPU）</strong>。HCPU（高性能核）是跑应用的主核——本项目的主循环、EPUB 解析、界面渲染都在它上面；LCPU（低功耗核）是贴心的协处理器，负责在系统休眠时用极低功耗盯着按键、定时器等，把 HCPU 放回睡眠。在 <code>project/SConstruct</code> 里有一行 <code>AddLCPU(SIFLI_SDK, rtconfig.CHIP, "../../src/lcpu_img.c")</code>，意思是"把 LCPU 的固件作为一个镜像编进主固件"——也就是说，你只需要 <code>scons</code> 一次，主核固件 + 协处理器镜像会一起产出，无需单独编两次。</p>
+
+  <p>看一眼 <code>SConstruct</code> 的完整流水线，就明白一次构建做了多少事：先 <code>PrepareEnv</code> 准备环境，<code>AddBootLoader</code> 加引导程序，<code>AddLCPU</code> 加协处理器镜像，<code>PrepareBuilding</code> 收集所有源码，<code>DoBuilding</code> 正式编译链接出主固件；随后 <code>AddFTAB</code> 生成分区表（ftab），<code>FileSystemBuild("../disk", env)</code> 把 <code>disk/</code> 里的样书打包成文件系统镜像 <code>fs_root</code> 烧进 Flash，若开了 <code>EPD_WAVEFORM_USE_BIN</code> 还会把 <code>waveform/epd_waveform.bin</code> 作为波形表镜像加进去；最后 <code>GenDownloadScript</code> 自动生成下载脚本。也就是说：<strong>样书、波形、分区表、引导程序，全部由一次 <code>scons</code> 打包进最终镜像</strong>——这是 SCons 帮这个项目省掉的最大工程量。</p>
+
+  <table>
+    <tr><th>板级配置目录</th><th>适用硬件</th><th>与 base 的关系</th><th>特点</th></tr>
+    <tr><td><code>sf32-oed-epd_base</code></td><td>V1.1 / V1.2 共用</td><td>—（被引用方）</td><td>bsp_init / bsp_lcd_tp / bsp_pinmux 等公共板级源码</td></tr>
+    <tr><td><code>sf32-oed-epd_v11</code></td><td>SF32-OED-EPD V1.1</td><td>source base</td><td>hcpu / lcpu / ptab.json 齐全</td></tr>
+    <tr><td><code>sf32-oed-epd_v12</code></td><td>SF32-OED-EPD V1.2</td><td>source base</td><td>与 v11 共用 base 板级源码</td></tr>
+    <tr><td><code>sf32-oed-epd_v12_spi</code></td><td>V1.2 + SPI 墨水屏</td><td>独立（不 source base）</td><td>顶层自带 bsp_*.c，Kconfig.board 写死 EPD/触控引脚</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 编译与 menuconfig（在 epdiy-epub/project 下）</span>
+scons --board=sf32-oed-epd_v11 --board_search_path=.. -j8
+scons --board=sf32-oed-epd_v11 --board_search_path=.. --menuconfig</code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/project/SConstruct（构建流水线，节选）</span>
+AddBootLoader(SIFLI_SDK, rtconfig.CHIP)                  <span class="cmt"># 引导程序</span>
+AddLCPU(SIFLI_SDK, rtconfig.CHIP, <span class="str">"../../src/lcpu_img.c"</span>) <span class="cmt"># LCPU 协处理器镜像</span>
+...
+AddFTAB(SIFLI_SDK, rtconfig.CHIP)                        <span class="cmt"># 生成分区表 ftab</span>
+fs_bin = FileSystemBuild(<span class="str">"../disk"</span>, env)              <span class="cmt"># disk/ 打包为文件系统镜像</span>
+AddCustomImg(<span class="str">"fs_root"</span>, bin=[fs_bin])
+GenDownloadScript(env)                                   <span class="cmt"># 生成 uart_download.bat</span></code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/sf32-oed-epd_v11/ 板级配置目录</span>
+sf32-oed-epd_v11/
+  hcpu/          <span class="cmt">HCPU 主核：board.conf / Kconfig.board / rtconfig.py</span>
+  lcpu/          <span class="cmt">LCPU 低功耗协处理器：同结构配置</span>
+  ptab.json      <span class="cmt">分区表（2.4 详讲）</span>
+  Kconfig.board  <span class="cmt">source "../sf32-oed-epd_base/Kconfig.board"</span>
+  SConscript     <span class="cmt">本板驱动构建脚本</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>看到 <code>_hcpu</code> 就联想到"双核"，方向就对了：<code>build_&lt;板名&gt;_hcpu</code> 是主核固件的产物目录；你<strong>不需要</strong>为 LCPU 单独跑一次编译。想知道这块芯片平时怎么省电？答案就在 LCPU 上——第 6 章讲电池与低功耗时会把它揭个底朝天。</p>
+  </div>
+
+  <!-- ========== 2.3 烧录：uart_download.bat ========== -->
+  <h2>2.3 烧录：uart_download.bat</h2>
+
+  <p>编译只是把固件做出来，真正让它跑起来还要<strong>烧录</strong>——把固件镜像通过某种通道写进芯片的 Flash（回忆第 1 章：Flash 是掉电不丢的存储区，固件就住在这里）。本项目官方推荐的通道是 <strong>UART 下载</strong>（UART 即串口，最简单的"一条收一条发"的通信方式；UART 下载就是给芯片装个"收件箱"，用串口把固件一段段送进去）。上一节提到，<code>SConstruct</code> 末尾的 <code>GenDownloadScript(env)</code> 会自动生成下载脚本，它在编译产物目录里：</p>
+
+  <pre><code><span class="cmt"># README · 编译与烧录（在 epdiy-epub/project 下编译完成后）</span>
+build_sf32-oed-epd_v11_hcpu\uart_download.bat</code></pre>
+
+  <p>注意它是个 Windows 批处理脚本（<code>.bat</code>），路径里的反斜杠是 Windows 风格——这个项目主要面向 Windows 开发环境（前面 <code>set_env.bat</code>、SCons 里的 <code>mingw</code> 工具集也都是 Windows 导向的）。运行它的步骤很简单：把开发板用 USB 连到电脑、装好串口驱动，然后执行这个脚本，<strong>按脚本提示输入开发板对应的串口号</strong>，脚本就会通过串口把固件烧进芯片。整个过程是"脚本问一句、你答一句"的交互式下载，不需要额外的烧录软件。</p>
+
+  <p>如果没连板子、或串口号输错，脚本会卡在等待握手或直接报错——这时先回设备管理器确认串口号（Windows 里 USB 转串口通常显示为 <code>COM3</code>、<code>COM5</code> 之类的名字），再重试。除了 UART 下载，SDK 也支持用调试器下载：板级配置里那句 <code>JLINK_DEVICE = 'SF32LB52X_NOR'</code> 表明 J-Link（一款流行的调试器，不仅能烧录还能在线断点调试）可以直连芯片的 NOR Flash。对新手，先走通 <code>uart_download.bat</code> 即可；想进阶调试再上 J-Link。</p>
+
+  <table>
+    <tr><th>烧录 / 调试方式</th><th>怎么用</th><th>优点</th><th>缺点</th></tr>
+    <tr><td>UART 下载脚本</td><td>运行 <code>uart_download.bat</code>，输入串口号</td><td>零额外硬件，只需 USB 线，官方推荐</td><td>只能下载，不能在线调试；依赖串口环境</td></tr>
+    <tr><td>J-Link 调试器</td><td>硬件连接 SWD 接口（<code>JLINK_DEVICE='SF32LB52X_NOR'</code>）</td><td>可断点调试、单步、读寄存器</td><td>需要额外硬件，上手门槛高</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 一次典型烧录交互（示意）</span>
+<span class="param">$</span> build_sf32-oed-epd_v11_hcpu\uart_download.bat
+请输入串口号: <span class="num">3</span>        <span class="cmt"># 输入 COM3，脚本开始下载</span>
+Downloading firmware... OK</code></pre>
+
+  <pre><code><span class="cmt"># 为什么脚本是"生成"出来的？因为 GenDownloadScript 会按当前配置动态生成</span>
+<span class="cmt"># epdiy-epub/project/SConstruct（节选）</span>
+GenDownloadScript(env)   <span class="cmt"># 在 build_&lt;板名&gt;_hcpu/ 下生成 uart_download.bat</span>
+
+<span class="cmt"># 板级 rtconfig.py 里声明了芯片型号，下载脚本据此定位目标芯片</span>
+CHIP = <span class="str">'SF32LB52X'</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>烧录失败九成是三个原因：串口号填错、串口被别的软件占用（比如串口监视器）、驱动没装好。排查顺序就按这个来。另外记住一句话：<strong>固件在哪、下载脚本就在哪</strong>——<code>build_&lt;板名&gt;_hcpu/</code> 目录就是编译产物的"收件箱"，凡是问"编出来的东西在哪个目录"，答案都在这里。</p>
+  </div>
+
+  <!-- ========== 2.4 menuconfig 与分区表：Kconfig.proj 与 ptab.json ========== -->
+  <h2>2.4 menuconfig 与分区表：Kconfig.proj 与 ptab.json</h2>
+
+  <p>最后一个工具是 <strong>menuconfig</strong>：一个字符界面的<strong>交互式配置菜单</strong>（Kconfig 是 Linux 内核首创的配置语法，menuconfig 是它的图形化操作界面）。它把所有编译期开关组织成树状菜单，你用方向键翻、回车选、空格切换勾选，最后保存生效——比手改配置头文件直观得多。运行方式就是上一节出现过的：</p>
+
+  <pre><code><span class="cmt"># 在 epdiy-epub/project 目录下</span>
+scons --board=sf32-oed-epd_v11 --board_search_path=.. --menuconfig</code></pre>
+
+  <p>这些开关具体管什么？打开 <code>project/Kconfig.proj</code>（项目配置的"总目录"），能看到几类关键选择。一是<strong>帧缓冲色深</strong>：<code>EPD_EPUB_COLOR_DEPTH</code> 在 1BPP（1 位色，纯黑白）和 4BPP（4 位色，16 级灰）之间选，SPI 小屏（OPM037A3）默认 1BPP，大屏默认 4BPP。二是<strong>屏幕驱动选择</strong>：<code>choice "Custom LCD driver"</code> 里挂着四块屏（YZC085 V1.1 版、YZC085 V1.2 版、R7D005、OPM037A3 SPI 屏），并且按板子自动设默认——<code>default LCD_USING_EPD_YZC085_V100 if BSP_USING_BOARD_SF32_OED_EPD_V11</code>，意思就是"V1.1 板默认选这块屏"。三是每块屏配套的<strong>分辨率与 DPI 宏</strong>：<code>LCD_HOR_RES_MAX</code> / <code>LCD_VER_RES_MAX</code> / <code>LCD_DPI</code>（DPI 是每英寸像素密度，墨水屏选字体和排版时要用）。</p>
+
+  <p>配置还有一个"优先级"规则值得记住：<strong>proj.conf 项目配置 &gt; board.conf 板级配置 &gt; Kconfig 默认值</strong>。<code>project/proj.conf</code> 是一份项目级默认配置（比如 <code>CONFIG_PKG_FREETYPE=y</code> 打开 FreeType 字体库、<code>CONFIG_BSP_USING_PM=y</code> 打开电源管理、<code>CONFIG_RT_MAIN_THREAD_STACK_SIZE=65536</code> 给主线程 64 KB 栈）；每个板级目录的 <code>board.conf</code> 再覆盖板子相关的（比如打开 GPIO/UART/SPI 等外设）；最后才是 Kconfig 里写的默认值。menuconfig 里改的配置最终会写入 <code>.config</code> 并生成 <code>rtconfig.h</code>，被代码 <code>#include</code> 使用。</p>
+
+  <p>最后认识一下 <strong>ptab.json（分区表）</strong>——它是芯片 Flash/内存的"楼盘户型图"，用 JSON 定义每块区域从哪里开始、多大、放什么。打开 <code>sf32-oed-epd_v11/ptab.json</code> 可以看到：主存储 <code>flash2</code> 从 <code>0x12000000</code> 开始，依次划出引导程序区（bootloader）、DFU 升级区、<code>HCPU_FLASH_CODE</code> 主固件区（<code>0x200000</code> 起、2 MB，标着 <code>"img": "main"</code>，支持 XIP 原地执行）、<code>BUILTIN_RESOURCE</code> 内置资源区、<code>fs_root</code> 文件系统区（<code>disk/</code> 里的样书就装这）以及 <code>wave_table</code> 波形表区；另有 <code>psram1</code>（外挂 PSRAM 数据区）、<code>hpsys_ram</code>（主核 RAM，含 HCPU↔LCPU 的邮箱 <code>HCPU2LCPU_MB_CH1/CH2_BUF</code>）和 <code>lpsys_ram</code>（低功耗系统 RAM）。看懂它，你就知道"哪本书烧在哪个地址、固件和资源怎么不打架"了。</p>
+
+  <table>
+    <tr><th>分区（tags）</th><th>起始地址 / 大小</th><th>放什么</th></tr>
+    <tr><td><code>bootloader</code></td><td><code>0x12010000</code> / 64 KB</td><td>引导程序</td></tr>
+    <tr><td><code>DFU_FLASH_CODE</code></td><td><code>0x12020000</code> / 384 KB</td><td>DFU 升级代码</td></tr>
+    <tr><td><code>HCPU_FLASH_CODE</code></td><td><code>0x12200000</code> / 2 MB</td><td>主固件（<code>"img": "main"</code>，可 XIP 执行）</td></tr>
+    <tr><td><code>BUILTIN_RESOURCE</code></td><td><code>0x12400000</code> / 10 MB</td><td>内置资源</td></tr>
+    <tr><td><code>FS_REGION</code>（<code>fs_root</code>）</td><td><code>0x12e00000</code> / 768 KB</td><td><code>disk/</code> 样书等文件系统镜像</td></tr>
+    <tr><td><code>CUSTOM_EPD_WAVE_TABLE</code></td><td><code>0x12ec0000</code> / 128 KB</td><td>墨水屏波形表 <code>wave_table</code></td></tr>
+    <tr><td><code>PSRAM_DATA</code></td><td><code>0x60000000</code> / 8 MB</td><td>外挂 PSRAM 数据区</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># epdiy-epub/project/Kconfig.proj（节选：屏幕驱动选择）</span>
+choice
+    prompt <span class="str">"Custom LCD driver"</span>
+    default LCD_USING_EPD_YZC085_V100 <span class="kw">if</span> BSP_USING_BOARD_SF32_OED_EPD_V11
+    default LCD_USING_EPD_YZC085_V100_V12 <span class="kw">if</span> BSP_USING_BOARD_SF32_OED_EPD_V12
+    config LCD_USING_EPD_YZC085_V100
+        bool <span class="str">"6.0 rect electronic paper display (EPD YZC085_V1.05 1032x758) for V1.1 board"</span>
+    config LCD_USING_EPD_OPMO37A3
+        bool <span class="str">"3.7 rect electronic paper display SPI (OPM037A3 240x416)"</span>
+endchoice
+
+config LCD_HOR_RES_MAX
+    <span class="type">int</span>
+    default <span class="num">1032</span> <span class="kw">if</span> LCD_USING_EPD_YZC085_V100</code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/sf32-oed-epd_v11/ptab.json（节选：主固件区）</span>
+{ <span class="str">"offset"</span>: <span class="str">"0x00200000"</span>, <span class="str">"max_size"</span>: <span class="str">"0x00200000"</span>,
+  <span class="str">"tags"</span>: [<span class="str">"HCPU_FLASH_CODE"</span>], <span class="str">"img"</span>: <span class="str">"main"</span>, <span class="str">"exec"</span>: <span class="str">"main"</span> }</code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/project/proj.conf（项目级默认配置，节选）</span>
+CONFIG_PKG_FREETYPE=y               <span class="cmt"># 打开 FreeType 字体库</span>
+CONFIG_BSP_USING_PM=y               <span class="cmt"># 打开电源管理</span>
+CONFIG_RT_MAIN_THREAD_STACK_SIZE=<span class="num">65536</span> <span class="cmt"># 主线程栈 64 KB</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>把三份配置文件当成"三层滤镜"：<code>proj.conf</code> 管"这个项目要什么"（FreeType、电源管理、蓝牙），<code>board.conf</code> 管"这块板子有哪些外设"（GPIO、UART、SPI、触控），Kconfig 默认值管"厂里给的老底"（各宏的兜底）。改配置时先想清楚你要动的是哪一层——改错层，要么没效果，要么被更上层覆盖。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：认识构建命令 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>解释下面这条命令里每个参数的意思，并说明它应该在哪个目录下执行：</p>
+      <pre><code>scons --board=sf32-oed-epd_v11 --board_search_path=.. -j8</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 2.2：<code>--board</code> 选板子，<code>--board_search_path</code> 指搜索路径，<code>-j8</code> 并行数；入口脚本 <code>SConstruct</code> 在 <code>project/</code> 里。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>在 <code>epdiy-epub/project/</code> 目录下执行。<code>--board=sf32-oed-epd_v11</code>：为 V1.1 板生成固件；<code>--board_search_path=..</code>：到上一级（epdiy-epub 根）去找四套板级配置目录；<code>-j8</code>：8 个任务并行编译以加速。产物输出到 <code>project/build_sf32-oed-epd_v11_hcpu/</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：多板差异 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>打开 <code>epdiy-epub/</code> 下 <code>sf32-oed-epd_v11</code>、<code>sf32-oed-epd_v12</code>、<code>sf32-oed-epd_v12_spi</code> 三个目录，指出：(a) 哪个目录的 <code>Kconfig.board</code> 是 <code>source</code> base 的？(b) <code>v12_spi</code> 顶层比 <code>v11</code> 多了一堆 <code>bsp_*.c</code> 文件，这暗示什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 <code>cat</code> 看三个 <code>Kconfig.board</code>；对比 <code>v12_spi</code> 与 <code>v11</code> 顶层文件列表。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>v11</code> 和 <code>v12</code> 的 <code>Kconfig.board</code> 都只有 <code>source "../sf32-oed-epd_base/Kconfig.board"</code>，即共用 base 板级源码；<code>v12_spi</code> 不 source base，自己写死了引脚配置。(b) <code>v12_spi</code> 顶层带 <code>bsp_board.h / bsp_init.c / bsp_lcd_tp.c / bsp_pinmux.c / bsp_power.c / battery_table.c</code> 一套完整板级源码，说明它是"完全自洽"的一档配置——因为走 SPI 接口的墨水屏板，引脚与电源方案和 base 那套并行屏方案差异太大，干脆独立成板。这也解释了为什么移植新屏时 README 建议"复制已有屏驱配置并改名"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：读分区表 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>打开 <code>sf32-oed-epd_v11/ptab.json</code>，回答：(a) 主固件区 <code>HCPU_FLASH_CODE</code> 的偏移与大小分别是多少？(b) 样书所在的文件系统区 <code>fs_root</code> 排在哪些分区之后？(c) <code>HCPU2LCPU_MB_CH1_BUF</code> 这类"邮箱"缓冲在哪个内存域里？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 <code>offset</code> 从小到大排；找 <code>"img": "fs_root"</code>；邮箱在 <code>hpsys_ram</code> 的 <code>0x20000000</code> 段内。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 偏移 <code>0x00200000</code>、大小 <code>0x00200000</code>（2 MB），<code>"img": "main"</code>、<code>"exec": "main"</code>（支持 XIP 原地执行）。(b) 在 bootloader、dfu、KVDB_DFU_REGION、KVDB_BLE_REGION 等之后，位于 <code>0x00E00000</code>，大小 <code>0x00C0000</code>（768 KB）。(c) <code>HCPU2LCPU_MB_CH1_BUF</code> 与 <code>HCPU2LCPU_MB_CH2_BUF</code> 都位于 <code>hpsys_ram</code>（主核系统 RAM，基址 <code>0x20000000</code>）的顶部——这是 HCPU 与 LCPU 两个核之间互发消息用的邮箱缓冲区，正是 2.2 说的"双核协作"在内存上的落点。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：双核与配置优先级 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>(1) 用第一性原理解释：为什么 SiFli 要搞 HCPU + LCPU 双核，而不是让单个核直接休眠省电？提示：从"唤醒条件谁在盯着"和"休眠时谁还能干点轻活"两个角度想。(2) 若你在 <code>project/proj.conf</code> 里设了 <code>CONFIG_BSP_USING_UART1=y</code>，而板级 <code>board.conf</code> 里 <code>CONFIG_BSP_USING_UART1=y</code> 已经存在，最终配置以谁为准？为什么这么设计？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想"全部休眠"的代价：必须有个东西还在数秒、还在等按键电平跳变；配置优先级从"项目"到"板子"是收窄的，越靠内越接近硬件事实。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 如果连 HCPU 一起深度休眠，就必须让外部中断（比如按键 GPIO 中断）来唤醒它——但等待外部事件期间系统几乎"全盲"，定时任务、传感器轮询都没人做，而且每次唤醒都要走完整的启动流程，又慢又费电。LCPU 作为低功耗核，能用微安级的电流持续盯着按键、定时器，需要时再叫醒 HCPU——"分工"带来的直接收益是：待机功耗大幅下降，唤醒又快又确定。这正是电子书阅读器"一页停几周"的物理基础。(2) 两处都是 <code>=y</code>，一致，没有冲突；真正的区别在"冲突时谁赢"——规则是 <code>proj.conf</code> 覆盖 <code>board.conf</code>，覆盖 Kconfig 默认值。这么设计是因为项目配置表达"这个应用要什么能力"，板级配置表达"这块板子物理上有哪些外设"，能力诉求应当优先于硬件清单——但前提是硬件得真有这个外设，否则就是编译期错误而非运行时灾难。理解这条优先级，menuconfig 里改来改去就不会懵。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

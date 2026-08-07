@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章：基础语法速览 - Kotlin Android 教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="03" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+
+  <h1>第3章：基础语法速览</h1>
+  <p class="chapter-subtitle">快速掌握 Kotlin 核心语法，从变量到函数一网打尽</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个，语法规律就是线索</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一门编程语言的语法，就像一起案件的现场。每一个关键字都是一条线索，每一段代码都是一份证据。只要仔细观察、逻辑推理，就能还原出整套规律的真相。各位，跟我一起来破解 Kotlin 语法之谜吧！」</p>
+    </div>
+  </div>
+
+  <!-- ==================== 3.1 变量与常量 ==================== -->
+  <h2>3.1 变量与常量</h2>
+
+  <h3><code>val</code> vs <code>var</code> — 不可变与可变</h3>
+
+  <p>让我们从案件的第一条线索开始调查。Kotlin 的变量声明现场只留下了两个「嫌疑人」：<code>val</code> 和 <code>var</code>。先破解它们的名字密码 —— <code>val</code> 是 <strong>value</strong>（值）的缩写，意味着一旦赋值就不能再改变，强调的是「这是一个确定的值」；<code>var</code> 是 <strong>variable</strong>（变量）的缩写，意味着它的值可以随时变化。记住这两个英文原词，就永远不会搞混：<strong>value 不变，variable 可变</strong>。</p>
+
+  <p>下面这张对照表就是关键证据：</p>
+
+  <table>
+    <tr>
+      <th>概念</th>
+      <th>Kotlin</th>
+      <th>Java</th>
+      <th>C++</th>
+      <th>Python</th>
+    </tr>
+    <tr>
+      <td>不可变变量</td>
+      <td><code>val</code></td>
+      <td><code>final</code></td>
+      <td><code>const</code> / <code>constexpr</code></td>
+      <td>无直接等价物</td>
+    </tr>
+    <tr>
+      <td>可变变量</td>
+      <td><code>var</code></td>
+      <td>普通变量</td>
+      <td>普通变量</td>
+      <td>普通变量</td>
+    </tr>
+  </table>
+
+  <p>现在，让我们来验证这条线索。看看实际的代码证据：</p>
+
+  <pre><code><span class="cmt">// val — 不可变（推荐优先使用）</span>
+<span class="kw">val</span> name <span class="op">=</span> <span class="str">"Kotlin"</span>
+<span class="cmt">// name = "Java"  // 编译错误！val 不能重新赋值</span>
+
+<span class="cmt">// var — 可变</span>
+<span class="kw">var</span> count <span class="op">=</span> <span class="num">0</span>
+count <span class="op">=</span> <span class="num">1</span>       <span class="cmt">// OK，var 可以重新赋值</span>
+count <span class="op">=</span> <span class="num">2</span>       <span class="cmt">// OK</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">柯南的推理笔记</p>
+    <p>根据大量代码现场的调查，我得出一个结论：默认使用 <code>val</code>，只在确实需要修改时才用 <code>var</code>。这能让代码更安全、更易于推理，也更适合并发编程。真相只有一个 —— 优先选择不可变！</p>
+  </div>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p><code>val</code> 近似于 C++ 中的 <code>const</code> 变量，<code>var</code> 则是普通变量。但要注意一个关键区别：Kotlin 中没有指针和引用的概念。C++ 里你需要区分 <code>const int</code>、<code>const int*</code>、<code>int* const</code>、<code>const int&amp;</code> 等复杂组合，而 Kotlin 只需要 <code>val</code> 和 <code>var</code> 两个关键字就能搞定。此外，<code>val</code> 只意味着变量引用不可变 —— 如果指向一个可变对象（如 <code>MutableList</code>），对象本身的内容仍然可以修改，类似 C++ 中 <code>T* const ptr</code>（指针本身不可变，但指向的内容可变）。</p>
+  </div>
+
+  <h3>类型推断</h3>
+
+  <p>接下来，我注意到一个重要线索：Kotlin 编译器有一项出色的「侦查能力」—— 类型推断。它可以根据赋值自动推断变量类型，不需要你显式声明。这就像我根据现场遗留的证据，就能推理出嫌疑人的身份一样！</p>
+
+  <pre><code><span class="cmt">// 编译器自动推断类型</span>
+<span class="kw">val</span> name <span class="op">=</span> <span class="str">"Kotlin"</span>          <span class="cmt">// 推断为 String</span>
+<span class="kw">val</span> age <span class="op">=</span> <span class="num">25</span>                 <span class="cmt">// 推断为 Int</span>
+<span class="kw">val</span> pi <span class="op">=</span> <span class="num">3.14</span>               <span class="cmt">// 推断为 Double</span>
+<span class="kw">val</span> isKotlinFun <span class="op">=</span> <span class="kw">true</span>       <span class="cmt">// 推断为 Boolean</span></code></pre>
+
+  <p>从这段代码中，我们能推理出什么？对比 Java，Kotlin 简洁了很多：</p>
+
+  <pre><code><span class="cmt">// Java — 必须写类型</span>
+<span class="kw">final</span> <span class="type">String</span> name <span class="op">=</span> <span class="str">"Kotlin"</span>;
+<span class="kw">final</span> <span class="type">int</span> age <span class="op">=</span> <span class="num">25</span>;
+
+<span class="cmt">// Kotlin — 类型推断，省去冗余</span>
+<span class="kw">val</span> name <span class="op">=</span> <span class="str">"Kotlin"</span>
+<span class="kw">val</span> age <span class="op">=</span> <span class="num">25</span></code></pre>
+
+  <h3>显式类型声明</h3>
+
+  <p>当然，有时候侦探也需要明确亮出证据。你可以手动指定类型，或者在没有初始值时必须指定 —— 这是 Kotlin 的铁律，不可违反：</p>
+
+  <pre><code><span class="cmt">// 显式声明类型</span>
+<span class="kw">val</span> age: <span class="type">Int</span> <span class="op">=</span> <span class="num">25</span>
+<span class="kw">val</span> price: <span class="type">Double</span> <span class="op">=</span> <span class="num">9.99</span>
+<span class="kw">val</span> greeting: <span class="type">String</span> <span class="op">=</span> <span class="str">"你好"</span>
+
+<span class="cmt">// 没有初始值时，必须显式声明类型</span>
+<span class="kw">val</span> result: <span class="type">Int</span>
+result <span class="op">=</span> <span class="fn">calculateSomething</span>()  <span class="cmt">// 稍后赋值（仅限一次）</span></code></pre>
+
+  <h3>编译时常量：<code>const val</code></h3>
+
+  <p>在深入调查中，我发现了一个更严格的「嫌疑人」—— <code>const val</code>。它用于声明编译时常量，类似于 Java 中的 <code>static final</code>。它必须是顶层声明或 <code>object</code> 的成员，且值必须是基本类型或 String。这条线索表明，<code>const val</code> 的值在编译阶段就已经锁定，不可能在运行时改变：</p>
+
+  <pre><code><span class="cmt">// 编译时常量 — 在编译阶段就确定值</span>
+<span class="kw">const val</span> MAX_COUNT <span class="op">=</span> <span class="num">100</span>
+<span class="kw">const val</span> BASE_URL <span class="op">=</span> <span class="str">"https://api.example.com"</span>
+<span class="kw">const val</span> PI <span class="op">=</span> <span class="num">3.14159265</span>
+
+<span class="cmt">// 对比 Java:</span>
+<span class="cmt">// public static final int MAX_COUNT = 100;</span>
+<span class="cmt">// public static final String BASE_URL = "https://api.example.com";</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">val vs const val</p>
+    <p><code>val</code> 在运行时赋值（可以调用函数得到值），而 <code>const val</code> 在编译时就确定了值。<code>const val</code> 只能用于基本类型和 String。用排除法来记忆：能在编译期确定的用 <code>const val</code>，其余一律用 <code>val</code>。</p>
+  </div>
+
+  <!-- ==================== 3.2 基本数据类型 ==================== -->
+  <h2>3.2 基本数据类型</h2>
+
+  <h3>数字类型</h3>
+
+  <p>接下来，我们来调查 Kotlin 数据类型的真相。这里有一条至关重要的线索：Kotlin 中没有 Java 的原始类型（primitive types），<strong>一切皆对象</strong>。但编译器会在可能的情况下优化为 JVM 原始类型 —— 这就好比嫌疑人表面上伪装成了对象，但在底层却悄悄地以原始类型的身份运行：</p>
+
+  <pre><code><span class="cmt">// 整数类型</span>
+<span class="kw">val</span> byte: <span class="type">Byte</span> <span class="op">=</span> <span class="num">127</span>               <span class="cmt">// 8 位</span>
+<span class="kw">val</span> short: <span class="type">Short</span> <span class="op">=</span> <span class="num">32767</span>           <span class="cmt">// 16 位</span>
+<span class="kw">val</span> int: <span class="type">Int</span> <span class="op">=</span> <span class="num">2147483647</span>          <span class="cmt">// 32 位</span>
+<span class="kw">val</span> long: <span class="type">Long</span> <span class="op">=</span> <span class="num">9999999999L</span>       <span class="cmt">// 64 位，注意后缀 L</span>
+
+<span class="cmt">// 浮点数类型</span>
+<span class="kw">val</span> float: <span class="type">Float</span> <span class="op">=</span> <span class="num">3.14f</span>           <span class="cmt">// 32 位，注意后缀 f</span>
+<span class="kw">val</span> double: <span class="type">Double</span> <span class="op">=</span> <span class="num">3.14159265</span>    <span class="cmt">// 64 位（默认）</span>
+
+<span class="cmt">// 数字字面量中可以用下划线增加可读性</span>
+<span class="kw">val</span> million <span class="op">=</span> <span class="num">1_000_000</span>
+<span class="kw">val</span> hexColor <span class="op">=</span> <span class="num">0xFF00FF</span>
+<span class="kw">val</span> binaryByte <span class="op">=</span> <span class="num">0b11010010</span></code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>这是一条关键线索：Kotlin 中<strong>一切皆对象</strong>，没有 C++ 中 <code>int</code> / <code>Integer</code>（Java 的装箱类型）的区分，也没有原始类型（primitive types）。在 C++ 中你要操心 <code>int</code>、<code>long</code>、<code>int32_t</code>、<code>size_t</code> 等不同平台上的宽度差异，而 Kotlin 的 <code>Int</code> 始终是 32 位、<code>Long</code> 始终是 64 位，跨平台一致。此外，Kotlin 的 <code>String</code> 是一等公民对象，不像 C++ 中你需要在 <code>char*</code>、<code>const char*</code>、<code>std::string</code>、<code>std::string_view</code> 之间来回选择。Kotlin 中只有一种 <code>String</code>，内置丰富的方法，不需要引入任何头文件。</p>
+  </div>
+
+  <h3>布尔、字符</h3>
+
+  <pre><code><span class="cmt">// Boolean</span>
+<span class="kw">val</span> isVisible: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">true</span>
+<span class="kw">val</span> isEmpty <span class="op">=</span> <span class="kw">false</span>
+
+<span class="cmt">// Char — 单引号</span>
+<span class="kw">val</span> letter: <span class="type">Char</span> <span class="op">=</span> <span class="str">'A'</span>
+<span class="kw">val</span> digit: <span class="type">Char</span> <span class="op">=</span> <span class="str">'9'</span>
+<span class="kw">val</span> chinese: <span class="type">Char</span> <span class="op">=</span> <span class="str">'中'</span></code></pre>
+
+  <h3>字符串与字符串模板</h3>
+
+  <p>我在代码现场发现了一件「秘密武器」—— Kotlin 的字符串模板。经过推理，我断定这是 Kotlin 最实用的特性之一，它比 Java 的字符串拼接简洁太多了。让我们来收集证据：</p>
+
+  <pre><code><span class="kw">val</span> name <span class="op">=</span> <span class="str">"Kotlin"</span>
+<span class="kw">val</span> version <span class="op">=</span> <span class="num">2.0</span>
+
+<span class="cmt">// 简单变量引用 — 用 $</span>
+<span class="kw">val</span> msg1 <span class="op">=</span> <span class="str">"Hello, $name"</span>                 <span class="cmt">// "Hello, Kotlin"</span>
+
+<span class="cmt">// 表达式 — 用 ${}</span>
+<span class="kw">val</span> msg2 <span class="op">=</span> <span class="str">"$name $version 已发布"</span>         <span class="cmt">// "Kotlin 2.0 已发布"</span>
+
+<span class="kw">val</span> list <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"A"</span>, <span class="str">"B"</span>, <span class="str">"C"</span>)
+<span class="kw">val</span> msg3 <span class="op">=</span> <span class="str">"共 ${list.size} 个元素"</span>       <span class="cmt">// "共 3 个元素"</span>
+<span class="kw">val</span> msg4 <span class="op">=</span> <span class="str">"大写: ${name.uppercase()}"</span>   <span class="cmt">// "大写: KOTLIN"</span></code></pre>
+
+  <p>对比 Java 的字符串拼接 —— 证据确凿，Kotlin 的写法更胜一筹：</p>
+
+  <pre><code><span class="cmt">// Java — 冗长的字符串拼接</span>
+<span class="type">String</span> msg <span class="op">=</span> <span class="str">"Hello, "</span> <span class="op">+</span> name <span class="op">+</span> <span class="str">"! 共 "</span> <span class="op">+</span> list.<span class="fn">size</span>() <span class="op">+</span> <span class="str">" 个元素"</span>;
+
+<span class="cmt">// Kotlin — 清晰的字符串模板</span>
+<span class="kw">val</span> msg <span class="op">=</span> <span class="str">"Hello, $name! 共 ${list.size} 个元素"</span></code></pre>
+
+  <p>Kotlin 还支持<strong>多行字符串</strong>（raw string），用三个双引号。这条线索在处理 JSON、SQL 等场景时尤其有用：</p>
+
+  <pre><code><span class="kw">val</span> json <span class="op">=</span> <span class="str">"""
+    {
+        "name": "$name",
+        "version": $version
+    }
+"""</span>.<span class="fn">trimIndent</span>()</code></pre>
+
+  <h3>数组</h3>
+
+  <pre><code><span class="cmt">// 通用数组</span>
+<span class="kw">val</span> names: <span class="type">Array</span><span class="op">&lt;</span><span class="type">String</span><span class="op">&gt;</span> <span class="op">=</span> <span class="fn">arrayOf</span>(<span class="str">"Alice"</span>, <span class="str">"Bob"</span>, <span class="str">"Charlie"</span>)
+<span class="kw">val</span> numbers <span class="op">=</span> <span class="fn">arrayOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>)
+
+<span class="cmt">// 原始类型数组（性能更好，避免装箱）</span>
+<span class="kw">val</span> intArr: <span class="type">IntArray</span> <span class="op">=</span> <span class="fn">intArrayOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>)
+<span class="kw">val</span> doubleArr: <span class="type">DoubleArray</span> <span class="op">=</span> <span class="fn">doubleArrayOf</span>(<span class="num">1.0</span>, <span class="num">2.0</span>)
+
+<span class="cmt">// 访问元素</span>
+<span class="fn">println</span>(names[<span class="num">0</span>])      <span class="cmt">// "Alice"</span>
+names[<span class="num">1</span>] <span class="op">=</span> <span class="str">"Bobby"</span>     <span class="cmt">// 修改元素</span></code></pre>
+
+  <h3>类型转换</h3>
+
+  <p>注意了！这是一条容易让人「翻车」的线索。Kotlin <strong>不会</strong>进行隐式类型转换，必须显式调用转换函数。在我看来，这种设计就像严格的法庭规则 —— 每一步操作都必须有明确的依据，不允许任何含糊不清的推理：</p>
+
+  <pre><code><span class="kw">val</span> intVal: <span class="type">Int</span> <span class="op">=</span> <span class="num">42</span>
+
+<span class="cmt">// 错误！不能隐式转换</span>
+<span class="cmt">// val longVal: Long = intVal   // 编译错误</span>
+
+<span class="cmt">// 正确 — 显式转换</span>
+<span class="kw">val</span> longVal: <span class="type">Long</span> <span class="op">=</span> intVal.<span class="fn">toLong</span>()
+<span class="kw">val</span> doubleVal: <span class="type">Double</span> <span class="op">=</span> intVal.<span class="fn">toDouble</span>()
+<span class="kw">val</span> stringVal: <span class="type">String</span> <span class="op">=</span> intVal.<span class="fn">toString</span>()
+
+<span class="cmt">// 字符串转数字</span>
+<span class="kw">val</span> parsed: <span class="type">Int</span> <span class="op">=</span> <span class="str">"123"</span>.<span class="fn">toInt</span>()
+<span class="kw">val</span> safeP: <span class="type">Int</span>? <span class="op">=</span> <span class="str">"abc"</span>.<span class="fn">toIntOrNull</span>()  <span class="cmt">// 转换失败返回 null，不会崩溃</span></code></pre>
+
+  <div class="warning">
+    <p class="tip-title">柯南的警告</p>
+    <p>Java 中 <code>int</code> 可以隐式转为 <code>long</code>，C++ 中更是充满了各种隐式转换陷阱（<code>int</code> 到 <code>double</code>、窄化转换等），但 Kotlin 中一律不行。忘记显式转换是从 Java 和 C++ 迁移过来时的常见「犯罪现场」。</p>
+  </div>
+
+  <!-- ==================== 3.3 控制流 ==================== -->
+  <h2>3.3 控制流</h2>
+
+  <h3><code>if</code> 是表达式</h3>
+
+  <p>案件进入了新的阶段 —— 控制流调查。我发现了第一条重要线索：在 Kotlin 中，<code>if</code> 不仅仅是语句，它还是一个<strong>表达式</strong>，可以有返回值。这意味着你不再需要三元运算符 <code>? :</code>。用推理来理解：既然 <code>if</code> 能返回值，那三元运算符就成了多余的「嫌疑人」—— 被排除了！</p>
+
+  <pre><code><span class="cmt">// if 作为表达式 — 替代三元运算符</span>
+<span class="kw">val</span> a <span class="op">=</span> <span class="num">10</span>
+<span class="kw">val</span> b <span class="op">=</span> <span class="num">20</span>
+<span class="kw">val</span> max <span class="op">=</span> <span class="kw">if</span> (a <span class="op">&gt;</span> b) a <span class="kw">else</span> b    <span class="cmt">// max = 20</span>
+
+<span class="cmt">// 也可以带代码块</span>
+<span class="kw">val</span> description <span class="op">=</span> <span class="kw">if</span> (a <span class="op">&gt;</span> b) {
+    <span class="fn">println</span>(<span class="str">"a 更大"</span>)
+    <span class="str">"a wins"</span>    <span class="cmt">// 最后一个表达式是返回值</span>
+} <span class="kw">else</span> {
+    <span class="fn">println</span>(<span class="str">"b 更大"</span>)
+    <span class="str">"b wins"</span>
+}</code></pre>
+
+  <p>让我把各路「嫌疑人」摆在一起做个对比，这样真相就更清楚了：</p>
+
+  <pre><code><span class="cmt">// Java — 三元运算符</span>
+<span class="type">int</span> max <span class="op">=</span> (a <span class="op">&gt;</span> b) <span class="op">?</span> a <span class="op">:</span> b;
+
+<span class="cmt">// Python — 条件表达式</span>
+<span class="cmt">// max = a if a > b else b</span>
+
+<span class="cmt">// Kotlin — if 表达式（更可读）</span>
+<span class="kw">val</span> max <span class="op">=</span> <span class="kw">if</span> (a <span class="op">&gt;</span> b) a <span class="kw">else</span> b</code></pre>
+
+  <h3><code>when</code> 表达式</h3>
+
+  <p>现在，案件迎来了最精彩的转折 —— <code>when</code> 表达式登场！经过细致的排查，我可以确认它是 Kotlin 中替代 <code>switch</code> 的终极利器，功能强大得多。让我们逐步收集证据：</p>
+
+  <pre><code><span class="cmt">// 基本用法 — 匹配值</span>
+<span class="kw">val</span> dayOfWeek <span class="op">=</span> <span class="num">3</span>
+<span class="kw">val</span> dayName <span class="op">=</span> <span class="kw">when</span> (dayOfWeek) {
+    <span class="num">1</span> <span class="op">-&gt;</span> <span class="str">"周一"</span>
+    <span class="num">2</span> <span class="op">-&gt;</span> <span class="str">"周二"</span>
+    <span class="num">3</span> <span class="op">-&gt;</span> <span class="str">"周三"</span>
+    <span class="num">4</span> <span class="op">-&gt;</span> <span class="str">"周四"</span>
+    <span class="num">5</span> <span class="op">-&gt;</span> <span class="str">"周五"</span>
+    <span class="num">6</span>, <span class="num">7</span> <span class="op">-&gt;</span> <span class="str">"周末"</span>           <span class="cmt">// 多个值合并</span>
+    <span class="kw">else</span> <span class="op">-&gt;</span> <span class="str">"未知"</span>            <span class="cmt">// 默认分支</span>
+}</code></pre>
+
+  <p>从这段代码中，我们能推理出什么？<code>when</code> 还能匹配范围，这比 <code>switch</code> 灵活多了：</p>
+
+  <pre><code><span class="cmt">// 匹配范围</span>
+<span class="kw">val</span> score <span class="op">=</span> <span class="num">85</span>
+<span class="kw">val</span> grade <span class="op">=</span> <span class="kw">when</span> (score) {
+    <span class="kw">in</span> <span class="num">90</span><span class="op">..</span><span class="num">100</span> <span class="op">-&gt;</span> <span class="str">"优秀"</span>
+    <span class="kw">in</span> <span class="num">80</span><span class="op">..</span><span class="num">89</span>  <span class="op">-&gt;</span> <span class="str">"良好"</span>
+    <span class="kw">in</span> <span class="num">70</span><span class="op">..</span><span class="num">79</span>  <span class="op">-&gt;</span> <span class="str">"中等"</span>
+    <span class="kw">in</span> <span class="num">60</span><span class="op">..</span><span class="num">69</span>  <span class="op">-&gt;</span> <span class="str">"及格"</span>
+    <span class="kw">else</span>       <span class="op">-&gt;</span> <span class="str">"不及格"</span>
+}</code></pre>
+
+  <p>更令人惊讶的证据 —— <code>when</code> 还能匹配类型，并且自动进行智能转换：</p>
+
+  <pre><code><span class="cmt">// 匹配类型</span>
+<span class="kw">fun</span> <span class="fn">describe</span>(obj: <span class="type">Any</span>): <span class="type">String</span> <span class="op">=</span> <span class="kw">when</span> (obj) {
+    <span class="kw">is</span> <span class="type">Int</span>    <span class="op">-&gt;</span> <span class="str">"整数: $obj"</span>
+    <span class="kw">is</span> <span class="type">String</span> <span class="op">-&gt;</span> <span class="str">"字符串，长度 ${obj.length}"</span>  <span class="cmt">// 智能类型转换！</span>
+    <span class="kw">is</span> <span class="type">Boolean</span> <span class="op">-&gt;</span> <span class="str">"布尔值: $obj"</span>
+    <span class="kw">else</span>     <span class="op">-&gt;</span> <span class="str">"未知类型"</span>
+}</code></pre>
+
+  <p>还有最后一条线索 —— 无参 <code>when</code>，它可以作为 if-else 链的更优雅替代：</p>
+
+  <pre><code><span class="cmt">// 无参 when — 作为 if-else 链的替代（更优雅）</span>
+<span class="kw">val</span> temperature <span class="op">=</span> <span class="num">35</span>
+<span class="kw">val</span> weather <span class="op">=</span> <span class="kw">when</span> {
+    temperature <span class="op">&lt;</span> <span class="num">0</span>   <span class="op">-&gt;</span> <span class="str">"严寒"</span>
+    temperature <span class="op">&lt;</span> <span class="num">10</span>  <span class="op">-&gt;</span> <span class="str">"寒冷"</span>
+    temperature <span class="op">&lt;</span> <span class="num">25</span>  <span class="op">-&gt;</span> <span class="str">"舒适"</span>
+    temperature <span class="op">&lt;</span> <span class="num">35</span>  <span class="op">-&gt;</span> <span class="str">"炎热"</span>
+    <span class="kw">else</span>              <span class="op">-&gt;</span> <span class="str">"酷暑"</span>
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">柯南的推理总结：when vs switch</p>
+    <p>经过全面调查，真相已经浮出水面：Kotlin 的 <code>when</code> 不需要 <code>break</code>，不会「穿透」到下一个分支。它也可以匹配范围、类型和任意条件，比 Java 的 <code>switch</code> 和 C++ 的 <code>switch</code> 强大得多。案件到此结束 —— <code>when</code> 就是王者！</p>
+  </div>
+
+  <h3><code>for</code> 循环与区间</h3>
+
+  <p>让我们继续追踪下一条线索 —— <code>for</code> 循环。Kotlin 的 <code>for</code> 循环与区间运算符搭配使用，形成了一套优雅的遍历体系：</p>
+
+  <pre><code><span class="cmt">// 遍历区间</span>
+<span class="kw">for</span> (i <span class="kw">in</span> <span class="num">1</span><span class="op">..</span><span class="num">5</span>) {
+    <span class="fn">print</span>(<span class="str">"$i "</span>)    <span class="cmt">// 输出: 1 2 3 4 5</span>
+}
+
+<span class="cmt">// until — 不包含末尾</span>
+<span class="kw">for</span> (i <span class="kw">in</span> <span class="num">0</span> <span class="fn">until</span> <span class="num">5</span>) {
+    <span class="fn">print</span>(<span class="str">"$i "</span>)    <span class="cmt">// 输出: 0 1 2 3 4</span>
+}
+
+<span class="cmt">// downTo — 倒序</span>
+<span class="kw">for</span> (i <span class="kw">in</span> <span class="num">5</span> <span class="fn">downTo</span> <span class="num">1</span>) {
+    <span class="fn">print</span>(<span class="str">"$i "</span>)    <span class="cmt">// 输出: 5 4 3 2 1</span>
+}
+
+<span class="cmt">// step — 指定步长</span>
+<span class="kw">for</span> (i <span class="kw">in</span> <span class="num">0</span><span class="op">..</span><span class="num">10</span> <span class="fn">step</span> <span class="num">2</span>) {
+    <span class="fn">print</span>(<span class="str">"$i "</span>)    <span class="cmt">// 输出: 0 2 4 6 8 10</span>
+}</code></pre>
+
+  <p>遍历集合也留下了清晰的证据 —— Kotlin 提供了多种方式：</p>
+
+  <pre><code><span class="cmt">// 遍历集合</span>
+<span class="kw">val</span> fruits <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"苹果"</span>, <span class="str">"香蕉"</span>, <span class="str">"橙子"</span>)
+
+<span class="kw">for</span> (fruit <span class="kw">in</span> fruits) {
+    <span class="fn">println</span>(fruit)
+}
+
+<span class="cmt">// 使用 indices 获取索引</span>
+<span class="kw">for</span> (i <span class="kw">in</span> fruits.indices) {
+    <span class="fn">println</span>(<span class="str">"$i: ${fruits[i]}"</span>)
+}
+
+<span class="cmt">// 使用 withIndex() 同时获取索引和值</span>
+<span class="kw">for</span> ((index, fruit) <span class="kw">in</span> fruits.<span class="fn">withIndex</span>()) {
+    <span class="fn">println</span>(<span class="str">"$index: $fruit"</span>)
+}
+<span class="cmt">// 输出:</span>
+<span class="cmt">// 0: 苹果</span>
+<span class="cmt">// 1: 香蕉</span>
+<span class="cmt">// 2: 橙子</span></code></pre>
+
+  <h3><code>while</code> / <code>do-while</code></h3>
+
+  <p>这两个嫌疑人的行为模式和其他语言几乎一致，不需要过多调查：</p>
+
+  <pre><code><span class="cmt">// while — 先判断后执行</span>
+<span class="kw">var</span> n <span class="op">=</span> <span class="num">5</span>
+<span class="kw">while</span> (n <span class="op">&gt;</span> <span class="num">0</span>) {
+    <span class="fn">print</span>(<span class="str">"$n "</span>)    <span class="cmt">// 输出: 5 4 3 2 1</span>
+    n<span class="op">--</span>
+}
+
+<span class="cmt">// do-while — 先执行后判断（至少执行一次）</span>
+<span class="kw">var</span> input: <span class="type">String</span>
+<span class="kw">do</span> {
+    input <span class="op">=</span> <span class="fn">readLine</span>() <span class="op">?:</span> <span class="str">""</span>
+    <span class="fn">println</span>(<span class="str">"你输入了: $input"</span>)
+} <span class="kw">while</span> (input <span class="op">!=</span> <span class="str">"quit"</span>)</code></pre>
+
+  <h3>区间运算总结</h3>
+
+  <p>将所有区间相关的线索汇总到一张证据表中：</p>
+
+  <table>
+    <tr>
+      <th>表达式</th>
+      <th>含义</th>
+      <th>结果</th>
+    </tr>
+    <tr>
+      <td><code>1..10</code></td>
+      <td>闭区间（包含两端）</td>
+      <td>1, 2, 3, ..., 10</td>
+    </tr>
+    <tr>
+      <td><code>1 until 10</code></td>
+      <td>半开区间（不含末尾）</td>
+      <td>1, 2, 3, ..., 9</td>
+    </tr>
+    <tr>
+      <td><code>10 downTo 1</code></td>
+      <td>倒序</td>
+      <td>10, 9, 8, ..., 1</td>
+    </tr>
+    <tr>
+      <td><code>1..10 step 2</code></td>
+      <td>步长为 2</td>
+      <td>1, 3, 5, 7, 9</td>
+    </tr>
+    <tr>
+      <td><code>10 downTo 1 step 3</code></td>
+      <td>倒序 + 步长</td>
+      <td>10, 7, 4, 1</td>
+    </tr>
+  </table>
+
+  <!-- ==================== 3.4 函数 ==================== -->
+  <h2>3.4 函数</h2>
+
+  <h3>基本定义</h3>
+
+  <p>案件来到了「函数」这一关键现场。经过仔细调查，我发现 Kotlin 的函数定义规则十分清晰 —— 用 <code>fun</code> 关键字开头，参数类型在名称后面，返回类型紧随其后：</p>
+
+  <pre><code><span class="cmt">// 标准函数定义</span>
+<span class="kw">fun</span> <span class="fn">add</span>(a: <span class="type">Int</span>, b: <span class="type">Int</span>): <span class="type">Int</span> {
+    <span class="kw">return</span> a <span class="op">+</span> b
+}
+
+<span class="cmt">// 调用</span>
+<span class="kw">val</span> sum <span class="op">=</span> <span class="fn">add</span>(<span class="num">3</span>, <span class="num">5</span>)  <span class="cmt">// 8</span></code></pre>
+
+  <p>让我们把各路「嫌疑人」排列对比，真相自然浮现：</p>
+
+  <pre><code><span class="cmt">// Java</span>
+<span class="kw">public</span> <span class="type">int</span> <span class="fn">add</span>(<span class="type">int</span> a, <span class="type">int</span> b) {
+    <span class="kw">return</span> a <span class="op">+</span> b;
+}
+
+<span class="cmt">// Python</span>
+<span class="cmt">// def add(a, b):</span>
+<span class="cmt">//     return a + b</span>
+
+<span class="cmt">// Kotlin</span>
+<span class="kw">fun</span> <span class="fn">add</span>(a: <span class="type">Int</span>, b: <span class="type">Int</span>): <span class="type">Int</span> {
+    <span class="kw">return</span> a <span class="op">+</span> b
+}</code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>Kotlin 函数有一个重要特征：它们总是属于某个类（成员函数），或者是<strong>顶层函数</strong>（直接写在文件中，不需要包在类里）。这和 C++ 不同 —— C++ 有自由函数（free functions）、类的成员函数、友元函数等多种形式。Kotlin 的顶层函数编译后实际上会变成一个包含静态方法的 Java 类，但在使用时你完全不需要关心这个细节。此外，Kotlin 的参数类型写在名称后面（<code>a: Int</code>），而 C++ 写在前面（<code>int a</code>），这一点要特别注意。</p>
+  </div>
+
+  <h3>单表达式函数</h3>
+
+  <p>我在调查中发现了一条精妙的线索：当函数体只有一个表达式时，可以用 <code>=</code> 简写，返回类型也可以省略。这就是 Kotlin 追求简洁的决定性证据：</p>
+
+  <pre><code><span class="cmt">// 标准写法</span>
+<span class="kw">fun</span> <span class="fn">add</span>(a: <span class="type">Int</span>, b: <span class="type">Int</span>): <span class="type">Int</span> {
+    <span class="kw">return</span> a <span class="op">+</span> b
+}
+
+<span class="cmt">// 单表达式简写 — 省去花括号和 return</span>
+<span class="kw">fun</span> <span class="fn">add</span>(a: <span class="type">Int</span>, b: <span class="type">Int</span>) <span class="op">=</span> a <span class="op">+</span> b
+
+<span class="cmt">// 更多示例</span>
+<span class="kw">fun</span> <span class="fn">isEven</span>(n: <span class="type">Int</span>) <span class="op">=</span> n <span class="op">%</span> <span class="num">2</span> <span class="op">==</span> <span class="num">0</span>
+<span class="kw">fun</span> <span class="fn">greeting</span>(name: <span class="type">String</span>) <span class="op">=</span> <span class="str">"Hello, $name!"</span>
+<span class="kw">fun</span> <span class="fn">max</span>(a: <span class="type">Int</span>, b: <span class="type">Int</span>) <span class="op">=</span> <span class="kw">if</span> (a <span class="op">&gt;</span> b) a <span class="kw">else</span> b</code></pre>
+
+  <h3>默认参数</h3>
+
+  <p>又一条关键线索浮出水面 —— Kotlin 支持给函数参数设置默认值，从而大幅减少方法重载的需要。对一个侦探来说，这就像是找到了一个能替代多条分散线索的核心证据：</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">greet</span>(name: <span class="type">String</span> <span class="op">=</span> <span class="str">"World"</span>, punctuation: <span class="type">String</span> <span class="op">=</span> <span class="str">"!"</span>) {
+    <span class="fn">println</span>(<span class="str">"Hello, $name$punctuation"</span>)
+}
+
+<span class="fn">greet</span>()                        <span class="cmt">// Hello, World!</span>
+<span class="fn">greet</span>(<span class="str">"Kotlin"</span>)               <span class="cmt">// Hello, Kotlin!</span>
+<span class="fn">greet</span>(<span class="str">"Kotlin"</span>, <span class="str">"."</span>)         <span class="cmt">// Hello, Kotlin.</span></code></pre>
+
+  <p>对比 Java，不再需要写一堆重载方法了 —— 这是铁证：</p>
+
+  <pre><code><span class="cmt">// Java — 需要多个重载</span>
+<span class="kw">void</span> <span class="fn">greet</span>() { <span class="fn">greet</span>(<span class="str">"World"</span>); }
+<span class="kw">void</span> <span class="fn">greet</span>(<span class="type">String</span> name) { <span class="fn">greet</span>(name, <span class="str">"!"</span>); }
+<span class="kw">void</span> <span class="fn">greet</span>(<span class="type">String</span> name, <span class="type">String</span> punctuation) {
+    System.out.<span class="fn">println</span>(<span class="str">"Hello, "</span> <span class="op">+</span> name <span class="op">+</span> punctuation);
+}
+
+<span class="cmt">// Kotlin — 一个函数搞定</span>
+<span class="kw">fun</span> <span class="fn">greet</span>(name: <span class="type">String</span> <span class="op">=</span> <span class="str">"World"</span>, punctuation: <span class="type">String</span> <span class="op">=</span> <span class="str">"!"</span>) {
+    <span class="fn">println</span>(<span class="str">"Hello, $name$punctuation"</span>)
+}</code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>C++ 也支持默认参数，写法是 <code>void greet(string name = "World")</code>，但有一些限制：默认参数必须从右往左连续提供，不能跳过中间的参数。而 Kotlin 配合<strong>命名参数</strong>，可以跳过任意中间参数，只指定你关心的那几个 —— 这比 C++ 灵活得多。此外，C++ 的默认参数值在声明处（头文件）绑定，而 Kotlin 的默认值编译后会生成合成方法来处理。</p>
+  </div>
+
+  <h3>命名参数</h3>
+
+  <p>这条线索与默认参数联合使用时威力倍增。调用函数时可以指定参数名，让代码更清晰，也可以跳过中间的默认参数 —— 这是我在侦查中发现的最优雅的搭配组合：</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">createUser</span>(
+    name: <span class="type">String</span>,
+    age: <span class="type">Int</span> <span class="op">=</span> <span class="num">0</span>,
+    email: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>,
+    isAdmin: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>
+) {
+    <span class="fn">println</span>(<span class="str">"$name, $age, $email, admin=$isAdmin"</span>)
+}
+
+<span class="cmt">// 使用命名参数 — 跳过中间参数，代码更易读</span>
+<span class="fn">createUser</span>(name <span class="op">=</span> <span class="str">"Alice"</span>, isAdmin <span class="op">=</span> <span class="kw">true</span>)
+<span class="fn">createUser</span>(name <span class="op">=</span> <span class="str">"Bob"</span>, email <span class="op">=</span> <span class="str">"bob@example.com"</span>)
+<span class="fn">createUser</span>(name <span class="op">=</span> <span class="str">"Charlie"</span>, age <span class="op">=</span> <span class="num">30</span>, email <span class="op">=</span> <span class="str">"c@test.com"</span>)</code></pre>
+
+  <h3>可变参数：<code>vararg</code></h3>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">printAll</span>(<span class="kw">vararg</span> messages: <span class="type">String</span>) {
+    <span class="kw">for</span> (msg <span class="kw">in</span> messages) {
+        <span class="fn">println</span>(msg)
+    }
+}
+
+<span class="fn">printAll</span>(<span class="str">"Hello"</span>, <span class="str">"World"</span>, <span class="str">"Kotlin"</span>)
+
+<span class="cmt">// 展开数组传入 vararg — 使用 * 展开运算符</span>
+<span class="kw">val</span> words <span class="op">=</span> <span class="fn">arrayOf</span>(<span class="str">"Hello"</span>, <span class="str">"World"</span>)
+<span class="fn">printAll</span>(<span class="op">*</span>words)</code></pre>
+
+  <h3><code>Unit</code> 返回类型</h3>
+
+  <p><code>Unit</code> 相当于 Java 的 <code>void</code>，表示函数不返回有意义的值。根据我的推理，省略不写是更常见的做法：</p>
+
+  <pre><code><span class="cmt">// 显式写 Unit</span>
+<span class="kw">fun</span> <span class="fn">logMessage</span>(msg: <span class="type">String</span>): <span class="type">Unit</span> {
+    <span class="fn">println</span>(<span class="str">"[LOG] $msg"</span>)
+}
+
+<span class="cmt">// 省略 Unit（推荐）</span>
+<span class="kw">fun</span> <span class="fn">logMessage</span>(msg: <span class="type">String</span>) {
+    <span class="fn">println</span>(<span class="str">"[LOG] $msg"</span>)
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">柯南的案件总结：函数篇</p>
+    <p>经过对函数的全面调查，真相已经大白：Kotlin 的函数默认参数 + 命名参数的组合非常强大，可以替代 Java 中大量的方法重载和 Builder 模式。写代码时优先使用这些特性让 API 更简洁 —— 这就是我作为侦探给出的最终建议。</p>
+  </div>
+
+  <!-- ==================== 3.5 语言对比 ==================== -->
+  <h2>3.5 与其他语言的对比小贴士</h2>
+
+  <p>现在让我们把所有收集到的线索汇总到一张「案件证据总表」中。如果你有 Java、C++ 或 Python 经验，下面这张对照表能帮你快速建立映射关系 —— 就像把嫌疑人的指纹与数据库比对一样高效：</p>
+
+  <table>
+    <tr>
+      <th>特性</th>
+      <th>Kotlin</th>
+      <th>Java</th>
+      <th>C++</th>
+      <th>Python</th>
+    </tr>
+    <tr>
+      <td>不可变变量</td>
+      <td><code>val x = 1</code></td>
+      <td><code>final int x = 1;</code></td>
+      <td><code>const int x = 1;</code></td>
+      <td>无内置支持</td>
+    </tr>
+    <tr>
+      <td>可变变量</td>
+      <td><code>var x = 1</code></td>
+      <td><code>int x = 1;</code></td>
+      <td><code>int x = 1;</code></td>
+      <td><code>x = 1</code></td>
+    </tr>
+    <tr>
+      <td>类型推断</td>
+      <td><code>val x = "hi"</code></td>
+      <td><code>var x = "hi";</code> (Java 10+)</td>
+      <td><code>auto x = "hi"s;</code> (C++11)</td>
+      <td><code>x = "hi"</code></td>
+    </tr>
+    <tr>
+      <td>Null 安全</td>
+      <td><code>var x: String? = null</code></td>
+      <td><code>@Nullable String x = null;</code></td>
+      <td><code>std::optional&lt;string&gt;</code> (C++17)</td>
+      <td><code>x = None</code></td>
+    </tr>
+    <tr>
+      <td>字符串模板</td>
+      <td><code>"Hello, $name"</code></td>
+      <td><code>"Hello, " + name</code></td>
+      <td><code>std::format("Hello, {}", name)</code> (C++20)</td>
+      <td><code>f"Hello, {name}"</code></td>
+    </tr>
+    <tr>
+      <td>类型转换</td>
+      <td><code>x.toInt()</code></td>
+      <td><code>(int) x</code> 或 <code>Integer.parseInt(x)</code></td>
+      <td><code>static_cast&lt;int&gt;(x)</code></td>
+      <td><code>int(x)</code></td>
+    </tr>
+    <tr>
+      <td>函数定义</td>
+      <td><code>fun add(a: Int, b: Int) = a + b</code></td>
+      <td><code>int add(int a, int b) { return a + b; }</code></td>
+      <td><code>int add(int a, int b) { return a + b; }</code></td>
+      <td><code>def add(a, b): return a + b</code></td>
+    </tr>
+    <tr>
+      <td>默认参数</td>
+      <td><code>fun f(x: Int = 0)</code></td>
+      <td>不支持（需重载）</td>
+      <td><code>void f(int x = 0)</code></td>
+      <td><code>def f(x=0)</code></td>
+    </tr>
+    <tr>
+      <td>命名参数</td>
+      <td><code>f(name = "K")</code></td>
+      <td>不支持</td>
+      <td>不支持（C++20 有指定初始化器）</td>
+      <td><code>f(name="K")</code></td>
+    </tr>
+    <tr>
+      <td>条件表达式</td>
+      <td><code>if (c) a else b</code></td>
+      <td><code>c ? a : b</code></td>
+      <td><code>c ? a : b</code></td>
+      <td><code>a if c else b</code></td>
+    </tr>
+    <tr>
+      <td>分支匹配</td>
+      <td><code>when (x) { ... }</code></td>
+      <td><code>switch (x) { ... }</code></td>
+      <td><code>switch (x) { ... }</code></td>
+      <td><code>match x: ...</code> (3.10+)</td>
+    </tr>
+    <tr>
+      <td>行尾分号</td>
+      <td>不需要</td>
+      <td>必须</td>
+      <td>必须</td>
+      <td>不需要</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <p class="tip-title">柯南的推理笔记：从 Java 迁移的关键心得</p>
+    <ul>
+      <li>用 <code>val</code> 替代 <code>final</code>，用 <code>var</code> 替代普通声明</li>
+      <li>不需要分号，不需要 <code>new</code> 关键字</li>
+      <li>字符串模板替代字符串拼接，告别 <code>+</code></li>
+      <li><code>when</code> 替代 <code>switch</code>，更强大且不会穿透</li>
+      <li>默认参数 + 命名参数替代大量方法重载</li>
+      <li>所有类型转换必须显式完成</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <p class="tip-title">柯南的推理笔记：从 Python 迁移的关键心得</p>
+    <ul>
+      <li>Kotlin 是静态类型语言，变量有确定的类型（虽然大多可以推断）</li>
+      <li><code>val</code>/<code>var</code> 必须用关键字声明，不能直接赋值</li>
+      <li>函数用 <code>fun</code> 而不是 <code>def</code>，参数必须声明类型</li>
+      <li>缩进不影响语义，用花括号 <code>{}</code> 来界定代码块</li>
+      <li>字符串模板用 <code>$</code> 而不是 <code>f""</code> 和 <code>{}</code></li>
+    </ul>
+  </div>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>从 C++ 迁移到 Kotlin，以下几点是最需要注意的「案件现场」：</p>
+    <ul>
+      <li><strong>没有指针和引用</strong> —— 不需要 <code>*</code>、<code>&amp;</code>、<code>-&gt;</code>，所有变量都是引用语义</li>
+      <li><strong>没有头文件</strong> —— Kotlin 没有声明与定义分离的概念，不需要 <code>.h</code>/<code>.cpp</code></li>
+      <li><strong>自动内存管理</strong> —— 有 GC（垃圾回收），无需 <code>new</code>/<code>delete</code>、<code>unique_ptr</code>/<code>shared_ptr</code></li>
+      <li><strong>没有隐式类型转换</strong> —— C++ 中 <code>int</code> 到 <code>double</code> 的隐式转换在 Kotlin 中必须显式完成</li>
+      <li><strong>没有运算符重载陷阱</strong> —— Kotlin 的运算符重载是基于约定的命名方法，比 C++ 更受控</li>
+      <li><strong>没有预处理器</strong> —— 不需要 <code>#include</code>、<code>#define</code>、<code>#ifdef</code></li>
+    </ul>
+  </div>
+
+  <!-- ==================== 练习 ==================== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <p>案件的调查告一段落，现在是时候检验你的推理能力了。以下练习将帮助你巩固本章学到的 Kotlin 基础语法线索。</p>
+
+    <div class="exercise-item">
+      <h3>练习 1：变量声明与类型推断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>声明以下变量，判断哪些应该用 <code>val</code>，哪些应该用 <code>var</code>：</p>
+      <ul>
+        <li>一个人的名字（假设不会改变）</li>
+        <li>一个人的年龄（每年会变）</li>
+        <li>圆周率</li>
+        <li>一个计数器，初始值为 0</li>
+      </ul>
+      <p>对每个变量，让编译器推断类型（不要显式写类型），然后写出编译器会推断出的类型是什么。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>想想每个变量在程序运行过程中是否需要被重新赋值。名字和圆周率是固定的，而年龄和计数器需要更新。推断类型时，记住：整数默认是 <code>Int</code>，带小数点的数默认是 <code>Double</code>，双引号括起来的文本是 <code>String</code>。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content">
+        <pre><code><span class="kw">val</span> name <span class="op">=</span> <span class="str">"柯南"</span>         <span class="cmt">// String — 名字不变，用 val</span>
+<span class="kw">var</span> age <span class="op">=</span> <span class="num">17</span>              <span class="cmt">// Int — 年龄会变，用 var</span>
+<span class="kw">val</span> pi <span class="op">=</span> <span class="num">3.14159265</span>       <span class="cmt">// Double — 圆周率是常数，用 val</span>
+<span class="kw">var</span> counter <span class="op">=</span> <span class="num">0</span>           <span class="cmt">// Int — 计数器需要累加，用 var</span>
+
+<span class="cmt">// 验证：可以修改 var，不能修改 val</span>
+age <span class="op">=</span> <span class="num">18</span>                  <span class="cmt">// OK</span>
+counter <span class="op">=</span> counter <span class="op">+</span> <span class="num">1</span>     <span class="cmt">// OK</span>
+<span class="cmt">// name = "新一"           // 编译错误！val 不能重新赋值</span></code></pre>
+      </div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：when 表达式实战 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>编写一个函数 <code>evaluateScore</code>，接收一个 <code>Int</code> 类型的分数参数，使用 <code>when</code> 表达式返回对应的评价字符串：</p>
+      <ul>
+        <li>100 分：「满分！完美推理！」</li>
+        <li>90-99 分：「优秀」</li>
+        <li>80-89 分：「良好」</li>
+        <li>60-79 分：「及格」</li>
+        <li>0-59 分：「不及格」</li>
+        <li>其他（负数或超过 100）：「无效分数」</li>
+      </ul>
+      <details><summary>提示</summary><div class="answer-content"><p>注意 100 分需要单独匹配（用具体值），而其他区间用 <code>in</code> 关键字加区间运算符 <code>..</code> 来匹配。考虑使用单表达式函数的写法。匹配顺序很重要 —— 把具体值匹配放在区间匹配前面。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content">
+        <pre><code><span class="kw">fun</span> <span class="fn">evaluateScore</span>(score: <span class="type">Int</span>): <span class="type">String</span> <span class="op">=</span> <span class="kw">when</span> (score) {
+    <span class="num">100</span>           <span class="op">-&gt;</span> <span class="str">"满分！完美推理！"</span>
+    <span class="kw">in</span> <span class="num">90</span><span class="op">..</span><span class="num">99</span>    <span class="op">-&gt;</span> <span class="str">"优秀"</span>
+    <span class="kw">in</span> <span class="num">80</span><span class="op">..</span><span class="num">89</span>    <span class="op">-&gt;</span> <span class="str">"良好"</span>
+    <span class="kw">in</span> <span class="num">60</span><span class="op">..</span><span class="num">79</span>    <span class="op">-&gt;</span> <span class="str">"及格"</span>
+    <span class="kw">in</span> <span class="num">0</span><span class="op">..</span><span class="num">59</span>     <span class="op">-&gt;</span> <span class="str">"不及格"</span>
+    <span class="kw">else</span>          <span class="op">-&gt;</span> <span class="str">"无效分数"</span>
+}
+
+<span class="cmt">// 测试</span>
+<span class="fn">println</span>(<span class="fn">evaluateScore</span>(<span class="num">100</span>))  <span class="cmt">// 满分！完美推理！</span>
+<span class="fn">println</span>(<span class="fn">evaluateScore</span>(<span class="num">85</span>))   <span class="cmt">// 良好</span>
+<span class="fn">println</span>(<span class="fn">evaluateScore</span>(<span class="num">42</span>))   <span class="cmt">// 不及格</span>
+<span class="fn">println</span>(<span class="fn">evaluateScore</span>(<span class="op">-</span><span class="num">1</span>))   <span class="cmt">// 无效分数</span></code></pre>
+      </div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：字符串模板综合运用 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>给定以下变量：</p>
+      <pre><code><span class="kw">val</span> detective <span class="op">=</span> <span class="str">"柯南"</span>
+<span class="kw">val</span> casesResolved <span class="op">=</span> <span class="num">312</span>
+<span class="kw">val</span> successRate <span class="op">=</span> <span class="num">99.7</span></code></pre>
+      <p>用字符串模板写出一句话：「侦探柯南已成功破获 312 起案件，破案率高达 99.7%！」。要求：使用 <code>$</code> 和 <code>${}</code> 两种语法，至少一处使用表达式（如调用方法或做运算）。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>简单的变量引用用 <code>$variable</code>，如果需要调用方法或写表达式则用 <code>${expression}</code>。你可以尝试在模板中嵌入 <code>${casesResolved + 1}</code> 之类的表达式来展示模板的灵活性，或者使用 <code>${detective.length}</code> 之类的方法调用。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content">
+        <pre><code><span class="kw">val</span> detective <span class="op">=</span> <span class="str">"柯南"</span>
+<span class="kw">val</span> casesResolved <span class="op">=</span> <span class="num">312</span>
+<span class="kw">val</span> successRate <span class="op">=</span> <span class="num">99.7</span>
+
+<span class="cmt">// 基础版</span>
+<span class="kw">val</span> report <span class="op">=</span> <span class="str">"侦探$detective 已成功破获 $casesResolved 起案件，破案率高达 $successRate%！"</span>
+<span class="fn">println</span>(report)
+<span class="cmt">// 侦探柯南已成功破获 312 起案件，破案率高达 99.7%！</span>
+
+<span class="cmt">// 进阶版 — 使用表达式</span>
+<span class="kw">val</span> report2 <span class="op">=</span> <span class="str">"侦探${detective.uppercase()} 已成功破获 ${casesResolved} 起案件（名字共 ${detective.length} 个字），破案率 $successRate%！"</span>
+<span class="fn">println</span>(report2)
+<span class="cmt">// 侦探柯南 已成功破获 312 起案件（名字共 2 个字），破案率 99.7%！</span></code></pre>
+      </div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：函数与默认参数 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>编写一个函数 <code>formatClue</code>，用于格式化案件线索。函数参数如下：</p>
+      <ul>
+        <li><code>content: String</code> — 线索内容（必填）</li>
+        <li><code>caseNumber: Int</code> — 案件编号，默认值为 1</li>
+        <li><code>priority: String</code> — 优先级，默认值为 "普通"</li>
+        <li><code>isVerified: Boolean</code> — 是否已验证，默认值为 false</li>
+      </ul>
+      <p>函数返回格式化后的字符串：<code>"[案件#编号][优先级] 线索内容 (已验证/未验证)"</code>。然后用命名参数调用这个函数 3 次：只传内容；传内容和优先级；传内容、案件编号和已验证标志。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>利用默认参数避免重载。在函数体内用 <code>if</code> 表达式根据 <code>isVerified</code> 生成 "已验证" 或 "未验证" 的文本。调用时使用命名参数来跳过中间参数。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content">
+        <pre><code><span class="kw">fun</span> <span class="fn">formatClue</span>(
+    content: <span class="type">String</span>,
+    caseNumber: <span class="type">Int</span> <span class="op">=</span> <span class="num">1</span>,
+    priority: <span class="type">String</span> <span class="op">=</span> <span class="str">"普通"</span>,
+    isVerified: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>
+): <span class="type">String</span> {
+    <span class="kw">val</span> status <span class="op">=</span> <span class="kw">if</span> (isVerified) <span class="str">"已验证"</span> <span class="kw">else</span> <span class="str">"未验证"</span>
+    <span class="kw">return</span> <span class="str">"[案件#$caseNumber][$priority] $content ($status)"</span>
+}
+
+<span class="cmt">// 调用 1：只传内容</span>
+<span class="fn">println</span>(<span class="fn">formatClue</span>(<span class="str">"现场发现指纹"</span>))
+<span class="cmt">// [案件#1][普通] 现场发现指纹 (未验证)</span>
+
+<span class="cmt">// 调用 2：传内容和优先级（使用命名参数跳过 caseNumber）</span>
+<span class="fn">println</span>(<span class="fn">formatClue</span>(content <span class="op">=</span> <span class="str">"发现可疑脚印"</span>, priority <span class="op">=</span> <span class="str">"紧急"</span>))
+<span class="cmt">// [案件#1][紧急] 发现可疑脚印 (未验证)</span>
+
+<span class="cmt">// 调用 3：传内容、案件编号和已验证标志（跳过 priority）</span>
+<span class="fn">println</span>(<span class="fn">formatClue</span>(content <span class="op">=</span> <span class="str">"嫌疑人不在场证明"</span>, caseNumber <span class="op">=</span> <span class="num">7</span>, isVerified <span class="op">=</span> <span class="kw">true</span>))
+<span class="cmt">// [案件#7][普通] 嫌疑人不在场证明 (已验证)</span></code></pre>
+      </div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：综合推理挑战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>编写一个函数 <code>investigate</code>，接收一个 <code>Any</code> 类型的参数（即任意类型），使用 <code>when</code> 表达式对传入的值进行「调查分析」，返回一段描述字符串：</p>
+      <ul>
+        <li>如果是 <code>Int</code> 且为正数，返回 「正整数线索：值为 X」</li>
+        <li>如果是 <code>Int</code> 且为 0 或负数，返回 「无效线索：整数 X 不是正数」</li>
+        <li>如果是 <code>String</code> 且长度大于 0，返回 「文字线索：内容为 "X"，共 N 个字符」</li>
+        <li>如果是 <code>String</code> 且为空，返回 「空白线索：没有内容」</li>
+        <li>如果是 <code>Boolean</code> 为 true，返回 「确认线索：已核实」</li>
+        <li>如果是 <code>Boolean</code> 为 false，返回 「否定线索：已排除」</li>
+        <li>其他类型，返回 「未知线索：类型为 X」（用 <code>::class.simpleName</code> 获取类型名）</li>
+      </ul>
+      <details><summary>提示</summary><div class="answer-content"><p>这道题需要组合使用 <code>when</code> 的类型匹配（<code>is</code>）和无参 <code>when</code> 的条件判断。一种方式是先用 <code>is</code> 匹配类型，在匹配后利用智能转换进行额外判断。另一种方式是使用无参 <code>when</code>，在每个分支中同时检查类型和条件。记住，<code>when</code> 匹配到第一个满足的分支就会停止。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content">
+        <pre><code><span class="kw">fun</span> <span class="fn">investigate</span>(clue: <span class="type">Any</span>): <span class="type">String</span> <span class="op">=</span> <span class="kw">when</span> {
+    clue <span class="kw">is</span> <span class="type">Int</span> <span class="op">&amp;&amp;</span> clue <span class="op">&gt;</span> <span class="num">0</span>           <span class="op">-&gt;</span> <span class="str">"正整数线索：值为 $clue"</span>
+    clue <span class="kw">is</span> <span class="type">Int</span>                        <span class="op">-&gt;</span> <span class="str">"无效线索：整数 $clue 不是正数"</span>
+    clue <span class="kw">is</span> <span class="type">String</span> <span class="op">&amp;&amp;</span> clue.<span class="fn">isNotEmpty</span>() <span class="op">-&gt;</span> <span class="str">"文字线索：内容为 \"$clue\"，共 ${clue.length} 个字符"</span>
+    clue <span class="kw">is</span> <span class="type">String</span>                     <span class="op">-&gt;</span> <span class="str">"空白线索：没有内容"</span>
+    clue <span class="op">==</span> <span class="kw">true</span>                       <span class="op">-&gt;</span> <span class="str">"确认线索：已核实"</span>
+    clue <span class="op">==</span> <span class="kw">false</span>                      <span class="op">-&gt;</span> <span class="str">"否定线索：已排除"</span>
+    <span class="kw">else</span>                               <span class="op">-&gt;</span> <span class="str">"未知线索：类型为 ${clue<span class="op">::</span><span class="kw">class</span>.simpleName}"</span>
+}
+
+<span class="cmt">// 测试</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="num">42</span>))          <span class="cmt">// 正整数线索：值为 42</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="op">-</span><span class="num">5</span>))          <span class="cmt">// 无效线索：整数 -5 不是正数</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="str">"指纹"</span>))      <span class="cmt">// 文字线索：内容为 "指纹"，共 2 个字符</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="str">""</span>))          <span class="cmt">// 空白线索：没有内容</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="kw">true</span>))        <span class="cmt">// 确认线索：已核实</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="kw">false</span>))       <span class="cmt">// 否定线索：已排除</span>
+<span class="fn">println</span>(<span class="fn">investigate</span>(<span class="num">3.14</span>))        <span class="cmt">// 未知线索：类型为 Double</span></code></pre>
+      </div></details>
+    </div>
+
+  </div>
+
+  <!-- ==================== 底部导航 ==================== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

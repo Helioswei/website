@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第11章：数据绑定与 Observer - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="11" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：数据绑定与 Observer</h1>
+  <p class="chapter-subtitle">让 UI 和应用数据自动对齐——滑块一动，文字就跟着变</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理，从"为什么"出发</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一个界面永远在回答同一个问题：'当前数据是多少？'。不绑定时，这个问题的答案散落在一堆手动 <code>lv_label_set_text</code>、<code>lv_slider_set_value</code> 里，数据一变就要满世界找漏网之鱼。Observer 的思路很简单：把'数据'本身变成一个可观察的容器，让控件自己订阅它。想通'数据才是源头、界面只是投影'，你就能理解这一整章的每个 API。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 11.1 数据绑定的动机 ========== -->
+  <h2>11.1 数据绑定的动机</h2>
+
+  <p>先把问题还原到第一性原理。假设界面上有一个温度计：滑块显示范围，label 显示数值。数据从传感器来，每一次读数变化，你都要"手动搬运"——<code>lv_slider_set_value(slider, temp, LV_ANIM_ON)</code> 更新滑杆，再 <code>lv_label_set_text_fmt(label, "%d °C", temp)</code> 更新文字。一个控件还好，一旦三五个控件都反映同一个数据（滑杆、进度条、数字、颜色、图标），每处变化就要写一堆同步代码，漏改一处就出现"数据变了界面没动"的灵异事件。</p>
+
+<pre><code><span class="cmt">/* 手动方式：数据每次变化都要自己同步所有控件 */</span>
+<span class="type">int32_t</span> temp = <span class="fn">read_sensor</span>();
+<span class="fn">lv_slider_set_value</span>(slider, temp, <span class="kw">LV_ANIM_ON</span>);
+<span class="fn">lv_label_set_text_fmt</span>(label, <span class="str">"%d °C"</span>, temp);
+<span class="fn">lv_bar_set_value</span>(bar, temp, <span class="kw">LV_ANIM_ON</span>);</code></pre>
+
+  <p>绑定的思路是反转方向：把"数据"变成界面和业务逻辑之间的<strong>唯一事实来源</strong>（single source of truth）。数据被放进一个可观察的容器（subject），控件声明"我订阅它"；此后只有一件事要做——改数据。数据一变，所有订阅者自动刷新，谁都不漏。README「Features」把 Data bindings 与控件、样式、布局并列为核心特性，原话是"<strong>to easily connect the UI with the application</strong>"（轻松地把界面与应用连接起来）。实现这套机制的模块，在 9.6.0-dev 里位于 <code>src/core/lv_observer.c</code>（公共头文件是 <code>include/lvgl/core/lv_observer.h</code>），由配置宏 <code>LV_USE_OBSERVER</code> 控制，默认开启。</p>
+
+<pre><code><span class="cmt">/* 绑定方式：控件自动跟随 subject 的当前值 */</span>
+<span class="fn">lv_slider_bind_value</span>(slider, &amp;temp_subject);
+<span class="fn">lv_label_bind_text</span>(label, &amp;temp_subject, <span class="str">"%d °C"</span>);
+
+<span class="cmt">/* 此后业务只改数据，界面自动同步： */</span>
+<span class="fn">lv_subject_set_int</span>(&amp;temp_subject, <span class="fn">read_sensor</span>());</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>这是个标准的<strong>观察者模式</strong>：subject 是被观察者，每个控件背后的 observer 是观察者。你不需要记住"谁在看我"，subject 内部用一张订阅者链表（<code>subs_ll</code>）自己管着。理解这一点，后面的 API 全部能推导出来。</p>
+  </div>
+
+  <!-- ========== 11.2 subject：可观察的数据容器 ========== -->
+  <h2>11.2 subject：可观察的数据容器</h2>
+
+  <p><code>lv_subject_t</code> 是整套机制的核心。它的结构（<code>struct _lv_subject_t</code>，在 <code>src/core/lv_observer_private.h</code>）保存着当前值、上一个值（供比较和动画）、min/max 边界，以及一张<strong>订阅者链表</strong> <code>subs_ll</code>。每个 subject 有固定类型 <code>LV_SUBJECT_TYPE_*</code>——int、float、pointer、color、group、string 之一，创建后不可改类型。核心字段如下：</p>
+
+<pre><code><span class="kw">struct</span> _lv_subject_t {
+    <span class="type">lv_ll_t</span> subs_ll;                <span class="cmt">/* 订阅者（observer）链表 */</span>
+    <span class="type">lv_subject_value_t</span> value;      <span class="cmt">/* 当前值 */</span>
+    <span class="type">lv_subject_value_t</span> prev_value; <span class="cmt">/* 上一个值，供比较 / 动画起始值 */</span>
+    <span class="type">lv_subject_value_t</span> min_value;  <span class="cmt">/* 最小值边界（int / float 型） */</span>
+    <span class="type">lv_subject_value_t</span> max_value;  <span class="cmt">/* 最大值边界 */</span>
+    <span class="kw">void</span> * user_data;              <span class="cmt">/* 自由使用 */</span>
+    <span class="type">uint32_t</span> type : <span class="num">4</span>;            <span class="cmt">/* LV_SUBJECT_TYPE_* 之一 */</span>
+    <span class="cmt">/* ... */</span>
+};</code></pre>
+
+  <p>使用分三步：<strong>声明 → 初始化 → 读写</strong>。声明就是在文件作用域放一个 <code>static lv_subject_t</code>（或嵌入某个结构体）；初始化调用 <code>lv_subject_init_int(&amp;s, 28)</code>；写值 <code>lv_subject_set_int(&amp;s, 31)</code> 会立即通知所有订阅者；读值 <code>lv_subject_get_int(&amp;s)</code>。字符串型特殊一点：<code>lv_subject_init_string()</code> 要求你自备两块缓冲区（当前值与上一个值各一），因为字符串要拷贝保存。</p>
+
+<pre><code><span class="kw">static</span> <span class="type">lv_subject_t</span> temp_subject;
+
+<span class="fn">lv_subject_init_int</span>(&amp;temp_subject, <span class="num">28</span>);
+<span class="fn">lv_subject_set_int</span>(&amp;temp_subject, <span class="num">31</span>);    <span class="cmt">/* 值变化，触发所有订阅者回调 */</span>
+<span class="type">int32_t</span> v = <span class="fn">lv_subject_get_int</span>(&amp;temp_subject);
+
+<span class="cmt">/* 字符串型需要自备缓冲区 */</span>
+<span class="type">char</span> cur[<span class="num">32</span>], prev[<span class="num">32</span>];
+<span class="fn">lv_subject_init_string</span>(&amp;s_text, cur, prev, <span class="kw">sizeof</span>(cur), <span class="str">"Hello"</span>);</code></pre>
+
+  <table>
+    <tr><th>subject 类型</th><th>初始化函数</th><th>读写 API</th></tr>
+    <tr><td>整数 <code>LV_SUBJECT_TYPE_INT</code></td><td><code>lv_subject_init_int()</code></td><td><code>lv_subject_set_int / get_int</code></td></tr>
+    <tr><td>浮点 <code>LV_SUBJECT_TYPE_FLOAT</code></td><td><code>lv_subject_init_float()</code></td><td><code>lv_subject_set_float</code></td></tr>
+    <tr><td>指针 <code>LV_SUBJECT_TYPE_POINTER</code></td><td><code>lv_subject_init_pointer()</code></td><td><code>lv_subject_set_pointer / get_pointer</code></td></tr>
+    <tr><td>颜色 <code>LV_SUBJECT_TYPE_COLOR</code></td><td><code>lv_subject_init_color()</code></td><td><code>lv_subject_set_color / get_color</code></td></tr>
+    <tr><td>字符串 <code>LV_SUBJECT_TYPE_STRING</code></td><td><code>lv_subject_init_string()</code></td><td>自备双缓冲区</td></tr>
+    <tr><td>分组 <code>LV_SUBJECT_TYPE_GROUP</code></td><td><code>lv_subject_init_group()</code></td><td>一组 subject 的聚合</td></tr>
+  </table>
+
+  <!-- ========== 11.3 控件绑定系列：lv_obj_bind_* ========== -->
+  <h2>11.3 控件绑定系列：lv_obj_bind_*</h2>
+
+  <p>每个"有值"的控件都提供了现成的绑定函数。官方示例 <code>examples/others/observer/lv_example_observer_1.c</code> 就是"滑块值绑定到 label 文本"的教科书写法：一个 <code>temperature_subject</code> 初始化成 28，居中的滑块 <code>lv_slider_bind_value</code>，下方 30 px 的 label 用 <code>lv_label_bind_text</code> 带上格式串 <code>"%d °C"</code>。拖动滑块，新值被写回 subject，label 文本自动重排——这就是本章核心例子，全部代码也就这么几行。</p>
+
+<pre><code><span class="kw">static</span> <span class="type">lv_subject_t</span> temperature_subject;
+
+<span class="kw">void</span> <span class="fn">lv_example_observer_1</span>(<span class="kw">void</span>)
+{
+    <span class="fn">lv_subject_init_int</span>(&amp;temperature_subject, <span class="num">28</span>);
+
+    <span class="cmt">/* 滑块：显示并写入 subject */</span>
+    <span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(<span class="fn">lv_screen_active</span>());
+    <span class="fn">lv_obj_center</span>(slider);
+    <span class="fn">lv_slider_bind_value</span>(slider, &amp;temperature_subject);
+
+    <span class="cmt">/* label：跟随 subject 并以 "%d °C" 格式渲染 */</span>
+    <span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(<span class="fn">lv_screen_active</span>());
+    <span class="fn">lv_obj_align</span>(label, <span class="kw">LV_ALIGN_CENTER</span>, <span class="num">0</span>, <span class="num">30</span>);
+    <span class="fn">lv_label_bind_text</span>(label, &amp;temperature_subject, <span class="str">"%d °C"</span>);
+}</code></pre>
+
+  <p>绑定系列遵循统一形态 <code>lv_&lt;控件&gt;_bind_&lt;属性&gt;(obj, subject)</code>，返回 <code>lv_observer_t*</code>。数值型控件绑 <code>bind_value</code>：<code>lv_bar_bind_value</code>、<code>lv_arc_bind_value</code>、<code>lv_dropdown_bind_value</code>、<code>lv_roller_bind_value</code>、<code>lv_spinbox_bind_value</code>；文本型绑 <code>bind_text</code>（label，带 printf 格式串）与 <code>lv_spangroup_bind_span_text</code>；图像有 <code>lv_image_bind_src</code>——给 subject 换成不同的图像描述符，同一个控件就能在几张图标之间自动切换。这一串函数分别定义在各控件的头文件里（如 <code>lv_slider.h</code>、<code>lv_label.h</code>）。</p>
+
+<pre><code><span class="fn">lv_bar_bind_value</span>(bar, &amp;sub);            <span class="cmt">/* 进度条跟随 */</span>
+<span class="fn">lv_arc_bind_value</span>(arc, &amp;sub);            <span class="cmt">/* 弧形表盘 */</span>
+<span class="fn">lv_dropdown_bind_value</span>(dd, &amp;sub);       <span class="cmt">/* 下拉框选中项 */</span>
+<span class="fn">lv_image_bind_src</span>(img, &amp;img_subject);   <span class="cmt">/* 多张图标轮换 */</span></code></pre>
+
+  <p>针对"属性是否成立"的绑定，通用对象还提供条件族：<code>lv_obj_bind_checked()</code> 把 subject 的 int 值映射到控件的 <code>LV_STATE_CHECKED</code>；<code>lv_obj_bind_flag_if_eq()</code> 系列（还有 <code>not_eq/gt/ge/lt/le</code>）在值满足条件时给对象挂标志（如 <code>LV_OBJ_FLAG_HIDDEN</code>）；<code>lv_obj_bind_state_if_gt()</code> 系列则在越界时给对象换状态——官方示例 <code>lv_example_slider_bind_state.c</code> 就用 <code>LV_STATE_DISABLED</code> 让值超过 80 时按钮被禁用。这类绑定让"数据驱动界面外观"几乎不用写任何回调。</p>
+
+<pre><code><span class="cmt">/* 条件族绑定：值等于 0 时隐藏按钮，超过 80 时进度条禁用 */</span>
+<span class="fn">lv_obj_bind_checked</span>(chk, &amp;sub);
+<span class="fn">lv_obj_bind_flag_if_eq</span>(btn, &amp;sub, <span class="kw">LV_OBJ_FLAG_HIDDEN</span>, <span class="num">0</span>);
+<span class="fn">lv_obj_bind_state_if_gt</span>(bar, &amp;sub, <span class="kw">LV_STATE_DISABLED</span>, <span class="num">80</span>);</code></pre>
+
+  <table>
+    <tr><th>绑定函数</th><th>作用</th></tr>
+    <tr><td><code>lv_slider_bind_value / lv_bar_bind_value</code></td><td>数值控件跟随 subject（双向）</td></tr>
+    <tr><td><code>lv_label_bind_text</code></td><td>label 文本，支持 <code>"%d"</code> 格式串</td></tr>
+    <tr><td><code>lv_image_bind_src</code></td><td>图像源跟随 subject</td></tr>
+    <tr><td><code>lv_dropdown_bind_value / lv_roller_bind_value</code></td><td>选中项跟随 subject</td></tr>
+    <tr><td><code>lv_obj_bind_checked</code></td><td>int 值 → <code>LV_STATE_CHECKED</code></td></tr>
+    <tr><td><code>lv_obj_bind_flag_if_*</code></td><td>条件成立 → 对象标志</td></tr>
+    <tr><td><code>lv_obj_bind_state_if_*</code></td><td>条件成立 → 对象状态</td></tr>
+  </table>
+
+  <!-- ========== 11.4 Observer 回调：数据变化时「你想做什么」 ========== -->
+  <h2>11.4 Observer 回调：数据变化时「你想做什么」</h2>
+
+  <p>内置绑定覆盖不了时，就自己注册<strong>观察者回调</strong>。<code>lv_subject_add_observer(&amp;sub, cb, user_data)</code> 把回调挂到 subject 上，签名是 <code>typedef void (*lv_observer_cb_t)(lv_observer_t * observer, lv_subject_t * subject)</code>。数据一变，回调被调用，你可以在里面做任何事——发消息给别的模块、驱动状态机、甚至再改另一个 subject（注意避免循环）。官方示例 <code>lv_example_observer_4.c</code> 就是用几个手动回调切换页签、控制按钮检查态。</p>
+
+<pre><code><span class="kw">static void</span> <span class="fn">on_temp_change</span>(<span class="type">lv_observer_t</span> * observer,
+                        <span class="type">lv_subject_t</span> * subject)
+{
+    <span class="cmt">/* subject 是触发来源，从中读当前值 */</span>
+    <span class="kw">if</span>(<span class="fn">lv_subject_get_int</span>(subject) &gt; <span class="num">100</span>) {
+        <span class="fn">lv_obj_remove_flag</span>(alarm, <span class="kw">LV_OBJ_FLAG_HIDDEN</span>);  <span class="cmt">/* 亮起报警 */</span>
+    }
+}
+<span class="cmt">/* 订阅：回调注册到 subject 上 */</span>
+<span class="fn">lv_subject_add_observer</span>(&amp;temp_subject, on_temp_change, <span class="kw">NULL</span>);</code></pre>
+
+  <p>observer 本身是个描述"订阅关系"的对象（<code>struct _lv_observer_t</code>）：记着它订阅的 subject、回调 <code>cb</code>、目标 <code>target</code>（可以是任意指针，若是控件则用 <code>lv_subject_add_observer_obj</code> 登记，方便自动清理）与 <code>user_data</code>。配套生命周期 API：<code>lv_observer_remove(obs)</code> 取消订阅、<code>lv_obj_remove_from_subject(obj, subject)</code> 移除某个控件与 subject 的全部关联、<code>lv_subject_notify(subject)</code> 手动触发一次"当前值即变化"的通知。还有一个便捷函数 <code>lv_obj_add_subject_increment_event()</code>：给一个控件挂上"事件发生时把 subject 加减 step"的行为，比如按钮每点一次加 5。</p>
+
+<pre><code><span class="cmt">/* 按钮每点击一次，subject 加 5（可在 0..100 之间回绕/夹取） */</span>
+<span class="fn">lv_obj_add_subject_increment_event</span>(btn_plus, &amp;temp_subject,
+                                      <span class="kw">LV_EVENT_CLICKED</span>, <span class="num">5</span>);
+
+<span class="cmt">/* 取消订阅与手动通知 */</span>
+<span class="fn">lv_observer_remove</span>(obs);
+<span class="fn">lv_subject_notify</span>(&amp;temp_subject);</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>在 observer 回调里再次 <code>lv_subject_set_*</code> 同一个 subject 会触发重入。LVGL 在 subject 里留了一个 <code>notify_restart_query</code> 位来处理"通知过程中订阅者被删除"的情形，但最佳实践仍是：回调里只读值、触发外部动作，不要在回调里改同一个 subject 形成无限循环。多模块联动时，宁可用一个中介状态，也不要 A↔B 互相订阅。</p>
+  </div>
+
+  <!-- ========== 11.5 XML 里的 subject：与 LVGL Pro 的映射 ========== -->
+  <h2>11.5 XML 里的 subject：与 LVGL Pro 的映射</h2>
+
+  <p>在 LVGL Pro 的 XML 工作流里，全局数据声明集中在 <code>examples/xml_project/globals.xml</code> 的 <code>&lt;subjects&gt;</code> 块。每个标签就是用 XML 声明一个 subject：<code>&lt;int&gt;</code> 标签对应 int 型，属性 <code>name</code>（变量名）、<code>value</code>（初值）、<code>min_value</code>/<code>max_value</code>（边界）。官方文件里有一段专门给数据绑定示例复用的全局 subject，注释还强调"用户不必为每个示例发明新名字"。</p>
+
+<pre><code><span class="cmt">&lt;!-- globals.xml 的 &lt;subjects&gt; 块（真实源码，节选） --&gt;</span>
+<span class="op">&lt;subjects&gt;</span>
+    <span class="op">&lt;int</span> <span class="param">name</span>=<span class="str">"subject_value"</span>  <span class="param">value</span>=<span class="str">"50"</span>   <span class="param">min_value</span>=<span class="str">"0"</span> <span class="param">max_value</span>=<span class="str">"100"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;int</span> <span class="param">name</span>=<span class="str">"subject_value2"</span> <span class="param">value</span>=<span class="str">"20"</span>  <span class="param">min_value</span>=<span class="str">"0"</span> <span class="param">max_value</span>=<span class="str">"100"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;int</span> <span class="param">name</span>=<span class="str">"subject_opa"</span>   <span class="param">value</span>=<span class="str">"128"</span>  <span class="param">min_value</span>=<span class="str">"0"</span> <span class="param">max_value</span>=<span class="str">"255"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;int</span> <span class="param">name</span>=<span class="str">"subject_index"</span> <span class="param">value</span>=<span class="str">"0"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;int</span> <span class="param">name</span>=<span class="str">"subject_flag"</span>  <span class="param">value</span>=<span class="str">"0"</span><span class="op">/&gt;</span>
+    <span class="op">&lt;string</span> <span class="param">name</span>=<span class="str">"subject_text"</span> <span class="param">value</span>=<span class="str">"Hello"</span><span class="op">/&gt;</span>
+<span class="op">&lt;/subjects&gt;</span></code></pre>
+
+  <p><code>lved generate</code>（第 12 章详讲）会把这段 XML 映射成 C 代码：为每个 <code>&lt;subject&gt;</code> 生成一个 <code>lv_subject_t</code> 变量，并用 <code>value</code> 属性调用对应的 <code>lv_subject_init_*()</code> 完成初始化；界面上任何引用该 subject 的控件属性，则被生成成 <code>lv_slider_bind_value()</code>、<code>lv_label_bind_text()</code> 等绑定调用。同理，<code>&lt;images&gt;</code> 块里的 <code>&lt;data&gt;</code>（如 <code>name="img_example_lvgl_logo" src_path="images/img_example_lvgl_logo.png" color_format="argb8888"</code>）映射到图像描述符，<code>&lt;fonts&gt;</code> 块里的 <code>&lt;bin&gt;</code>（TTF 转二进制字体）映射到字体资源——名字与第 10 章的转换产物一一对应。</p>
+
+<pre><code><span class="cmt">/* globals.xml &lt;int name="subject_value" value="50"
+       min_value="0" max_value="100"/&gt; 的 C 端等价 */</span>
+<span class="type">lv_subject_t</span> subject_value;
+<span class="fn">lv_subject_init_int</span>(&amp;subject_value, <span class="num">50</span>);
+
+<span class="cmt">/* 界面上引用它的滑块/文本，生成： */</span>
+<span class="fn">lv_slider_bind_value</span>(slider, &amp;subject_value);
+<span class="fn">lv_label_bind_text</span>(label, &amp;subject_value, <span class="str">"%d"</span>);</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>XML 里的 <code>value="50"</code> 和 C 里的 <code>lv_subject_init_int(&amp;s, 50)</code> 是同一件事的两种写法，一个给设计师、一个给嵌入式工程师。理解了 subject 的"声明 + 初值 + 边界"三要素，你在 XML 和 C 之间来回切换就不会迷路——它们只是同一种数据模型的两副面孔。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：把温度同时绑到滑块、进度条与文本 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>仿照 <code>lv_example_observer_1.c</code>，让一个 <code>temperature_subject</code>（int，初值 28）同时驱动：一个滑块、一个 <code>lv_bar</code> 进度条、一个显示 <code>"%d °C"</code> 的 label。拖动滑块后，验证三者是否同步变化。说出：三个控件分别用了哪个绑定函数？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>滑块用 <code>lv_slider_bind_value</code>，进度条用 <code>lv_bar_bind_value</code>，文本用 <code>lv_label_bind_text</code>——三者订阅同一个 subject。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_slider_bind_value(slider, &amp;temperature_subject)</code>、<code>lv_bar_bind_value(bar, &amp;temperature_subject)</code>、<code>lv_label_bind_text(label, &amp;temperature_subject, "%d °C")</code>。拖动滑块会先把值写回 subject，再广播给包括它自己在内的所有订阅者，因此三者总是同步。要点：业务逻辑里只需要 <code>lv_subject_set_int(&amp;temperature_subject, v)</code> 一处改数据。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：手动 observer 回调实现超限报警 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 <code>lv_subject_add_observer()</code> 注册一个手动回调：当 subject 值超过 80 时，把一个 label 的文本设为 <code>"超限!"</code> 并切到自定义状态 <code>LV_STATE_USER_1</code>（配合一条自定义样式显示警示色），否则恢复 <code>"正常"</code> 并移除该状态。写全代码，并解释：相比在事件回调里逐处判断，手动 observer 为什么更不容易漏改？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回调签名是 <code>void cb(lv_observer_t * observer, lv_subject_t * subject)</code>；用 <code>lv_subject_get_int(subject)</code> 读值；改状态用 <code>lv_obj_add_state/lv_obj_remove_state</code> 或 <code>lv_obj_set_style_text_color</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>核心代码：<code>static void warn_cb(lv_observer_t * o, lv_subject_t * s){ if(lv_subject_get_int(s) &gt; 80){ lv_label_set_text(label, "超限!"); lv_obj_add_state(label, LV_STATE_USER_1); } else { lv_label_set_text(label, "正常"); lv_obj_remove_state(label, LV_STATE_USER_1); } }</code>，再 <code>lv_subject_add_observer(&amp;temp_subject, warn_cb, NULL)</code>。注意 LVGL 9 没有内置"警示"状态，自定义状态用 <code>LV_STATE_USER_1</code>（还有 USER_2..4），再配一条 <code>LV_STATE_USER_1</code> 下的样式（如红色文字）让它显示成报警色。安全性：无论数据从哪条路径改（传感器、滑块、按钮加/减），所有入口最终都汇聚到 <code>lv_subject_set_*</code>，回调只会被触发一次、逻辑只写一处；而手动在 N 个入口各写一遍判断，任何一处漏写就是 bug。这就是"数据是唯一事实来源"的价值。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：在 globals.xml 里声明音量 subject <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>参考 <code>examples/xml_project/globals.xml</code>，在 <code>&lt;subjects&gt;</code> 里新增一个音量 subject：<code>&lt;int name="subject_volume" value="30" min_value="0" max_value="100"/&gt;</code>。写出该标签在 C 端对应的初始化代码，以及界面上一组"音量滑块 + 音量百分比文本"的绑定调用。说明 <code>min_value/max_value</code> 在 C 端体现在哪里。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>lv_subject_init_int(&amp;subject_volume, 30)</code> 初值来自 <code>value</code>；<code>min_value/max_value</code> 会写入 subject 的 min/max 字段，供 <code>lv_slider_bind_value</code> 之类的绑定在内部夹取使用。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>XML：<code>&lt;int name="subject_volume" value="30" min_value="0" max_value="100"/&gt;</code>。C 端：<code>lv_subject_t subject_volume; lv_subject_init_int(&amp;subject_volume, 30);</code>——初值即 <code>value="30"</code>，<code>min_value/max_value</code> 写入 subject 的 <code>min_value/max_value</code> 字段，绑定后的滑块在范围内拖动、增/减事件在边界处夹取或回绕。绑定：<code>lv_slider_bind_value(slider, &amp;subject_volume)</code>、<code>lv_label_bind_text(label, &amp;subject_volume, "%d%%")</code>。要点：XML 与 C 是同一种数据模型，<code>lved generate</code> 负责机械地翻译。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：费曼式剖析"双向绑定" <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p><code>lv_slider_bind_value()</code> 表面上一行代码，内部却实现了"双向"同步：拖动滑块会更新 subject，代码里改 subject 滑块也会动。请打开 <code>src/widgets/slider/lv_slider.c</code> 找到该函数的实现，用第一性原理说明：它靠哪两个机制分别实现"控件→数据"与"数据→控件"？为什么这里不必担心无限循环？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>源码里它做了两件事：<code>lv_obj_add_event_cb(obj, ..., LV_EVENT_VALUE_CHANGED, subject)</code> 与 <code>lv_subject_add_observer_obj(subject, ..., obj, NULL)</code>。前者负责滑块被拖动时写回 subject，后者负责 subject 变化时更新滑块。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>① 控件→数据：<code>lv_obj_add_event_cb(obj, slider_value_changed_event_cb, LV_EVENT_VALUE_CHANGED, subject)</code>——用户拖动滑块触发 <code>LV_EVENT_VALUE_CHANGED</code>，事件回调把滑块当前值 <code>lv_subject_set_int(subject, value)</code> 写回；② 数据→控件：<code>lv_subject_add_observer_obj(subject, slider_value_observer_cb, obj, NULL)</code>——subject 变化时观察者回调把新值 <code>lv_slider_set_value</code> 写回滑块。为什么不会无限循环：observer 回调写滑块、事件回调写 subject 确实构成"循环"，但 LVGL 的 observer 只在"值真正变化"时才通知（内部比较 <code>value</code> 与 <code>prev_value</code>），且写回同一数值不会再次产生变化事件，循环自然收敛。这也是 <code>prev_value</code> 字段存在的意义——去重是防抖的基础。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cuda-cuda10.0安装 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="​ 在转码的过程中，我们可以使用硬件来进行转码的加速，今天记录一下在Centos7环境下安装驱动以及cuda模块。 下载驱动 如果打算安装CUDA10.0及以上的版本则不需要单独安装驱动，cuda10.0自带驱动驱动忽略该驱动的安装 驱动下">
+  <meta name="keywords" content="">
+  <link rel="canonical" href="https://aigcwei.cn/notes/graphics/cuda-cuda10-0安装.html">
+  <meta property="og:title" content="cuda-cuda10.0安装">
+  <meta property="og:description" content="​ 在转码的过程中，我们可以使用硬件来进行转码的加速，今天记录一下在Centos7环境下安装驱动以及cuda模块。 下载驱动 如果打算安装CUDA10.0及以上的版本则不需要单独安装驱动，cuda10.0自带驱动驱动忽略该驱动的安装 驱动下">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/graphics/cuda-cuda10-0安装.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>cuda-cuda10.0安装</h1>
+          <div class="article-meta"><span>2020-05-07</span></div>
+        </header>
+        <div class="article-body">
+<p>​		在转码的过程中，我们可以使用硬件来进行转码的加速，今天记录一下在Centos7环境下安装驱动以及cuda模块。</p>
+<h3>下载驱动</h3>
+<p><code>如果打算安装CUDA10.0及以上的版本则不需要单独安装驱动，cuda10.0自带驱动驱动</code><strong>忽略该驱动的安装</strong></p>
+<p><a href="https://www.nvidia.cn/Download/Find.aspx?lang=cn&amp;QNF=1">驱动下载地址</a></p>
+<p>例如我们下载Quadro P2000 linux64的驱动</p>
+<p><img src="../../images/cuda/图片1.png" alt="图片1.png"></p>
+<p><img src="../../images/cuda/图片2.png" alt="图片2.png"></p>
+<p>之所以安装这个驱动是因为要安装的cuda10.0也是410的，之后运行安装驱动程序就好了。</p>
+<h3>安装cuda10.0</h3>
+<h5>1，下载安装包</h5>
+<p>​	<a href="https://developer.nvidia.com/cuda-downloads?target_os=Linux&amp;target_arch=x86_64&amp;target_distro=CentOS&amp;target_version=7&amp;target_type=runfilelocal">安装包下载</a>	在该网站上下载安装包</p>
+<p><img src="../../images/cuda/图片3.png" alt="图片3.png"></p>
+<h5>2，版本选择</h5>
+<pre><code>
+通过以下按钮选择历史版本的cuda，找到10.0下载，然后选择对应的系统
+</code></pre>
+<p><img src="../../images/cuda/图片4.png" alt="图片4.png"></p>
+<h5>3，运行.run文件</h5>
+<pre><code>
+下载完安装包放在linux上直接运行.run文件
+
+chmod +x cuda_10.0.130_410.48_linux.run
+./cuda_10.0.130_410.48_linux.run
+</code></pre>
+<h5>4，然后一直按回车键直到：</h5>
+<p><img src="../../images/cuda/图片5.png" alt="图片5.png"></p>
+<pre><code>
+回答：accept
+</code></pre>
+<h5>5，是否安装驱动</h5>
+<p><img src="../../images/cuda/图片6.png" alt="图片6.png"></p>
+<pre><code>
+是否安装驱动，这里选择安装：y,因为我们自己没有提前安装驱动，如果提前安装过驱动，这里就不选择安装：n
+</code></pre>
+<h5>6，是否安装OpenGL</h5>
+<p><img src="../../images/cuda/图片7.png" alt="图片7.png"></p>
+<pre><code>
+选择;n
+</code></pre>
+<h5>7，是否安装x-config</h5>
+<p><img src="../../images/cuda/图片8.png" alt="图片8.png"></p>
+<pre><code>
+选择：n
+</code></pre>
+<h5>8，是否安装Toolkit</h5>
+<p><img src="../../images/cuda/图片10.png" alt="图片10.png"></p>
+<pre><code>
+选择：y
+</code></pre>
+<h5>9，cuda目录</h5>
+<p><img src="../../images/cuda/图片11.png" alt="图片11.png"></p>
+<pre><code>
+直接回车，选择默认安装路径
+</code></pre>
+<h5>10，是否创建软连接</h5>
+<p><img src="../../images/cuda/图片12.png" alt="图片12.png"></p>
+<pre><code>
+选择：y
+</code></pre>
+<h5>11，是否安装示例</h5>
+<p><img src="../../images/cuda/图片13.png" alt="图片13.png"></p>
+<pre><code>
+为了节约空间，这个不安装
+选择：n
+</code></pre>
+<h5>12，然后开始安装</h5>
+<p><img src="../../images/cuda/图片14.png" alt="图片14.png"></p>
+<pre><code>
+表示安装成功
+</code></pre>
+<h5>13，添加配置文件</h5>
+<pre><code>
+vim  /etc/profile
+写入：
+export PATH=/usr/local/cuda-10.0/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+保存：
+source /etc/profile
+</code></pre>
+<h5>14，卸载驱动及cuda</h5>
+<p><img src="../../images/cuda/图片15.png" alt="图片15.png"></p>
+<p>⚠️ <strong>注意</strong></p>
+<p><code>1,千万不要重复安装显卡驱动，会导致系统损坏</code></p>
+<p><code>2.升级cuda的时候，一定要将旧版本的cuda卸载干净，否则会出现意想不到的错误</code></p>
+<h5>15，查看命令</h5>
+<pre><code>
+1，检查显卡类型
+yum install pciutils（如果没有这个命令，则下载）
+lspci | grep VGA
+</code></pre>
+<p><img src="../../images/cuda/图片17.png" alt="图片17.png"></p>
+<pre><code>
+2，检查安装是否成功
+nvidia-smi
+</code></pre>
+<p><img src="../../images/cuda/图片16.png" alt="图片16.png"></p>
+<h3>错误处理</h3>
+<h5>1， /usr/bin/perl: bad interpreter: No such file or directory</h5>
+<pre><code>
+yum install gcc
+yum install perl
+</code></pre>
+<h5>2，kernel源安装</h5>
+<pre><code>
+检查系统版本
+uname -a
+yum install kernel-devel-$(uname -r) kernel-headers-$(uname -r)
+先查看源是否相同，如果没有则需要下载
+</code></pre>
+<h5>3，禁用nouveau（对某些版本需要）</h5>
+<h6>1，修改文件</h6>
+<pre><code>
+1，修改文件
+cd /etc/modprobe.d
+vim nvidia-installer-disable-nouveau.conf（如果没有这个文件，则手动生成）
+
+ 内容：
+ # generated by nvidia-installer
+ blacklist nouveau
+ options nouveau modeset=0
+
+</code></pre>
+<h6>2，备份 initramfs</h6>
+<pre><code>
+    mv /boot/initramfs-$(uname -r).img /boot/initramfs-$(uname -r).img.bak
+</code></pre>
+<h6>3，重建 initramfs</h6>
+<pre><code>
+dracut -v /boot/initramfs-$(uname -r).img $(uname -r)
+</code></pre>
+<h6>4，重启机器</h6>
+<pre><code>
+reboot
+</code></pre>
+<h6>5，检查nouveau driver确保没有被加载</h6>
+<pre><code>
+lsmod | grep nouveau
+没有加载则为空，有加载则如图，说明设置没有生效，需要重新设置
+</code></pre>
+<p><img src="../../images/cuda/nouveau.png" alt="nouveau.png"></p>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

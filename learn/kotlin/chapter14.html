@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第14章：依赖注入实战 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="14" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第14章：依赖注入实战</h1>
+  <p class="chapter-subtitle">使用 Hilt 框架管理依赖关系，构建松耦合、易测试的 Android 应用架构</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：架构如棋局，走一步看三步</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「善战者，求之于势，不责于人。软件架构亦是如此——好的依赖注入如同排兵布阵，让每个模块各司其职、互不牵制。当你需要替换一员将领时，整个阵法依然稳如磐石。今日我们便来学习如何用 Hilt 构建一套攻守兼备的架构体系。」</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 14.1 什么是依赖注入 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-1">14.1 什么是依赖注入</h2>
+
+  <p>行军打仗，主帅需要粮草官筹备军粮、斥候营打探敌情、工匠营修筑器械。在软件世界中也是如此：一个类往往需要借助其他类才能完成使命。譬如 <code>UserViewModel</code> 需要 <code>UserRepository</code> 提供数据，而 <code>UserRepository</code> 又需要 <code>ApiService</code> 发起网络请求。这些被依赖的对象，便是你麾下的各路将领。</p>
+
+  <h3>紧耦合的问题</h3>
+  <p>最鲁莽的做法，便是让每位将领自行招兵买马、各自为政——在类的内部直接创建依赖对象：</p>
+
+  <pre><code><span class="cmt">// 反面示例：紧耦合</span>
+<span class="kw">class</span> <span class="type">UserRepository</span> {
+    <span class="cmt">// 直接在内部创建依赖 —— 紧耦合！</span>
+    <span class="kw">private val</span> apiService <span class="op">=</span> <span class="type">ApiService</span>()
+    <span class="kw">private val</span> database <span class="op">=</span> <span class="type">AppDatabase</span>.<span class="fn">create</span>()
+
+    <span class="kw">suspend fun</span> <span class="fn">getUser</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> {
+        <span class="kw">return</span> apiService.<span class="fn">fetchUser</span>(id)
+    }
+}
+
+<span class="kw">class</span> <span class="type">UserViewModel</span> {
+    <span class="cmt">// 又一次直接创建依赖</span>
+    <span class="kw">private val</span> repository <span class="op">=</span> <span class="type">UserRepository</span>()
+}</code></pre>
+
+  <p>此等做法，如同让前锋将领自己决定何时出击、粮草官自行决定给谁送粮——全军必乱。具体来说，有三大致命隐患：</p>
+  <ul>
+    <li><strong>无法替换实现</strong> —— 如同将帅不可调换。想在演练（测试）中使用替身？必须修改 <code>UserRepository</code> 的源码，牵一发而动全身。</li>
+    <li><strong>难以复用</strong> —— <code>UserRepository</code> 与同一个 <code>ApiService</code> 实现绑死，如同一员武将只会操练一种兵器，无法适应变局。</li>
+    <li><strong>生命周期失控</strong> —— 每次创建 <code>UserViewModel</code> 都连带生出一整棵依赖树，如同每到一处都重建营寨，既浪费资源又无法共享军资。</li>
+  </ul>
+
+  <h3>构造函数注入</h3>
+  <p><strong>依赖注入（Dependency Injection, DI）</strong>的精妙之处，与兵法中"令行禁止、统一调度"的思想异曲同工：不要让各部自行筹备物资，而是由中军帐统一调配。落到代码上，最经典的手法便是通过构造函数传入依赖：</p>
+
+  <pre><code><span class="cmt">// 正面示例：构造函数注入</span>
+<span class="kw">class</span> <span class="type">UserRepository</span>(
+    <span class="kw">private val</span> <span class="param">apiService</span>: <span class="type">ApiService</span>,
+    <span class="kw">private val</span> <span class="param">userDao</span>: <span class="type">UserDao</span>
+) {
+    <span class="kw">suspend fun</span> <span class="fn">getUser</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> {
+        <span class="kw">val</span> cached <span class="op">=</span> userDao.<span class="fn">findById</span>(id)
+        <span class="kw">if</span> (cached <span class="op">!=</span> <span class="kw">null</span>) <span class="kw">return</span> cached
+
+        <span class="kw">val</span> remote <span class="op">=</span> apiService.<span class="fn">fetchUser</span>(id)
+        userDao.<span class="fn">insert</span>(remote)
+        <span class="kw">return</span> remote
+    }
+}
+
+<span class="kw">class</span> <span class="type">UserViewModel</span>(
+    <span class="kw">private val</span> <span class="param">repository</span>: <span class="type">UserRepository</span>
+) {
+    <span class="kw">fun</span> <span class="fn">loadUser</span>(<span class="param">id</span>: <span class="type">Int</span>) { <span class="cmt">/* ... */</span> }
+}</code></pre>
+
+  <p>如此一来，<code>UserRepository</code> 不再关心 <code>ApiService</code> 是真正的网络客户端还是演习用的替身——它只需要一位能听令行事的将领即可。这正是依赖注入带来的战略优势：</p>
+  <ul>
+    <li><strong>可测试性</strong> —— 如同沙盘推演时可用木偶代替真兵，测试时传入模拟对象即可。</li>
+    <li><strong>灵活性</strong> —— 战场形势瞬息万变，能轻松更换先锋大将（切换不同实现），方能立于不败之地。</li>
+    <li><strong>解耦</strong> —— 各部各司其职，互不越权，恰如治大国者"垂拱而治"。</li>
+  </ul>
+
+  <div class="tip">
+    <div class="tip-title">DI 一句话总结</div>
+    <p>依赖注入就是"别自己 new，让别人给你"。谁来调配？可以是手动指派（手动组装），也可以是中军帐自动分派（框架自动完成）。正所谓：善将者，不自操戈，而令三军协力。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 14.2 手动依赖注入的痛点 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-2">14.2 手动依赖注入的痛点</h2>
+
+  <p>构造函数注入的道理浅显易懂，那为何还需要框架来助阵？诸位且看——若由主帅一人亲自分配每一粒军粮、每一支箭矢，全军上下几万人的调度会变成何等景象：</p>
+
+  <pre><code><span class="cmt">// 在 Application 或某个入口处手动组装所有依赖</span>
+<span class="kw">class</span> <span class="type">AppContainer</span>(<span class="kw">private val</span> <span class="param">context</span>: <span class="type">Context</span>) {
+
+    <span class="cmt">// 1. 网络层</span>
+    <span class="kw">private val</span> okHttpClient <span class="op">=</span> <span class="type">OkHttpClient</span>.<span class="type">Builder</span>()
+        .<span class="fn">addInterceptor</span>(<span class="type">AuthInterceptor</span>())
+        .<span class="fn">build</span>()
+
+    <span class="kw">private val</span> retrofit <span class="op">=</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+        .<span class="fn">baseUrl</span>(<span class="str">"https://api.example.com/"</span>)
+        .<span class="fn">client</span>(okHttpClient)
+        .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+        .<span class="fn">build</span>()
+
+    <span class="kw">val</span> apiService: <span class="type">ApiService</span> <span class="op">=</span> retrofit.<span class="fn">create</span>(<span class="type">ApiService</span>::<span class="kw">class</span>.java)
+
+    <span class="cmt">// 2. 数据库层</span>
+    <span class="kw">private val</span> database <span class="op">=</span> <span class="type">Room</span>.<span class="fn">databaseBuilder</span>(
+        context, <span class="type">AppDatabase</span>::<span class="kw">class</span>.java, <span class="str">"app.db"</span>
+    ).<span class="fn">build</span>()
+
+    <span class="kw">val</span> userDao: <span class="type">UserDao</span> <span class="op">=</span> database.<span class="fn">userDao</span>()
+    <span class="kw">val</span> articleDao: <span class="type">ArticleDao</span> <span class="op">=</span> database.<span class="fn">articleDao</span>()
+
+    <span class="cmt">// 3. Repository 层</span>
+    <span class="kw">val</span> userRepository <span class="op">=</span> <span class="type">UserRepository</span>(apiService, userDao)
+    <span class="kw">val</span> articleRepository <span class="op">=</span> <span class="type">ArticleRepository</span>(apiService, articleDao)
+
+    <span class="cmt">// 4. 更多的 Repository... 越来越多...</span>
+    <span class="cmt">// val commentRepository = CommentRepository(apiService, commentDao)</span>
+    <span class="cmt">// val settingsRepository = SettingsRepository(dataStore)</span>
+}</code></pre>
+
+  <p>随着疆域扩张（应用规模增长），这种事必躬亲的手动调度暴露出愈来愈严重的弊端——犹如丞相事无巨细皆亲自过问，纵有经天纬地之才，也终有力不从心之日：</p>
+
+  <table>
+    <thead>
+      <tr><th>痛点</th><th>表现</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>样板代码爆炸</td><td>每增加一个类，都要在 Container 中手动添加创建代码</td></tr>
+      <tr><td>生命周期管理困难</td><td>哪些对象该是单例？哪些该跟 Activity 生命周期绑定？全靠人工维护</td></tr>
+      <tr><td>依赖图不透明</td><td>新成员加入项目，很难快速理解依赖关系</td></tr>
+      <tr><td>编译时安全性弱</td><td>忘记初始化某个依赖？只有运行时才会崩溃</td></tr>
+    </tbody>
+  </table>
+
+  <p>古语云："善用人者为之下。"聪明的统帅不会亲手调度每一名士兵，而是建立一套完善的军令体系，让调度自动运转。这便是 Hilt 登场的时机——它用注解自动完成这些繁琐的"军需调配"，并在<strong>编译期</strong>检查依赖图是否完整，如同出征前清点军需，确保无一遗漏。</p>
+
+  <!-- ============================================================ -->
+  <!-- 14.3 Hilt 入门 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-3">14.3 Hilt 入门</h2>
+
+  <p>Hilt 是 Google 官方推荐的 Android 依赖注入框架，犹如朝廷颁布的统一军令制度。它基于 Dagger 构建，但大幅简化了部署配置，专为 Android 开发量身打造。若将 Dagger 比作一部精密却繁复的兵书，那么 Hilt 便是提炼其精髓而成的实战手册——威力不减，上手更快。</p>
+
+  <h3>Gradle 配置</h3>
+  <p>万事开头，粮草先行。首先在项目级 <code>build.gradle.kts</code> 中添加 Hilt 插件，如同在全军上下颁布军令：</p>
+
+  <pre><code><span class="cmt">// 项目级 build.gradle.kts</span>
+plugins {
+    id(<span class="str">"com.google.dagger.hilt.android"</span>) version <span class="str">"2.51.1"</span> apply <span class="kw">false</span>
+}</code></pre>
+
+  <p>然后在模块级 <code>build.gradle.kts</code> 中应用插件并添加依赖——这相当于在各营落实军令细则：</p>
+
+  <pre><code><span class="cmt">// 模块级 app/build.gradle.kts</span>
+plugins {
+    id(<span class="str">"com.google.dagger.hilt.android"</span>)
+    id(<span class="str">"com.google.devtools.ksp"</span>)
+}
+
+dependencies {
+    implementation(<span class="str">"com.google.dagger:hilt-android:2.51.1"</span>)
+    ksp(<span class="str">"com.google.dagger:hilt-android-compiler:2.51.1"</span>)
+
+    <span class="cmt">// Hilt 与 Compose 集成</span>
+    implementation(<span class="str">"androidx.hilt:hilt-navigation-compose:1.2.0"</span>)
+}</code></pre>
+
+  <h3>标记 Application 类</h3>
+  <p>行军布阵，必先立中军帐。用 <code>@HiltAndroidApp</code> 标记你的 Application 类，Hilt 便会以此为帅帐，生成管理全局依赖的基础组件：</p>
+
+  <pre><code><span class="ann">@HiltAndroidApp</span>
+<span class="kw">class</span> <span class="type">MyApp</span> : <span class="type">Application</span>()</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">别忘了 AndroidManifest.xml</div>
+    <p>需要在 <code>AndroidManifest.xml</code> 的 <code>&lt;application&gt;</code> 标签中声明 <code>android:name=".MyApp"</code>，否则 Hilt 无法正常初始化。此乃出征前的"点将令"——少了这一步，帅帐虽立却无人听令。</p>
+  </div>
+
+  <h3>标记 Activity</h3>
+  <p>中军帐已立，接下来要指定哪些营寨需要接受统一调度。在需要注入依赖的 Activity 上添加 <code>@AndroidEntryPoint</code>，如同为各营挂上令旗：</p>
+
+  <pre><code><span class="ann">@AndroidEntryPoint</span>
+<span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle</span>?) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        <span class="fn">setContent</span> {
+            <span class="type">MyAppTheme</span> {
+                <span class="type">AppNavigation</span>()
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>使用 @Inject 构造函数</h3>
+  <p>对于你亲手编写的类，只需在构造函数上添加 <code>@Inject</code> 注解，便等同于向中军帐递交了一份"本部所需物资清单"——Hilt 自然知道该如何为你筹备：</p>
+
+  <pre><code><span class="cmt">// Hilt 知道如何创建这个类 —— 因为构造函数标记了 @Inject</span>
+<span class="kw">class</span> <span class="type">UserRepository</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">apiService</span>: <span class="type">ApiService</span>,
+    <span class="kw">private val</span> <span class="param">userDao</span>: <span class="type">UserDao</span>
+) {
+    <span class="kw">suspend fun</span> <span class="fn">getUsers</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; {
+        <span class="kw">return</span> apiService.<span class="fn">fetchUsers</span>()
+    }
+
+    <span class="kw">suspend fun</span> <span class="fn">getUserById</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> {
+        <span class="kw">return</span> userDao.<span class="fn">findById</span>(id) <span class="op">?:</span> apiService.<span class="fn">fetchUser</span>(id)
+    }
+}</code></pre>
+
+  <p>只要 <code>ApiService</code> 和 <code>UserDao</code> 也能被 Hilt 创建（通过 <code>@Inject</code> 或 Module 提供），整条依赖链便自动串联——犹如军令自帅帐而下，层层传递，直达前锋，无需主帅亲自跑腿。</p>
+
+  <div class="tip">
+    <div class="tip-title">编译期安全</div>
+    <p>如果依赖图有缺失（比如 <code>ApiService</code> 没有告诉 Hilt 怎么创建），编译时就会报错，不会等到运行时才崩溃。此乃"未战而庙算胜者"——在出征前便将隐患一一排除，远胜于兵临城下才发现粮草不继。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 14.4 Module 与 Provides -->
+  <!-- ============================================================ -->
+  <h2 id="s14-4">14.4 Module 与 Provides</h2>
+
+  <p><code>@Inject</code> 构造函数只适用于你能修改源码的类——也就是你自己麾下的将士。然而战场上还需要借助盟军之力（第三方库），或者以接口定义的抽象角色来排兵布阵。对于以下情况，需要通过 Module 来向中军帐禀报"此部将如何调遣"：</p>
+  <ul>
+    <li>接口 —— 接口如同一道军令，只规定职责，不指定具体人选，自然没有构造函数可以标注。</li>
+    <li>第三方库的类 —— 你无法修改 Retrofit、Room 等盟军的内部编制，需另辟蹊径。</li>
+    <li>需要通过 Builder 模式创建的对象 —— 如同锻造兵器需要多道工序，不能简单地一声令下了事。</li>
+  </ul>
+
+  <h3>@Provides 提供实例</h3>
+  <p>用 <code>@Module</code> 标记一个类（或 object），用 <code>@InstallIn</code> 指定它隶属于哪个军团（组件），用 <code>@Provides</code> 标记具体的"锻造工序"：</p>
+
+  <pre><code><span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">NetworkModule</span> {
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideOkHttpClient</span>(): <span class="type">OkHttpClient</span> {
+        <span class="kw">return</span> <span class="type">OkHttpClient</span>.<span class="type">Builder</span>()
+            .<span class="fn">connectTimeout</span>(<span class="num">30</span>, <span class="type">TimeUnit</span>.SECONDS)
+            .<span class="fn">readTimeout</span>(<span class="num">30</span>, <span class="type">TimeUnit</span>.SECONDS)
+            .<span class="fn">addInterceptor</span>(<span class="type">HttpLoggingInterceptor</span>().<span class="fn">apply</span> {
+                level <span class="op">=</span> <span class="type">HttpLoggingInterceptor</span>.<span class="type">Level</span>.BODY
+            })
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideRetrofit</span>(<span class="param">client</span>: <span class="type">OkHttpClient</span>): <span class="type">Retrofit</span> {
+        <span class="kw">return</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+            .<span class="fn">baseUrl</span>(<span class="str">"https://api.example.com/"</span>)
+            .<span class="fn">client</span>(client)
+            .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideApiService</span>(<span class="param">retrofit</span>: <span class="type">Retrofit</span>): <span class="type">ApiService</span> {
+        <span class="kw">return</span> retrofit.<span class="fn">create</span>(<span class="type">ApiService</span>::<span class="kw">class</span>.java)
+    }
+}</code></pre>
+
+  <p>注意 <code>provideRetrofit</code> 的参数 <code>client: OkHttpClient</code> —— Hilt 会自动从 <code>provideOkHttpClient</code> 的返回值中取用，整条军需供应链自动衔接。这便是"运筹帷幄之中"的精妙：你只需声明各部所需，调度之事自有帅帐安排。</p>
+
+  <h3>@Binds 绑定接口</h3>
+  <p>兵法云："将在谋而不在勇。"当你以接口定义一个战略角色、以实现类担任具体人选时，用 <code>@Binds</code> 比 <code>@Provides</code> 更为精简——如同一纸任命书，简洁明了：</p>
+
+  <pre><code><span class="cmt">// 定义接口</span>
+<span class="kw">interface</span> <span class="type">UserRepository</span> {
+    <span class="kw">suspend fun</span> <span class="fn">getUsers</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt;
+    <span class="kw">suspend fun</span> <span class="fn">getUserById</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span>
+}
+
+<span class="cmt">// 实现类 —— 注意 @Inject constructor</span>
+<span class="kw">class</span> <span class="type">UserRepositoryImpl</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">apiService</span>: <span class="type">ApiService</span>,
+    <span class="kw">private val</span> <span class="param">userDao</span>: <span class="type">UserDao</span>
+) : <span class="type">UserRepository</span> {
+
+    <span class="kw">override suspend fun</span> <span class="fn">getUsers</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; {
+        <span class="kw">return</span> apiService.<span class="fn">fetchUsers</span>()
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">getUserById</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> {
+        <span class="kw">return</span> userDao.<span class="fn">findById</span>(id) <span class="op">?:</span> apiService.<span class="fn">fetchUser</span>(id)
+    }
+}
+
+<span class="cmt">// 用 @Binds 告诉 Hilt：当需要 UserRepository 时，给 UserRepositoryImpl</span>
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">RepositoryModule</span> {
+
+    <span class="ann">@Binds</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindUserRepository</span>(
+        <span class="param">impl</span>: <span class="type">UserRepositoryImpl</span>
+    ): <span class="type">UserRepository</span>
+}</code></pre>
+
+  <h3>组件层级</h3>
+  <p><code>@InstallIn</code> 决定了模块安装在哪个组件中。组件如同军中的层级体系——从天子到将军到校尉，每一层级的令旗管辖范围不同，依赖的可见范围与生命周期也随之而定：</p>
+
+  <table>
+    <thead>
+      <tr><th>组件</th><th>作用域注解</th><th>生命周期</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>SingletonComponent</code></td><td><code>@Singleton</code></td><td>整个应用</td></tr>
+      <tr><td><code>ViewModelComponent</code></td><td><code>@ViewModelScoped</code></td><td>ViewModel 存活期间</td></tr>
+      <tr><td><code>ActivityComponent</code></td><td><code>@ActivityScoped</code></td><td>Activity 存活期间</td></tr>
+      <tr><td><code>FragmentComponent</code></td><td><code>@FragmentScoped</code></td><td>Fragment 存活期间</td></tr>
+      <tr><td><code>ServiceComponent</code></td><td><code>@ServiceScoped</code></td><td>Service 存活期间</td></tr>
+      <tr><td><code>ActivityRetainedComponent</code></td><td><code>@ActivityRetainedScoped</code></td><td>跨配置变更的 Activity</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">@Binds vs @Provides 选择指南</div>
+    <p>如果只是将一位将领（接口）的职位指定给某人（实现类），用 <code>@Binds</code>（一纸调令，简洁高效）。如果需要亲自督造兵器（执行构建逻辑，如调用 Builder、配置参数），则用 <code>@Provides</code>（详细的锻造工序）。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 14.5 作用域与生命周期 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-5">14.5 作用域与生命周期</h2>
+
+  <p>用兵之道，在于知进退、明存亡。作用域（Scope）之于 Hilt，便如同军令中对各部驻防期限的规定——它决定了一个依赖的实例会被复用多久。选错作用域，轻则浪费军资（内存），重则阵法崩溃（状态混乱）。</p>
+
+  <h3>无作用域 = 每次新建</h3>
+  <p>如果不添加任何作用域注解，Hilt 每次注入时都会创建一个全新的实例——如同每次出征都临时招募新兵，打完仗就地解散：</p>
+
+  <pre><code><span class="cmt">// 没有作用域注解 —— 每次注入都是新实例</span>
+<span class="kw">class</span> <span class="type">AnalyticsTracker</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>() {
+    <span class="kw">val</span> id <span class="op">=</span> <span class="type">UUID</span>.<span class="fn">randomUUID</span>()
+
+    <span class="kw">fun</span> <span class="fn">trackEvent</span>(<span class="param">name</span>: <span class="type">String</span>) {
+        <span class="fn">println</span>(<span class="str">"Tracker[$id] 记录事件: $name"</span>)
+    }
+}
+
+<span class="cmt">// 如果两个不同的类都注入 AnalyticsTracker，</span>
+<span class="cmt">// 它们拿到的是不同的实例（不同的 id）</span></code></pre>
+
+  <h3>@Singleton — 全局唯一</h3>
+  <p>标记 <code>@Singleton</code> 如同授予铁券丹书——此将从应用启动到终结，自始至终只此一人，全军共用：</p>
+
+  <pre><code><span class="ann">@Singleton</span>
+<span class="kw">class</span> <span class="type">AnalyticsTracker</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>() {
+    <span class="kw">val</span> id <span class="op">=</span> <span class="type">UUID</span>.<span class="fn">randomUUID</span>()
+
+    <span class="kw">fun</span> <span class="fn">trackEvent</span>(<span class="param">name</span>: <span class="type">String</span>) {
+        <span class="fn">println</span>(<span class="str">"Tracker[$id] 记录事件: $name"</span>)
+    }
+}
+
+<span class="cmt">// 现在所有注入点拿到的都是同一个实例（相同的 id）</span></code></pre>
+
+  <h3>@ViewModelScoped — 绑定 ViewModel</h3>
+  <p>当多个依赖需要在同一个 ViewModel 中共享状态，但不同 ViewModel 之间需要独立编制时——如同一支偏师内部共享情报，但各偏师之间互不干涉：</p>
+
+  <pre><code><span class="ann">@ViewModelScoped</span>
+<span class="kw">class</span> <span class="type">SavedStateHandler</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>() {
+    <span class="kw">private val</span> stateMap <span class="op">=</span> <span class="fn">mutableMapOf</span>&lt;<span class="type">String</span>, <span class="type">Any</span>?&gt;()
+
+    <span class="kw">fun</span> <span class="fn">save</span>(<span class="param">key</span>: <span class="type">String</span>, <span class="param">value</span>: <span class="type">Any</span>?) {
+        stateMap[key] <span class="op">=</span> value
+    }
+
+    <span class="kw">fun</span> <span class="fn">get</span>(<span class="param">key</span>: <span class="type">String</span>): <span class="type">Any</span>? <span class="op">=</span> stateMap[key]
+}</code></pre>
+
+  <h3>作用域对照表</h3>
+
+  <table>
+    <thead>
+      <tr><th>作用域注解</th><th>对应组件</th><th>实例生命周期</th><th>典型用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>无注解</td><td>—</td><td>每次注入创建新实例</td><td>轻量级无状态工具类</td></tr>
+      <tr><td><code>@Singleton</code></td><td><code>SingletonComponent</code></td><td>与 Application 同生命周期</td><td>网络客户端、数据库、Repository</td></tr>
+      <tr><td><code>@ViewModelScoped</code></td><td><code>ViewModelComponent</code></td><td>与 ViewModel 同生命周期</td><td>需在 ViewModel 内共享的状态</td></tr>
+      <tr><td><code>@ActivityScoped</code></td><td><code>ActivityComponent</code></td><td>与 Activity 同生命周期</td><td>Activity 级别的 UI 状态管理</td></tr>
+      <tr><td><code>@ActivityRetainedScoped</code></td><td><code>ActivityRetainedComponent</code></td><td>跨配置变更（如旋转屏幕）</td><td>需要在配置变更后保留的数据</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">常见错误：作用域选择不当</div>
+    <p>将所有依赖都封为 <code>@Singleton</code>，是新手常犯的兵家大忌。这如同给每位士卒都授予世袭爵位，永远占据朝堂编制——结果便是内存中驻满了本不需要长存的对象，军资（内存）白白消耗。唯有真正需要全局共享的重器（如网络客户端、数据库实例）才应授此殊荣。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 14.6 ViewModel 注入 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-6">14.6 ViewModel 注入</h2>
+
+  <p>在 Android 的战略架构中，ViewModel 如同前敌指挥所——上承中军帐（数据层）的战略情报，下达前线（UI 层）的作战指令。它是连接后方与前线的核心枢纽，Hilt 对此自然有专门的调度机制。</p>
+
+  <h3>@HiltViewModel 基本用法</h3>
+
+  <pre><code><span class="ann">@HiltViewModel</span>
+<span class="kw">class</span> <span class="type">UserListViewModel</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">userRepository</span>: <span class="type">UserRepository</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="kw">private val</span> _uiState <span class="op">=</span> <span class="type">MutableStateFlow</span>&lt;<span class="type">UserListUiState</span>&gt;(
+        <span class="type">UserListUiState</span>.<span class="type">Loading</span>
+    )
+    <span class="kw">val</span> uiState: <span class="type">StateFlow</span>&lt;<span class="type">UserListUiState</span>&gt; <span class="op">=</span> _uiState.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">init</span> {
+        <span class="fn">loadUsers</span>()
+    }
+
+    <span class="kw">private fun</span> <span class="fn">loadUsers</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="kw">try</span> {
+                <span class="kw">val</span> users <span class="op">=</span> userRepository.<span class="fn">getUsers</span>()
+                _uiState.value <span class="op">=</span> <span class="type">UserListUiState</span>.<span class="fn">Success</span>(users)
+            } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+                _uiState.value <span class="op">=</span> <span class="type">UserListUiState</span>.<span class="fn">Error</span>(e.message <span class="op">?:</span> <span class="str">"未知错误"</span>)
+            }
+        }
+    }
+
+    <span class="kw">fun</span> <span class="fn">refresh</span>() {
+        _uiState.value <span class="op">=</span> <span class="type">UserListUiState</span>.<span class="type">Loading</span>
+        <span class="fn">loadUsers</span>()
+    }
+}
+
+<span class="kw">sealed interface</span> <span class="type">UserListUiState</span> {
+    <span class="kw">data object</span> <span class="type">Loading</span> : <span class="type">UserListUiState</span>
+    <span class="kw">data class</span> <span class="type">Success</span>(<span class="kw">val</span> <span class="param">users</span>: <span class="type">List</span>&lt;<span class="type">User</span>&gt;) : <span class="type">UserListUiState</span>
+    <span class="kw">data class</span> <span class="type">Error</span>(<span class="kw">val</span> <span class="param">message</span>: <span class="type">String</span>) : <span class="type">UserListUiState</span>
+}</code></pre>
+
+  <h3>在 Compose 中获取 ViewModel</h3>
+  <p>使用 <code>hiltViewModel()</code> 在 Composable 函数中获取 Hilt 管理的 ViewModel——如同前线将领凭令牌即可调用后方资源，无需知晓调度的繁复细节：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">UserListScreen</span>(
+    <span class="param">viewModel</span>: <span class="type">UserListViewModel</span> <span class="op">=</span> <span class="fn">hiltViewModel</span>()
+) {
+    <span class="kw">val</span> uiState <span class="kw">by</span> viewModel.uiState.<span class="fn">collectAsStateWithLifecycle</span>()
+
+    <span class="kw">when</span> (<span class="kw">val</span> state <span class="op">=</span> uiState) {
+        <span class="kw">is</span> <span class="type">UserListUiState</span>.<span class="type">Loading</span> <span class="op">-&gt;</span> {
+            <span class="type">Box</span>(
+                modifier <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+                contentAlignment <span class="op">=</span> <span class="type">Alignment</span>.<span class="type">Center</span>
+            ) {
+                <span class="type">CircularProgressIndicator</span>()
+            }
+        }
+        <span class="kw">is</span> <span class="type">UserListUiState</span>.<span class="type">Success</span> <span class="op">-&gt;</span> {
+            <span class="type">LazyColumn</span> {
+                <span class="fn">items</span>(state.users) { user <span class="op">-&gt;</span>
+                    <span class="type">UserCard</span>(<span class="param">user</span> <span class="op">=</span> user)
+                }
+            }
+        }
+        <span class="kw">is</span> <span class="type">UserListUiState</span>.<span class="type">Error</span> <span class="op">-&gt;</span> {
+            <span class="type">ErrorContent</span>(
+                <span class="param">message</span> <span class="op">=</span> state.message,
+                <span class="param">onRetry</span> <span class="op">=</span> viewModel::refresh
+            )
+        }
+    }
+}</code></pre>
+
+  <h3>完整的三层架构示例</h3>
+  <p>下面展示从 DataSource 到 Repository 到 ViewModel 的完整依赖注入链——犹如从后方粮仓到中转站到前线营帐，军需补给一气呵成：</p>
+
+  <pre><code><span class="cmt">// 1. 数据源</span>
+<span class="kw">class</span> <span class="type">RemoteUserDataSource</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">apiService</span>: <span class="type">ApiService</span>
+) {
+    <span class="kw">suspend fun</span> <span class="fn">fetchUsers</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; <span class="op">=</span> apiService.<span class="fn">getUsers</span>()
+    <span class="kw">suspend fun</span> <span class="fn">fetchUser</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> <span class="op">=</span> apiService.<span class="fn">getUser</span>(id)
+}
+
+<span class="kw">class</span> <span class="type">LocalUserDataSource</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">userDao</span>: <span class="type">UserDao</span>
+) {
+    <span class="kw">suspend fun</span> <span class="fn">getAll</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; <span class="op">=</span> userDao.<span class="fn">getAll</span>()
+    <span class="kw">suspend fun</span> <span class="fn">save</span>(<span class="param">users</span>: <span class="type">List</span>&lt;<span class="type">User</span>&gt;) <span class="op">=</span> userDao.<span class="fn">insertAll</span>(users)
+}
+
+<span class="cmt">// 2. Repository —— 协调远程与本地数据源</span>
+<span class="kw">class</span> <span class="type">UserRepositoryImpl</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">remote</span>: <span class="type">RemoteUserDataSource</span>,
+    <span class="kw">private val</span> <span class="param">local</span>: <span class="type">LocalUserDataSource</span>
+) : <span class="type">UserRepository</span> {
+
+    <span class="kw">override suspend fun</span> <span class="fn">getUsers</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; {
+        <span class="kw">return try</span> {
+            <span class="kw">val</span> users <span class="op">=</span> remote.<span class="fn">fetchUsers</span>()
+            local.<span class="fn">save</span>(users) <span class="cmt">// 缓存到本地</span>
+            users
+        } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+            local.<span class="fn">getAll</span>() <span class="cmt">// 网络失败时使用缓存</span>
+        }
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">getUserById</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span> {
+        <span class="kw">return</span> remote.<span class="fn">fetchUser</span>(id)
+    }
+}
+
+<span class="cmt">// 3. ViewModel</span>
+<span class="ann">@HiltViewModel</span>
+<span class="kw">class</span> <span class="type">UserListViewModel</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">repository</span>: <span class="type">UserRepository</span>
+) : <span class="type">ViewModel</span>() {
+    <span class="cmt">// ... 同上</span>
+}</code></pre>
+
+  <p>Hilt 会自动将 <code>ApiService</code>、<code>UserDao</code>、<code>RemoteUserDataSource</code>、<code>LocalUserDataSource</code>、<code>UserRepositoryImpl</code> 一层层串联起来。正所谓"善治者不亲细务"——你只需声明各部的依赖需求，统筹调配之事自有帅帐（Hilt）运筹。</p>
+
+  <!-- ============================================================ -->
+  <!-- 14.7 实战：重构新闻应用 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-7">14.7 实战：重构新闻应用</h2>
+
+  <p>纸上谈兵终觉浅，绝知此事要躬行。还记得第 9 章中构建的新闻应用吗？彼时我们在 Activity 中手动创建一切依赖，如同行军打仗却没有参谋部，主帅一人包揽所有调度。今日便让我们以 Hilt 为帅帐，将这座旧营寨改造为一座攻守兼备的新城池。</p>
+
+  <h3>重构前：手动创建依赖</h3>
+  <pre><code><span class="cmt">// 重构前 —— 在 Activity 中手动组装一切</span>
+<span class="kw">class</span> <span class="type">NewsActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle</span>?) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+
+        <span class="cmt">// 手动创建网络层</span>
+        <span class="kw">val</span> client <span class="op">=</span> <span class="type">OkHttpClient</span>()
+        <span class="kw">val</span> retrofit <span class="op">=</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+            .<span class="fn">baseUrl</span>(<span class="str">"https://newsapi.example.com/"</span>)
+            .<span class="fn">client</span>(client)
+            .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+            .<span class="fn">build</span>()
+        <span class="kw">val</span> newsApi <span class="op">=</span> retrofit.<span class="fn">create</span>(<span class="type">NewsApi</span>::<span class="kw">class</span>.java)
+
+        <span class="cmt">// 手动创建数据库层</span>
+        <span class="kw">val</span> db <span class="op">=</span> <span class="type">Room</span>.<span class="fn">databaseBuilder</span>(
+            <span class="kw">this</span>, <span class="type">NewsDatabase</span>::<span class="kw">class</span>.java, <span class="str">"news.db"</span>
+        ).<span class="fn">build</span>()
+        <span class="kw">val</span> newsDao <span class="op">=</span> db.<span class="fn">newsDao</span>()
+
+        <span class="cmt">// 手动创建 Repository</span>
+        <span class="kw">val</span> repository <span class="op">=</span> <span class="type">NewsRepository</span>(newsApi, newsDao)
+
+        <span class="cmt">// 手动创建 ViewModel（还需要 ViewModelFactory...）</span>
+        <span class="cmt">// 这里省略了工厂类的样板代码</span>
+    }
+}</code></pre>
+
+  <p>审视此代码，便能看出旧阵的弊病：所有军需调度集中于一人（Activity），既不利于分兵把守，也无法灵活换将。现在，请随我按六步之法，完成这场架构的改天换地。</p>
+
+  <h3>步骤一：创建 Application 类</h3>
+  <p>立中军帐——这是整个阵法的根基：</p>
+  <pre><code><span class="ann">@HiltAndroidApp</span>
+<span class="kw">class</span> <span class="type">NewsApplication</span> : <span class="type">Application</span>()</code></pre>
+
+  <h3>步骤二：创建 NetworkModule</h3>
+  <p>设立"通信营"——统一管理网络层的兵器装备：</p>
+  <pre><code><span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">NetworkModule</span> {
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideOkHttpClient</span>(): <span class="type">OkHttpClient</span> {
+        <span class="kw">return</span> <span class="type">OkHttpClient</span>.<span class="type">Builder</span>()
+            .<span class="fn">connectTimeout</span>(<span class="num">15</span>, <span class="type">TimeUnit</span>.SECONDS)
+            .<span class="fn">readTimeout</span>(<span class="num">15</span>, <span class="type">TimeUnit</span>.SECONDS)
+            .<span class="fn">addInterceptor</span>(<span class="type">HttpLoggingInterceptor</span>().<span class="fn">apply</span> {
+                level <span class="op">=</span> <span class="type">HttpLoggingInterceptor</span>.<span class="type">Level</span>.BODY
+            })
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideRetrofit</span>(<span class="param">client</span>: <span class="type">OkHttpClient</span>): <span class="type">Retrofit</span> {
+        <span class="kw">return</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+            .<span class="fn">baseUrl</span>(<span class="str">"https://newsapi.example.com/"</span>)
+            .<span class="fn">client</span>(client)
+            .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideNewsApi</span>(<span class="param">retrofit</span>: <span class="type">Retrofit</span>): <span class="type">NewsApi</span> {
+        <span class="kw">return</span> retrofit.<span class="fn">create</span>(<span class="type">NewsApi</span>::<span class="kw">class</span>.java)
+    }
+}</code></pre>
+
+  <h3>步骤三：创建 DatabaseModule</h3>
+  <p>设立"辎重营"——管理数据存储的粮草辎重：</p>
+  <pre><code><span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">DatabaseModule</span> {
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideDatabase</span>(
+        <span class="ann">@ApplicationContext</span> <span class="param">context</span>: <span class="type">Context</span>
+    ): <span class="type">NewsDatabase</span> {
+        <span class="kw">return</span> <span class="type">Room</span>.<span class="fn">databaseBuilder</span>(
+            context,
+            <span class="type">NewsDatabase</span>::<span class="kw">class</span>.java,
+            <span class="str">"news.db"</span>
+        ).<span class="fn">fallbackToDestructiveMigration</span>()
+         .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="kw">fun</span> <span class="fn">provideNewsDao</span>(<span class="param">database</span>: <span class="type">NewsDatabase</span>): <span class="type">NewsDao</span> {
+        <span class="kw">return</span> database.<span class="fn">newsDao</span>()
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">@ApplicationContext</div>
+    <p>Hilt 内置了 <code>@ApplicationContext</code> 和 <code>@ActivityContext</code> 两枚令牌，你可以直接在参数中使用它们来获取对应的 Context，无需自行调配。此乃帅帐预备的"通行符节"——省去了各营自行请印的繁琐。</p>
+  </div>
+
+  <h3>步骤四：定义 Repository 接口与实现</h3>
+  <p>明确"参谋部"的职能与人选——接口定义战略方针，实现类负责具体执行：</p>
+  <pre><code><span class="kw">interface</span> <span class="type">NewsRepository</span> {
+    <span class="kw">fun</span> <span class="fn">getNewsStream</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">NewsArticle</span>&gt;&gt;
+    <span class="kw">suspend fun</span> <span class="fn">refreshNews</span>()
+    <span class="kw">suspend fun</span> <span class="fn">getArticleById</span>(<span class="param">id</span>: <span class="type">Long</span>): <span class="type">NewsArticle</span>?
+}
+
+<span class="kw">class</span> <span class="type">NewsRepositoryImpl</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">newsApi</span>: <span class="type">NewsApi</span>,
+    <span class="kw">private val</span> <span class="param">newsDao</span>: <span class="type">NewsDao</span>
+) : <span class="type">NewsRepository</span> {
+
+    <span class="kw">override fun</span> <span class="fn">getNewsStream</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">NewsArticle</span>&gt;&gt; {
+        <span class="kw">return</span> newsDao.<span class="fn">observeAll</span>()
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">refreshNews</span>() {
+        <span class="kw">val</span> articles <span class="op">=</span> newsApi.<span class="fn">getTopHeadlines</span>()
+        newsDao.<span class="fn">clearAndInsert</span>(articles)
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">getArticleById</span>(<span class="param">id</span>: <span class="type">Long</span>): <span class="type">NewsArticle</span>? {
+        <span class="kw">return</span> newsDao.<span class="fn">findById</span>(id)
+    }
+}
+
+<span class="cmt">// 绑定接口到实现</span>
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">RepositoryModule</span> {
+
+    <span class="ann">@Binds</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindNewsRepository</span>(
+        <span class="param">impl</span>: <span class="type">NewsRepositoryImpl</span>
+    ): <span class="type">NewsRepository</span>
+}</code></pre>
+
+  <h3>步骤五：创建 ViewModel</h3>
+  <p>任命"前敌指挥"——ViewModel 统揽战场态势，向前线传达作战方略：</p>
+  <pre><code><span class="ann">@HiltViewModel</span>
+<span class="kw">class</span> <span class="type">NewsListViewModel</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">repository</span>: <span class="type">NewsRepository</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="kw">val</span> newsArticles: <span class="type">StateFlow</span>&lt;<span class="type">NewsUiState</span>&gt; <span class="op">=</span> repository
+        .<span class="fn">getNewsStream</span>()
+        .<span class="fn">map</span> { articles <span class="op">-&gt;</span>
+            <span class="type">NewsUiState</span>.<span class="fn">Success</span>(articles) <span class="kw">as</span> <span class="type">NewsUiState</span>
+        }
+        .<span class="fn">catch</span> { e <span class="op">-&gt;</span>
+            <span class="fn">emit</span>(<span class="type">NewsUiState</span>.<span class="fn">Error</span>(e.message <span class="op">?:</span> <span class="str">"加载失败"</span>))
+        }
+        .<span class="fn">stateIn</span>(
+            scope <span class="op">=</span> viewModelScope,
+            started <span class="op">=</span> <span class="type">SharingStarted</span>.<span class="fn">WhileSubscribed</span>(<span class="num">5000</span>),
+            initialValue <span class="op">=</span> <span class="type">NewsUiState</span>.<span class="type">Loading</span>
+        )
+
+    <span class="kw">private val</span> _isRefreshing <span class="op">=</span> <span class="type">MutableStateFlow</span>(<span class="kw">false</span>)
+    <span class="kw">val</span> isRefreshing: <span class="type">StateFlow</span>&lt;<span class="type">Boolean</span>&gt; <span class="op">=</span> _isRefreshing.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">init</span> {
+        <span class="fn">refresh</span>()
+    }
+
+    <span class="kw">fun</span> <span class="fn">refresh</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            _isRefreshing.value <span class="op">=</span> <span class="kw">true</span>
+            <span class="kw">try</span> {
+                repository.<span class="fn">refreshNews</span>()
+            } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+                <span class="cmt">// 刷新失败时仍显示缓存数据</span>
+            } <span class="kw">finally</span> {
+                _isRefreshing.value <span class="op">=</span> <span class="kw">false</span>
+            }
+        }
+    }
+}
+
+<span class="kw">sealed interface</span> <span class="type">NewsUiState</span> {
+    <span class="kw">data object</span> <span class="type">Loading</span> : <span class="type">NewsUiState</span>
+    <span class="kw">data class</span> <span class="type">Success</span>(<span class="kw">val</span> <span class="param">articles</span>: <span class="type">List</span>&lt;<span class="type">NewsArticle</span>&gt;) : <span class="type">NewsUiState</span>
+    <span class="kw">data class</span> <span class="type">Error</span>(<span class="kw">val</span> <span class="param">message</span>: <span class="type">String</span>) : <span class="type">NewsUiState</span>
+}</code></pre>
+
+  <h3>步骤六：连接 UI</h3>
+  <p>前线将士（UI）凭令牌即可获取指挥官（ViewModel）的作战指令——一切调度浑然天成：</p>
+  <pre><code><span class="ann">@AndroidEntryPoint</span>
+<span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle</span>?) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        <span class="fn">setContent</span> {
+            <span class="type">NewsTheme</span> {
+                <span class="type">NewsListScreen</span>()
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">NewsListScreen</span>(
+    <span class="param">viewModel</span>: <span class="type">NewsListViewModel</span> <span class="op">=</span> <span class="fn">hiltViewModel</span>()
+) {
+    <span class="kw">val</span> uiState <span class="kw">by</span> viewModel.newsArticles.<span class="fn">collectAsStateWithLifecycle</span>()
+    <span class="kw">val</span> isRefreshing <span class="kw">by</span> viewModel.isRefreshing.<span class="fn">collectAsStateWithLifecycle</span>()
+
+    <span class="type">PullToRefreshBox</span>(
+        <span class="param">isRefreshing</span> <span class="op">=</span> isRefreshing,
+        <span class="param">onRefresh</span> <span class="op">=</span> viewModel::refresh
+    ) {
+        <span class="kw">when</span> (<span class="kw">val</span> state <span class="op">=</span> uiState) {
+            <span class="kw">is</span> <span class="type">NewsUiState</span>.<span class="type">Loading</span> <span class="op">-&gt;</span> {
+                <span class="type">Box</span>(
+                    <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+                    contentAlignment <span class="op">=</span> <span class="type">Alignment</span>.<span class="type">Center</span>
+                ) {
+                    <span class="type">CircularProgressIndicator</span>()
+                }
+            }
+            <span class="kw">is</span> <span class="type">NewsUiState</span>.<span class="type">Success</span> <span class="op">-&gt;</span> {
+                <span class="type">LazyColumn</span>(<span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>()) {
+                    <span class="fn">items</span>(state.articles) { article <span class="op">-&gt;</span>
+                        <span class="type">NewsCard</span>(<span class="param">article</span> <span class="op">=</span> article)
+                    }
+                }
+            }
+            <span class="kw">is</span> <span class="type">NewsUiState</span>.<span class="type">Error</span> <span class="op">-&gt;</span> {
+                <span class="type">Text</span>(
+                    <span class="param">text</span> <span class="op">=</span> state.message,
+                    <span class="param">color</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.error,
+                    <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16</span>.dp)
+                )
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>重构后的依赖关系图</h3>
+  <p>重构完成后，整个阵法层次分明、指挥通畅——依赖关系清晰透明，如同一幅精心绘制的行军地图：</p>
+
+  <pre><code><span class="cmt">/*
+ * 依赖关系图（Hilt 自动管理）
+ *
+ * ┌──────────────────────────────────┐
+ * │        SingletonComponent         │
+ * │                                   │
+ * │  OkHttpClient ──► Retrofit        │
+ * │                      │            │
+ * │                   NewsApi         │
+ * │                      │            │
+ * │  Context ──► NewsDatabase         │
+ * │                  │                │
+ * │               NewsDao             │
+ * │                  │                │
+ * │  NewsApi + NewsDao                │
+ * │        │                          │
+ * │   NewsRepositoryImpl              │
+ * │    (binds to NewsRepository)      │
+ * └──────────┬────────────────────────┘
+ *            │
+ * ┌──────────▼────────────────────────┐
+ * │       ViewModelComponent          │
+ * │                                   │
+ * │  NewsRepository ──► NewsListVM    │
+ * └───────────────────────────────────┘
+ */</span></code></pre>
+
+  <p>对比重构前后，高下立判——犹如散兵游勇与精锐之师之差：</p>
+  <table>
+    <thead>
+      <tr><th>方面</th><th>重构前</th><th>重构后（Hilt）</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>依赖创建</td><td>Activity 中手动 new</td><td>声明式注解自动完成</td></tr>
+      <tr><td>生命周期</td><td>自己管理，容易出错</td><td>Hilt 按作用域自动管理</td></tr>
+      <tr><td>可测试性</td><td>难以替换依赖</td><td>接口注入，轻松替换</td></tr>
+      <tr><td>编译安全</td><td>运行时才发现问题</td><td>缺少依赖编译就会报错</td></tr>
+      <tr><td>代码量</td><td>大量样板代码集中在 Activity</td><td>分散到各个 Module，各司其职</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============================================================ -->
+  <!-- 14.8 Hilt 最佳实践 -->
+  <!-- ============================================================ -->
+  <h2 id="s14-8">14.8 Hilt 最佳实践</h2>
+
+  <p>善用兵者，不仅要知道如何排兵布阵，更要深谙"因地制宜、因时而变"的用兵之道。以下五条锦囊，是从无数实战中提炼出的用"Hilt"之法，望诸位牢记于心。</p>
+
+  <h3>1. 优先使用构造函数注入</h3>
+  <p>Hilt 也支持字段注入（<code>@Inject lateinit var</code>），但构造函数注入如同出征前便将军令写明——一目了然、不留后患：</p>
+
+  <pre><code><span class="cmt">// 推荐：构造函数注入</span>
+<span class="kw">class</span> <span class="type">UserRepository</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">apiService</span>: <span class="type">ApiService</span>
+)
+
+<span class="cmt">// 不推荐：字段注入（仅在无法使用构造函数注入时使用，如 Activity）</span>
+<span class="kw">class</span> <span class="type">SomeClass</span> {
+    <span class="ann">@Inject</span> <span class="kw">lateinit var</span> apiService: <span class="type">ApiService</span>
+}</code></pre>
+
+  <p>构造函数注入的优势：依赖关系如同军令状一般一目了然，对象创建后即全副武装、随时可战，测试时亦可轻松替换任何一位将领。</p>
+
+  <h3>2. 能用 @Binds 就不用 @Provides</h3>
+  <p>能一纸调令解决的事，何须大费周章地写锻造工序？</p>
+  <pre><code><span class="cmt">// 推荐：@Binds 更简洁、效率更高</span>
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">RepositoryModule</span> {
+    <span class="ann">@Binds</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindRepo</span>(<span class="param">impl</span>: <span class="type">NewsRepositoryImpl</span>): <span class="type">NewsRepository</span>
+}
+
+<span class="cmt">// 不推荐：@Provides 用于简单绑定显得冗余</span>
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">RepositoryModule</span> {
+    <span class="ann">@Provides</span>
+    <span class="kw">fun</span> <span class="fn">provideRepo</span>(<span class="param">impl</span>: <span class="type">NewsRepositoryImpl</span>): <span class="type">NewsRepository</span> <span class="op">=</span> impl
+}</code></pre>
+
+  <h3>3. 保持 Module 职责单一</h3>
+  <p>治军之要，在于分工明确。按功能领域拆分 Module，犹如行军设立前锋营、辎重营、斥候营，各司其职：</p>
+
+  <pre><code><span class="cmt">// 推荐：按职责拆分</span>
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">NetworkModule</span> { <span class="cmt">/* OkHttp, Retrofit, ApiService */</span> }
+
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">DatabaseModule</span> { <span class="cmt">/* Room, Dao */</span> }
+
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">RepositoryModule</span> { <span class="cmt">/* @Binds 绑定 */</span> }
+
+<span class="cmt">// 不推荐：一个大杂烩 Module</span>
+<span class="cmt">// object AppModule { /* 几十个 @Provides 方法... */ }</span></code></pre>
+
+  <h3>4. 为测试做准备</h3>
+  <p>古之善战者，先为不可胜，以待敌之可胜。在架构设计之初便预留测试的余地，方能在日后检验代码时从容不迫。Hilt 提供了 <code>@TestInstallIn</code>，可在"沙盘推演"（测试）中替换任何一位将领：</p>
+
+  <pre><code><span class="cmt">// 测试中替换 Repository 实现</span>
+<span class="ann">@Module</span>
+<span class="ann">@TestInstallIn</span>(
+    components <span class="op">=</span> [<span class="type">SingletonComponent</span>::<span class="kw">class</span>],
+    replaces <span class="op">=</span> [<span class="type">RepositoryModule</span>::<span class="kw">class</span>]
+)
+<span class="kw">abstract class</span> <span class="type">FakeRepositoryModule</span> {
+
+    <span class="ann">@Binds</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindNewsRepository</span>(
+        <span class="param">fake</span>: <span class="type">FakeNewsRepository</span>
+    ): <span class="type">NewsRepository</span>
+}
+
+<span class="cmt">// 假的 Repository 实现，用于测试</span>
+<span class="kw">class</span> <span class="type">FakeNewsRepository</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>() : <span class="type">NewsRepository</span> {
+
+    <span class="kw">private val</span> fakeArticles <span class="op">=</span> <span class="fn">listOf</span>(
+        <span class="type">NewsArticle</span>(
+            <span class="param">id</span> <span class="op">=</span> <span class="num">1</span>,
+            <span class="param">title</span> <span class="op">=</span> <span class="str">"测试新闻标题"</span>,
+            <span class="param">content</span> <span class="op">=</span> <span class="str">"测试内容"</span>,
+            <span class="param">publishedAt</span> <span class="op">=</span> <span class="str">"2024-01-01"</span>
+        )
+    )
+
+    <span class="kw">override fun</span> <span class="fn">getNewsStream</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">NewsArticle</span>&gt;&gt; {
+        <span class="kw">return</span> <span class="fn">flowOf</span>(fakeArticles)
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">refreshNews</span>() { <span class="cmt">/* 测试中不做网络请求 */</span> }
+
+    <span class="kw">override suspend fun</span> <span class="fn">getArticleById</span>(<span class="param">id</span>: <span class="type">Long</span>): <span class="type">NewsArticle</span>? {
+        <span class="kw">return</span> fakeArticles.<span class="fn">find</span> { it.id <span class="op">==</span> id }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">下一章预告</div>
+    <p>第 15 章将深入讲解 Android 测试之道。届时我们会详细展示如何用 Hilt 的测试利器编写单元测试与 UI 测试——那将是对今日所学阵法的真正沙场检验。正所谓：练兵千日，用兵一时。</p>
+  </div>
+
+  <h3>5. 常见问题速查</h3>
+  <p>行军在外，难免遇到突发状况。以下是 Hilt 使用中常见的"军情急报"及其对策——可将此表裱起以备不时之需：</p>
+
+  <table>
+    <thead>
+      <tr><th>问题</th><th>原因</th><th>解决方案</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>编译错误：缺少绑定</td>
+        <td>某个依赖没有告诉 Hilt 如何创建</td>
+        <td>添加 <code>@Inject constructor</code> 或在 Module 中提供</td>
+      </tr>
+      <tr>
+        <td>运行时崩溃：Activity 未标记</td>
+        <td>忘记在 Activity 上加 <code>@AndroidEntryPoint</code></td>
+        <td>在所有需要注入的 Activity/Fragment 上添加注解</td>
+      </tr>
+      <tr>
+        <td>ViewModel 注入失败</td>
+        <td>忘记添加 <code>@HiltViewModel</code></td>
+        <td>确保 ViewModel 同时有 <code>@HiltViewModel</code> 和 <code>@Inject constructor</code></td>
+      </tr>
+      <tr>
+        <td>作用域不匹配</td>
+        <td>在低层级组件中引用高层级作用域的依赖</td>
+        <td>检查组件层级关系，调整 <code>@InstallIn</code></td>
+      </tr>
+      <tr>
+        <td>Application 未初始化</td>
+        <td>AndroidManifest 没有声明自定义 Application</td>
+        <td>在 manifest 中添加 <code>android:name</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>本章小结</h3>
+  <p>本章我们从依赖注入的基本兵法出发，审视了手动调度的困局，最终习得了以 Hilt 为帅帐统筹全军的精妙阵法。正如用兵之道在于"以正合，以奇胜"，好的架构既要有章法可循（框架规范），又要灵活变通（轻松替换实现）。核心要点回顾：</p>
+  <ul>
+    <li><strong>依赖注入</strong>就是将依赖从外部调配，而非令各部自行筹备——"善将者，不自操戈"。</li>
+    <li><strong>Hilt</strong> 基于 Dagger，专为 Android 简化，提供编译期安全检查——"未战而庙算胜"。</li>
+    <li><code>@HiltAndroidApp</code>（立帅帐）、<code>@AndroidEntryPoint</code>（挂令旗）、<code>@Inject</code>（递物资清单）是三个最基础的注解。</li>
+    <li><code>@Module</code> + <code>@Provides</code>/<code>@Binds</code> 用于调配第三方盟军或以接口定义的抽象角色。</li>
+    <li>合理选择<strong>作用域</strong>（<code>@Singleton</code>、<code>@ViewModelScoped</code> 等）如同规定各部驻防期限，不可滥封。</li>
+    <li><code>@HiltViewModel</code> 配合 <code>hiltViewModel()</code> 在 Compose 中实现前线与指挥部的无缝衔接。</li>
+    <li>依赖注入让代码如同精锐之师般易于操练（测试）—— 第 15 章将详细展开。</li>
+  </ul>
+
+  <!-- ============================================================ -->
+  <!-- 本章练习 -->
+  <!-- ============================================================ -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：识别紧耦合 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>以下代码中存在紧耦合的问题。请指出所有紧耦合之处，并将其重构为构造函数注入的方式。思考一下：若战场形势有变（需要切换实现），当前的阵型能否快速应变？</p>
+      <pre><code><span class="kw">class</span> <span class="type">OrderService</span> {
+    <span class="kw">private val</span> db <span class="op">=</span> <span class="type">DatabaseHelper</span>()
+    <span class="kw">private val</span> emailSender <span class="op">=</span> <span class="type">SmtpEmailSender</span>()
+    <span class="kw">private val</span> logger <span class="op">=</span> <span class="type">FileLogger</span>(<span class="str">"/var/log/orders.log"</span>)
+
+    <span class="kw">fun</span> <span class="fn">placeOrder</span>(<span class="param">order</span>: <span class="type">Order</span>) {
+        db.<span class="fn">save</span>(order)
+        emailSender.<span class="fn">send</span>(order.userEmail, <span class="str">"订单确认"</span>)
+        logger.<span class="fn">log</span>(<span class="str">"订单 ${order.id} 已创建"</span>)
+    }
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>思考三个问题：(1) 如果要在测试中避免真正发送邮件，该怎么办？(2) 如果要将日志从文件切换到远程服务，需要改多少代码？(3) 将 <code>DatabaseHelper</code>、<code>EmailSender</code>、<code>Logger</code> 定义为接口，通过构造函数传入——正如兵法中"将帅任命由中军帐统一调度"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><pre><code><span class="kw">interface</span> <span class="type">Database</span> { <span class="kw">fun</span> <span class="fn">save</span>(<span class="param">order</span>: <span class="type">Order</span>) }
+<span class="kw">interface</span> <span class="type">EmailSender</span> { <span class="kw">fun</span> <span class="fn">send</span>(<span class="param">to</span>: <span class="type">String</span>, <span class="param">subject</span>: <span class="type">String</span>) }
+<span class="kw">interface</span> <span class="type">Logger</span> { <span class="kw">fun</span> <span class="fn">log</span>(<span class="param">message</span>: <span class="type">String</span>) }
+
+<span class="kw">class</span> <span class="type">OrderService</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">db</span>: <span class="type">Database</span>,
+    <span class="kw">private val</span> <span class="param">emailSender</span>: <span class="type">EmailSender</span>,
+    <span class="kw">private val</span> <span class="param">logger</span>: <span class="type">Logger</span>
+) {
+    <span class="kw">fun</span> <span class="fn">placeOrder</span>(<span class="param">order</span>: <span class="type">Order</span>) {
+        db.<span class="fn">save</span>(order)
+        emailSender.<span class="fn">send</span>(order.userEmail, <span class="str">"订单确认"</span>)
+        logger.<span class="fn">log</span>(<span class="str">"订单 ${order.id} 已创建"</span>)
+    }
+}</code></pre></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：编写 Hilt Module <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设你的应用需要接入一个天气 API。请为以下第三方库类编写完整的 Hilt Module，提供 <code>OkHttpClient</code>、<code>Retrofit</code> 和 <code>WeatherApi</code> 三个依赖，并确定合适的作用域。想想看：这三者是应该每次重新锻造，还是应当作为全军共用的重器？</p>
+      <pre><code><span class="cmt">// 已有的接口定义</span>
+<span class="kw">interface</span> <span class="type">WeatherApi</span> {
+    <span class="ann">@GET</span>(<span class="str">"weather"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">getWeather</span>(
+        <span class="ann">@Query</span>(<span class="str">"city"</span>) <span class="param">city</span>: <span class="type">String</span>
+    ): <span class="type">WeatherResponse</span>
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>需要使用 <code>@Module</code> + <code>@InstallIn(SingletonComponent::class)</code>。网络客户端和 Retrofit 实例都是重量级对象，应当标记 <code>@Singleton</code>——如同铸造城门铁锁，只需一把即可守护全城。注意 <code>provideRetrofit</code> 的参数中可以引用 <code>provideOkHttpClient</code> 的返回值，Hilt 会自动衔接。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><pre><code><span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">WeatherNetworkModule</span> {
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideOkHttpClient</span>(): <span class="type">OkHttpClient</span> {
+        <span class="kw">return</span> <span class="type">OkHttpClient</span>.<span class="type">Builder</span>()
+            .<span class="fn">connectTimeout</span>(<span class="num">15</span>, <span class="type">TimeUnit</span>.SECONDS)
+            .<span class="fn">readTimeout</span>(<span class="num">15</span>, <span class="type">TimeUnit</span>.SECONDS)
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideRetrofit</span>(<span class="param">client</span>: <span class="type">OkHttpClient</span>): <span class="type">Retrofit</span> {
+        <span class="kw">return</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+            .<span class="fn">baseUrl</span>(<span class="str">"https://api.weather.example.com/"</span>)
+            .<span class="fn">client</span>(client)
+            .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideWeatherApi</span>(<span class="param">retrofit</span>: <span class="type">Retrofit</span>): <span class="type">WeatherApi</span> {
+        <span class="kw">return</span> retrofit.<span class="fn">create</span>(<span class="type">WeatherApi</span>::<span class="kw">class</span>.java)
+    }
+}</code></pre></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：选择正确的作用域 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以下五个类分别应该使用哪种作用域注解？请为每个类选择最合理的作用域，并说明理由。记住：滥封 <code>@Singleton</code> 如同滥封侯爵——既浪费国库，又增加朝廷负担。</p>
+      <ol>
+        <li><code>RetrofitClient</code> —— 全局网络客户端</li>
+        <li><code>InputValidator</code> —— 无状态的表单验证工具</li>
+        <li><code>CartManager</code> —— 管理当前购物车，需在同一个 ViewModel 内共享</li>
+        <li><code>AppDatabase</code> —— Room 数据库实例</li>
+        <li><code>DateFormatter</code> —— 将日期格式化为字符串的无状态工具</li>
+      </ol>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>判断依据有三：(1) 是否有状态？无状态的工具类不需要作用域。(2) 需要全局共享吗？重量级的网络客户端和数据库应全军共用。(3) 只需在某个范围内共享？用对应的范围作用域。正如治军，"赏罚分明"方能令行禁止。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>1. <code>RetrofitClient</code> → <code>@Singleton</code>：全军粮道之重器，只需一条，全局共享。</p>
+          <p>2. <code>InputValidator</code> → 无注解：无状态的轻骑斥候，随用随遣，无需常驻编制。</p>
+          <p>3. <code>CartManager</code> → <code>@ViewModelScoped</code>：购物车如同一支偏师的军需官，在此偏师内共享，不同偏师各有各的。</p>
+          <p>4. <code>AppDatabase</code> → <code>@Singleton</code>：全军辎重总库，自然只需一座，从开营到收兵始终存在。</p>
+          <p>5. <code>DateFormatter</code> → 无注解：无状态的笔墨小吏，需要时即可招来使用，不占编制。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：@Binds 实战 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为以下接口和实现类编写 Hilt 的 <code>@Binds</code> 模块。同时编写一个 <code>FakeAuthRepository</code> 用于测试，以及对应的 <code>@TestInstallIn</code> 模块。想想看：为何在架构设计之初就要为"沙盘推演"（测试）预留通道？</p>
+      <pre><code><span class="kw">interface</span> <span class="type">AuthRepository</span> {
+    <span class="kw">suspend fun</span> <span class="fn">login</span>(<span class="param">email</span>: <span class="type">String</span>, <span class="param">password</span>: <span class="type">String</span>): <span class="type">AuthResult</span>
+    <span class="kw">suspend fun</span> <span class="fn">logout</span>()
+    <span class="kw">fun</span> <span class="fn">isLoggedIn</span>(): <span class="type">Boolean</span>
+}
+
+<span class="kw">class</span> <span class="type">AuthRepositoryImpl</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">apiService</span>: <span class="type">AuthApi</span>,
+    <span class="kw">private val</span> <span class="param">tokenStore</span>: <span class="type">TokenStore</span>
+) : <span class="type">AuthRepository</span> {
+    <span class="cmt">// ... 省略实现</span>
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>正式模块用 <code>@Module</code> + <code>@InstallIn</code> + <code>@Binds</code>。测试替换模块用 <code>@TestInstallIn</code>，需指定 <code>replaces</code> 参数。<code>FakeAuthRepository</code> 无需真实的网络请求，内部用简单的状态变量模拟即可——沙盘上的木偶，不需要真会打仗。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><pre><code><span class="cmt">// 正式绑定模块</span>
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">AuthModule</span> {
+    <span class="ann">@Binds</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindAuthRepository</span>(
+        <span class="param">impl</span>: <span class="type">AuthRepositoryImpl</span>
+    ): <span class="type">AuthRepository</span>
+}
+
+<span class="cmt">// 测试用的假实现</span>
+<span class="kw">class</span> <span class="type">FakeAuthRepository</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>() : <span class="type">AuthRepository</span> {
+    <span class="kw">private var</span> loggedIn <span class="op">=</span> <span class="kw">false</span>
+
+    <span class="kw">override suspend fun</span> <span class="fn">login</span>(
+        <span class="param">email</span>: <span class="type">String</span>, <span class="param">password</span>: <span class="type">String</span>
+    ): <span class="type">AuthResult</span> {
+        loggedIn <span class="op">=</span> <span class="kw">true</span>
+        <span class="kw">return</span> <span class="type">AuthResult</span>.<span class="fn">Success</span>(<span class="str">"fake-token"</span>)
+    }
+
+    <span class="kw">override suspend fun</span> <span class="fn">logout</span>() { loggedIn <span class="op">=</span> <span class="kw">false</span> }
+    <span class="kw">override fun</span> <span class="fn">isLoggedIn</span>(): <span class="type">Boolean</span> <span class="op">=</span> loggedIn
+}
+
+<span class="cmt">// 测试替换模块</span>
+<span class="ann">@Module</span>
+<span class="ann">@TestInstallIn</span>(
+    components <span class="op">=</span> [<span class="type">SingletonComponent</span>::<span class="kw">class</span>],
+    replaces <span class="op">=</span> [<span class="type">AuthModule</span>::<span class="kw">class</span>]
+)
+<span class="kw">abstract class</span> <span class="type">FakeAuthModule</span> {
+    <span class="ann">@Binds</span>
+    <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindAuthRepository</span>(
+        <span class="param">fake</span>: <span class="type">FakeAuthRepository</span>
+    ): <span class="type">AuthRepository</span>
+}</code></pre></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：全局架构设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你正在设计一个电商应用的完整架构。应用包含以下功能模块：用户认证、商品浏览、购物车、订单管理。请完成以下任务：</p>
+      <ol>
+        <li>画出完整的依赖关系图（使用文本 ASCII 格式），标明各组件所属的 Hilt 组件层级。</li>
+        <li>为每个 Module 选择合适的 <code>@InstallIn</code> 组件。</li>
+        <li>编写 <code>NetworkModule</code>、<code>RepositoryModule</code>（包含所有四个 Repository 的 <code>@Binds</code> 绑定），以及一个 <code>CartViewModel</code>。</li>
+      </ol>
+      <p>此乃统帅全局的大考——你需要像谋划一场战役一样，纵观全局、合理部署，使各营既能独立作战，又能协同配合。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>思路如下：(1) 网络客户端和数据库是全军共用的基础设施，放入 <code>SingletonComponent</code>。(2) 四个 Repository 各管一域（认证、商品、购物车、订单），接口与实现分离，用 <code>@Binds</code> 绑定。(3) <code>CartViewModel</code> 需要注入 <code>CartRepository</code> 和 <code>UserRepository</code>（需要知道当前用户）。走一步看三步——考虑未来如果要加入"推荐系统"模块，你的架构是否能轻松扩展？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><pre><code><span class="cmt">// 依赖关系图：
+// ┌─────────── SingletonComponent ──────────────┐
+// │  OkHttpClient → Retrofit → ShopApi          │
+// │  Context → AppDatabase → [各 Dao]            │
+// │  AuthRepositoryImpl → (binds) AuthRepository │
+// │  ProductRepoImpl → (binds) ProductRepository │
+// │  CartRepoImpl → (binds) CartRepository       │
+// │  OrderRepoImpl → (binds) OrderRepository     │
+// └──────────────────┬──────────────────────────┘
+//                    │
+// ┌──────────────────▼──────────────────────────┐
+// │          ViewModelComponent                  │
+// │  CartRepository + UserRepo → CartViewModel   │
+// │  ProductRepository → ProductListViewModel    │
+// │  OrderRepository → OrderViewModel            │
+// └──────────────────────────────────────────────┘</span>
+
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">object</span> <span class="type">NetworkModule</span> {
+    <span class="ann">@Provides</span> <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideRetrofit</span>(): <span class="type">Retrofit</span> {
+        <span class="kw">return</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+            .<span class="fn">baseUrl</span>(<span class="str">"https://shop.example.com/api/"</span>)
+            .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+            .<span class="fn">build</span>()
+    }
+
+    <span class="ann">@Provides</span> <span class="ann">@Singleton</span>
+    <span class="kw">fun</span> <span class="fn">provideShopApi</span>(<span class="param">retrofit</span>: <span class="type">Retrofit</span>): <span class="type">ShopApi</span> {
+        <span class="kw">return</span> retrofit.<span class="fn">create</span>(<span class="type">ShopApi</span>::<span class="kw">class</span>.java)
+    }
+}
+
+<span class="ann">@Module</span>
+<span class="ann">@InstallIn</span>(<span class="type">SingletonComponent</span>::<span class="kw">class</span>)
+<span class="kw">abstract class</span> <span class="type">RepositoryModule</span> {
+    <span class="ann">@Binds</span> <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindAuth</span>(<span class="param">impl</span>: <span class="type">AuthRepositoryImpl</span>): <span class="type">AuthRepository</span>
+
+    <span class="ann">@Binds</span> <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindProduct</span>(<span class="param">impl</span>: <span class="type">ProductRepositoryImpl</span>): <span class="type">ProductRepository</span>
+
+    <span class="ann">@Binds</span> <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindCart</span>(<span class="param">impl</span>: <span class="type">CartRepositoryImpl</span>): <span class="type">CartRepository</span>
+
+    <span class="ann">@Binds</span> <span class="ann">@Singleton</span>
+    <span class="kw">abstract fun</span> <span class="fn">bindOrder</span>(<span class="param">impl</span>: <span class="type">OrderRepositoryImpl</span>): <span class="type">OrderRepository</span>
+}
+
+<span class="ann">@HiltViewModel</span>
+<span class="kw">class</span> <span class="type">CartViewModel</span> <span class="ann">@Inject</span> <span class="kw">constructor</span>(
+    <span class="kw">private val</span> <span class="param">cartRepository</span>: <span class="type">CartRepository</span>,
+    <span class="kw">private val</span> <span class="param">authRepository</span>: <span class="type">AuthRepository</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="kw">val</span> cartItems <span class="op">=</span> cartRepository.<span class="fn">getCartStream</span>()
+        .<span class="fn">stateIn</span>(viewModelScope, <span class="type">SharingStarted</span>.<span class="fn">WhileSubscribed</span>(<span class="num">5000</span>), <span class="fn">emptyList</span>())
+
+    <span class="kw">fun</span> <span class="fn">checkout</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="kw">if</span> (authRepository.<span class="fn">isLoggedIn</span>()) {
+                cartRepository.<span class="fn">submitOrder</span>()
+            }
+        }
+    }
+}</code></pre></div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

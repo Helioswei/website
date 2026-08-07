@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章：面向对象编程 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="04" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：面向对象编程</h1>
+  <p class="chapter-subtitle">类、继承、接口、数据类、密封类 —— 以运筹帷幄之道，布局 Kotlin OOP 的战略蓝图</p>
+
+  <!-- ========== 导师卡片 ========== -->
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄，先设计蓝图再排兵布阵</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「兵者，国之大事也。编程亦然。面向对象之道，犹如排兵布阵——类是你的兵种，继承是指挥链，接口是军令协议，密封类是独门阵法。不懂布局者，代码必乱如散兵；善于谋划者，架构自成铁壁。今日，吾将以军略之道，带各位将军领悟 Kotlin OOP 的精髓。切记：先画蓝图，再动代码。未战而庙算者胜！」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 类与构造器 ========== -->
+  <h2 id="class-constructor">4.1 类与构造器 —— 定义你的兵种</h2>
+
+  <h3>基本类定义</h3>
+  <p>三军未动，兵种先行。在 Kotlin 的战场上，<strong>类</strong>就是你麾下的兵种蓝图。定义一个兵种可以极其简洁——构造器参数直接写在类名后面，加上 <code>val</code> 或 <code>var</code> 就自动成为该兵种的属性，无需冗余的样板代码：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Person</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">var</span> <span class="param">age</span>: <span class="type">Int</span>)
+
+<span class="cmt">// 使用</span>
+<span class="kw">val</span> person = <span class="type">Person</span>(<span class="str">"张三"</span>, <span class="num">25</span>)
+println(person.<span class="param">name</span>)  <span class="cmt">// 张三</span>
+person.<span class="param">age</span> = <span class="num">26</span>       <span class="cmt">// var 可以修改</span>
+<span class="cmt">// person.name = "李四"  // 编译错误! val 不可修改</span></code></pre>
+
+  <p>仅此一行，Kotlin 便为你铸造了一个包含两个属性、一个构造器的完整兵种蓝图。正所谓化繁为简，上兵伐谋。</p>
+
+  <h3>主构造器 vs 次构造器</h3>
+  <p>类名后面跟的便是<strong>主构造器</strong>（primary constructor），犹如兵种的主要招募方式。若需要额外的招募途径，可以使用 <code>constructor</code> 关键字定义<strong>次构造器</strong>（secondary constructor），作为后备方案：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Person</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">var</span> <span class="param">age</span>: <span class="type">Int</span>) {
+
+    <span class="kw">var</span> <span class="param">email</span>: <span class="type">String</span> = <span class="str">""</span>
+
+    <span class="cmt">// 次构造器，必须委托给主构造器</span>
+    <span class="kw">constructor</span>(<span class="param">name</span>: <span class="type">String</span>, <span class="param">age</span>: <span class="type">Int</span>, <span class="param">email</span>: <span class="type">String</span>) : <span class="kw">this</span>(name, age) {
+        <span class="kw">this</span>.<span class="param">email</span> = email
+    }
+}
+
+<span class="kw">val</span> p1 = <span class="type">Person</span>(<span class="str">"张三"</span>, <span class="num">25</span>)
+<span class="kw">val</span> p2 = <span class="type">Person</span>(<span class="str">"李四"</span>, <span class="num">30</span>, <span class="str">"lisi@example.com"</span>)</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">军师锦囊</p>
+    <p>善用兵者，不以数量取胜。实际开发中，Kotlin 更推荐使用<strong>默认参数值</strong>来代替多个次构造器，化繁为简：<br>
+    <code>class Person(val name: String, var age: Int, var email: String = "")</code></p>
+  </div>
+
+  <h3>init 块：练兵初始化</h3>
+  <p>兵种招募之后，还需要检阅与操练。<code>init</code> 块就是你的"练兵场"——在对象创建时执行初始化逻辑，确保每一个新兵都合格：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Person</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">var</span> <span class="param">age</span>: <span class="type">Int</span>) {
+
+    <span class="kw">init</span> {
+        <span class="fn">require</span>(age <span class="op">&gt;=</span> <span class="num">0</span>) { <span class="str">"年龄不能为负数"</span> }
+        <span class="fn">println</span>(<span class="str">"创建了一个 Person: </span><span class="op">$</span>name<span class="str">, </span><span class="op">$</span>age<span class="str"> 岁"</span>)
+    }
+
+    <span class="cmt">// 可以有多个 init 块，按顺序执行</span>
+    <span class="kw">init</span> {
+        <span class="fn">println</span>(<span class="str">"第二个 init 块"</span>)
+    }
+}</code></pre>
+
+  <h3>兵种蓝图对比：Kotlin vs Java vs C++</h3>
+  <p>让我们以三国之势，看看同样的兵种蓝图在不同阵营中需要多少笔墨：</p>
+
+<pre><code><span class="cmt">// Java — 一个简单的 Person 类需要这么多样板代码</span>
+<span class="kw">public class</span> <span class="type">Person</span> {
+    <span class="kw">private final</span> <span class="type">String</span> name;
+    <span class="kw">private</span> <span class="type">int</span> age;
+
+    <span class="kw">public</span> <span class="fn">Person</span>(<span class="type">String</span> name, <span class="type">int</span> age) {
+        <span class="kw">this</span>.name = name;
+        <span class="kw">this</span>.age = age;
+    }
+
+    <span class="kw">public</span> <span class="type">String</span> <span class="fn">getName</span>() { <span class="kw">return</span> name; }
+    <span class="kw">public</span> <span class="type">int</span> <span class="fn">getAge</span>() { <span class="kw">return</span> age; }
+    <span class="kw">public</span> <span class="type">void</span> <span class="fn">setAge</span>(<span class="type">int</span> age) { <span class="kw">this</span>.age = age; }
+}
+
+<span class="cmt">// Kotlin — 一行搞定</span>
+<span class="kw">class</span> <span class="type">Person</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">var</span> <span class="param">age</span>: <span class="type">Int</span>)</code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>C++ 的类默认可以被继承（除非标记为 <code>final</code>），而 <strong>Kotlin 的类默认就是 final 的</strong>，必须加 <code>open</code> 关键字才允许继承。这正如兵法所云：「善守者，藏于九地之下」——Kotlin 选择了默认封闭的防御策略，只在你明确需要时才开放继承。C++ 则是默认敞开城门，需要你自己加 <code>final</code> 去守卫。此外，Kotlin 的主构造器语法将参数声明与属性定义合二为一，省去了 C++ 中构造函数初始化列表和成员变量声明的繁琐。</p>
+  </div>
+
+  <!-- ========== 4.2 属性 ========== -->
+  <h2 id="properties">4.2 属性 —— 兵种的装备与属性</h2>
+
+  <h3>属性：比字段更高明的布局</h3>
+  <p>在排兵布阵中，每个兵种都有其核心属性——攻击力、防御力、速度。Kotlin 没有传统意义上的"字段"（field），你声明的是<strong>属性</strong>（property），编译器会自动为其配备 getter（对于 <code>val</code>）和 getter/setter（对于 <code>var</code>）。这就像为每个兵种自动配备了标准装备，无需手动打造：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Rectangle</span>(<span class="kw">val</span> <span class="param">width</span>: <span class="type">Double</span>, <span class="kw">val</span> <span class="param">height</span>: <span class="type">Double</span>) {
+    <span class="cmt">// 只读属性，自动有 getter</span>
+    <span class="kw">val</span> <span class="param">area</span>: <span class="type">Double</span>
+        <span class="kw">get</span>() = width <span class="op">*</span> height
+}
+
+<span class="kw">val</span> rect = <span class="type">Rectangle</span>(<span class="num">5.0</span>, <span class="num">3.0</span>)
+<span class="fn">println</span>(rect.<span class="param">area</span>)  <span class="cmt">// 15.0 — 看起来像访问字段，实际调用了 getter</span></code></pre>
+
+  <h3>自定义 getter 和 setter</h3>
+  <p>有时你需要为兵种的装备加入特殊效果。自定义 getter 和 setter 就是你的"附魔工坊"——在读写属性时注入自定义逻辑：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">User</span>(<span class="param">name</span>: <span class="type">String</span>) {
+
+    <span class="kw">var</span> <span class="param">name</span>: <span class="type">String</span> = name
+        <span class="kw">set</span>(<span class="param">value</span>) {
+            <span class="cmt">// 自定义 setter: 自动去除首尾空格</span>
+            field = value.<span class="fn">trim</span>()
+        }
+
+    <span class="kw">val</span> <span class="param">nameLength</span>: <span class="type">Int</span>
+        <span class="kw">get</span>() = name.<span class="param">length</span>  <span class="cmt">// 自定义 getter: 每次访问时计算</span>
+}
+
+<span class="kw">val</span> user = <span class="type">User</span>(<span class="str">"  Kotlin  "</span>)
+<span class="fn">println</span>(user.<span class="param">name</span>)        <span class="cmt">// Kotlin（已去除空格）</span>
+<span class="fn">println</span>(user.<span class="param">nameLength</span>)  <span class="cmt">// 6</span></code></pre>
+
+  <h3>幕后字段 field</h3>
+  <p>在自定义 setter 中，<code>field</code> 是所谓的<strong>幕后字段</strong>（backing field），犹如军中密令，代表属性实际存储的值。切不可混淆——用属性名赋值会陷入"无限递归"的圈套：</p>
+
+<pre><code><span class="kw">var</span> <span class="param">counter</span>: <span class="type">Int</span> = <span class="num">0</span>
+    <span class="kw">set</span>(<span class="param">value</span>) {
+        <span class="kw">if</span> (value <span class="op">&gt;=</span> <span class="num">0</span>) {
+            field = value  <span class="cmt">// field 指向真正存储值的地方</span>
+        }
+        <span class="cmt">// 如果写 this.counter = value 会无限递归调用 setter!</span>
+    }</code></pre>
+
+  <div class="warning">
+    <p class="tip-title">军令警告</p>
+    <p>在自定义 setter 中，一定要用 <code>field</code> 而不是属性名来赋值，否则会导致无限递归，最终 StackOverflowError。此乃兵家大忌，如同"追击敌军却绕回自家营寨"，死循环矣！</p>
+  </div>
+
+  <h3>延迟初始化：lateinit var</h3>
+  <p>兵马未动，粮草先行——但有些"装备"无法在出征前备齐。比如 Android 中 <code>onCreate</code> 之后才能拿到 View，此时可以用 <code>lateinit</code> 先声明，稍后再装备：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">MyActivity</span> : <span class="type">AppCompatActivity</span>() {
+
+    <span class="cmt">// 告诉编译器: 我保证在使用之前会初始化</span>
+    <span class="kw">lateinit var</span> <span class="param">textView</span>: <span class="type">TextView</span>
+
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        textView = <span class="fn">findViewById</span>(<span class="type">R</span>.id.myTextView)  <span class="cmt">// 真正初始化</span>
+    }
+
+    <span class="kw">fun</span> <span class="fn">updateText</span>() {
+        <span class="cmt">// 可以检查是否已初始化</span>
+        <span class="kw">if</span> (<span class="kw">this</span>::textView.<span class="param">isInitialized</span>) {
+            textView.<span class="param">text</span> = <span class="str">"Hello Kotlin"</span>
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">lateinit 军规</p>
+    <ul>
+      <li>只能用于 <code>var</code>，不能用于 <code>val</code></li>
+      <li>不能用于基本类型（<code>Int</code>、<code>Boolean</code> 等）</li>
+      <li>如果在未初始化时访问，会抛出 <code>UninitializedPropertyAccessException</code>——如同未备粮草就强行出征，必败！</li>
+    </ul>
+  </div>
+
+  <h3>惰性初始化：by lazy</h3>
+  <p><code>by lazy</code> 乃"以逸待劳"之策——用于 <code>val</code> 属性，只有在<strong>第一次访问</strong>时才会执行初始化逻辑，而且是线程安全的。不需要的装备绝不提前打造，节省资源：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">DatabaseHelper</span> {
+
+    <span class="cmt">// 只有在第一次访问 connection 时才会创建连接</span>
+    <span class="kw">val</span> <span class="param">connection</span>: <span class="type">Connection</span> <span class="kw">by</span> <span class="fn">lazy</span> {
+        <span class="fn">println</span>(<span class="str">"正在建立数据库连接..."</span>)
+        <span class="type">DriverManager</span>.<span class="fn">getConnection</span>(<span class="str">"jdbc:mysql://localhost/mydb"</span>)
+    }
+}
+
+<span class="kw">val</span> helper = <span class="type">DatabaseHelper</span>()
+<span class="fn">println</span>(<span class="str">"DatabaseHelper 已创建"</span>)  <span class="cmt">// 此时还没有连接数据库</span>
+helper.<span class="param">connection</span>                      <span class="cmt">// 第一次访问，触发 lazy 初始化</span>
+helper.<span class="param">connection</span>                      <span class="cmt">// 第二次访问，直接返回缓存值</span></code></pre>
+
+  <table>
+    <tr>
+      <th>对比项</th>
+      <th>lateinit var</th>
+      <th>by lazy</th>
+    </tr>
+    <tr>
+      <td>适用对象</td>
+      <td>var（可变属性）</td>
+      <td>val（只读属性）</td>
+    </tr>
+    <tr>
+      <td>初始化时机</td>
+      <td>手动赋值，任何时候</td>
+      <td>第一次访问时自动执行</td>
+    </tr>
+    <tr>
+      <td>线程安全</td>
+      <td>不保证</td>
+      <td>默认线程安全</td>
+    </tr>
+    <tr>
+      <td>基本类型</td>
+      <td>不支持</td>
+      <td>支持</td>
+    </tr>
+    <tr>
+      <td>典型场景</td>
+      <td>Android View 绑定</td>
+      <td>昂贵资源的延迟加载</td>
+    </tr>
+  </table>
+
+  <!-- ========== 4.3 继承与接口 ========== -->
+  <h2 id="inheritance-interface">4.3 继承与接口 —— 指挥链与军令协议</h2>
+
+  <h3>Kotlin 类默认 final：铁壁防御</h3>
+  <p>兵法云：「善守者，敌不知其所攻。」与 Java 不同，Kotlin 的类<strong>默认是 final 的</strong>——城门紧闭，不允许被继承。你必须显式地用 <code>open</code> 修饰符来开放继承，就像主动打开城门，欢迎盟军入驻：</p>
+
+<pre><code><span class="cmt">// 默认不能被继承</span>
+<span class="kw">class</span> <span class="type">Animal</span>   <span class="cmt">// 相当于 Java 的 final class Animal</span>
+
+<span class="cmt">// 加上 open 才能被继承</span>
+<span class="kw">open class</span> <span class="type">Animal</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>) {
+    <span class="kw">open fun</span> <span class="fn">makeSound</span>() {
+        <span class="fn">println</span>(<span class="str">"..."</span>)
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">为何默认铁壁？</p>
+    <p>此乃 Kotlin 的战略布局：<em>"Effective Java"</em> 第19条建议"要么为继承设计并提供文档，要么禁止继承"。Kotlin 在语言层面贯彻了这一防御思想，避免了"脆弱基类"问题——正如一座城池若不加防护便允许任何人进出，迟早被敌军渗透。</p>
+  </div>
+
+  <h3>继承语法：建立指挥链</h3>
+  <p>继承就是军队的指挥链——子类服从父类的蓝图，但可以因地制宜地重写战术。Kotlin 使用 <code>:</code>（冒号）代替 Java 的 <code>extends</code>，简洁而有力：</p>
+
+<pre><code><span class="kw">open class</span> <span class="type">Person</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">var</span> <span class="param">age</span>: <span class="type">Int</span>) {
+    <span class="kw">open fun</span> <span class="fn">introduce</span>() {
+        <span class="fn">println</span>(<span class="str">"我叫</span><span class="op">$</span>name<span class="str">，今年</span><span class="op">$</span>age<span class="str">岁"</span>)
+    }
+}
+
+<span class="kw">class</span> <span class="type">Student</span>(
+    <span class="param">name</span>: <span class="type">String</span>,
+    <span class="param">age</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">school</span>: <span class="type">String</span>
+) : <span class="type">Person</span>(name, age) {
+
+    <span class="cmt">// 重写方法必须加 override</span>
+    <span class="kw">override fun</span> <span class="fn">introduce</span>() {
+        <span class="kw">super</span>.<span class="fn">introduce</span>()
+        <span class="fn">println</span>(<span class="str">"我在</span><span class="op">$</span>school<span class="str">上学"</span>)
+    }
+}
+
+<span class="kw">val</span> student = <span class="type">Student</span>(<span class="str">"小明"</span>, <span class="num">18</span>, <span class="str">"清华大学"</span>)
+student.<span class="fn">introduce</span>()
+<span class="cmt">// 输出:
+// 我叫小明，今年18岁
+// 我在清华大学上学</span></code></pre>
+
+  <h3>接口：军令协议</h3>
+  <p>接口就是军中协议——定义了各兵种必须遵守的行为规范。一个兵种可以同时遵循多份协议，而协议本身还可以提供<strong>默认实现</strong>，作为"通用战术手册"：</p>
+
+<pre><code><span class="kw">interface</span> <span class="type">Clickable</span> {
+    <span class="kw">fun</span> <span class="fn">onClick</span>()           <span class="cmt">// 抽象方法</span>
+    <span class="kw">fun</span> <span class="fn">showRipple</span>() {      <span class="cmt">// 有默认实现</span>
+        <span class="fn">println</span>(<span class="str">"显示水波纹效果"</span>)
+    }
+}
+
+<span class="kw">interface</span> <span class="type">Focusable</span> {
+    <span class="kw">fun</span> <span class="fn">onFocus</span>()
+    <span class="kw">fun</span> <span class="fn">showRipple</span>() {      <span class="cmt">// 也有 showRipple 的默认实现</span>
+        <span class="fn">println</span>(<span class="str">"显示焦点高亮"</span>)
+    }
+}
+
+<span class="cmt">// 一个类可以实现多个接口</span>
+<span class="kw">class</span> <span class="type">Button</span> : <span class="type">Clickable</span>, <span class="type">Focusable</span> {
+    <span class="kw">override fun</span> <span class="fn">onClick</span>() {
+        <span class="fn">println</span>(<span class="str">"按钮被点击"</span>)
+    }
+
+    <span class="kw">override fun</span> <span class="fn">onFocus</span>() {
+        <span class="fn">println</span>(<span class="str">"按钮获得焦点"</span>)
+    }
+
+    <span class="cmt">// 两个接口都有 showRipple，必须手动指定</span>
+    <span class="kw">override fun</span> <span class="fn">showRipple</span>() {
+        <span class="kw">super</span><span class="op">&lt;</span><span class="type">Clickable</span><span class="op">&gt;</span>.<span class="fn">showRipple</span>()  <span class="cmt">// 调用 Clickable 的默认实现</span>
+        <span class="kw">super</span><span class="op">&lt;</span><span class="type">Focusable</span><span class="op">&gt;</span>.<span class="fn">showRipple</span>()  <span class="cmt">// 也可以调用 Focusable 的</span>
+    }
+}</code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>C++ 支持多重继承，但由此带来了臭名昭著的<strong>菱形继承问题</strong>（Diamond Problem），需要用虚继承（<code>virtual</code>）来解决，布局复杂且容易出错。Kotlin 从根源上避免了这个问题——<strong>只允许单继承类，但可以实现多个接口</strong>。接口可以有默认实现（类似 C++ 的纯虚函数 + 默认实现），当多个接口存在同名方法时，编译器会强制你用 <code>super&lt;InterfaceName&gt;</code> 明确指定调用哪个，绝不留下歧义。此乃"以规矩定方圆"之道。</p>
+  </div>
+
+  <h3>抽象类：大将之蓝图</h3>
+  <p>抽象类是不可直接实例化的"高级兵种蓝图"——它定义了框架，具体实现交给各路将领。用 <code>abstract</code> 修饰的类天然是 <code>open</code> 的，无需再添"开城令"：</p>
+
+<pre><code><span class="kw">abstract class</span> <span class="type">Shape</span> {
+    <span class="kw">abstract val</span> <span class="param">area</span>: <span class="type">Double</span>       <span class="cmt">// 抽象属性</span>
+    <span class="kw">abstract fun</span> <span class="fn">draw</span>()              <span class="cmt">// 抽象方法</span>
+
+    <span class="kw">fun</span> <span class="fn">describe</span>() {                  <span class="cmt">// 普通方法</span>
+        <span class="fn">println</span>(<span class="str">"这是一个形状，面积为 </span><span class="op">$</span>area<span class="str">"</span>)
+    }
+}
+
+<span class="kw">class</span> <span class="type">Circle</span>(<span class="kw">val</span> <span class="param">radius</span>: <span class="type">Double</span>) : <span class="type">Shape</span>() {
+    <span class="kw">override val</span> <span class="param">area</span>: <span class="type">Double</span>
+        <span class="kw">get</span>() = <span class="type">Math</span>.<span class="param">PI</span> <span class="op">*</span> radius <span class="op">*</span> radius
+
+    <span class="kw">override fun</span> <span class="fn">draw</span>() {
+        <span class="fn">println</span>(<span class="str">"画一个半径为 </span><span class="op">$</span>radius<span class="str"> 的圆"</span>)
+    }
+}</code></pre>
+
+  <!-- ========== 4.4 数据类 ========== -->
+  <h2 id="data-class">4.4 数据类 (data class) —— 军情档案</h2>
+
+  <h3>告别样板，速造档案</h3>
+  <p>战场上，情报传递讲究快速准确。<strong>数据类</strong>就是 Kotlin 的"军情速递"——一个 <code>data class</code> 关键字，编译器便自动为你生成 <code>equals()</code>、<code>hashCode()</code>、<code>toString()</code>、<code>copy()</code> 等全套方法。在 Java 阵营，同样的"档案"需要手写五六十行样板代码，而 Kotlin 一行定乾坤：</p>
+
+<pre><code><span class="kw">data class</span> <span class="type">User</span>(
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Long</span>,
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">email</span>: <span class="type">String</span>
+)
+
+<span class="kw">val</span> user1 = <span class="type">User</span>(<span class="num">1</span>, <span class="str">"张三"</span>, <span class="str">"zhangsan@example.com"</span>)
+<span class="kw">val</span> user2 = <span class="type">User</span>(<span class="num">1</span>, <span class="str">"张三"</span>, <span class="str">"zhangsan@example.com"</span>)
+
+<span class="cmt">// 自动生成的 toString()</span>
+<span class="fn">println</span>(user1)  <span class="cmt">// User(id=1, name=张三, email=zhangsan@example.com)</span>
+
+<span class="cmt">// 自动生成的 equals() — 基于属性值比较</span>
+<span class="fn">println</span>(user1 <span class="op">==</span> user2)  <span class="cmt">// true</span>
+
+<span class="cmt">// 自动生成的 copy() — 复制并修改部分属性</span>
+<span class="kw">val</span> user3 = user1.<span class="fn">copy</span>(name = <span class="str">"李四"</span>)
+<span class="fn">println</span>(user3)  <span class="cmt">// User(id=1, name=李四, email=zhangsan@example.com)</span></code></pre>
+
+  <h3>三国鼎立：Kotlin vs Java vs C++</h3>
+  <p>同一份军情档案，不同阵营的兵力消耗对比：</p>
+
+<pre><code><span class="cmt">// Java: 需要大约 50-60 行代码</span>
+<span class="kw">public class</span> <span class="type">User</span> {
+    <span class="kw">private final long</span> id;
+    <span class="kw">private final</span> <span class="type">String</span> name;
+    <span class="kw">private final</span> <span class="type">String</span> email;
+
+    <span class="kw">public</span> <span class="fn">User</span>(<span class="kw">long</span> id, <span class="type">String</span> name, <span class="type">String</span> email) { <span class="cmt">/* ... */</span> }
+    <span class="kw">public long</span> <span class="fn">getId</span>() { <span class="kw">return</span> id; }
+    <span class="kw">public</span> <span class="type">String</span> <span class="fn">getName</span>() { <span class="kw">return</span> name; }
+    <span class="kw">public</span> <span class="type">String</span> <span class="fn">getEmail</span>() { <span class="kw">return</span> email; }
+
+    <span class="ann">@Override</span> <span class="kw">public boolean</span> <span class="fn">equals</span>(<span class="type">Object</span> o) { <span class="cmt">/* 十几行... */</span> }
+    <span class="ann">@Override</span> <span class="kw">public int</span> <span class="fn">hashCode</span>() { <span class="cmt">/* ... */</span> }
+    <span class="ann">@Override</span> <span class="kw">public</span> <span class="type">String</span> <span class="fn">toString</span>() { <span class="cmt">/* ... */</span> }
+    <span class="cmt">// 还要手写 copy 方法...</span>
+}
+
+<span class="cmt">// Kotlin: 一行搞定</span>
+<span class="kw">data class</span> <span class="type">User</span>(<span class="kw">val</span> <span class="param">id</span>: <span class="type">Long</span>, <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">email</span>: <span class="type">String</span>)</code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>C++ 开发者通常用 <code>struct</code> 来承载数据，但需要手动编写 <code>operator==</code>、<code>operator&lt;&lt;</code> 等运算符重载。C++20 引入了三路比较运算符 <code>operator&lt;=&gt;</code>（太空船运算符），可以自动生成比较函数，但 Kotlin 的 <code>data class</code> 更为全面——<strong>自动生成 equals/hashCode/toString/copy 以及解构函数</strong>，无需任何额外声明。相当于 C++ 的 <code>struct</code> + <code>operator==</code> + <code>operator&lt;&lt;</code> + 拷贝构造函数 + 结构化绑定，一个 <code>data</code> 关键字全部搞定。</p>
+  </div>
+
+  <h3>解构声明：分兵拆阵</h3>
+  <p>data class 自动生成 <code>componentN()</code> 函数，支持<strong>解构声明</strong>——将一个阵型拆解为独立的单兵，各取所需：</p>
+
+<pre><code><span class="kw">data class</span> <span class="type">Point</span>(<span class="kw">val</span> <span class="param">x</span>: <span class="type">Int</span>, <span class="kw">val</span> <span class="param">y</span>: <span class="type">Int</span>)
+
+<span class="kw">val</span> point = <span class="type">Point</span>(<span class="num">10</span>, <span class="num">20</span>)
+
+<span class="cmt">// 解构声明: 将属性拆解到独立变量</span>
+<span class="kw">val</span> (<span class="param">x</span>, <span class="param">y</span>) = point
+<span class="fn">println</span>(<span class="str">"x=</span><span class="op">$</span>x<span class="str">, y=</span><span class="op">$</span>y<span class="str">"</span>)  <span class="cmt">// x=10, y=20</span>
+
+<span class="cmt">// 在遍历 Map 时特别好用</span>
+<span class="kw">val</span> map = <span class="fn">mapOf</span>(<span class="str">"name"</span> <span class="kw">to</span> <span class="str">"张三"</span>, <span class="str">"city"</span> <span class="kw">to</span> <span class="str">"北京"</span>)
+<span class="kw">for</span> ((<span class="param">key</span>, <span class="param">value</span>) <span class="kw">in</span> map) {
+    <span class="fn">println</span>(<span class="str">"</span><span class="op">$</span>key<span class="str"> = </span><span class="op">$</span>value<span class="str">"</span>)
+}</code></pre>
+
+  <!-- ========== 4.5 密封类 ========== -->
+  <h2 id="sealed-class">4.5 密封类 (sealed class) / 密封接口 —— 独门阵法</h2>
+
+  <h3>受限的类层次结构：封闭阵法</h3>
+  <p>密封类乃兵家独门阵法——限定了继承它的子类必须定义在同一个包内（Kotlin 1.5+），犹如只有特定将领才能入阵。这让编译器能够穷举所有可能的子类型，做到"知己知彼，百战不殆"：</p>
+
+<pre><code><span class="kw">sealed class</span> <span class="type">Result</span><span class="op">&lt;</span><span class="kw">out</span> <span class="type">T</span><span class="op">&gt;</span> {
+    <span class="kw">data class</span> <span class="type">Success</span><span class="op">&lt;</span><span class="type">T</span><span class="op">&gt;</span>(<span class="kw">val</span> <span class="param">data</span>: <span class="type">T</span>) : <span class="type">Result</span><span class="op">&lt;</span><span class="type">T</span><span class="op">&gt;</span>()
+    <span class="kw">data class</span> <span class="type">Error</span>(<span class="kw">val</span> <span class="param">message</span>: <span class="type">String</span>) : <span class="type">Result</span><span class="op">&lt;</span><span class="type">Nothing</span><span class="op">&gt;</span>()
+    <span class="kw">data object</span> <span class="type">Loading</span> : <span class="type">Result</span><span class="op">&lt;</span><span class="type">Nothing</span><span class="op">&gt;</span>()
+}</code></pre>
+
+  <h3>与 when 表达式完美配合：天罗地网</h3>
+  <p>密封类最大的优势在于配合 <code>when</code> 表达式时，编译器能确保你处理了所有情况——如同布下天罗地网，任何敌情都不会遗漏：</p>
+
+<pre><code><span class="kw">fun</span> <span class="op">&lt;</span><span class="type">T</span><span class="op">&gt;</span> <span class="fn">handleResult</span>(<span class="param">result</span>: <span class="type">Result</span><span class="op">&lt;</span><span class="type">T</span><span class="op">&gt;</span>) {
+    <span class="kw">when</span> (result) {
+        <span class="kw">is</span> <span class="type">Result.Success</span> <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"成功: </span><span class="op">${</span>result.data<span class="op">}</span><span class="str">"</span>)
+        <span class="kw">is</span> <span class="type">Result.Error</span>   <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"错误: </span><span class="op">${</span>result.message<span class="op">}</span><span class="str">"</span>)
+        <span class="type">Result.Loading</span>    <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"加载中..."</span>)
+        <span class="cmt">// 不需要 else! 编译器知道已经穷举了所有情况</span>
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">军师锦囊</p>
+    <p>如果你后来给 <code>Result</code> 新增了一个子类，所有 <code>when</code> 表达式都会编译报错，提醒你处理新的情况。这比用 <code>if-else</code> 链安全得多——犹如每增加一路兵马，所有作战计划都会自动更新，绝不留死角。</p>
+  </div>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>Kotlin 的 <code>sealed class</code> 类似于 C++17 的 <code>std::variant</code>，都能表示"多选一"的类型。但 <code>sealed class</code> 更为优雅：<strong>编译器会在 <code>when</code> 表达式中强制穷举所有子类型</strong>，如果遗漏就报编译错误。而 C++ 的 <code>std::visit</code> 虽然也能做到穷举，但语法冗长且需要配合 <code>overloaded</code> 模式。此外，sealed class 的每个子类型可以拥有完全不同的属性结构，比 <code>std::variant</code> 的固定类型列表灵活得多。这正是"以简驭繁"的战略精髓。</p>
+  </div>
+
+  <h3>实际用例：军情状态管理</h3>
+  <p>密封类在 Android 开发中犹如军情快报系统，用来表示 UI 状态的变化——加载中、成功、失败，一目了然：</p>
+
+<pre><code><span class="cmt">// 也可以用 sealed interface</span>
+<span class="kw">sealed interface</span> <span class="type">UiState</span><span class="op">&lt;</span><span class="kw">out</span> <span class="type">T</span><span class="op">&gt;</span> {
+    <span class="kw">data object</span> <span class="type">Loading</span> : <span class="type">UiState</span><span class="op">&lt;</span><span class="type">Nothing</span><span class="op">&gt;</span>
+    <span class="kw">data class</span> <span class="type">Success</span><span class="op">&lt;</span><span class="type">T</span><span class="op">&gt;</span>(<span class="kw">val</span> <span class="param">data</span>: <span class="type">T</span>) : <span class="type">UiState</span><span class="op">&lt;</span><span class="type">T</span><span class="op">&gt;</span>
+    <span class="kw">data class</span> <span class="type">Error</span>(<span class="kw">val</span> <span class="param">exception</span>: <span class="type">Throwable</span>) : <span class="type">UiState</span><span class="op">&lt;</span><span class="type">Nothing</span><span class="op">&gt;</span>
+}
+
+<span class="cmt">// 在 ViewModel 中使用</span>
+<span class="kw">class</span> <span class="type">UserViewModel</span> : <span class="type">ViewModel</span>() {
+    <span class="kw">private val</span> <span class="param">_state</span> = <span class="type">MutableStateFlow</span><span class="op">&lt;</span><span class="type">UiState</span><span class="op">&lt;</span><span class="type">List</span><span class="op">&lt;</span><span class="type">User</span><span class="op">&gt;&gt;&gt;</span>(<span class="type">UiState</span>.<span class="type">Loading</span>)
+    <span class="kw">val</span> <span class="param">state</span> = _state.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">fun</span> <span class="fn">loadUsers</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            _state.<span class="param">value</span> = <span class="type">UiState</span>.<span class="type">Loading</span>
+            <span class="kw">try</span> {
+                <span class="kw">val</span> users = repository.<span class="fn">getUsers</span>()
+                _state.<span class="param">value</span> = <span class="type">UiState</span>.<span class="type">Success</span>(users)
+            } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+                _state.<span class="param">value</span> = <span class="type">UiState</span>.<span class="type">Error</span>(e)
+            }
+        }
+    }
+}</code></pre>
+
+  <!-- ========== 4.6 枚举类 ========== -->
+  <h2 id="enum-class">4.6 枚举类 (enum class) —— 编制固定的兵种名册</h2>
+
+  <h3>基本用法</h3>
+  <p>当你有一组固定不变的兵种编制时，枚举类就是最好的名册——人数固定，绝不超编：</p>
+
+<pre><code><span class="kw">enum class</span> <span class="type">Direction</span> {
+    <span class="param">NORTH</span>, <span class="param">SOUTH</span>, <span class="param">EAST</span>, <span class="param">WEST</span>
+}
+
+<span class="kw">val</span> dir = <span class="type">Direction</span>.<span class="param">NORTH</span>
+
+<span class="kw">when</span> (dir) {
+    <span class="type">Direction</span>.<span class="param">NORTH</span> <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"向北"</span>)
+    <span class="type">Direction</span>.<span class="param">SOUTH</span> <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"向南"</span>)
+    <span class="type">Direction</span>.<span class="param">EAST</span>  <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"向东"</span>)
+    <span class="type">Direction</span>.<span class="param">WEST</span>  <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"向西"</span>)
+}</code></pre>
+
+  <h3>带属性和方法的枚举</h3>
+  <p>枚举中的每个兵种不仅有编号，还可以携带属性和方法——正如名册中记录了每位将士的武器和特技：</p>
+
+<pre><code><span class="kw">enum class</span> <span class="type">Color</span>(
+    <span class="kw">val</span> <span class="param">rgb</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">displayName</span>: <span class="type">String</span>
+) {
+    <span class="param">RED</span>(<span class="num">0xFF0000</span>, <span class="str">"红色"</span>),
+    <span class="param">GREEN</span>(<span class="num">0x00FF00</span>, <span class="str">"绿色"</span>),
+    <span class="param">BLUE</span>(<span class="num">0x0000FF</span>, <span class="str">"蓝色"</span>);  <span class="cmt">// 注意: 最后一个枚举值后面要加分号</span>
+
+    <span class="cmt">// 枚举类中的方法</span>
+    <span class="kw">fun</span> <span class="fn">hexString</span>(): <span class="type">String</span> = <span class="str">"#</span><span class="op">${</span>rgb.<span class="fn">toString</span>(<span class="num">16</span>).<span class="fn">padStart</span>(<span class="num">6</span>, <span class="str">'0'</span>)<span class="op">}</span><span class="str">"</span>
+}
+
+<span class="kw">val</span> color = <span class="type">Color</span>.<span class="param">RED</span>
+<span class="fn">println</span>(color.<span class="param">displayName</span>)  <span class="cmt">// 红色</span>
+<span class="fn">println</span>(color.<span class="fn">hexString</span>())  <span class="cmt">// #ff0000</span>
+
+<span class="cmt">// 遍历所有枚举值</span>
+<span class="type">Color</span>.<span class="fn">entries</span>.<span class="fn">forEach</span> {
+    <span class="fn">println</span>(<span class="str">"</span><span class="op">${</span>it.<span class="param">name</span><span class="op">}</span><span class="str">: </span><span class="op">${</span>it.<span class="param">displayName</span><span class="op">}</span><span class="str"> (</span><span class="op">${</span>it.<span class="fn">hexString</span>()<span class="op">}</span><span class="str">)"</span>)
+}
+
+<span class="cmt">// 从字符串解析枚举</span>
+<span class="kw">val</span> fromString = <span class="type">Color</span>.<span class="fn">valueOf</span>(<span class="str">"GREEN"</span>)  <span class="cmt">// Color.GREEN</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">枚举 vs 密封类：名册与阵法之别</p>
+    <ul>
+      <li><strong>枚举类</strong>：每个值都是单例，不能携带不同的数据结构。适合简单的固定名册——如同"前锋、中军、后卫"。</li>
+      <li><strong>密封类</strong>：每个子类可以有不同的属性和结构。适合需要携带不同军情的场景——如同"胜利报文、失败原因、待命信号"。</li>
+    </ul>
+  </div>
+
+  <!-- ========== 4.7 对象声明与伴生对象 ========== -->
+  <h2 id="object">4.7 对象声明与伴生对象 —— 中军大帐与参谋部</h2>
+
+  <h3>object：中军大帐（单例模式一行搞定）</h3>
+  <p>每支军队只有一个中军大帐——这就是单例模式。Kotlin 的 <code>object</code> 声明在语言层面直接支持单例，无需 Java 那套私有构造器、静态实例、双重检查锁的繁琐阵法：</p>
+
+<pre><code><span class="kw">object</span> <span class="type">DatabaseConfig</span> {
+    <span class="kw">val</span> <span class="param">url</span> = <span class="str">"jdbc:mysql://localhost:3306/mydb"</span>
+    <span class="kw">val</span> <span class="param">maxConnections</span> = <span class="num">10</span>
+
+    <span class="kw">fun</span> <span class="fn">connect</span>() {
+        <span class="fn">println</span>(<span class="str">"连接到 </span><span class="op">$</span>url<span class="str">"</span>)
+    }
+}
+
+<span class="cmt">// 直接通过类名访问，无需 getInstance()</span>
+<span class="type">DatabaseConfig</span>.<span class="fn">connect</span>()
+<span class="fn">println</span>(<span class="type">DatabaseConfig</span>.<span class="param">maxConnections</span>)  <span class="cmt">// 10</span></code></pre>
+
+  <p>一个 <code>object</code> 关键字，便稳如泰山，线程安全，全局唯一——运筹帷幄，就是这般从容。</p>
+
+  <h3>companion object：参谋部（类似 Java static 的替代）</h3>
+  <p>Kotlin 没有 <code>static</code> 关键字。要实现类似功能，使用 <code>companion object</code>——它就像兵种蓝图里的"参谋部"，不依附于具体士兵，而是服务于整个兵种：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">User</span> <span class="kw">private constructor</span>(
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Long</span>,
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>
+) {
+    <span class="kw">companion object</span> {
+        <span class="kw">private var</span> <span class="param">nextId</span> = <span class="num">0L</span>
+
+        <span class="cmt">// 工厂方法</span>
+        <span class="kw">fun</span> <span class="fn">create</span>(<span class="param">name</span>: <span class="type">String</span>): <span class="type">User</span> {
+            <span class="kw">return</span> <span class="type">User</span>(<span class="op">++</span>nextId, name)
+        }
+
+        <span class="cmt">// "常量"</span>
+        <span class="kw">const val</span> <span class="param">MAX_NAME_LENGTH</span> = <span class="num">50</span>
+    }
+}
+
+<span class="cmt">// 使用: 看起来就像调用静态方法</span>
+<span class="kw">val</span> user = <span class="type">User</span>.<span class="fn">create</span>(<span class="str">"张三"</span>)
+<span class="fn">println</span>(<span class="type">User</span>.<span class="param">MAX_NAME_LENGTH</span>)  <span class="cmt">// 50</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">参谋部的真正实力</p>
+    <p>companion object 实际上是一个单例对象，只不过它依附于外部类。它可以有名字，可以实现接口，还可以有扩展函数——这些都是 Java <code>static</code> 做不到的。犹如参谋部不仅出谋划策，还能独立执行任务。</p>
+  </div>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>Kotlin 没有 <code>static</code> 关键字，这一点与 C++ 差异极大。C++ 中 <code>static</code> 成员变量和方法属于类本身，而 Kotlin 用 <code>companion object</code>（伴生对象）来替代。关键区别在于：<strong>companion object 是一个真正的对象实例</strong>，它可以实现接口、被赋值给变量、拥有扩展函数——这些都是 C++ 的 <code>static</code> 成员做不到的。同时，Kotlin 的 <code>object</code> 声明替代了 C++ 中手写单例（Meyers' Singleton 等模式）的需求，天生线程安全，无需操心 <code>std::call_once</code> 或双重检查锁。</p>
+  </div>
+
+  <h3>对象表达式：临时征召</h3>
+  <p>有时你需要临时征召一批无名将士来执行特殊任务。Kotlin 用 <code>object</code> 表达式代替 Java 的匿名内部类：</p>
+
+<pre><code><span class="cmt">// Java 风格的匿名内部类（在 Android 中很常见）</span>
+<span class="kw">val</span> listener = <span class="kw">object</span> : <span class="type">View.OnClickListener</span> {
+    <span class="kw">override fun</span> <span class="fn">onClick</span>(<span class="param">v</span>: <span class="type">View</span>) {
+        <span class="fn">println</span>(<span class="str">"按钮被点击了"</span>)
+    }
+}
+
+<span class="cmt">// 也可以创建不继承任何类的匿名对象</span>
+<span class="kw">val</span> adHoc = <span class="kw">object</span> {
+    <span class="kw">val</span> <span class="param">x</span> = <span class="num">10</span>
+    <span class="kw">val</span> <span class="param">y</span> = <span class="num">20</span>
+}
+<span class="fn">println</span>(<span class="str">"</span><span class="op">${</span>adHoc.x<span class="op">}</span><span class="str">, </span><span class="op">${</span>adHoc.y<span class="op">}</span><span class="str">"</span>)  <span class="cmt">// 10, 20</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">军师锦囊</p>
+    <p>如果匿名内部类只有一个抽象方法（SAM 接口），Kotlin 可以用 Lambda 代替，更加简洁——以少胜多，方为上策：<br>
+    <code>button.setOnClickListener { println("点击!") }</code></p>
+  </div>
+
+  <!-- ========== 4.8 可见性修饰符 ========== -->
+  <h2 id="visibility">4.8 可见性修饰符 —— 军事机密等级</h2>
+
+  <p>战场上情报有机密等级，代码亦然。Kotlin 提供了四种可见性修饰符，犹如军中的四级保密制度：</p>
+
+  <table>
+    <tr>
+      <th>修饰符</th>
+      <th>类成员</th>
+      <th>顶层声明</th>
+      <th>军事类比</th>
+    </tr>
+    <tr>
+      <td><code>public</code>（默认）</td>
+      <td>到处可见</td>
+      <td>到处可见</td>
+      <td>公开军令，全军皆知</td>
+    </tr>
+    <tr>
+      <td><code>private</code></td>
+      <td>只在类内可见</td>
+      <td>只在当前文件内可见</td>
+      <td>最高机密，仅限本营</td>
+    </tr>
+    <tr>
+      <td><code>protected</code></td>
+      <td>类内 + 子类可见</td>
+      <td>不可用于顶层声明</td>
+      <td>指挥链密令，上下级共享</td>
+    </tr>
+    <tr>
+      <td><code>internal</code></td>
+      <td>同一模块内可见</td>
+      <td>同一模块内可见</td>
+      <td>战区内部通告，不外传</td>
+    </tr>
+  </table>
+
+<pre><code><span class="kw">class</span> <span class="type">BankAccount</span>(<span class="kw">private var</span> <span class="param">balance</span>: <span class="type">Double</span>) {
+
+    <span class="cmt">// public — 默认，到处可访问</span>
+    <span class="kw">fun</span> <span class="fn">getBalance</span>(): <span class="type">Double</span> = balance
+
+    <span class="cmt">// private — 只有类内部能调用</span>
+    <span class="kw">private fun</span> <span class="fn">validate</span>(<span class="param">amount</span>: <span class="type">Double</span>) {
+        <span class="fn">require</span>(amount <span class="op">&gt;</span> <span class="num">0</span>) { <span class="str">"金额必须大于0"</span> }
+    }
+
+    <span class="cmt">// protected — 类内和子类能调用</span>
+    <span class="kw">protected open fun</span> <span class="fn">log</span>(<span class="param">message</span>: <span class="type">String</span>) {
+        <span class="fn">println</span>(<span class="str">"[LOG] </span><span class="op">$</span>message<span class="str">"</span>)
+    }
+
+    <span class="cmt">// internal — 同一模块（同一个 Gradle 模块）内可访问</span>
+    <span class="kw">internal fun</span> <span class="fn">audit</span>(): <span class="type">String</span> = <span class="str">"余额: </span><span class="op">$</span>balance<span class="str">"</span>
+
+    <span class="kw">fun</span> <span class="fn">deposit</span>(<span class="param">amount</span>: <span class="type">Double</span>) {
+        <span class="fn">validate</span>(amount)
+        balance <span class="op">+=</span> amount
+        <span class="fn">log</span>(<span class="str">"存入 </span><span class="op">$</span>amount<span class="str">"</span>)
+    }
+}</code></pre>
+
+  <h3>三阵营可见性对比</h3>
+
+  <table>
+    <tr>
+      <th>特性</th>
+      <th>Kotlin</th>
+      <th>Java</th>
+      <th>C++</th>
+    </tr>
+    <tr>
+      <td>默认可见性</td>
+      <td><code>public</code></td>
+      <td>package-private（包级私有）</td>
+      <td><code>private</code>（class）/ <code>public</code>（struct）</td>
+    </tr>
+    <tr>
+      <td>package-private</td>
+      <td>没有这个概念</td>
+      <td>默认可见性</td>
+      <td>没有对应概念（可用 friend）</td>
+    </tr>
+    <tr>
+      <td><code>internal</code></td>
+      <td>同一模块内可见</td>
+      <td>没有对应概念</td>
+      <td>没有对应概念</td>
+    </tr>
+    <tr>
+      <td><code>private</code>（顶层）</td>
+      <td>文件级私有</td>
+      <td>不适用</td>
+      <td>类似匿名命名空间 / <code>static</code></td>
+    </tr>
+    <tr>
+      <td><code>friend</code></td>
+      <td>没有此概念</td>
+      <td>没有此概念</td>
+      <td>允许指定类/函数访问 private 成员</td>
+    </tr>
+  </table>
+
+  <div class="warning">
+    <p class="tip-title">战略要点</p>
+    <p><code>internal</code> 修饰符在 Android 多模块项目中乃战略利器。它允许你在模块内自由调度 API，同时防止其他模块直接渗透内部实现。当你在设计 SDK 或公共库时，<code>internal</code> 是隐藏内部机密的铁壁——善守者，敌不知其所攻也。</p>
+  </div>
+
+  <!-- ========== 本章小结 ========== -->
+  <h2 id="summary">本章小结</h2>
+
+  <p>各位将军，本章的排兵布阵已到尾声。让我们回顾这张 OOP 战略全图：</p>
+
+  <ul>
+    <li><strong>类与构造器</strong> — 兵种蓝图。主构造器直接写在类名后面，<code>val</code>/<code>var</code> 参数自动成为属性，化繁为简，上兵伐谋。</li>
+    <li><strong>属性</strong> — 兵种装备。取代了 Java 的字段+getter/setter 模式，支持自定义访问器、<code>lateinit</code>（先声后装）和 <code>by lazy</code>（以逸待劳）。</li>
+    <li><strong>继承与接口</strong> — 指挥链与军令协议。类默认 <code>final</code>（铁壁防御），需要 <code>open</code> 才能继承；接口可以有默认实现。</li>
+    <li><strong>data class</strong> — 军情档案。一行代码自动生成 <code>equals()</code>、<code>hashCode()</code>、<code>toString()</code>、<code>copy()</code> 和解构声明。</li>
+    <li><strong>sealed class</strong> — 独门阵法。限制子类范围，与 <code>when</code> 完美配合，布下天罗地网，不留遗漏。</li>
+    <li><strong>enum class</strong> — 固定名册。用于固定兵种编制，可以携带属性和方法。</li>
+    <li><strong>object / companion object</strong> — 中军大帐与参谋部。语言级别的单例支持和 <code>static</code> 替代方案。</li>
+    <li><strong>可见性修饰符</strong> — 军事机密等级。默认 <code>public</code>，新增 <code>internal</code>（战区级），没有 package-private。</li>
+  </ul>
+
+  <p>记住军师之言：「先设计蓝图，再排兵布阵。」OOP 之精髓不在于写代码的速度，而在于架构设计的深度。下一章，我们将进入 Kotlin 的"杀手级特性"——空安全、扩展函数、Lambda 与高阶函数。那才是 Kotlin 真正亮剑的时刻。</p>
+
+  <!-- ========== 练习题 ========== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：定义兵种蓝图 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建一个 <code>Soldier</code> 类，包含姓名（<code>name: String</code>）、攻击力（<code>attack: Int</code>）和防御力（<code>defense: Int</code>，默认值为 10）。使用主构造器定义属性，并添加一个 <code>introduce()</code> 方法打印士兵信息。创建两个 Soldier 对象并调用该方法。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>利用主构造器的 <code>val</code> 参数直接声明属性，使用默认参数值来简化构造。<code>introduce()</code> 方法中可用字符串模板 <code>$name</code> 来拼接输出。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">Soldier</span>(
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">attack</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">defense</span>: <span class="type">Int</span> = <span class="num">10</span>
+) {
+    <span class="kw">fun</span> <span class="fn">introduce</span>() {
+        <span class="fn">println</span>(<span class="str">"士兵 </span><span class="op">$</span>name<span class="str">: 攻击力=</span><span class="op">$</span>attack<span class="str">, 防御力=</span><span class="op">$</span>defense<span class="str">"</span>)
+    }
+}
+
+<span class="kw">val</span> s1 = <span class="type">Soldier</span>(<span class="str">"赵云"</span>, <span class="num">95</span>, <span class="num">88</span>)
+<span class="kw">val</span> s2 = <span class="type">Soldier</span>(<span class="str">"张飞"</span>, <span class="num">98</span>)  <span class="cmt">// defense 使用默认值 10</span>
+s1.<span class="fn">introduce</span>()  <span class="cmt">// 士兵 赵云: 攻击力=95, 防御力=88</span>
+s2.<span class="fn">introduce</span>()  <span class="cmt">// 士兵 张飞: 攻击力=98, 防御力=10</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：建立指挥链（继承） <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>定义一个 <code>open class Weapon(val name: String, val damage: Int)</code>，然后创建两个子类 <code>Sword</code>（近战武器，额外属性 <code>length: Double</code>）和 <code>Bow</code>（远程武器，额外属性 <code>range: Int</code>）。每个子类重写一个 <code>open fun describe()</code> 方法，输出武器的详细描述。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>父类需要标记为 <code>open</code>，方法也需要 <code>open</code> 才能被子类重写。子类构造器中，父类参数不加 <code>val</code>/<code>var</code>（因为已在父类中声明），子类自己的新属性才需要加。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">open class</span> <span class="type">Weapon</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">damage</span>: <span class="type">Int</span>) {
+    <span class="kw">open fun</span> <span class="fn">describe</span>() {
+        <span class="fn">println</span>(<span class="str">"武器: </span><span class="op">$</span>name<span class="str">, 伤害: </span><span class="op">$</span>damage<span class="str">"</span>)
+    }
+}
+
+<span class="kw">class</span> <span class="type">Sword</span>(
+    <span class="param">name</span>: <span class="type">String</span>,
+    <span class="param">damage</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">length</span>: <span class="type">Double</span>
+) : <span class="type">Weapon</span>(name, damage) {
+    <span class="kw">override fun</span> <span class="fn">describe</span>() {
+        <span class="fn">println</span>(<span class="str">"近战武器 </span><span class="op">$</span>name<span class="str">: 伤害=</span><span class="op">$</span>damage<span class="str">, 长度=</span><span class="op">${</span>length<span class="op">}</span><span class="str">m"</span>)
+    }
+}
+
+<span class="kw">class</span> <span class="type">Bow</span>(
+    <span class="param">name</span>: <span class="type">String</span>,
+    <span class="param">damage</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">range</span>: <span class="type">Int</span>
+) : <span class="type">Weapon</span>(name, damage) {
+    <span class="kw">override fun</span> <span class="fn">describe</span>() {
+        <span class="fn">println</span>(<span class="str">"远程武器 </span><span class="op">$</span>name<span class="str">: 伤害=</span><span class="op">$</span>damage<span class="str">, 射程=</span><span class="op">${</span>range<span class="op">}</span><span class="str">m"</span>)
+    }
+}
+
+<span class="kw">val</span> sword = <span class="type">Sword</span>(<span class="str">"青龙偃月刀"</span>, <span class="num">95</span>, <span class="num">2.1</span>)
+<span class="kw">val</span> bow = <span class="type">Bow</span>(<span class="str">"落日弓"</span>, <span class="num">78</span>, <span class="num">150</span>)
+sword.<span class="fn">describe</span>()  <span class="cmt">// 近战武器 青龙偃月刀: 伤害=95, 长度=2.1m</span>
+bow.<span class="fn">describe</span>()    <span class="cmt">// 远程武器 落日弓: 伤害=78, 射程=150m</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：军情速递（data class） <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建一个 <code>data class BattleReport</code>，包含 <code>location: String</code>（战场）、<code>result: String</code>（结果）、<code>casualties: Int</code>（伤亡）。创建两个相同内容的 BattleReport 对象，验证 <code>==</code> 比较结果为 <code>true</code>，然后用 <code>copy()</code> 创建一个修改了 result 的副本。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p><code>data class</code> 自动生成基于属性值的 <code>equals()</code>，所以内容相同的两个对象比较结果为 <code>true</code>。<code>copy()</code> 方法可以使用命名参数修改部分属性。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">data class</span> <span class="type">BattleReport</span>(
+    <span class="kw">val</span> <span class="param">location</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">result</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">casualties</span>: <span class="type">Int</span>
+)
+
+<span class="kw">val</span> r1 = <span class="type">BattleReport</span>(<span class="str">"赤壁"</span>, <span class="str">"胜利"</span>, <span class="num">3000</span>)
+<span class="kw">val</span> r2 = <span class="type">BattleReport</span>(<span class="str">"赤壁"</span>, <span class="str">"胜利"</span>, <span class="num">3000</span>)
+
+<span class="fn">println</span>(r1 <span class="op">==</span> r2)  <span class="cmt">// true — 内容相同</span>
+<span class="fn">println</span>(r1)        <span class="cmt">// BattleReport(location=赤壁, result=胜利, casualties=3000)</span>
+
+<span class="kw">val</span> r3 = r1.<span class="fn">copy</span>(result = <span class="str">"惨败"</span>)
+<span class="fn">println</span>(r3)        <span class="cmt">// BattleReport(location=赤壁, result=惨败, casualties=3000)</span>
+
+<span class="cmt">// 解构声明</span>
+<span class="kw">val</span> (<span class="param">loc</span>, <span class="param">res</span>, <span class="param">cas</span>) = r1
+<span class="fn">println</span>(<span class="str">"</span><span class="op">$</span>loc<span class="str">之战: </span><span class="op">$</span>res<span class="str">, 伤亡 </span><span class="op">$</span>cas<span class="str">"</span>)  <span class="cmt">// 赤壁之战: 胜利, 伤亡 3000</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：设计独门阵法（sealed class） <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>设计一个 <code>sealed class Command</code> 来表示军队的指令系统，包含以下子类型：</p>
+      <ul>
+        <li><code>Attack(val target: String, val troops: Int)</code> — 进攻</li>
+        <li><code>Defend(val position: String)</code> — 防守</li>
+        <li><code>Retreat</code> — 撤退（使用 <code>data object</code>）</li>
+        <li><code>Ambush(val location: String, val duration: Int)</code> — 埋伏</li>
+      </ul>
+      <p>然后编写一个 <code>executeCommand(cmd: Command)</code> 函数，使用 <code>when</code> 表达式处理每种指令并打印相应的执行信息。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>sealed class 的子类可以是 <code>data class</code>（携带数据）或 <code>data object</code>（单例，不携带数据）。<code>when</code> 表达式中使用 <code>is</code> 关键字匹配子类型，匹配后可以直接访问子类的属性（智能转换）。因为是 sealed class，不需要 <code>else</code> 分支。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">sealed class</span> <span class="type">Command</span> {
+    <span class="kw">data class</span> <span class="type">Attack</span>(
+        <span class="kw">val</span> <span class="param">target</span>: <span class="type">String</span>,
+        <span class="kw">val</span> <span class="param">troops</span>: <span class="type">Int</span>
+    ) : <span class="type">Command</span>()
+
+    <span class="kw">data class</span> <span class="type">Defend</span>(
+        <span class="kw">val</span> <span class="param">position</span>: <span class="type">String</span>
+    ) : <span class="type">Command</span>()
+
+    <span class="kw">data object</span> <span class="type">Retreat</span> : <span class="type">Command</span>()
+
+    <span class="kw">data class</span> <span class="type">Ambush</span>(
+        <span class="kw">val</span> <span class="param">location</span>: <span class="type">String</span>,
+        <span class="kw">val</span> <span class="param">duration</span>: <span class="type">Int</span>
+    ) : <span class="type">Command</span>()
+}
+
+<span class="kw">fun</span> <span class="fn">executeCommand</span>(<span class="param">cmd</span>: <span class="type">Command</span>) {
+    <span class="kw">when</span> (cmd) {
+        <span class="kw">is</span> <span class="type">Command.Attack</span> <span class="op">-&gt;</span>
+            <span class="fn">println</span>(<span class="str">"进攻 </span><span class="op">${</span>cmd.target<span class="op">}</span><span class="str">! 出兵 </span><span class="op">${</span>cmd.troops<span class="op">}</span><span class="str"> 人"</span>)
+        <span class="kw">is</span> <span class="type">Command.Defend</span> <span class="op">-&gt;</span>
+            <span class="fn">println</span>(<span class="str">"坚守 </span><span class="op">${</span>cmd.position<span class="op">}</span><span class="str"> 阵地!"</span>)
+        <span class="type">Command.Retreat</span> <span class="op">-&gt;</span>
+            <span class="fn">println</span>(<span class="str">"鸣金收兵，全军撤退!"</span>)
+        <span class="kw">is</span> <span class="type">Command.Ambush</span> <span class="op">-&gt;</span>
+            <span class="fn">println</span>(<span class="str">"在 </span><span class="op">${</span>cmd.location<span class="op">}</span><span class="str"> 设伏 </span><span class="op">${</span>cmd.duration<span class="op">}</span><span class="str"> 小时"</span>)
+    }
+}
+
+<span class="cmt">// 测试</span>
+<span class="fn">executeCommand</span>(<span class="type">Command</span>.<span class="type">Attack</span>(<span class="str">"曹营"</span>, <span class="num">5000</span>))
+<span class="fn">executeCommand</span>(<span class="type">Command</span>.<span class="type">Defend</span>(<span class="str">"汉中"</span>))
+<span class="fn">executeCommand</span>(<span class="type">Command</span>.<span class="type">Retreat</span>)
+<span class="fn">executeCommand</span>(<span class="type">Command</span>.<span class="type">Ambush</span>(<span class="str">"华容道"</span>, <span class="num">3</span>))</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：参谋部设计（companion object + 接口） <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>设计一个 <code>interface Describable</code>，包含一个 <code>fun describe(): String</code> 方法。然后创建一个 <code>class Army</code>，它的 <code>companion object</code> 实现 <code>Describable</code> 接口，并提供一个工厂方法 <code>create(name: String, size: Int): Army</code>。工厂方法应自动分配递增的 ID。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>companion object 可以实现接口——这是 Java <code>static</code> 做不到的。在 companion object 内部维护一个 <code>private var nextId</code> 作为自增 ID 计数器。构造器可以设为 <code>private</code>，强制通过工厂方法创建实例。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">interface</span> <span class="type">Describable</span> {
+    <span class="kw">fun</span> <span class="fn">describe</span>(): <span class="type">String</span>
+}
+
+<span class="kw">class</span> <span class="type">Army</span> <span class="kw">private constructor</span>(
+    <span class="kw">val</span> <span class="param">id</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">size</span>: <span class="type">Int</span>
+) {
+    <span class="kw">companion object</span> : <span class="type">Describable</span> {
+        <span class="kw">private var</span> <span class="param">nextId</span> = <span class="num">0</span>
+
+        <span class="kw">fun</span> <span class="fn">create</span>(<span class="param">name</span>: <span class="type">String</span>, <span class="param">size</span>: <span class="type">Int</span>): <span class="type">Army</span> {
+            <span class="kw">return</span> <span class="type">Army</span>(<span class="op">++</span>nextId, name, size)
+        }
+
+        <span class="kw">override fun</span> <span class="fn">describe</span>(): <span class="type">String</span> {
+            <span class="kw">return</span> <span class="str">"Army 工厂: 已创建 </span><span class="op">$</span>nextId<span class="str"> 支军队"</span>
+        }
+    }
+
+    <span class="kw">override fun</span> <span class="fn">toString</span>(): <span class="type">String</span> {
+        <span class="kw">return</span> <span class="str">"Army #</span><span class="op">$</span>id<span class="str">: </span><span class="op">$</span>name<span class="str"> (</span><span class="op">${</span>size<span class="op">}</span><span class="str"> 人)"</span>
+    }
+}
+
+<span class="kw">val</span> a1 = <span class="type">Army</span>.<span class="fn">create</span>(<span class="str">"虎豹骑"</span>, <span class="num">5000</span>)
+<span class="kw">val</span> a2 = <span class="type">Army</span>.<span class="fn">create</span>(<span class="str">"白马义从"</span>, <span class="num">3000</span>)
+<span class="fn">println</span>(a1)  <span class="cmt">// Army #1: 虎豹骑 (5000 人)</span>
+<span class="fn">println</span>(a2)  <span class="cmt">// Army #2: 白马义从 (3000 人)</span>
+<span class="fn">println</span>(<span class="type">Army</span>.<span class="fn">describe</span>())  <span class="cmt">// Army 工厂: 已创建 2 支军队</span></code></pre>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

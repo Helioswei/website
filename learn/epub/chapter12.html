@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第12章：渲染到电子墨水屏 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="12" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第12章：渲染到电子墨水屏——数据如何在屏幕上定格</h1>
+  <p class="chapter-subtitle">上一章给每个元素记好了坐标，这章把它们变成笔画。但电子墨水屏刷一次要数百毫秒，真正的艺术是取舍。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程，为每个像素负责</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「达芬奇画的是光影，工程师画的是像素。上一章我们把每个元素的位置都算好了，这一章的任务只是"照着坐标落笔"——听起来不难，对吧？可真正的挑战藏在落笔之后：电子墨水屏不是画布，它刷一次要几百毫秒，刷完还要定格给你看一整页。于是每一帧都在考验一个取舍——这页是只有黑白，还是要掺进灰阶？纯黑白翻页飞快，一旦出现灰阶就得整屏慢刷。别小看这一问，它就是电子墨水屏的灵魂，也是"艺术与工程"交界的那个点。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 12.1 渲染模型 ========== -->
+  <h2>12.1 渲染模型：一页就是"一串带 y 坐标的元素"</h2>
+
+  <p>翻页时，负责<strong>渲染</strong>（说人话：把内存里的画面数据变成屏幕上的显示，也就是把排好的内容"画出来"）的 <code>EpubReader::render()</code> 只做一件事：调用 <code>parser-&gt;render_page(state.current_page, renderer, epub)</code> 画当前这一页。而 <code>render_page</code> 的核心逻辑非常轻：先 <code>clear_screen()</code> 清空帧缓冲，然后让 <code>pages.at(page_index)</code> 自己把元素逐个画出来。<code>Page::render</code> 就是一个遍历——对 <code>elements</code> 里的每个 <code>PageElement</code> 调用它的 <code>render(renderer, epub)</code>。这正是 README 说的那句话：<em>"Rendering each page is trivial - we know the y position of each element on the page."</em>（渲染每页是琐碎的——我们已经知道每个元素在页面上的 y 位置。）分页阶段把最难的排版做完了，渲染只是执行。</p>
+
+  <p>元素各自知道怎么画自己：<code>PageLine</code> 把"来自哪个块、第几行"翻译成一次文本渲染；<code>PageImage</code> 把图片按已算好的<strong>坐标</strong>（说人话：画面上的位置编号，用横向 x、纵向 y 两个数就能定位一个点）画出来。这套"接口 + 多态"的设计让 <code>Page</code> 完全不需要关心元素种类——加一种新元素（比如表格）时，只要它实现 <code>PageElement::render</code>，分页和渲染的骨架都不用动。看 <code>lib/Epub/RubbishHtmlParser/Page.h</code> 里的真实代码。</p>
+
+<pre><code><span class="cmt">/* Page.h：每个元素都自带"怎么画自己" */</span>
+<span class="kw">void</span> Page::render(Renderer *renderer, Epub *epub) {
+  <span class="kw">for</span> (<span class="kw">auto</span> element : elements) {
+    element-&gt;render(renderer, epub);
+  }
+}
+
+<span class="cmt">// PageLine：画一行文字（line_break_index 指定块内第几行）</span>
+<span class="kw">void</span> PageLine::render(Renderer *renderer, Epub *epub) {
+  block-&gt;render(renderer, line_break_index, <span class="num">0</span>, y_pos);
+}
+
+<span class="cmt">// PageImage：画一张图片（x 已居中算好，画在 y_pos）</span>
+<span class="kw">void</span> PageImage::render(Renderer *renderer, Epub *epub) {
+  block-&gt;render(renderer, epub, y_pos);
+}</code></pre>
+
+  <p><code>render_page</code> 还有两个值得注意的细节。其一，<code>clear_screen()</code> 之后，若 <code>renderer-&gt;has_gray()</code> 为真，会先 <code>flush_display()</code> 一次——这是 EPDiy 专用的小技巧：上一帧如果画过灰阶内容，先整屏慢刷一次把残留清干净，再画本页。其二，当请求的页码越界（翻过全书最后一页）时，<code>pages.at()</code> 会抛 <code>std::out_of_range</code>，代码捕获后在屏幕中央画一个提示框。这两处体现了防御式编程。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser::render_page —— 真正画一页 */</span>
+<span class="type">void</span> RubbishHtmlParser::render_page(<span class="type">int</span> page_index, Renderer *renderer, Epub *epub) {
+  renderer-&gt;clear_screen();                <span class="cmt">// 清空帧缓冲</span>
+  <span class="kw">if</span> (renderer-&gt;has_gray()) {
+    renderer-&gt;flush_display();             <span class="cmt">// 上一帧有灰阶 → 先慢刷清场</span>
+  }
+  <span class="kw">try</span> {
+    pages.at(page_index)-&gt;render(renderer, epub);
+  } <span class="kw">catch</span> (<span class="kw">const</span> std::out_of_range &amp;oor) {
+    <span class="cmt">// 翻过最后一页：画提示框</span>
+    renderer-&gt;draw_text_box(
+        <span class="str">"Reached the limit of the book\nUse the SELECT button"</span>,
+        <span class="num">10</span>, y, renderer-&gt;get_page_width(), <span class="num">80</span>, <span class="kw">false</span>, <span class="kw">false</span>);
+  }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>体会"分页记账、渲染执行"的分工：第 11 章算的是<em>这页该有什么</em>，本章做的是<em>怎么把东西画出来</em>。正是这种解耦，让 <code>test/</code> 里跑分页单元测试时完全不需要屏幕，也让 <code>ConsoleRenderer</code> 可以把页面"打印到串口"来调试渲染逻辑。画布可以换，而内容与布局自岿然不动。</p>
+  </div>
+
+  <!-- ========== 12.2 文字逐词绘制 ========== -->
+  <h2>12.2 文字逐词绘制，图片居中绘制</h2>
+
+  <p>文字渲染的关键在于：<strong>第 10 章换行时已经把每个单词的 x 坐标算好了</strong>（存在 <code>word_xpos[]</code> 里），渲染只是把它们读出来。看 <code>TextBlock::render</code> 的真实实现：先用 <code>line_break_index</code> 反推出这一行的起止单词下标 <code>start/end</code>，然后逐个单词调用 <code>draw_text(x_pos + word_xpos[i], y_pos, words[i], ...)</code>。这样两端对齐（<code>JUSTIFIED</code>）行被拉开的字间距、居中行被推算的起始 x，都已经"固化"在 <code>word_xpos</code> 里，绘制时无需再算。</p>
+
+<pre><code><span class="cmt">/* TextBlock::render —— 逐词绘制某一行 */</span>
+<span class="type">void</span> TextBlock::render(Renderer *renderer, <span class="type">int</span> line_break_index, <span class="type">int</span> x_pos, <span class="type">int</span> y_pos) {
+  <span class="type">int</span> start = line_break_index == <span class="num">0</span> ? <span class="num">0</span> : line_breaks[line_break_index - <span class="num">1</span>];
+  <span class="type">int</span> end   = line_breaks[line_break_index];
+  <span class="kw">for</span> (<span class="type">int</span> i = start; i &lt; end; i++) {
+    <span class="type">uint8_t</span> style = word_styles[i];   <span class="cmt">// 该词的粗体/斜体标记</span>
+    renderer-&gt;draw_text(x_pos + word_xpos[i], y_pos,
+                        words[i], style &amp; BOLD_SPAN, style &amp; ITALIC_SPAN);
+  }
+}
+<span class="cmt">// word_xpos[i] 在换行布局时已算好 —— 渲染只是"读坐标"</span></code></pre>
+
+  <p>当这一层调用抵达 <code>EpdiyFrameBufferRenderer::draw_text</code> 时，坐标还要做最后一次换算：页面里存的 <code>y</code> 被当作"该行的顶部"，绘制时再加上一行行高（把基线压下来）和 <code>margin_top</code>；<code>x</code> 则加上 <code>margin_left</code>。然后按粗斜体从四种字体里挑出对应字体，交给 EPDiy 的 <code>epd_write_string</code> 把字符串写进帧缓冲。注意 <code>&amp;xpos</code> 和 <code>&amp;ypos</code> 传的是指针——调用后它们会被推进到字符串的末尾，方便连续书写。</p>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer::draw_text —— 换算坐标后落笔 */</span>
+<span class="type">void</span> draw_text(<span class="type">int</span> x, <span class="type">int</span> y, <span class="kw">const</span> <span class="type">char</span> *text, <span class="type">bool</span> bold, <span class="type">bool</span> italic) {
+  <span class="type">int</span> ypos = y + get_line_height() + margin_top;  <span class="cmt">// 页内 y 是"行顶"</span>
+  <span class="type">int</span> xpos = x + margin_left;
+  epd_write_string(get_font(bold, italic), text, &amp;xpos, &amp;ypos,
+                   m_frame_buffer, &amp;m_font_props);
+}
+
+<span class="cmt">/* 四种字体按粗斜体组合挑选 */</span>
+<span class="kw">const</span> EpdFont *get_font(<span class="type">bool</span> is_bold, <span class="type">bool</span> is_italic) {
+  <span class="kw">if</span> (is_bold &amp;&amp; is_italic) <span class="kw">return</span> m_bold_italic_font;
+  <span class="kw">if</span> (is_bold)             <span class="kw">return</span> m_bold_font;
+  <span class="kw">if</span> (is_italic)           <span class="kw">return</span> m_italic_font;
+  <span class="kw">return</span> m_regular_font;
+}</code></pre>
+
+  <p>图片的绘制则多一步"清场"。<code>ImageBlock::render</code> 在真正画图前，先用一个纯白矩形（<code>fill_rect(..., 255)</code>）盖住图片区域——这是为了擦掉上一页残留的文字<strong>像素</strong>（说人话：屏幕上最小的点，整个画面就是由无数这样的点拼出来的）；接着 <code>flush_area</code> 把这一小块局部刷新上屏（保证残影立刻消失），最后 <code>draw_image</code> 按分页时算好的 <code>x_pos/y_pos/width/height</code> 画图。解码 JPEG 还是 PNG 由 <code>Renderer::get_image_helper</code> 根据文件扩展名或文件头魔数自动判断；若解码失败，会退化成画一个占位矩形，保证页面不至于空缺。</p>
+
+<pre><code><span class="cmt">/* ImageBlock::render —— 先盖白再画图 */</span>
+<span class="type">void</span> ImageBlock::render(Renderer *renderer, Epub *epub, <span class="type">int</span> y_pos) {
+  <span class="type">uint8_t</span> *image_data = epub-&gt;get_item_contents(m_src, &amp;image_data_size);
+  renderer-&gt;fill_rect(x_pos, y_pos, width, height, <span class="num">255</span>);  <span class="cmt">// 盖掉旧残影</span>
+  renderer-&gt;flush_area(x_pos, y_pos, width, height);        <span class="cmt">// 局部快刷</span>
+  renderer-&gt;draw_image(m_src, image_data, image_data_size,
+                       x_pos, y_pos, width, height);
+  <span class="kw">free</span>(image_data);
+}</code></pre>
+
+  <table>
+    <tr><th>元素</th><th>绘制入口</th><th>关键 API</th></tr>
+    <tr><td>文字</td><td><code>TextBlock::render</code></td><td><code>draw_text</code> → <code>epd_write_string</code></td></tr>
+    <tr><td>图片</td><td><code>ImageBlock::render</code></td><td><code>fill_rect</code> + <code>flush_area</code> + <code>draw_image</code></td></tr>
+    <tr><td>图形（提示框/电池）</td><td>各渲染器直接调用</td><td><code>draw_rect</code> / <code>fill_rect</code> / <code>draw_text_box</code></td></tr>
+  </table>
+
+  <!-- ========== 12.3 EPDiy 帧缓冲与刷新 API ========== -->
+  <h2>12.3 EPDiy：帧缓冲与刷新 API</h2>
+
+  <p>所有绘制最终都落在 EPDiy 的帧缓冲上。在 <code>EpdiyRenderer</code> 的构造函数里完成屏幕的"上电三部曲"：<code>epd_init(EPD_OPTIONS_DEFAULT)</code> 初始化硬件；<code>epd_hl_init(EPD_BUILTIN_WAVEFORM)</code> 建立高层状态机并选择内置波形；<code>epd_hl_set_all_white(&amp;m_hl)</code> 先把整屏刷白。随后 <code>m_frame_buffer = epd_hl_get_framebuffer(&amp;m_hl)</code> 拿到帧缓冲指针——此后所有绘制函数（<code>epd_write_string</code>、<code>epd_fill_rect</code> 等）都只是往这块内存里写数据，真正的上屏要等刷新调用。</p>
+
+<pre><code><span class="cmt">/* EpdiyRenderer 构造：启动屏幕、拿帧缓冲 */</span>
+epd_init(EPD_OPTIONS_DEFAULT);
+m_hl = epd_hl_init(EPD_BUILTIN_WAVEFORM);       <span class="cmt">// 内置波形</span>
+epd_hl_set_all_white(&amp;m_hl);                    <span class="cmt">// 首刷全白</span>
+m_frame_buffer = epd_hl_get_framebuffer(&amp;m_hl);
+
+<span class="cmt">/* 整屏刷新：有灰阶走 GC16（慢），纯黑白走 DU（快） */</span>
+<span class="type">void</span> flush_display() {
+  epd_hl_update_screen(&amp;m_hl, needs_gray_flush ? MODE_GC16 : MODE_DU,
+                       temperature);
+  needs_gray_flush = <span class="kw">false</span>;
+}
+
+<span class="cmt">/* 局部刷新：只更新一个矩形区域（如图片区） */</span>
+<span class="type">void</span> flush_area(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height) {
+  epd_hl_update_area(&amp;m_hl, MODE_DU, temperature,
+                     {.x = x, .y = y, .width = width, .height = height});
+}</code></pre>
+
+  <p>帧缓冲的尺寸是一个值得记住的数字：<code>EPD_WIDTH * EPD_HEIGHT / 2</code> 字节——也就是说它<strong>每个像素只占 4 位</strong>（4 比特/像素，16 级灰阶）。因此 <code>clear_screen()</code> 只需一条 <code>memset</code> 就能把整屏刷成纯色；<code>dehydrate()</code> 保存睡眠前画面时也是拿这块缓冲用 miniz 压缩后写盘。另一个容易踩坑的点是旋转：面板物理上是横向的，代码在构造时调用 <code>epd_set_rotation(EPD_ROT_INVERTED_PORTRAIT)</code> 转成竖屏，于是页面宽高是"互换"的——<code>get_page_width()</code> 返回 <code>EPD_HEIGHT - (margin_left + margin_right)</code>，<code>get_page_height()</code> 返回 <code>EPD_WIDTH - (margin_top + margin_bottom)</code>。若忘了这层旋转，坐标会整整偏转 90°。</p>
+
+<pre><code><span class="cmt">/* 帧缓冲：EPD_WIDTH×EPD_HEIGHT/2 字节 = 4 位/像素的灰度缓冲 */</span>
+<span class="type">void</span> clear_screen() {
+  memset(m_frame_buffer, <span class="num">0xFF</span>, EPD_WIDTH * EPD_HEIGHT / <span class="num">2</span>);
+}
+
+<span class="cmt">/* 注意旋转：面板是横向的，页面宽高与 EPD 宽高互换 */</span>
+<span class="type">int</span> get_page_width()  { <span class="kw">return</span> EPD_HEIGHT - (margin_left + margin_right); }
+<span class="type">int</span> get_page_height() { <span class="kw">return</span> EPD_WIDTH  - (margin_top  + margin_bottom); }</code></pre>
+
+  <p>整个刷新流程由 <code>main.cpp</code> 的主循环驱动：用户按键 → 各 <code>handle*</code> 函数重画页面 → 画完电池图标与触摸反馈后调用一次 <code>renderer-&gt;flush_display()</code>。也就是说，EPDiy 采用的是<strong>"整页画进帧缓冲 → 一次性上屏"</strong>的模型：绘制期间屏幕纹丝不动，只有那一下刷新才真正改变画面。这对程序员很友好——不用考虑逐行扫描的时序，画错了擦掉重画即可。</p>
+
+  <table>
+    <tr><th>数据 / API</th><th>值或说明</th></tr>
+    <tr><td>帧缓冲</td><td><code>EPD_WIDTH × EPD_HEIGHT / 2</code> 字节，4 位/像素灰度</td></tr>
+    <tr><td>清屏</td><td><code>memset(fb, 0xFF, ...)</code> 一条清整屏</td></tr>
+    <tr><td>旋转</td><td><code>epd_set_rotation(EPD_ROT_INVERTED_PORTRAIT)</code></td></tr>
+    <tr><td>页面宽/高</td><td><code>EPD_HEIGHT − 左右边距</code> / <code>EPD_WIDTH − 上下边距</code></td></tr>
+    <tr><td>整屏刷新</td><td><code>epd_hl_update_screen(GC16 或 DU, temperature)</code></td></tr>
+    <tr><td>局部刷新</td><td><code>epd_hl_update_area(MODE_DU, rect)</code></td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>刷新函数都接收 <code>temperature</code>（当前温度）参数——EPDiy 用它选择适配低温的波形，因为电子墨水在寒冷时离子迁移变慢，刷新质量会明显下降。这个项目里 <code>Renderer</code> 的 <code>temperature</code> 字段默认 <code>20</code>（摄氏度）。真机验证时，若发现冬天翻页有"重影"或"刷不净"，优先怀疑温度参数而非绘制代码。</p>
+  </div>
+
+  <!-- ========== 12.4 双色与刷新速度 ========== -->
+  <h2>12.4 双色 vs 灰阶：刷新速度的艺术</h2>
+
+  <p>回到 12.3 那段刷新代码里最"艺术"的一行：<code>needs_gray_flush ? MODE_GC16 : MODE_DU</code>。先补个背景概念：电子墨水屏有<strong>双色 vs 灰度</strong>之分（说人话：双色指每个像素只能非黑即白，灰度指像素还能显示多级深浅的灰，本项目两种都支持）。它把<strong>刷新模式</strong>（说人话：刷屏的时序方式——GC16 是逐级全屏慢刷，DU 是直接快速刷新，纯黑白内容与局部小区域都用 DU）分成两档——<strong><code>MODE_GC16</code></strong>（16 级灰阶全刷，画面细腻但要数百毫秒）；<strong><code>MODE_DU</code></strong>（直接更新，只保证纯黑白，速度快得多）。那么谁来决定走哪档？答案是渲染过程中埋下的一个开关：任何绘制只要使用了"非纯黑白"的颜色，<code>needs_gray(color)</code> 就会置位 <code>needs_gray_flush</code>，从而让下一次 <code>flush_display</code> 选择慢而全的 <code>GC16</code>。</p>
+
+<pre><code><span class="cmt">/* 只要画了非纯黑白的像素，就记下：这次需要 GC16 慢刷 */</span>
+<span class="type">void</span> needs_gray(<span class="type">uint8_t</span> color) {
+  <span class="kw">if</span> (color != <span class="num">0</span> &amp;&amp; color != <span class="num">255</span>) {
+    needs_gray_flush = <span class="kw">true</span>;
+  }
+}
+
+<span class="cmt">/* draw_text 里被注释掉的一行 —— 抗锯齿文字会强制灰阶刷新 */</span>
+<span class="cmt">// needs_gray_flush = true;   // 双色字体不需要它，翻页才能快</span></code></pre>
+
+  <p>这正是 README <strong>"Fonts"</strong> 一节强调的重点：字体脚本 <code>scripts/generate_fonts.sh</code> 是 EPDiy 官方脚本的改版，"<em>lets you output the font data in only two colors which lets us update the screen considerably faster</em>"——<strong>只输出双色字体的数据，让整屏更新明显更快</strong>。因为字形是纯黑白的，<code>draw_text</code> 里那行"抗锯齿就强制灰阶"的代码被注释掉了：纯文字页全程只有 <code>0/255</code> 两种像素，翻页就走 <code>MODE_DU</code> 快速通道。反过来，图片（JPEG/PNG 解码出的灰度）里几乎必然出现中间灰阶，<code>draw_image</code> 一旦写进中间色，这一帧就会退化成慢速 <code>GC16</code>。12.1 里那"先 flush 一次清场"的做法，正是在慢刷前先把上一屏的灰阶残留洗干净。</p>
+
+  <table>
+    <tr><th>刷新模式</th><th>支持的颜色</th><th>速度</th><th>触发条件</th></tr>
+    <tr><td><code>MODE_DU</code></td><td>纯黑白（0 / 255）</td><td>快</td><td>页面只有黑白像素（如纯文字页）</td></tr>
+    <tr><td><code>MODE_GC16</code></td><td>16 级灰阶</td><td>慢（数百毫秒）</td><td>页面出现中间灰阶（如图片、抗锯齿）</td></tr>
+  </table>
+
+  <p>灰阶本身也值得一说：即便走进了 <code>GC16</code>，写像素时仍要经过一条伽马校正曲线 <code>gamma_curve[]</code>——把 0..255 的线性灰阶映射到墨水屏真实的物理响应（<code>GAMMA_VALUE = 1.0/0.8</code>，即 1.25 次幂）。原因很简单：墨水屏的电泳响应不是线性的，直接用线性灰度画出来会"中间灰发暗"。这条曲线在构造时用 <code>pow()</code> 一次性算好存表，绘制时查表即可——空间换时间，也是嵌入式里常见的优化。</p>
+
+<pre><code><span class="cmt">/* 伽马校正：把线性灰阶映射到墨水屏的物理响应 */</span>
+<span class="kw">const</span> <span class="type">float</span> GAMMA_VALUE = <span class="num">1.0f</span> / <span class="num">0.8f</span>;
+<span class="kw">for</span> (<span class="type">int</span> v = <span class="num">0</span>; v &lt; <span class="num">256</span>; v++) {
+  gamma_curve[v] = round(<span class="num">255</span> * pow(v / <span class="num">255.0</span>, GAMMA_VALUE));
+}
+<span class="cmt">// draw_pixel 里：颜色先查表校正，再交给 epd_draw_pixel</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>把"双色"想成电子墨水屏的<em>本色</em>，而不是妥协：电纸书几百年来读的就是黑白纸墨。作者为速度主动砍掉抗锯齿与中间灰阶，换来的是"像翻纸质书一样快"的体验——这是把约束变成风格的典型案例。等你做自己的渲染器时，也先问一句：这页真的需要灰阶吗？</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：翻一页的完整调用链 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>按下一个 <code>DOWN</code> 按键，到屏幕定格新一页，中间经历了哪些调用？结合 <code>src/main.cpp</code> 与 <code>EpubReader.cpp</code>，把从按键到 <code>flush_display()</code> 的完整链路写出来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按键进入消息队列 → 主循环 <code>xQueueReceive</code> → <code>handleUserInteraction</code> → <code>handleEpub</code> → … → 最后 <code>renderer-&gt;flush_display()</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>按键 → FreeRTOS 队列 → 主循环 <code>xQueueReceive</code> 收到 <code>DOWN</code> → <code>handleUserInteraction</code> → <code>handleEpub(renderer, DOWN)</code> → <code>reader-&gt;next()</code>（页码 +1，必要时切章节）→ <code>reader-&gt;render()</code> → <code>parser-&gt;render_page(current_page, ...)</code>（清屏、画元素）→ 返回主循环 → 画电池图标 → <code>renderer-&gt;flush_display()</code> → EPDiy 把帧缓冲刷上屏，屏幕定格。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：DU 与 GC16 的取舍 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为什么纯文字页能走快速的 <code>MODE_DU</code>，而含图片的页面通常要走慢速的 <code>MODE_GC16</code>？<code>needs_gray()</code> 在什么条件下置位？如果启用抗锯齿文字，翻页体验会怎样变化（结合 <code>draw_text</code> 里被注释掉的那行）？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>关键在"是否出现了非纯黑白像素"；抗锯齿会在字形边缘产生中间灰阶，从而强制慢刷。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>MODE_DU</code> 只保证纯黑白，因此只有页面里所有像素都是 <code>0</code> 或 <code>255</code> 时才安全；<code>needs_gray(color)</code> 在 <code>color != 0 &amp;&amp; color != 255</code>（即中间灰阶）时置位 <code>needs_gray_flush</code>，使本次 <code>flush_display</code> 改用 <code>MODE_GC16</code>。文字字形是双色的，不产生中间灰阶，故纯文字页走 DU、翻页飞快；JPEG/PNG 图片解码出的灰阶会触发 GC16 慢刷。若为文字启用抗锯齿，字形边缘出现中间灰阶，每翻一页都要整屏慢刷——这正是作者注释掉那行、坚持双色字体的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：计算帧缓冲 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以 4.7 英寸的 <code>ED047TC2</code> 面板（960×540）为例：它的帧缓冲是多少字节？为什么 <code>clear_screen()</code> 一条 <code>memset</code> 就能清掉整屏？这份内存会放在 ESP32 的哪一块区域（提示：结合第 1 章的 PSRAM 讨论）？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>960 × 540 / 2</code> 字节；memset 不需要关心像素含义，只要整块置同一值；PSRAM 是为了容纳这种大缓冲与解析峰值。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>帧缓冲按 4 位/像素存储，大小 = <code>960 × 540 / 2 = 259200</code> 字节 ≈ 253 kB。因为是"每个字节存两个像素"，<code>memset(m_frame_buffer, 0xFF, ...)</code> 把整块缓冲统一置值即完成清屏，无需逐像素处理。这块缓冲（连同 EPUB 解析、图片解码的临时内存）远超 ESP32 内部约 520 kB 的 SRAM 预算，因此必须放在外挂 PSRAM 里——这正是 README 把 PSRAM 列为硬性要求的直接原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：图片区域为什么先盖白再画 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>阅读 <code>ImageBlock::render</code>：为什么画图前要先 <code>fill_rect(..., 255)</code> 再 <code>flush_area</code>？如果去掉 <code>flush_area</code>、只保留 <code>fill_rect</code>，会有什么后果？请结合"帧缓冲 vs 屏幕上屏"两个层次分析。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>帧缓冲里改了像素不等于屏幕变了，只有刷新才上屏；图片区可能残留上一页的文字，若不让它在画图前先"白掉"，残影会一闪而过或残留。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>图片区域在上一页可能印着文字。绘制前 <code>fill_rect(255)</code> 先把这块在帧缓冲里涂白；随后 <code>flush_area</code> 用 <code>MODE_DU</code> 把这一小块立即局部刷上屏——若省略它，屏幕上的旧文字仍残留（帧缓冲变了、屏幕没变），直到整屏刷新才被盖掉，视觉上出现"旧字叠新图"。去掉 <code>flush_area</code> 后，图片区域会出现上一页文字残影，只有翻到下一页（触发整屏 <code>flush_display</code>）才会消失。这个例子生动说明"画进帧缓冲"与"刷到屏幕"是两步：前者廉价、后者昂贵，局部刷新正是对"昂贵"的那一步精打细算。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章：EPUB 格式解密（zip + miniz） - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="7" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：EPUB 格式解密——zip 与 miniz</h1>
+  <p class="chapter-subtitle">你管它叫 EPUB，它却偷偷把自己压缩成了 zip——破案要从拆包开始。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一桩悬案摆在面前：你管它叫 EPUB，以为它就是一本装订好的书。可把它拆开一看，里面竟是一个压缩包，装着几十个毫无章法的文件——哪个是真凶、哪个是替罪羊，全藏在归档的中央目录里。要破这个案子，得从最不起眼的证据入手：那个被规定必须排在最前面的 mimetype、一份名叫 container.xml 的『地图』、还有一个藏在 META-INF 里的入口。今天我们就顺着这些证据，一层层剥掉 EPUB 的伪装——真相只有一个：它只是一只披着书皮的 zip 罢了。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 揭穿 EPUB ========== -->
+  <h2>7.1 揭穿 EPUB：文件名骗人，其实是 zip 归档</h2>
+
+  <p>先纠正一个直觉：<strong>EPUB 不是一种"书"，而是一种"打包方式"</strong>——本质是一个 <strong>zip 归档</strong>（说人话：一种把多个文件压缩打包成一个文件的格式）。README 在 "How does it work?" 一节的开门见山原话是："Epub files are a bit of a pain to parse. Despite the file extension <code>epub</code>, they are actually zip archives containing multiple files."（EPUB 文件有点难解析。尽管扩展名是 epub，它们实际上是由多个文件组成的 zip 压缩包。）也就是说，所谓"打开一本 EPUB"，第一步从来不是读文字，而是<strong>解压缩</strong>（说人话：zip 的还原过程，把打包压缩起来的文件一个个变回原样；反过来，把一堆文件压成一个包就叫"压缩"）。只要用 <code>unzip -l</code> 列一下仓库 <code>data/</code> 里那本 <code>pg43-images.epub</code>，案件现场就全部摊开了。</p>
+
+  <p>现场有几件关键"物证"。排在第一位的 <code>mimetype</code> 是一个约 20 字节的文件，内容是 <code>application/epub+zip</code>，规格要求它必须是归档里<strong>第一个</strong>文件、且不得压缩——它是整本书的"身份证"。然后是 <code>META-INF/container.xml</code>，一份袖珍 XML，它的任务只有一个：告诉你 <code>content.opf</code> 到底藏在哪里。真正的"书"在 <code>OEBPS/</code> 目录里：<code>content.opf</code>（整本书的清单）、<code>toc.ncx</code>（章节目录）、以及一大堆章节 HTML 和图片。注意那本古登堡书的章节文件名长得离谱（<code>@public@vhost@g@gutenberg@html@files@43@43-h@43-h-1.htm.html</code>）——那是古登堡的 Ebookmaker 工具切分章节时把原始 URL 原样当成了文件名，对解析者来说它们只是"清单里的一串字符"，叫什么都无所谓。</p>
+
+<pre><code><span class="cmt"># unzip -l 揭穿 pg43-images.epub（真实结构节选）</span>
+$ unzip -l /fs/pg43-images.epub
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+       20  2021-08-01 07:34   mimetype                     <span class="cmt"># 身份证：application/epub+zip</span>
+      221  2021-08-01 07:34   META-INF/container.xml      <span class="cmt"># 地图：指向 content.opf</span>
+    <span class="num">15000</span>  2021-08-01 07:34   OEBPS/content.opf           <span class="cmt"># 清单：metadata / manifest / spine</span>
+     <span class="num">7000</span>  2021-08-01 07:34   OEBPS/toc.ncx              <span class="cmt"># 目录：章节目录</span>
+    <span class="num">14064</span>  2021-08-01 07:34   OEBPS/@public@...@43-h-1.htm.html  <span class="cmt"># 第一章正文</span>
+    <span class="num">17603</span>  2021-08-01 07:34   OEBPS/@public@...@43-h-2.htm.html  <span class="cmt"># 第二章正文</span>
+     <span class="num">9699</span>  2021-08-01 07:34   OEBPS/@public@...@43-h-11.htm.html <span class="cmt"># 末章正文</span>
+    <span class="num">222685</span> 2021-08-01 07:34   OEBPS/@public@...@images@cover.jpg  <span class="cmt"># 封面图</span></code></pre>
+
+  <p>顺着 container.xml 的指引，我们来到本案的核心现场。这份 <code>container.xml</code> 只有几行，却定义了整本书的"根"：<code>rootfiles/rootfile</code> 的 <code>full-path</code> 属性写明了 <code>content.opf</code> 的真实路径（这里是 <code>OEBPS/content.opf</code>），而 <code>media-type="application/oebps-package+xml"</code> 是它的身份标识。之所以绕这一圈，是因为规范允许书商把 <code>content.opf</code> 放在任意目录——阅读器必须"先读地图、再找书"，不能拍脑袋猜路径。</p>
+
+<pre><code><span class="cmt">/* META-INF/container.xml：全书唯一的"入口地图"（真实内容） */</span>
+&lt;?xml version=<span class="str">'1.0'</span> encoding=<span class="str">'utf-8'</span>?&gt;
+&lt;container xmlns=<span class="str">"urn:oasis:names:tc:opendocument:xmlns:container"</span> version=<span class="str">"1.0"</span>&gt;
+  &lt;rootfiles&gt;
+    &lt;rootfile full-path=<span class="str">"OEBPS/content.opf"</span>
+              media-type=<span class="str">"application/oebps-package+xml"</span>/&gt;
+  &lt;/rootfiles&gt;
+&lt;/container&gt;</code></pre>
+
+  <table>
+    <tr><th>文件</th><th>在书中的角色</th><th>本项目解析与否</th></tr>
+    <tr><td><code>mimetype</code></td><td>身份证，须为归档第一个文件且不压缩</td><td>不解析（只在 zip 规范层面要求）</td></tr>
+    <tr><td><code>META-INF/container.xml</code></td><td>地图，指向 <code>content.opf</code> 路径</td><td>解析（找 <code>full-path</code>）</td></tr>
+    <tr><td><code>OEBPS/content.opf</code></td><td>清单：metadata / manifest / spine</td><td>解析（第 8 章）</td></tr>
+    <tr><td><code>OEBPS/toc.ncx</code></td><td>章节目录</td><td>解析（第 8 章）</td></tr>
+    <tr><td><code>OEBPS/*.htm.html</code></td><td>章节正文（XHTML）</td><td>解析（第 9 章）</td></tr>
+    <tr><td><code>OEBPS/*.jpg / *.png</code></td><td>封面与插图</td><td>解码显示（第 13 章）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>判断一个文件到底是不是 EPUB，最快的方法不是看扩展名，而是拆包看两点：归档里<strong>第一个</strong>文件是不是 <code>mimetype</code>，以及它的内容是不是 <code>application/epub+zip</code>。在开发机上 <code>file xxx.epub</code> 也会直接告诉你 "Zip archive data"。EPUB 的"伪装"只骗得过操作系统图标，骗不过会拆包的人。</p>
+  </div>
+
+  <!-- ========== 7.2 zip 与 miniz ========== -->
+  <h2>7.2 zip 与 miniz：ROM 里藏着 miniz，但多文件支持被禁用了</h2>
+
+  <p>把 zip 解开需要压缩库，本项目用的是 <strong>miniz</strong>（说人话：一个极小的 zip 压缩解压库）——一个"整个压缩库塞进一个 C 文件"的极简实现。miniz 是 zlib 的独立重实现（同样是 DEFLATE 算法），API 兼容 zlib 最常用的那部分，但完全独立、MIT 许可，特别适合嵌入式。然而有个坑：<strong>miniz 其实早就被内置在 ESP32 的 ROM 里了</strong>——ROM 说人话就是芯片里只读的出厂存储，ESP32 出厂时自带一些固件例程。README 原话是："Miniz is actually built into the ESP32 ROM, but support for multifile archives is disabled."（miniz 实际被内置在 ESP32 的 ROM 中，但对多文件归档的支持被禁用了。）ROM 里的 miniz 只留了单流压缩/解压（inflate/deflate）的能力，能解一段数据，却没法"打开一个 zip、按文件名挑文件、逐个解出来"——这正是我们需要的 zip 归档能力，等于被砍掉了。</p>
+
+  <p>所以 README 给出的答案是换一个 fork："To read the file I'm using a nice zip library from here: lbernstrone/miniz. This library has been modified to work on the ESP32 with PSRAM."（我用了 lbernstrone/miniz 这个不错的 zip 库，它已被修改为在带 PSRAM 的 ESP32 上工作。）注意 README 把仓库名拼成了 <code>lbernstrone</code>（多打了一个 r），真实仓库是 <code>lbernstone/miniz-esp32</code>。而具体到这份代码，实际编译的是 <code>lib/miniz-2.2.0/</code> 里 vendored 的<strong>官方 miniz 2.2.0</strong>：仓库里的 <code>miniz.c</code> 是把所有实现"合并"（amalgamation）后的单文件产物，配一个 <code>miniz.h</code> 头，直接用 <code>#include "miniz.h"</code> 引进来参与编译。从"README 说的 fork"到"仓库里 vendored 的 stock miniz"，又是一处文档与代码的漂移。</p>
+
+<pre><code><span class="cmt"># lib/miniz-2.2.0/：vendored 的官方 miniz 2.2.0（amalgamation 产物）</span>
+lib/miniz-2.2.0/
+  miniz.c          <span class="cmt"># 全部实现，单个 C 文件（约 32 万字节）</span>
+  miniz.h          <span class="cmt"># 公共 API：mz_zip_*、tdefl_*、tinfl_*</span>
+  ChangeLog.md     <span class="cmt"># 版本变更记录</span>
+  readme.md        <span class="cmt"># 官方 readme</span>
+  examples/        <span class="cmt"># 示例代码</span></code></pre>
+
+  <p>配置层面，真正参与编译的开关在 <code>platformio.ini</code> 的 <code>[common]</code> 段。其中一个宏 <code>-DMINIZ_NO_ZLIB_COMPATIBLE_NAMES</code> 的作用，platformio.ini 的注释写得很直白："stop miniz conflicting with zlib which is used by the png library"——因为 png 库引入了 zlib，如果 miniz 还导出 zlib 兼容名的函数（<code>inflate</code>/<code>deflate</code> 等），两者就会重名冲突；关掉兼容名后，miniz 的所有符号统一用 <code>mz_</code> 前缀，各走各路。另一个 <code>-DBOARD_HAS_PSRAM</code> 告诉构建系统"这块板子有 PSRAM"。那么 PSRAM 到底在哪一步被用上？答案藏在 sdkconfig 里，见下面的配置块。</p>
+
+<pre><code><span class="cmt">; platformio.ini [common] build_flags：miniz 与 zlib 如何共存</span>
+build_flags =
+  ; maximim speed
+  -Ofast
+  ; needed to stop the png library tying to pull in Arduino.h
+  -D__MCUXPRESSO
+  ; stop miniz conflicting with zlib which is used by the png library
+  -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
+  ; device has PRSRAM
+  ; and should be used for ram intensive display work
+  -DBOARD_HAS_PSRAM</code></pre>
+
+<pre><code><span class="cmt"># sdkconfig.lilygo_t5_47：PSRAM 被配置成"大分配自动入住"</span>
+CONFIG_ESP32_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y            <span class="cmt"># malloc/calloc 可自动使用 PSRAM</span>
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=<span class="num">16384</span>  <span class="cmt"># ≤16 KB 的分配留在内部 SRAM</span></code></pre>
+
+  <p>把这两条合起来看，真相就水落石出了：<code>CONFIG_SPIRAM_USE_MALLOC=y</code> 之后，ESP-IDF 的 <code>malloc/calloc</code> 对<strong>超过 <code>SPIRAM_MALLOC_ALWAYSINTERNAL</code>（16384 字节）的请求</strong>，会优先从 PSRAM 分配。而 <code>ZipFile::read_file_to_memory</code> 里正是用 <code>calloc(file_size + 1, 1)</code> 为每一章正文申请内存——古登堡书的章节 HTML 动辄几十 KB，于是自动落进 PSRAM。这就是 README 那句"解析 EPUB 需要 PSRAM"的底层机制：不是哪一行代码显式写了 <code>ps_malloc</code>，而是靠<strong>堆</strong>（说人话：动态内存，程序运行时可申请、用完可释放的内存区）分配策略，让大块内容天然绕开内部那 520 kB 的窄道。</p>
+
+  <table>
+    <tr><th>来源 / 配置</th><th>角色</th><th>备注</th></tr>
+    <tr><td>ESP32 ROM 内置 miniz</td><td>只提供单流 inflate/deflate</td><td>README：多文件归档支持被禁用</td></tr>
+    <tr><td><code>lbernstone/miniz-esp32</code></td><td>README 提及的 fork</td><td>README 拼成 <code>lbernstrone</code>（文档手滑）</td></tr>
+    <tr><td><code>lib/miniz-2.2.0/</code></td><td>实际参与编译的 vendored 官方 miniz</td><td>API 一律 <code>mz_*</code> 前缀</td></tr>
+    <tr><td><code>-DMINIZ_NO_ZLIB_COMPATIBLE_NAMES</code></td><td>避免与 png 库的 zlib 重名冲突</td><td>platformio.ini 注释原话</td></tr>
+    <tr><td><code>CONFIG_SPIRAM_USE_MALLOC</code></td><td>大分配自动用 PSRAM</td><td>配合 <code>ALWAYSINTERNAL=16384</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p><code>SPIRAM_MALLOC_ALWAYSINTERNAL=16384</code> 是一条<strong>阈值线</strong>：请求 ≤16 KB 时留在内部 SRAM（速度更快、稳定），请求 &gt;16 KB 时才转入 PSRAM。这意味着"章节文件多大"直接决定了它住哪：2 KB 的简介页住内部 SRAM，100 KB 的章节住 PSRAM。想亲眼验证，可以盯 <code>EpubReader.cpp</code> 里 <code>esp_get_free_heap_size()</code> 打出的 "Before read html" / "After read html" 两行日志，看看解压一章到底吃掉了多少内存。</p>
+  </div>
+
+  <!-- ========== 7.3 ZipFile 封装类 ========== -->
+  <h2>7.3 ZipFile 封装类：把六步 miniz 流程收敛成两个方法</h2>
+
+  <p>miniz 的功能很全，但调用它打开一个 zip、定位文件、解压，需要一串小心翼翼的操作序列。作者把它包进了一个叫 <code>ZipFile</code> 的小类，放在 <code>lib/Epub/ZipFile/</code>（<code>ZipFile.h</code> + <code>ZipFile.cpp</code>），README 也专门点名了这个封装："I've encapsulated the needed ZIP function in a small wrapper class which can be found here: ZipFile." 这个类的门面极小：构造时传入 zip 文件路径，对外只暴露两个方法——<code>read_file_to_memory()</code>（把某个条目整个解压进堆内存，返回指针）和 <code>read_file_to_file()</code>（把某个条目解压成磁盘上的文件）。调用方完全不需要知道 zip 是怎么被打开的。</p>
+
+<pre><code><span class="cmt">/* lib/Epub/ZipFile/ZipFile.h：整个封装的门面（真实代码） */</span>
+<span class="kw">class</span> ZipFile
+{
+<span class="kw">private:</span>
+  std::string m_filename;
+
+<span class="kw">public:</span>
+  ZipFile(<span class="kw">const</span> <span class="kw">char</span> *filename)
+  {
+    m_filename = filename;
+  }
+  ~ZipFile() {}
+  <span class="cmt">// read a file from the zip file allocating the required memory for the data</span>
+  <span class="type">uint8_t</span> *read_file_to_memory(<span class="kw">const</span> <span class="kw">char</span> *filename, <span class="type">size_t</span> *size = <span class="kw">nullptr</span>);
+  <span class="kw">bool</span> read_file_to_file(<span class="kw">const</span> <span class="kw">char</span> *filename, <span class="kw">const</span> <span class="kw">char</span> *dest);
+};</code></pre>
+
+  <p><code>read_file_to_memory()</code> 是绝对主力，内部是一条规整的六步流水线。第一步 <code>mz_zip_reader_init_file()</code> 打开归档并解析中央目录；第二步 <code>mz_zip_reader_locate_file_v2()</code> 按文件名在中央目录里定位，拿到条目索引 <code>file_index</code>；第三步 <code>mz_zip_reader_file_stat()</code> 读出该条目的元数据（重点是解压后大小 <code>file_stat.m_uncomp_size</code> 与文件名 <code>m_filename</code>）；第四步按大小 <code>calloc(file_size + 1, 1)</code> 申请内存；第五步 <code>mz_zip_reader_extract_to_mem()</code> 真正解压；第六步 <code>mz_zip_reader_end()</code> 释放归档资源。中间任何一步失败，都会 <code>ESP_LOGE</code> 打印 <code>mz_zip_get_error_string(zip_archive.m_last_error)</code> 并清理现场返回 <code>nullptr</code>——错误处理收敛在一处，是封装最实在的收益。</p>
+
+<pre><code><span class="cmt">/* ZipFile.cpp：read_file_to_memory 六步流水线（节选） */</span>
+<span class="type">uint8_t</span> *ZipFile::read_file_to_memory(<span class="kw">const</span> <span class="kw">char</span> *filename, <span class="type">size_t</span> *size)
+{
+  mz_zip_archive zip_archive;
+  memset(&amp;zip_archive, <span class="num">0</span>, <span class="kw">sizeof</span>(zip_archive));          <span class="cmt">// ① 清空归档句柄</span>
+  <span class="kw">bool</span> status = mz_zip_reader_init_file(&amp;zip_archive, m_filename.c_str(), <span class="num">0</span>);  <span class="cmt">// ② 打开 zip</span>
+  <span class="kw">if</span> (!status) { <span class="cmt">/* ESP_LOGE(TAG, "mz_zip_reader_init_file() failed!\n"); ... */</span> <span class="kw">return</span> <span class="kw">nullptr</span>; }
+
+  <span class="type">mz_uint32</span> file_index = <span class="num">0</span>;                              <span class="cmt">// ③ 按名定位</span>
+  <span class="kw">if</span> (!mz_zip_reader_locate_file_v2(&amp;zip_archive, filename, <span class="kw">nullptr</span>, <span class="num">0</span>, &amp;file_index)) { <span class="cmt">/* ... */</span> <span class="kw">return</span> <span class="kw">nullptr</span>; }
+
+  mz_zip_archive_file_stat file_stat;                   <span class="cmt">// ④ 读元数据，拿解压后大小</span>
+  <span class="kw">if</span> (!mz_zip_reader_file_stat(&amp;zip_archive, file_index, &amp;file_stat)) { <span class="cmt">/* ... */</span> <span class="kw">return</span> <span class="kw">nullptr</span>; }
+
+  <span class="type">size_t</span> file_size = file_stat.m_uncomp_size;
+  <span class="type">uint8_t</span> *file_data = (<span class="type">uint8_t</span> *)calloc(file_size + <span class="num">1</span>, <span class="num">1</span>);   <span class="cmt">// ⑤ 多申请 1 字节放 null 终止符</span>
+  <span class="kw">if</span> (!file_data) { <span class="cmt">/* ... */</span> <span class="kw">return</span> <span class="kw">nullptr</span>; }
+
+  status = mz_zip_reader_extract_to_mem(&amp;zip_archive, file_index, file_data, file_size, <span class="num">0</span>); <span class="cmt">// ⑥ 解压</span>
+  <span class="kw">if</span> (!status) { free(file_data); mz_zip_reader_end(&amp;zip_archive); <span class="kw">return</span> <span class="kw">nullptr</span>; }
+
+  mz_zip_reader_end(&amp;zip_archive);                      <span class="cmt">// 收尾：释放归档资源</span>
+  <span class="kw">if</span> (size) *size = file_size;
+  <span class="kw">return</span> file_data;
+}</code></pre>
+
+  <p>第六步那个 <code>+ 1</code> 是本案最容易被忽视的细节。代码注释原话："get the file size - we do this all manually so we can add a null terminator to any strings"（我们手动处理大小，就是为了给任何字符串补一个 null 终止符）。因为 EPUB 里读出来的东西大多是文本（XML、XHTML），解析器习惯拿到一个以 <code>'\0'</code> 结尾的字符串；如果解压出来的原始字节没有结尾哨兵，把指针直接当 C 字符串用就会读到野内存。多申请一字节并 <code>calloc</code> 清零，等于给每个条目都备好了"句号"。另一个方法 <code>read_file_to_file()</code> 则反过来：遍历全部条目（<code>mz_zip_reader_get_num_files()</code>）比对文件名，找到后用 <code>mz_zip_reader_extract_file_to_file()</code> 直接解压成磁盘文件，适合"不想让大文件占堆内存"的场景。</p>
+
+  <table>
+    <tr><th>miniz API</th><th>在 ZipFile 里的用途</th></tr>
+    <tr><td><code>mz_zip_reader_init_file()</code></td><td>打开 zip 文件、解析中央目录</td></tr>
+    <tr><td><code>mz_zip_reader_locate_file_v2()</code></td><td>按文件名定位条目，输出索引</td></tr>
+    <tr><td><code>mz_zip_reader_file_stat()</code></td><td>读条目元数据（<code>m_uncomp_size</code>、<code>m_filename</code>）</td></tr>
+    <tr><td><code>mz_zip_reader_extract_to_mem()</code></td><td>解压条目到内存缓冲</td></tr>
+    <tr><td><code>mz_zip_reader_get_num_files()</code></td><td>统计归档内文件总数（<code>read_file_to_file</code> 遍历用）</td></tr>
+    <tr><td><code>mz_zip_reader_end()</code></td><td>释放归档占用的所有资源</td></tr>
+    <tr><td><code>mz_zip_get_error_string()</code></td><td>把 <code>m_last_error</code> 转成可读错误串</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>把 miniz 的六步流程"翻译"给调用方，是 <code>ZipFile</code> 存在的全部意义：<code>Epub</code> 类只想要"给我 <code>OEBPS/content.opf</code> 的内容"，不关心 zip 怎么开、怎么找、怎么解、怎么关。封装把变化隔离在 <code>ZipFile.cpp</code> 一个文件里，也让"打开失败 → 打日志 → 清理 → 返回空"这条错误路径只写一遍。读 <code>ZipFile.cpp</code> 时记住这个心法：接口极小，恰好够用。</p>
+  </div>
+
+  <!-- ========== 7.4 从 zip 里读出正文 ========== -->
+  <h2>7.4 从 zip 里读出 content.opf 与 XHTML</h2>
+
+  <p>有了 <code>ZipFile</code>，读出书里的任意文件就是一行调用的事。但"读哪个文件"不是拍脑袋决定的——整本书的读取顺序是：先读 <code>META-INF/container.xml</code> 得知 <code>content.opf</code> 的真实路径（这一步在 <code>Epub::find_content_opf_file</code> 里，第 8 章展开），再读 <code>content.opf</code> 拿到 manifest 与 spine 清单，最后才按 spine 顺序逐章读正文。负责"通用取文件"的是 <code>Epub::get_item_contents()</code>：它先对 <code>item_href</code> 做一次路径规范化（处理 <code>..</code> 回退、清理重复斜杠），再交给 <code>ZipFile::read_file_to_memory</code>。注意它每次<strong>新建一个 <code>ZipFile</code></strong>、读完即返回指针——zip 的打开/关闭开销被当作"每次读取的固定成本"接受了。</p>
+
+<pre><code><span class="cmt">/* Epub.cpp：get_item_contents——按需解压任意条目（真实代码） */</span>
+<span class="type">uint8_t</span> *Epub::get_item_contents(<span class="kw">const</span> std::string &amp;item_href, <span class="type">size_t</span> *size)
+{
+  ZipFile zip(m_path.c_str());                 <span class="cmt">// 每次读取都新开一个归档</span>
+  std::string path = normalise_path(item_href); <span class="cmt">// 规范化：把 ".." 回退掉</span>
+  <span class="kw">auto</span> content = zip.read_file_to_memory(path.c_str(), size);
+  <span class="kw">if</span> (!content) { <span class="cmt">/* ESP_LOGE(TAG, "Failed to read item %s", path.c_str()); */</span> <span class="kw">return</span> <span class="kw">nullptr</span>; }
+  <span class="kw">return</span> content;
+}</code></pre>
+
+  <p>真正把正文"读出来并交出去"的地方在 <code>EpubReader::parse_and_layout_current_section()</code>。它先 <code>epub-&gt;get_spine_item(state.current_section)</code> 拿到当前章节在 spine 里的路径，再 <code>get_item_contents(item)</code> 解压出整章 HTML，然后 <code>reinterpret_cast&lt;char *&gt;</code> 成字符串喂给 <code>RubbishHtmlParser</code>（第 9 章的主角），用完立刻 <code>free(html)</code>。这一步印证了全书的<strong>按章内存模型</strong>：<code>Epub::load()</code> 只把清单（opf/ncx）解进内存，正文是"翻到哪章才解压哪章"，解完即释放——一本 1.3 MiB 的书，永远不会整本占着堆。</p>
+
+<pre><code><span class="cmt">/* EpubReader.cpp：按 spine 顺序解压当前章节（真实代码） */</span>
+std::string item = epub-&gt;get_spine_item(state.current_section);  <span class="cmt">// 本章的 href</span>
+std::string base_path = item.substr(<span class="num">0</span>, item.find_last_of(<span class="str">'/'</span>) + <span class="num">1</span>);
+<span class="kw">char</span> *html = <span class="kw">reinterpret_cast</span>&lt;<span class="kw">char</span> *&gt;(epub-&gt;get_item_contents(item)); <span class="cmt">// 解压本章</span>
+parser = <span class="kw">new</span> RubbishHtmlParser(html, strlen(html), base_path);    <span class="cmt">// 交给解析器</span>
+free(html);                                                     <span class="cmt">// 用毕即还</span>
+parser-&gt;layout(renderer, epub);                                 <span class="cmt">// 排版成页（第 10-11 章）</span></code></pre>
+
+  <p>把 7.1 到 7.4 串成一张案卷，整条"拆包流水线"就闭环了：<code>Epub::load()</code> 在书单阶段把书"验明正身"（读 container.xml → content.opf → toc.ncx），此后 <code>EpubReader</code> 按 spine 逐章取正文。自始至终，我们动手的只有 zip 这个唯一真凶；XML 解析、HTML 解析都只是它的"下游证人"。而作为对照，<code>read_file_to_file()</code> 提供了一条"解压到磁盘"的支线——虽然本仓库的渲染路径走的是内存，但这个 API 留给了"大图片先落盘再读"的扩展空间。</p>
+
+<pre><code><span class="cmt">/* 一条 EPUB 的拆包流水线（本章主角） */</span>
+pg43-images.epub
+  │  ZipFile::read_file_to_memory("META-INF/container.xml")
+  ▼
+container.xml ──► 拿到 content.opf 的 full-path（第 8 章解析）
+  │  ZipFile::read_file_to_memory("OEBPS/content.opf")
+  ▼
+content.opf ──► metadata / manifest / spine（第 8 章解析）
+  │  EpubReader::get_spine_item(i) → get_item_contents()
+  ▼
+chapter.htm.html ──► RubbishHtmlParser（第 9 章）
+  │  按章解压、用完 free——整本书永不整本驻留内存</code></pre>
+
+  <table>
+    <tr><th>读出的文件</th><th>调用方</th><th>用途</th></tr>
+    <tr><td><code>META-INF/container.xml</code></td><td><code>Epub::find_content_opf_file</code></td><td>定位 <code>content.opf</code> 路径</td></tr>
+    <tr><td><code>OEBPS/content.opf</code></td><td><code>Epub::parse_content_opf</code></td><td>书名 / 封面 / manifest / spine</td></tr>
+    <tr><td><code>OEBPS/toc.ncx</code></td><td><code>Epub::parse_toc_ncx_file</code></td><td>章节目录条目</td></tr>
+    <tr><td><code>OEBPS/...-h-N.htm.html</code></td><td><code>EpubReader::parse_and_layout_current_section</code></td><td>章节正文 → 解析排版</td></tr>
+    <tr><td><code>OEBPS/...@images@cover.jpg</code></td><td><code>EpubList::render</code></td><td>书单封面缩略图</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>观察 <code>EpubReader.cpp</code> 里那串 <code>ESP_LOGD(TAG, "After read html: %d", esp_get_free_heap_size())</code> 日志，你能直接"看到"内存曲线：打开书、读清单、解压一章、排版、释放，每一步前后 <code>esp_get_free_heap_size()</code> 都在变化。把这条曲线记下来，再去读 7.2 的 PSRAM 阈值，你就会明白为什么作者反复强调"解析 EPUB 需要内存"——它不是一句口号，是堆上的实打实的峰值。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：拆包验尸 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用 <code>unzip -l</code>（或归档管理器）拆开 <code>fixtures/oebps.epub</code> 或 <code>data/pg43-images.epub</code>，回答：(a) 归档里第一个文件叫什么？(b) <code>META-INF/container.xml</code> 的 <code>full-path</code> 指向哪个文件？(c) 列出 <code>OEBPS/</code> 下至少三类不同扩展名的文件。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 7.1 的现场清单：身份证 <code>mimetype</code>、地图 <code>container.xml</code>、正文 <code>*.htm.html</code>、样式 <code>*.css</code>、图片 <code>*.jpg</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>mimetype</code>，内容为 <code>application/epub+zip</code>。(b) <code>OEBPS/content.opf</code>（这就是 content.opf 的实际路径）。(c) 例如章节正文 <code>OEBPS/@public@...@43-h-1.htm.html</code>、样式 <code>OEBPS/pgepub.css</code> / <code>OEBPS/0.css</code>、封面 <code>OEBPS/@public@...@images@cover.jpg</code>，外加 <code>OEBPS/toc.ncx</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：六步流水线 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>lib/Epub/ZipFile/ZipFile.cpp</code> 的 <code>read_file_to_memory()</code>，列出完整的 miniz 调用序列（从打开到关闭）。再解释：为什么 <code>calloc(file_size + 1, 1)</code> 要比解压后大小多申请一个字节？若去掉它，把返回指针当 C 字符串用会怎样？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>序列是 init → locate → stat → extract → end 五步关键调用；<code>file_stat.m_uncomp_size</code> 决定申请多大；想想字符串结尾哨兵 <code>'\0'</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>序列：<code>mz_zip_reader_init_file</code>（打开归档）→ <code>mz_zip_reader_locate_file_v2</code>（按名定位到 <code>file_index</code>）→ <code>mz_zip_reader_file_stat</code>（读 <code>m_uncomp_size</code> 等元数据）→ <code>mz_zip_reader_extract_to_mem</code>（解压到 <code>calloc</code> 出的缓冲）→ <code>mz_zip_reader_end</code>（释放归档）。多申请的那一字节用于放字符串终止符 <code>'\0'</code>（源码注释原话："we do this all manually so we can add a null terminator to any strings"）；去掉后，把指针当 C 字符串读会越界读到相邻内存，XML/XHTML 解析器会拿到"没尾巴"的字符串，可能读到野内存甚至崩溃。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：PSRAM 阈值线 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>结合 7.2 的 sdkconfig，解释 <code>CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384</code> 的含义。设想三种情况：某章 HTML 解压后约 2 KB、约 60 KB、约 300 KB，它们分别会被分配到内部 SRAM 还是 PSRAM？这对"解析 EPUB 为什么需要 PSRAM"说明了什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>CONFIG_SPIRAM_USE_MALLOC=y</code> 时，<code>calloc</code> 请求 &gt;16384 字节会优先走 PSRAM；&lt;=16384 留内部 SRAM。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>SPIRAM_MALLOC_ALWAYSINTERNAL=16384</code> 是一条阈值：请求 ≤16,384 字节时 <code>malloc/calloc</code> 强制留在内部 SRAM；请求 &gt;16,384 字节时自动转向 PSRAM（若可用）。因此 2 KB 的章节住内部 SRAM，60 KB 与 300 KB 的章节都落进 PSRAM。古登堡书的章节正文动辄几十上百 KB，而 <code>ZipFile::read_file_to_memory</code> 正是用 <code>calloc(file_size+1)</code> 申请——所以"解析 EPUB 需要 PSRAM"不是玄学，而是每一章解压时堆上真实发生的大块分配。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：内存模型推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>对比两种阅读策略：A. <code>Epub::load()</code> 时把整本书所有章节一次性解压进内存；B. 本项目做法——只把清单（opf/ncx）解进内存，正文按 spine 逐章解压、读完即 <code>free</code>。请至少从内存峰值、打开一本书的耗时、实现复杂度三个角度说明 B 为什么更适合 ESP32。若某本书只有 3 章且每章很小，B 的劣势又是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 <code>EpubReader.cpp</code> 里的 <code>esp_get_free_heap_size()</code> 日志与 <code>get_item_contents</code> 每次新建 <code>ZipFile</code> 的开销；再想"逐章解压"每次都要重新打开 zip 的代价。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>内存峰值：方案 A 的峰值 ≈ 整本书解压后大小（1.3 MiB 的书就是 1.3 MiB 常驻），方案 B 的峰值 ≈ 最大单章 + 排版缓冲，翻页时只住一章，内存曲线平缓得多。打开耗时：A 在 <code>load()</code> 时就要解压全书，打开书很慢；B 只在"翻到那一章"时才解压，打开书只读清单，响应快。实现复杂度：A 需要一次建好全部章节的索引与缓冲、管理整本书生命周期；B 只需一个 <code>get_item_contents</code> 通用入口，天然与"翻到哪算哪"的阅读模型吻合。B 的劣势在于每次切换章节都要重新打开 zip、定位、解压（<code>get_item_contents</code> 里每次 <code>new ZipFile</code>），对于只有 3 章、每章很小的小书，这个固定开销相对放大，反而显得有些浪费——但权衡下来，把"整本书驻留内存"换成"按需解压"，对内存极窄的 ESP32 是明显的净收益。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

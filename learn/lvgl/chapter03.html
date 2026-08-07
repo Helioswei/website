@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章：对象模型与屏幕 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="3" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：对象模型与屏幕</h1>
+  <p class="chapter-subtitle">真相只有一个：LVGL 里的一切，都是一棵以 screen 为根的对象树</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个，源码就是证据</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一章我们跑起了第一个界面。但你有没有停下来想过：<code>lv_screen_active()</code> 返回的那个『根对象』到底是什么？按钮为什么能挂在它下面？屏幕又是怎么和 display 挂钩的？这些如果靠猜，十有八九会错。别猜——去 <code>src/core</code> 和 <code>src/display</code> 里找证据。真相只有一个，而且它藏在源码里。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 lv_obj：一切对象的基座 ========== -->
+  <h2>3.1 lv_obj：一切对象的基座</h2>
+
+  <p>上一章你随手写的 <code>lv_button_create()</code>、<code>lv_label_create()</code> 返回的都是 <code>lv_obj_t *</code>——按钮、标签、面板……所有控件在 LVGL 里本质都是同一个结构 <code>lv_obj_t</code> 的实例，只是各自挂了不同的"类描述"（<code>lv_obj_class_t</code>）。<code>lv_obj_create()</code> 是它们的共同入口：它调用 <code>lv_obj_class_create_obj()</code> 分配内存、初始化一个"空对象"，控件再在它之上叠加自己的行为。</p>
+
+  <pre><code><span class="cmt">/* 创建对象的两条路：指定父对象，或传 NULL */</span>
+<span class="type">lv_obj_t</span> * parent = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>()); <span class="cmt">/* 普通对象 */</span>
+<span class="type">lv_obj_t</span> * child  = <span class="fn">lv_obj_create</span>(parent);              <span class="cmt">/* 挂在 parent 下 */</span>
+<span class="type">lv_obj_t</span> * scr   = <span class="fn">lv_obj_create</span>(<span class="kw">NULL</span>);                <span class="cmt">/* NULL 父 = 一块新屏 */</span></code></pre>
+
+  <p>在 LVGL 9 里，<code>lv_obj_create(NULL)</code> 不是创建一个"无父的孤儿对象"，而是<strong>创建一块屏幕（screen）</strong>。读 <code>lv_obj_class.c</code> 的 <code>lv_obj_class_create_obj()</code> 会看到 <code>parent == NULL</code> 分支直接打印一行 <code>"creating a screen"</code>，然后把新对象登记进默认 display 的屏幕数组。也就是说：对象树里 <strong>parent 为 NULL 的 lv_obj，天然就是一块屏幕</strong>。</p>
+
+  <p>有了对象，就有了树。屏幕是根，控件是枝叶，一个对象可以有任意多个子对象，但只有一个父对象（根对象除外）。这棵树不是概念模型——LVGL 的渲染、事件、布局全部沿着它工作：渲染时从根向下遍历，把每个对象按自己的位置与样式画出来；触摸时按命中测试找"谁被点到了"。理解"一切皆对象、对象皆成树"，你就拿到了整座库的地图。</p>
+
+  <pre><code><span class="cmt">/* 一棵真实的对象树：屏幕 → 面板 → 按钮 → 标签 */</span>
+<span class="type">lv_obj_t</span> * screen = <span class="fn">lv_obj_create</span>(<span class="kw">NULL</span>);            <span class="cmt">/* 根 */</span>
+<span class="type">lv_obj_t</span> * panel  = <span class="fn">lv_obj_create</span>(screen);            <span class="cmt">/* 一级子对象 */</span>
+<span class="type">lv_obj_t</span> * btn    = <span class="fn">lv_button_create</span>(panel);          <span class="cmt">/* 二级 */</span>
+<span class="type">lv_obj_t</span> * label  = <span class="fn">lv_label_create</span>(btn);            <span class="cmt">/* 三级 */</span>
+<span class="fn">lv_obj_center</span>(panel);</code></pre>
+
+  <table>
+    <tr><th>术语</th><th>含义</th></tr>
+    <tr><td>根 / screen</td><td>对象树的顶层，<code>parent</code> 为 NULL 的 lv_obj</td></tr>
+    <tr><td>父对象（parent）</td><td>直接上级，控制布局、裁剪与事件冒泡的范围</td></tr>
+    <tr><td>子对象（child）</td><td>挂在某对象之下的对象，随父移动与显隐</td></tr>
+    <tr><td>兄弟（sibling）</td><td>同一父对象下的平级对象，决定绘制与点击的先后</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>判断一个对象是不是屏幕，别猜——看它调用的是不是 <code>lv_obj_create(NULL)</code>，或者用 <code>lv_obj_get_parent(obj)</code> 看返回是否 <code>NULL</code>。空父即根，根即屏幕，这个等式就是线索。</p>
+  </div>
+
+  <!-- ========== 3.2 对象树：父子关系与生命周期 ========== -->
+  <h2>3.2 对象树：父子关系与生命周期</h2>
+
+  <p>建立父子关系有两条路：一是创建时把父对象传进 <code>lv_obj_create(parent)</code>；二是创建后再<strong>改挂</strong>，用公开 API <code>lv_obj_set_parent(obj, new_parent)</code> 把对象从旧父对象下解绑、挂到新父对象下。运行时动态改挂是切换界面组织的常用手法，例如把一个控件从一屏挪到另一屏。</p>
+
+  <pre><code><span class="cmt">/* 动态改挂：把 btn 从 screen 挪到 panel 下 */</span>
+<span class="fn">lv_obj_set_parent</span>(btn, panel);
+<span class="cmt">/* 验证父子关系 */</span>
+<span class="type">lv_obj_t</span> * p   = <span class="fn">lv_obj_get_parent</span>(btn);        <span class="cmt">/* 应为 panel */</span>
+<span class="type">uint32_t</span> cnt = <span class="fn">lv_obj_get_child_count</span>(panel); <span class="cmt">/* 面板的子对象数 */</span></code></pre>
+
+  <p>这里有一个值得停下来查证的点：v8 时代很多人熟悉的 <code>lv_obj_add_child()</code>，在 v9 里<strong>已经是内部函数</strong>了。搜一下它的声明你会发现它不在任何公开头文件里，而是在 <code>src/core/lv_obj_private.h</code>，返回类型是 <code>lv_result_t</code>；公开的"新增子对象"入口只有 <code>lv_obj_set_parent()</code>。这就是柯南式真相：网上大量 v8 教程的写法，在 v9 未必能直接用——拿源码核对永远比背 API 靠谱。</p>
+
+  <pre><code><span class="cmt">/* 内部函数：src/core/lv_obj_private.h（仅供库内部使用） */</span>
+<span class="type">lv_result_t</span> lv_obj_add_child(<span class="type">lv_obj_t</span> * <span class="param">parent</span>, <span class="type">lv_obj_t</span> * <span class="param">child</span>);
+
+<span class="cmt">/* 公开 API：include/lvgl/core/lv_obj_tree.h */</span>
+<span class="kw">void</span> lv_obj_set_parent(<span class="type">lv_obj_t</span> * <span class="param">obj</span>, <span class="type">lv_obj_t</span> * <span class="param">parent</span>);</code></pre>
+
+  <p>生命周期同样沿着树走。<code>lv_obj_delete(obj)</code> 销毁对象并<strong>连带销毁它的全部后代</strong>；<code>lv_obj_clean(obj)</code> 只清空所有子对象、保留本体；另外还有延迟删除 <code>lv_obj_delete_delayed()</code>（用于动画等场景，避免正在使用的对象被立刻释放）和 <code>lv_obj_delete_async()</code>（安全地在下一个周期删除）。这条规则帮你养成一个好习惯：<strong>想删一棵子树，删它的根即可</strong>，不必逐个遍历子对象。</p>
+
+  <pre><code><span class="cmt">/* 生命周期三兄弟 */</span>
+<span class="fn">lv_obj_delete</span>(btn);                    <span class="cmt">/* 删掉 btn 及其全部后代 */</span>
+<span class="fn">lv_obj_clean</span>(panel);                  <span class="cmt">/* 清空 panel 的子对象，panel 仍在 */</span>
+<span class="fn">lv_obj_delete_delayed</span>(panel, <span class="num">500</span>);   <span class="cmt">/* 500ms 后再删 */</span>
+
+<span class="cmt">/* 调试神器：打印整棵对象树 */</span>
+<span class="fn">lv_obj_dump_tree</span>(<span class="fn">lv_screen_active</span>());</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>删掉的 <code>lv_obj_t *</code> 指针不会再为你"变有效"。删对象前先想清楚有没有其他地方还握着这个指针（例如事件回调的 user_data），否则会踩到悬空指针——这也是 <code>lv_obj_delete_async()</code> 存在的理由。</p>
+  </div>
+
+  <!-- ========== 3.3 display 与 screen：屏幕的世界 ========== -->
+  <h2>3.3 display 与 screen：屏幕的世界</h2>
+
+  <p>对象树之上还有一层容器：<strong>display</strong>（显示设备）。注意它的类型是 <code>lv_display_t</code>，<strong>不是 lv_obj</strong>——display 不是一个对象，而是 LVGL 世界里"一块物理屏幕"的抽象。调用 <code>lv_display_create(w, h)</code> 时，内部会做一串动作：创建一个默认屏幕并记为 <code>act_scr</code>、额外创建 bottom/top/sys 三个层对象、建一个刷新 timer（<code>lv_display_refr_timer</code>，周期 <code>LV_DEF_REFR_PERIOD</code>）、并初始化默认主题。你看到的每一帧，都是这个 timer 驱动的。</p>
+
+  <pre><code><span class="cmt">/* lv_display_create 内部帮你做的事（src/display/lv_display.c） */</span>
+<span class="type">lv_display_t</span> * disp = <span class="fn">lv_display_create</span>(<span class="num">320</span>, <span class="num">240</span>);
+
+<span class="cmt">/* 于是下面这句总能拿到一块默认屏： */</span>
+<span class="type">lv_obj_t</span> * scr = <span class="fn">lv_screen_active</span>();</code></pre>
+
+  <p><code>lv_screen_active()</code> 是上一章一直在用的"根对象"入口。查源码，它的实现只有一行：<code>return lv_display_get_screen_active(lv_display_get_default())</code>——取"默认 display 的当前活跃屏幕"。这意味着三件事：<strong>先要有 display，才有 screen</strong>（没有 display 时 <code>lv_obj_create(NULL)</code> 会直接警告并返回 NULL）；一个 display 同一时刻只有一个活跃 screen；切换屏幕用 <code>lv_screen_load(scr)</code>。</p>
+
+  <pre><code><span class="cmt">/* 两屏切换：各自有独立对象树，切换不互相破坏 */</span>
+<span class="type">lv_obj_t</span> * home_scr = <span class="fn">lv_obj_create</span>(<span class="kw">NULL</span>);
+<span class="type">lv_obj_t</span> * set_scr  = <span class="fn">lv_obj_create</span>(<span class="kw">NULL</span>);
+
+<span class="fn">lv_obj_set_style_bg_color</span>(home_scr, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_BLUE</span>), <span class="num">0</span>);
+<span class="fn">lv_obj_set_style_bg_color</span>(set_scr, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_RED</span>), <span class="num">0</span>);
+
+<span class="fn">lv_screen_load</span>(home_scr);   <span class="cmt">/* 切到主屏 */</span>
+<span class="cmt">/* ... 某个按钮事件里 ... */</span>
+<span class="fn">lv_screen_load</span>(set_scr);    <span class="cmt">/* 切到设置屏 */</span></code></pre>
+
+  <p>最后还你一个真相：前文说 screen 是"display 的子对象"，这句话在对象树层面<strong>并不准确</strong>。screen 的 <code>parent</code> 字段是 NULL，它并不挂在 display 之下——display 是 <code>lv_display_t</code>，根本不参与对象树；真实关系是 display 用 <code>disp->screens[]</code> 数组持有这块屏、用 <code>disp->act_scr</code> 记住当前活跃屏。正因如此，屏幕切换 <code>lv_screen_load()</code> 只是改 display 的活跃指针，不会破坏任何父子的对象树结构。多显示器场景下还能用 <code>lv_display_set_default()</code> 切换"默认 display"，但对新手，先牢牢抓住"一块 display + 一块活跃屏"这个模型就够用了。</p>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>把三个概念分清，很多困惑瞬间消失：<code>lv_display_t</code> 是<strong>设备</strong>（屏幕硬件），<code>screen</code> 是<strong>树的根对象</strong>（一个 lv_obj），display 持有一组 screen 并通过 <code>act_scr</code> 指向当前活跃的那个。三者是完全不同的东西，源码里各自有各自的容器。</p>
+  </div>
+
+  <!-- ========== 3.4 lv_init 与对象定位 ========== -->
+  <h2>3.4 lv_init 与对象定位</h2>
+
+  <p>把根捋清楚之后，<code>lv_init()</code> 干的事就一目了然了——它是整棵世界树的"开机流程"。读 <code>src/lv_init.c</code>，初始化的顺序严格遵循依赖关系：先内存（<code>lv_mem_init</code>、draw buffer 处理器），再操作系统抽象（<code>lv_os_init</code>），然后 timer 核心、文件系统、布局、动画、分组，接着绘制系统（<code>lv_draw_init</code> 及各渲染后端），最后是样式与刷新系统（<code>lv_obj_style_init</code>、<code>lv_refr_init</code>）。顺序错不得——绘制系统依赖前面的内存与 timer。</p>
+
+  <pre><code><span class="cmt">/* lv_init() 的初始化顺序（src/lv_init.c，按真实调用序排列） */</span>
+lv_mem_init();              <span class="cmt">/* 内存池 */</span>
+lv_timer_core_init();       <span class="cmt">/* 计时器核心 */</span>
+lv_fs_init();               <span class="cmt">/* 文件系统 */</span>
+lv_layout_init();           <span class="cmt">/* Flex/Grid 布局 */</span>
+lv_anim_core_init();        <span class="cmt">/* 动画核心 */</span>
+lv_draw_init();             <span class="cmt">/* 绘制系统（含 sw/opengles 等后端） */</span>
+lv_obj_style_init();        <span class="cmt">/* 样式系统 */</span>
+lv_refr_init();             <span class="cmt">/* 屏幕刷新系统 */</span></code></pre>
+
+  <p>初始化完成后，就该给对象定位置了。最省事的是 <code>lv_obj_center(obj)</code>——把对象相对<strong>父对象</strong>居中（父的大小变化后要重新调用）；更精细的控制用 <code>lv_obj_align(obj, align, x_ofs, y_ofs)</code> 对齐到父对象的任意位置，或用 <code>lv_obj_set_pos(obj, x, y)</code> 直接给像素坐标。记住一个关键事实：<strong>所有定位都是相对父对象坐标系</strong>——这正是对象树的用武之地：改一个父对象的位置，整棵子树一起移动。</p>
+
+  <pre><code><span class="cmt">/* 三种定位方式 */</span>
+<span class="fn">lv_obj_center</span>(btn);                          <span class="cmt">/* 相对父居中 */</span>
+<span class="fn">lv_obj_align</span>(label, <span class="kw">LV_ALIGN_TOP_MID</span>, <span class="num">0</span>, <span class="num">10</span>); <span class="cmt">/* 顶部居中，下移 10px */</span>
+<span class="fn">lv_obj_set_pos</span>(panel, <span class="num">20</span>, <span class="num">20</span>);             <span class="cmt">/* 相对父的 (20, 20) */</span></code></pre>
+
+  <table>
+    <tr><th>初始化步骤</th><th>作用</th></tr>
+    <tr><td><code>lv_mem_init()</code></td><td>建立内存池，后续所有对象分配都依赖它</td></tr>
+    <tr><td><code>lv_timer_core_init()</code></td><td>计时器系统，驱动刷新、动画与延迟任务</td></tr>
+    <tr><td><code>lv_draw_init()</code></td><td>注册绘制单元与渲染后端（sw 等）</td></tr>
+    <tr><td><code>lv_refr_init()</code></td><td>屏幕刷新系统，配合 display 的刷新 timer 工作</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>想确认自己没漏掉哪一步初始化，就在 <code>lv_init()</code> 之后立刻建一个 display、再 <code>lv_obj_create(NULL)</code> 建屏——如果它们能正常返回非 NULL，说明地基已经打牢。空对象树跑起来 = 你的初始化链路正确。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：亲手建一棵对象树 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>在 <code>lv_screen_active()</code> 上创建 panel → button → label 三层结构，然后用 <code>lv_obj_get_parent()</code> 和 <code>lv_obj_get_child_count()</code> 验证父子关系：<code>label</code> 的父对象是不是 <code>btn</code>？<code>btn</code> 的父对象是不是 <code>panel</code>？每层各有多少子对象？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>创建时传哪个父对象，它就挂在哪；对照 3.2 的验证代码，逐层打印 <code>lv_obj_get_parent</code> 与 <code>lv_obj_get_child_count</code> 的结果。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>是的，逐层关系成立：<code>label</code> 的父是 <code>btn</code>，<code>btn</code> 的父是 <code>panel</code>，<code>panel</code> 的父是 <code>screen</code>。子对象数：<code>lv_obj_get_child_count(btn)</code> 为 1（label），<code>lv_obj_get_child_count(panel)</code> 为 1（btn），<code>lv_obj_get_child_count(screen)</code> 为 1（panel）——注意屏幕自己可能还带 scrollbar 等内部对象，别被干扰。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：用 dump_tree 侦查对象树 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在跑起一个简单 UI 后，调用 <code>lv_obj_dump_tree(lv_screen_active())</code> 打印对象树。观察打印结果，解释为什么会出现 <code>screen</code> 之外的 bottom / top / sys 三层。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回到 3.3 的 <code>lv_display_create()</code> 内部动作；再想想这三层的名字与"层叠次序"的关系。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>这三层是 <code>lv_display_create()</code> 在创建 display 时用 <code>lv_obj_create(NULL)</code> 一并创建的特殊屏幕对象（bottom/top/sys layer），供系统内部使用：top layer 常放提示框等悬浮物，sys layer 放系统级组件。它们与用户自己的 screen 同级，都挂在 display 的屏幕体系下，所以 dump 时能看到。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：两屏切换 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>创建两个 screen，各放一个颜色背景和一个标签，用一个按钮在两者之间来回 <code>lv_screen_load()</code> 切换；切换后用 <code>lv_display_get_screen_active(disp)</code> 确认当前活跃屏确实变了。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 3.3 的切换代码；<code>lv_display_get_screen_active</code> 需要你持有 <code>lv_display_t * disp</code>（<code>lv_display_create</code> 或 <code>lv_display_get_default()</code> 返回）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>两屏都是 <code>lv_obj_create(NULL)</code> 建屏，各自布局独立；按钮事件里 <code>lv_screen_load()</code> 切换后，用 <code>lv_display_get_screen_active(disp)</code> 与切换前比较返回值即可验证。由于活跃屏只是 display 记录的一个指针，来回切换不会破坏任何一屏的对象树。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：三处真相，逐一取证 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>结合源码回答三个"真相"：(1) 为什么 <code>lv_obj_add_child()</code> 在 v9 里是 private，而公开的是 <code>lv_obj_set_parent()</code>？(2) 为什么说 screen <strong>不是</strong> display 的"子对象"？(3) <code>lv_screen_active()</code> 实际上做了什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>分别查 <code>src/core/lv_obj_private.h</code>、<code>src/core/lv_obj_class.c</code> 的 NULL-parent 分支（<code>disp->screens[]</code>）、<code>src/display/lv_display.c</code> 里 <code>lv_screen_active()</code> 的定义。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) v9 把"改变父关系"收敛为唯一公开入口 <code>lv_obj_set_parent()</code>，内部的挂接动作（含旧的 add/remove child）被收进 private 头文件，返回 <code>lv_result_t</code>，仅供库内使用——所以公开 API 更简单、外部不该直接操作子列表；(2) screen 的 <code>parent</code> 字段是 NULL，它由 display 通过 <code>disp->screens[]</code> 数组持有，display 本身是 <code>lv_display_t</code> 而非 lv_obj、不参与对象树，因此 screen 与 display 不是父子关系，而是"设备持有根对象"的关系；(3) <code>lv_screen_active()</code> 的实现是 <code>lv_display_get_screen_active(lv_display_get_default())</code>，即"默认 display 的当前活跃屏幕"。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

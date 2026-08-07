@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第13章：图像处理与缩放 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="13" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第13章：图像处理与缩放——把 22 万字节的封面塞进一块 4 位灰阶屏</h1>
+  <p class="chapter-subtitle">图是电子书里的"重量级乘客"：先解码、再等比缩放、最后算好块高度排进页面。每一张都带着解码成本与内存账单。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程，先量尺寸，再落笔</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「达芬奇画壁画，先要在墙上打素描稿，量好尺寸才敢动笔。图像在这块墨水屏上也是同一个道理：你得先知道它有多大，才能决定画多大、占多高、留多少空给文字。可这张"画布"窄得可怜——4 位灰阶、几百 KB 内存、刷一次还要几百毫秒。于是每一张图都是一道取舍题：解码要快还是要省内存？缩小交给硬件还是软件？占一页还是占半页？这章的每一行代码，都是在替这些取舍做选择。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 13.1 电子书里的图：封面、插图、图像作为块 ========== -->
+  <h2>13.1 电子书里的图：封面图、书内插图、图像作为块</h2>
+
+  <p>在一本 EPUB 里，图像有两个完全不同的身份。第一个是<strong>封面图</strong>（说人话：书在书架上的"门面"大图，好比纸质书封面印的那张画）：它不在章节的 XHTML 里，而是被记录在 <code>OEBPS/content.opf</code> 的 <code>metadata</code> 里——一个 <code>name="cover"</code> 的 <code>meta</code> 标签，其 <code>content</code> 属性指向 <code>manifest</code> 中某件资源的 id。<code>Epub.cpp</code> 解析时正是顺着这条链找到封面：先遍历 <code>meta</code> 找 <code>name="cover"</code> 的项，拿到 <code>cover_item</code>，再在 manifest 里匹配 <code>item_id == cover_item</code> 的元素，把它的 <code>href</code> 存进 <code>m_cover_image_item</code>。之后书目列表页用 <code>get_cover_image_item()</code> 一行就能取到封面地址。</p>
+
+  <p>第二个身份是<strong>书内插图</strong>：它们嵌在章节 XHTML 的 <code>&lt;img&gt;</code> 标签里。仓库自带的两本示例书恰好各有代表性——<code>data/pg43-images.epub</code>（约 304 KB）里有一张 <code>cover.jpg</code>（222,685 字节）；<code>data/pg14838-images.epub</code>（约 1.4 MB）则塞了一打插图（<code>peter04.jpg</code>、<code>peter08.jpg</code>、<code>peter11.jpg</code>…还混着一张 <code>peter02.gif</code>）。文件名里的 <code>-images</code> 后缀是作者的提示：这是本带插图的书。书目列表渲染封面时，会先把封面按固定比例（<code>image_width = 2 * image_height / 3</code>，约 3:2 竖版缩略图）<strong>缩放</strong>再画出来——说人话：改变图片的尺寸，这里指把大图按比例缩小，让它能在小小的屏幕里放得下。</p>
+
+  <p>把两种图像统一进"块"模型的，是 <code>RubbishHtmlParser</code>。解析器维护一张 <code>IMAGE_TAGS[] = {"img"}</code> 的清单，遇到 <code>&lt;img&gt;</code> 标签就新建一个 <code>ImageBlock(m_base_path + src)</code>：<code>m_src</code> 记录 src 属性，并与章节所在目录 <code>m_base_path</code> 拼接成完整路径。图片块和文本块一样被推进 <code>blocks</code> 列表，经历"布局算坐标 → 分页分配 → 渲染绘制"三段旅程——这正是第 11、12 章那套"分页记账、渲染执行"的分工。看真实代码。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：遇到 &lt;img&gt; 就新建一个图片块 */</span>
+<span class="kw">const</span> <span class="type">char</span> *IMAGE_TAGS[] = {<span class="str">"img"</span>};
+<span class="kw">const</span> <span class="type">int</span> NUM_IMAGE_TAGS = <span class="kw">sizeof</span>(IMAGE_TAGS) / <span class="kw">sizeof</span>(IMAGE_TAGS[<span class="num">0</span>]);
+
+<span class="cmt">// VisitEnter 里：我们只处理 img 标签</span>
+<span class="kw">if</span> (matches(tag_name, IMAGE_TAGS, NUM_IMAGE_TAGS)) {
+  <span class="kw">const</span> <span class="type">char</span> *src = element.Attribute(<span class="str">"src"</span>);
+  <span class="kw">if</span> (src) {
+    <span class="cmt">// 图片块之前若是空文本块，先把它摘掉</span>
+    <span class="kw">if</span> (currentTextBlock-&gt;is_empty()) {
+      blocks.pop_back();
+      delete currentTextBlock;
+      currentTextBlock = <span class="kw">nullptr</span>;
+    }
+    <span class="cmt">// 图片本身就是一块</span>
+    blocks.push_back(<span class="kw">new</span> ImageBlock(m_base_path + src));
+    <span class="cmt">// 图片之后重新累积文本，沿用之前的样式</span>
+    startNewTextBlock(style);
+  }
+}</code></pre>
+
+<pre><code><span class="cmt">/* Epub.cpp：metadata → manifest，两条路找到封面图 */</span>
+<span class="cmt">// ① 在 metadata 里找 name="cover" 的 meta 标签</span>
+<span class="kw">auto</span> cover = metadata-&gt;FirstChildElement(<span class="str">"meta"</span>);
+<span class="kw">while</span> (cover &amp;&amp; cover-&gt;Attribute(<span class="str">"name"</span>) &amp;&amp;
+       strcmp(cover-&gt;Attribute(<span class="str">"name"</span>), <span class="str">"cover"</span>) != <span class="num">0</span>) {
+  cover = cover-&gt;NextSiblingElement(<span class="str">"meta"</span>);
+}
+<span class="kw">auto</span> cover_item = cover ? cover-&gt;Attribute(<span class="str">"content"</span>) : <span class="kw">nullptr</span>;
+
+<span class="cmt">// ② 在 manifest 里找 id 等于 cover_item 的资源，记录它的 href</span>
+<span class="kw">if</span> (cover_item &amp;&amp; item_id == cover_item) {
+  m_cover_image_item = href;   <span class="cmt">// 封面图的完整路径</span>
+}</code></pre>
+
+  <table>
+    <tr><th>图像类型</th><th>在哪里被描述</th><th>谁消费它</th><th>关键入口</th></tr>
+    <tr><td>封面图</td><td><code>content.opf</code> 的 metadata（<code>name="cover"</code>）</td><td>书目列表页</td><td><code>get_cover_image_item()</code> → <code>draw_image</code></td></tr>
+    <tr><td>书内插图</td><td>章节 XHTML 的 <code>&lt;img&gt;</code> 标签</td><td>阅读页</td><td><code>&lt;img&gt;</code> → <code>ImageBlock</code></td></tr>
+    <tr><td>系统图标</td><td><code>lib/Images/</code>（<code>hourglass.h</code> / <code>warning.h</code>）</td><td>忙碌提示、无 SD 卡警告</td><td><code>show_busy()</code> / <code>show_img()</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>分清"封面图"和"书内插图"两条<em>完全独立</em>的数据流：封面走 metadata→manifest 索引，服务书目列表；插图走 HTML <code>&lt;img&gt;</code>，服务阅读页。前者 <code>get_cover_image_item()</code> 一行就能取到，后者要靠解析器逐个扒出来塞进块列表。调试时先想清楚"这张图属于哪条流"，能省一大半排查时间。</p>
+  </div>
+
+  <!-- ========== 13.2 解码：PNGdec 与 TJpgDec ========== -->
+  <h2>13.2 解码：PNG（PNGdec）与 JPEG（TJpgDec）在 ESP32 上怎么把图解出来</h2>
+
+  <p>拿到图片字节后，第一步是决定"谁来解它"——<code>Renderer::get_image_helper</code> 干这件事。先认识两个名词：<strong>解码</strong>（说人话：把压缩过的图片数据还原成屏幕能直接画出来的像素），负责干这活的代码叫<strong>解码器</strong>；<strong>PNG</strong> 和 <strong>JPEG</strong> 则是两种最常见的图片格式——PNG 无损，适合图标、线条图这类边界清晰的图；JPEG 有损，适合照片，体积更小。判定顺序有两条：先看文件扩展名（<code>.jpg</code> / <code>.jpeg</code> / <code>.png</code>），扩展名骗不了人的时候再看文件头魔数——JPEG 以 <code>0xFF 0xD8 0xFF</code> 开头，PNG 以 <code>0x89 'P' 'N' 'G'</code> 开头。这是嵌入式里的常见双保险：靠数据说话，不轻信名字。两个 helper 都是<strong>懒创建</strong>的（<code>png_helper</code> / <code>jpeg_helper</code> 首次用到某格式才 <code>new</code>），因为解码器对象本身也要占内存。</p>
+
+<pre><code><span class="cmt">/* Renderer.cpp：按扩展名或魔数选择解码器 */</span>
+ImageHelper *Renderer::get_image_helper(<span class="kw">const</span> std::string &amp;filename,
+                                        <span class="kw">const</span> <span class="type">uint8_t</span> *data, <span class="type">size_t</span> data_size) {
+  <span class="kw">if</span> (filename.find(<span class="str">".jpg"</span>) != std::string::npos ||
+      filename.find(<span class="str">".jpeg"</span>) != std::string::npos ||
+      (data_size &gt; <span class="num">3</span> &amp;&amp; data[<span class="num">0</span>] == <span class="num">0xFF</span> &amp;&amp; data[<span class="num">1</span>] == <span class="num">0xD8</span> &amp;&amp; data[<span class="num">2</span>] == <span class="num">0xFF</span>)) {
+    <span class="kw">if</span> (!jpeg_helper) jpeg_helper = <span class="kw">new</span> JPEGHelper();
+    <span class="kw">return</span> jpeg_helper;
+  }
+  <span class="kw">if</span> (filename.find(<span class="str">".png"</span>) != std::string::npos ||
+      (data_size &gt; <span class="num">4</span> &amp;&amp; data[<span class="num">0</span>] == <span class="num">0x89</span> &amp;&amp; data[<span class="num">1</span>] == <span class="str">'P'</span> &amp;&amp;
+       data[<span class="num">2</span>] == <span class="str">'N'</span> &amp;&amp; data[<span class="num">3</span>] == <span class="str">'G'</span>)) {
+    <span class="kw">if</span> (!png_helper) png_helper = <span class="kw">new</span> PNGHelper();
+    <span class="kw">return</span> png_helper;
+  }
+  <span class="kw">return</span> <span class="kw">nullptr</span>;
+}</code></pre>
+
+  <p>PNG 由 <code>PNGdec</code>（<code>lib/png/PNGdec</code>，一个 git 子模块）解码。项目用它的<strong>内存模式</strong>：<code>png.openRAM(data, size, callback)</code> 直接从内存打开，不碰文件系统。读尺寸时不带回调，渲染时才挂上 <code>png_draw_callback</code> 并调用 <code>png.decode(this, PNG_FAST_PALETTE)</code>。PNGdec 按<em>行</em>回调：每一行解码出一段 RGB565 像素，交给 <code>PNGHelper::draw_callback</code> 处理。注意缩放只做"缩小不做放大"——<code>x_scale = std::min(1.0f, width / png.getWidth())</code>，再逐像素把 RGB565 拆成灰度写进帧缓冲。由于目标行可能重叠（缩小后多行源像素落在同一行），代码用 <code>last_y</code> 去重：同一目标行只画一次。</p>
+
+<pre><code><span class="cmt">/* PNGHelper.cpp：逐行回调，把 RGB565 转成灰度像素 */</span>
+<span class="type">void</span> PNGHelper::draw_callback(PNGDRAW *draw) {
+  <span class="type">int</span> y = y_pos + draw-&gt;y * y_scale;   <span class="cmt">// 目标行（含缩小因子）</span>
+  <span class="kw">if</span> (y != last_y) {                  <span class="cmt">// 同一目标行只画一次</span>
+    vTaskDelay(<span class="num">1</span>);                  <span class="cmt">// 让出 CPU，顺带喂看门狗</span>
+    png.getLineAsRGB565(draw, tmp_rgb565_buffer, <span class="num">0</span>, <span class="num">0x00FFFFFF</span>);
+    <span class="kw">for</span> (<span class="type">int</span> x = <span class="num">0</span>; x &lt; png.getWidth() * x_scale; x++) {
+      <span class="type">uint8_t</span> r, g, b;
+      convert_rgb_565_to_rgb(tmp_rgb565_buffer[<span class="type">int</span>(x / x_scale)], &amp;r, &amp;g, &amp;b);
+      <span class="type">uint32_t</span> gray = (r * <span class="num">38</span> + g * <span class="num">75</span> + b * <span class="num">15</span>) &gt;&gt; <span class="num">7</span>;  <span class="cmt">// 加权亮度</span>
+      renderer-&gt;draw_pixel(x_pos + x, y, gray);
+    }
+    last_y = y;
+  }
+}</code></pre>
+
+  <p>JPEG 由 <strong>TJpgDec</strong>（<code>lib/tjpgd3</code>，ChaN 的 "Tiny JPEG Decompressor"）解码——一个为小内存 MCU 专门优化的解压器，官方文档自称只需 <strong>3.5 KB 的工作区 RAM，且与图像尺寸无关</strong>。项目配置里 <code>POOL_SIZE = 32768</code>（工作区上限开得更宽），输出格式 <code>JD_FORMAT 0</code> 即 RGB888。数据通过 <code>read_jpeg_data</code> 从内存缓冲<em>流式</em>喂入：TJpgDec 需要多少就回调多少。它还支持在解码时直接缩小 <code>1/1、1/2、1/4、1/8</code>（<code>JD_USE_SCALE 1</code>）——项目用一个 <code>scale_factor</code> 循环把"目标缩小比"尽量转成硬件缩放：每翻倍一次 <code>scale_factor</code> 就升一级，把能交给解码器吞掉的缩小量吃掉，剩下的残余比例留给软件逐像素映射。</p>
+
+<pre><code><span class="cmt">/* JPEGHelper.cpp：32 KB 工作区 + 硬件缩放因子 */</span>
+<span class="kw">#define</span> POOL_SIZE <span class="num">32768</span>
+<span class="type">void</span> *pool = malloc(POOL_SIZE);   <span class="cmt">// 解码工作区，与图像尺寸无关</span>
+JRESULT res = jd_prepare(&amp;dec, read_jpeg_data, pool, POOL_SIZE, <span class="kw">this</span>);
+...
+<span class="kw">this</span>-&gt;x_scale = std::min(<span class="num">1.0f</span>, <span class="type">float</span>(width) / <span class="type">float</span>(dec.width));
+<span class="kw">this</span>-&gt;y_scale = std::min(<span class="num">1.0f</span>, <span class="type">float</span>(height) / <span class="type">float</span>(dec.height));
+
+scale_factor = <span class="num">0</span>;
+<span class="cmt">// 把缩小比"换算"成硬件缩放级数（1/1,1/2,1/4,1/8）</span>
+<span class="kw">while</span> (x_scale &lt;= <span class="num">1.0f</span> &amp;&amp; y_scale &lt;= <span class="num">1.0f</span> &amp;&amp; scale_factor &lt;= <span class="num">3</span>) {
+  scale_factor++;
+  x_scale *= <span class="num">2</span>; y_scale *= <span class="num">2</span>;
+}
+scale_factor--; x_scale /= <span class="num">2</span>; y_scale /= <span class="num">2</span>;
+jd_decomp(&amp;dec, draw_jpeg_function, scale_factor);  <span class="cmt">// 按块输出</span></code></pre>
+
+  <p>两条解码链最终汇合到同一个灰度公式：<code>gray = (r * 38 + g * 75 + b * 15) &gt;&gt; 7</code>。这是标准亮度权重 0.299/0.587/0.114 的<strong>定点整数版本</strong>——38 + 75 + 15 = 128 = 2⁷，用一次右移代替三次浮点乘，正是嵌入式的老手艺。屏幕只有灰阶，所以"去色"在解码阶段就完成了，之后每像素都只是往帧缓冲写一个 4 位值。</p>
+
+  <table>
+    <tr><th>维度</th><th>PNG（PNGdec）</th><th>JPEG（TJpgDec）</th></tr>
+    <tr><td>位置</td><td><code>lib/png/PNGdec</code>（子模块）</td><td><code>lib/tjpgd3</code></td></tr>
+    <tr><td>工作区</td><td>一行 RGB565 缓冲（<code>png.getWidth()*2</code> 字节）</td><td>固定 <code>POOL_SIZE=32768</code>，与图像尺寸无关</td></tr>
+    <tr><td>输出</td><td>逐行回调（<code>PNGDRAW</code>）</td><td>逐块回调（<code>JRECT</code>）</td></tr>
+    <tr><td>缩小</td><td>纯软件：<code>x_scale/y_scale = min(1, 目标/源)</code></td><td>硬件 <code>1/1..1/8</code> + 软件残余</td></tr>
+    <tr><td>去色</td><td colspan="2">同公式：<code>(r*38 + g*75 + b*15) &gt;&gt; 7</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>两种解码器有个共同点：都按"小块/逐行"<em>流式</em>输出，而不是把整张解码好的<strong>位图</strong>（Bitmap，一个像素一格的点阵图像，解码的终点就是把它还原出来）一次性堆在内存里——这是嵌入式解码的第一原则，让工作区与图像大小解耦。PNG 用行回调、JPEG 用矩形块回调，回调里还都塞了一个 <code>vTaskDelay(1)</code>：解码很耗 CPU，定时让出时间片既能喂看门狗，也不至于卡死同核上的其他任务。</p>
+  </div>
+
+  <!-- ========== 13.3 缩放：读宽高 → 等比缩到屏幕 → 算块高度 ========== -->
+  <h2>13.3 缩放：读宽高 → 按屏幕尺寸等比缩放 → 算出块高度</h2>
+
+  <p>图片块的布局在 <code>ImageBlock::layout</code> 里完成，逻辑短得惊人。第一步用 <code>get_item_contents</code> 把图片压缩字节整个读进内存；第二步 <code>get_image_size</code> 读出原始宽高——这一步只解析图片头部，不解全图；第三步判断是否超屏：只有宽或高<strong>超出页面</strong>才触发缩放。缩放是严格的<strong>等比</strong>：<code>scale = min(页宽/原宽, 页高/原高)</code>，取两个方向里较小的比例——保证不裁切、不变形、也不会让高宽方向相互打架。缩放后 <code>width *= scale; height *= scale</code> 就是这块图在页面上的最终占位，最后 <code>x_pos</code> 居中。读完成马上 <code>free(image_data)</code> 释放，绝不把图片字节留到渲染阶段。</p>
+
+<pre><code><span class="cmt">/* ImageBlock.h：图片块的布局 —— 读宽高、等比缩放、算块尺寸 */</span>
+<span class="kw">void</span> ImageBlock::layout(Renderer *renderer, Epub *epub, <span class="type">int</span> max_width = <span class="num">-1</span>) {
+  <span class="type">size_t</span> image_data_size = <span class="num">0</span>;
+  <span class="type">uint8_t</span> *image_data = epub-&gt;get_item_contents(m_src, &amp;image_data_size);
+  renderer-&gt;get_image_size(m_src, image_data, image_data_size, &amp;width, &amp;height);
+  <span class="kw">if</span> (width &gt; renderer-&gt;get_page_width() || height &gt; renderer-&gt;get_page_height()) {
+    <span class="type">float</span> scale = std::min(
+        <span class="type">float</span>(max_width != <span class="num">-1</span> ? max_width : renderer-&gt;get_page_width()) / <span class="type">float</span>(width),
+        <span class="type">float</span>(renderer-&gt;get_page_height()) / <span class="type">float</span>(height));
+    width *= scale;   <span class="cmt">// 等比缩小后的占位尺寸</span>
+    height *= scale;
+  }
+  <span class="cmt">// 水平居中</span>
+  x_pos = (renderer-&gt;get_page_width() - width) / <span class="num">2</span>;
+  free(image_data);   <span class="cmt">// 读完宽高就释放，渲染阶段重新读</span>
+}</code></pre>
+
+  <p>缩放算出的 <code>height</code> 随后成为分页的关键输入。在 <code>RubbishHtmlParser::layout</code> 分配页面时，图片块走这样一段：若 <code>y + imageBlock-&gt;height &gt; page_height</code>，说明剩余空间放不下，就开新页；否则把图片以当前 <code>y</code> 塞进这一页，再 <code>y += imageBlock-&gt;height</code>。也就是说，图片块的高度直接决定了它占据的版面——这也是为什么"先读宽高、再缩放、再算块高度"的顺序是<strong>硬性</strong>的：不解码就拿不到宽高，拿不到宽高就没法排页。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：图片块按缩放后的高度分页 */</span>
+<span class="kw">if</span> (block-&gt;getType() == BlockType::IMAGE_BLOCK) {
+  ImageBlock *imageBlock = (ImageBlock *)block;
+  <span class="kw">if</span> (y + imageBlock-&gt;height &gt; page_height) {
+    pages.push_back(<span class="kw">new</span> Page());   <span class="cmt">// 放不下 → 新开一页</span>
+    y = <span class="num">0</span>;
+  }
+  pages.back()-&gt;elements.push_back(<span class="kw">new</span> PageImage(imageBlock, y));
+  y += imageBlock-&gt;height;          <span class="cmt">// 图片占掉的高度</span>
+}</code></pre>
+
+  <p>来算一个真实数字。以 4.7 英寸的 <code>ED047TC2</code>（960×540，旋转成竖屏）为例，<code>main.cpp</code> 给阅读页设置的边距是 <code>margin_top=35</code>、<code>margin_left=10</code>、<code>margin_right=10</code>，于是页宽 = 960 − 20 = 940，页高 = 540 − 35 = 505。若来一张 1200×800 的插图：宽度超了，触发缩放；<code>scale = min(940/1200, 505/800) = min(0.783, 0.631) = 0.631</code>；缩放后 <code>width ≈ 757</code>、<code>height ≈ 505</code>——正好贴住高度方向，水平居中 <code>x_pos = (940 − 757) / 2 ≈ 91</code>。这张图独占一页，页面上剩余的 505 − 505 = 0 像素说明它下面不会再排文字。</p>
+
+  <table>
+    <tr><th>步骤</th><th>代码</th><th>结果</th></tr>
+    <tr><td>读图片字节</td><td><code>epub-&gt;get_item_contents(m_src, &amp;size)</code></td><td>压缩字节在内存（用完即释放）</td></tr>
+    <tr><td>读原始宽高</td><td><code>renderer-&gt;get_image_size(...)</code></td><td>只解析头部，不解全图</td></tr>
+    <tr><td>判断超屏</td><td><code>width &gt; page_width || height &gt; page_height</code></td><td>小图原样保留、不做放大</td></tr>
+    <tr><td>等比缩放</td><td><code>scale = min(页宽/原宽, 页高/原高)</code></td><td>不裁切、不变形</td></tr>
+    <tr><td>算块高度 / 居中</td><td><code>height *= scale</code>；<code>x_pos = (页宽 − width)/2</code></td><td>供分页与渲染使用</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>layout</code> 的第三个参数 <code>max_width</code> 默认是 <code>-1</code>。注意那行三目运算：<code>max_width != -1 ? max_width : get_page_width()</code>——也就是调用方可以传入一个更窄的宽度来约束图片（比如在缩略图、章节列表等窄场景里），默认才用整页宽。读 <code>ImageBlock</code> 的头文件时别把 <code>-1</code> 当成随便写死的数字：它是"没有限制"的哨兵值。</p>
+  </div>
+
+  <!-- ========== 13.4 内存考量：大图与 PSRAM ========== -->
+  <h2>13.4 内存考量：大图与 PSRAM</h2>
+
+  <p>图像是这套系统里最"重"的数据，内存压力来自三处。其一，<code>get_item_contents</code> 会把图片的<strong>压缩字节</strong>整个读进堆——一张 222,685 字节的 <code>cover.jpg</code>，光"躺在内存里的原始文件"就超过 200 KB。其二，PNG 渲染每帧要临时 <code>malloc(png.getWidth() * 2)</code> 一行 RGB565 缓冲。其三，JPEG 解码固定要 <code>POOL_SIZE = 32768</code> 的工作区。好在这些内存都是<strong>用完即释放</strong>的：布局阶段读完宽高就 <code>free</code>，渲染画完又 <code>free</code>，绝不驻留。</p>
+
+<pre><code><span class="cmt">/* 每个图片块的内存生命周期：读 → 用 → 释放 */</span>
+<span class="cmt">// 布局阶段：读入压缩字节 → 取宽高 → 立刻释放</span>
+<span class="type">uint8_t</span> *image_data = epub-&gt;get_item_contents(m_src, &amp;image_data_size);
+renderer-&gt;get_image_size(m_src, image_data, image_data_size, &amp;width, &amp;height);
+<span class="kw">free</span>(image_data);
+
+<span class="cmt">// PNG 渲染：一行 RGB565 临时缓冲，解完即释放</span>
+<span class="type">uint16_t</span> *tmp = (<span class="type">uint16_t</span> *)malloc(png.getWidth() * <span class="num">2</span>);
+png.decode(<span class="kw">this</span>, PNG_FAST_PALETTE);
+<span class="kw">free</span>(tmp);
+
+<span class="cmt">// JPEG 渲染：32 KB 固定工作区，解完即释放</span>
+<span class="type">void</span> *pool = malloc(POOL_SIZE);
+jd_prepare(&amp;dec, read_jpeg_data, pool, POOL_SIZE, <span class="kw">this</span>);
+jd_decomp(&amp;dec, draw_jpeg_function, scale_factor);
+<span class="kw">free</span>(pool);</code></pre>
+
+  <p>但<strong>峰值叠加</strong>依然可观：渲染一个图片块的那一刻，图片字节 + 解码工作区 + 帧缓冲同时在场。帧缓冲本身是 <code>EPD_WIDTH × EPD_HEIGHT / 2</code> 字节 = 960 × 540 / 2 = 259,200 ≈ 253 KB（第 12 章算过）；再加上 EPUB 解析期的整章 blocks、文本缓冲……这些远超 ESP32 内部约 520 KB 的 SRAM。所以仓库把 <strong>PSRAM 列为第一硬性要求</strong>：图片解码的临时内存与帧缓冲都得住进外挂 PSRAM，否则要么解析失败、要么图片画不出来。</p>
+
+  <p>README 的 "How well does it work" 一节也如实交代了图像带来的体验代价：<em>"Depending on the images that have been used for the book covers displaying the list of ePub files on the SD Card can take a few seconds and moving through the pages of ePub files can be a bit slow. Rendering the actual pages is pretty reasonable, even when they have images on them."</em>——封面解码会让书目列表慢上几秒；而阅读页本身的渲染"即使带图也相当利索"。这印证了本章的分工：解码是昂贵的一步，布局时把它藏进"只读头部"，渲染时按块流式完成，才把成本控制在可接受范围。</p>
+
+  <table>
+    <tr><th>内存项</th><th>大小 / 来源</th><th>释放时机</th></tr>
+    <tr><td>图片压缩字节</td><td>约等于文件体积（封面可达 222 KB）</td><td>布局取完宽高 / 渲染画完之后</td></tr>
+    <tr><td>PNG 行缓冲</td><td><code>png.getWidth() * 2</code> 字节</td><td>本次渲染结束</td></tr>
+    <tr><td>JPEG 工作区</td><td><code>POOL_SIZE = 32768</code> 固定</td><td>本次渲染结束</td></tr>
+    <tr><td>帧缓冲</td><td><code>EPD_WIDTH×EPD_HEIGHT/2</code> ≈ 253 KB</td><td>常驻（PSRAM）</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>不是所有图片都能解。项目只支持 JPEG 与 PNG——前文的 <code>get_image_helper</code> 对未知格式直接返回 <code>nullptr</code>，<code>draw_image</code> 便退化成画一个空心占位矩形（<code>draw_rect(x+20, y+20, width-40, height-40)</code>）。这解释了一个真实现象：<code>pg14838-images.epub</code> 里那张 <code>peter02.gif</code> 在阅读页上会以占位框的形式出现，而不是真图。遇到"图没出来"的问题，先查格式是否在这两条白名单里。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：封面图的两步寻址 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>结合 <code>lib/Epub/EpubList/Epub.cpp</code>，简述封面图是如何被找到的：它先存在于哪里？用了哪两个标签/属性？最终存在哪个成员变量里？书目列表页又是怎么把它画出来的（结合 <code>EpubList.cpp</code>）？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>封面在 <code>content.opf</code> 的 metadata；先 <code>name="cover"</code> 拿 id，再按 id 匹配 manifest；列表页按 3:2 比例缩放后用 <code>draw_image</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>封面图记录在 <code>OEBPS/content.opf</code> 的 <code>metadata</code> 中：一个 <code>name="cover"</code> 的 <code>meta</code> 标签，其 <code>content</code> 属性是 manifest 里某件资源的 id。解析时遍历 meta 找到它拿到 <code>cover_item</code>，再在 manifest 里匹配 <code>item_id == cover_item</code> 的元素，把其 <code>href</code> 存入 <code>m_cover_image_item</code>。书目列表页用 <code>get_cover_image_item()</code> 取地址、<code>get_item_contents</code> 读字节，按 <code>image_width = 2 * image_height / 3</code> 的竖版比例缩放后 <code>draw_image</code> 画进格子。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：动手算一次缩放 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>沿用 13.3 的屏幕配置（页宽 940、页高 505），分别计算两张图的最终占位与 <code>x_pos</code>：(a) 1200×800；(b) 400×300（一张小插图，不触发缩放）。请写出每一步的 <code>scale</code>、缩放后 <code>width/height</code>、<code>x_pos</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(b) 宽高都小于页面，<code>if</code> 分支不进入，尺寸保持原样只做居中；注意 <code>width *= scale</code> 中 width 是整数，会被截断。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 1200 宽、800 高都超出，<code>scale = min(940/1200, 505/800) = min(0.783, 0.631) = 0.631</code>；缩放后 <code>width ≈ 757</code>、<code>height ≈ 505</code>；<code>x_pos = (940 − 757)/2 ≈ 91</code>。(b) 400&lt;940 且 300&lt;505，不触发缩放，保持 400×300；<code>x_pos = (940 − 400)/2 = 270</code>。可见小图不会被强行放大到整页宽——缩放只做缩小不做放大。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：灰度公式为什么用移位 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>项目把彩色像素转灰度用的公式是 <code>gray = (r*38 + g*75 + b*15) &gt;&gt; 7</code>。请解释：(1) 系数 38/75/15 对应标准亮度公式里的哪几个权重？(2) 为什么 <code>&gt;&gt; 7</code> 等价于除以 128？(3) 相比 <code>float</code> 版本，定点整数版好在哪？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>标准公式是 0.299R + 0.587G + 0.114B；38+75+15 = 128 = 2⁷；想想嵌入式的 CPU 有没有 FPU。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 38/128 ≈ 0.297、75/128 ≈ 0.586、15/128 ≈ 0.117，正是 0.299/0.587/0.114 的定点近似，且和等于 128，保证白色 (255,255,255) 仍映射回 255。(2) <code>&gt;&gt; 7</code> 是对无符号整数除以 2⁷ = 128 的移位实现，一步完成除法。(3) 定点整数只做整数乘法和一次移位，而浮点版在无 FPU 的 MCU 上会触发软件浮点模拟，慢一个量级——这是一张图要执行几十万次的操作，省下来的时间很可观。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：JPEG 的 scale_factor 循环 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>跟踪 <code>JPEGHelper::render</code> 里的 <code>scale_factor</code> 循环。给定初始 <code>x_scale = y_scale = 0.615</code>，写出循环每一步 <code>scale_factor</code> 与 <code>x_scale</code> 的值，并说明最终 <code>jd_decomp</code> 用的缩放级数与软件残余比例。若改成初始 0.25 又会怎样？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>循环条件是三个同时成立：<code>x_scale&lt;=1</code> 且 <code>y_scale&lt;=1</code> 且 <code>scale_factor&lt;=3</code>；退出后要 <code>scale_factor--</code> 再 <code>x_scale/=2</code> 还原。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>初始 0.615、scale_factor=0：第 1 轮 0.615≤1 成立 → scale_factor=1、x_scale=1.23；第 2 轮 1.23≤1 不成立，退出。随后 scale_factor--=0、x_scale/=2=0.615。即 <code>jd_decomp</code> 用 1/1（不缩小），软件按 0.615 逐像素映射。若初始 0.25：第 1 轮→0.5(sf=1)；第 2 轮→1.0(sf=2)；第 3 轮→2.0(sf=3) 退出，随后 sf=2、x_scale=1.0。即解码器直接输出 1/4 缩小的图，软件残余比例 1.0（无需再缩放）。这个循环把"目标缩小比"在硬件解码与软件映射之间做了分配——硬件能吞多少就吞多少，剩下的才留给软件。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

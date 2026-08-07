@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第8章：Jetpack Compose UI - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="08" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：Jetpack Compose UI</h1>
+  <p class="chapter-subtitle">当代码化为画笔，画布即是屏幕 —— 用声明式构图法绘制 Android 界面</p>
+
+  <!-- ======================== 导师卡片 ======================== -->
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>达芬奇 (Leonardo da Vinci)</h3>
+        <p class="mentor-method">艺术与工程的融合</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「画家是万物的主宰。」五百年前，我在佛罗伦萨的工坊中同时研究人体解剖与透视法 —— 因为伟大的作品从来不是纯粹的艺术，也不是纯粹的工程，而是两者的完美融合。今天，Jetpack Compose 正是这样一件杰作：每一个 Composable 函数都是你的画笔，布局就是构图法则，状态管理则是画布背后精密的机械齿轮。当你用代码描绘界面时，你同时是艺术家和工程师。来吧，让我们一起在数字画布上创造杰作。</p>
+    </div>
+  </div>
+
+  <!-- ======================== 8.1 声明式 vs 命令式 ======================== -->
+  <h2>8.1 声明式 UI vs 命令式 UI</h2>
+
+  <h3>传统 XML 布局（命令式）：笨拙的旧画法</h3>
+  <p>想象一下，如果每次作画都要先在一张纸上写下指令 —— "在坐标 (100, 200) 处画一个红色方块"，然后交给助手去执行。你看不到画布的全貌，只能通过一条条指令来控制每个细节。这就是传统 Android 开发中 XML 布局的工作方式：先在一个文件里定义结构，再到另一个文件中用 <code>findViewById</code> 逐一抓取控件，手动指挥每一个元素的变化。</p>
+
+  <pre><code><span class="cmt">// 传统方式：像给助手下指令，手动操控每一个控件</span>
+<span class="kw">val</span> tvCount = <span class="fn">findViewById</span>&lt;<span class="type">TextView</span>&gt;(R.id.tvCount)
+<span class="kw">val</span> btnAdd = <span class="fn">findViewById</span>&lt;<span class="type">Button</span>&gt;(R.id.btnAdd)
+
+<span class="kw">var</span> count = <span class="num">0</span>
+btnAdd.<span class="fn">setOnClickListener</span> {
+    count++
+    tvCount.text = <span class="str">"点击了 $count 次"</span>   <span class="cmt">// 手动更新 UI</span>
+}</code></pre>
+
+  <p>这种旧画法有几个致命的缺陷：</p>
+  <ul>
+    <li>构图（UI）和机械（逻辑）被迫分离在 XML 和 Kotlin 两个文件中，就像画家必须在两个房间之间来回奔跑</li>
+    <li>每增加一个控件，就要多写一行 <code>findViewById</code>，手动管理所有状态同步 —— 画面越复杂，越容易出错</li>
+    <li>代码冗长，工程精度低，维护成本高</li>
+  </ul>
+
+  <h3>Compose（声明式）：画家亲自执笔</h3>
+  <p>Jetpack Compose 带来了全新的创作方式。正如我在绘制《最后的晚餐》时，脑中先有完整的构图，再让画面自然呈现 —— Compose 让你<strong>直接描述画面应该是什么样子</strong>。当底层数据变化时，框架会自动重新渲染画布，你无需亲手擦拭和重画每一笔。</p>
+
+  <pre><code><span class="cmt">// Compose 方式：描绘你心中的画面，框架自动呈现</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">Counter</span>() {
+    <span class="kw">var</span> count <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }
+
+    <span class="fn">Column</span> {
+        <span class="fn">Text</span>(<span class="str">"点击了 $count 次"</span>)       <span class="cmt">// 数据变了，画布自动更新</span>
+        <span class="fn">Button</span>(<span class="param">onClick</span> = { count++ }) {
+            <span class="fn">Text</span>(<span class="str">"点击 +1"</span>)
+        }
+    }
+}</code></pre>
+
+  <p>对比一目了然 —— 不需要 XML 草稿纸，不需要 <code>findViewById</code> 来寻找画布上的元素，不需要手动调用 <code>setText</code> 来修改笔触。艺术与工程，在这里合二为一。</p>
+
+  <div class="tip">
+    <p class="tip-title">跨平台开发者会觉得很亲切</p>
+    <p>如果你用过 React、Flutter 或 SwiftUI，Compose 的核心思想和它们一样：<strong>UI = f(state)</strong>。界面是状态的函数 —— 正如一幅画是光影和透视法的函数。状态变了，画面自动重新呈现。</p>
+  </div>
+
+  <h3>为什么 Google 推荐 Compose？</h3>
+  <table>
+    <tr>
+      <th>对比项</th>
+      <th>传统 XML + View</th>
+      <th>Jetpack Compose</th>
+    </tr>
+    <tr>
+      <td>布局文件</td>
+      <td>需要 XML</td>
+      <td>纯 Kotlin，无需 XML</td>
+    </tr>
+    <tr>
+      <td>控件引用</td>
+      <td>findViewById / ViewBinding</td>
+      <td>不需要</td>
+    </tr>
+    <tr>
+      <td>状态同步</td>
+      <td>手动更新每个控件</td>
+      <td>自动重组</td>
+    </tr>
+    <tr>
+      <td>代码量</td>
+      <td>多</td>
+      <td>显著减少</td>
+    </tr>
+    <tr>
+      <td>预览</td>
+      <td>需要编译运行</td>
+      <td>@Preview 实时预览</td>
+    </tr>
+    <tr>
+      <td>学习曲线</td>
+      <td>XML + Kotlin 双重学习</td>
+      <td>只需要学 Kotlin</td>
+    </tr>
+  </table>
+
+  <!-- ======================== 8.2 Composable 函数基础 ======================== -->
+  <h2>8.2 Composable 函数基础</h2>
+
+  <h3>@Composable 注解：你的画笔</h3>
+  <p>在我的工坊里，每一支画笔都有它的用途 —— 有的画轮廓，有的涂色彩，有的描细节。在 Compose 中，<strong>函数就是你的画笔</strong>。只要给一个函数加上 <code>@Composable</code> 注解，它就变成了一支可以在画布上留下痕迹的画笔，能够发射（emit）UI 元素。</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">Greeting</span>(<span class="param">name</span>: <span class="type">String</span>) {
+    <span class="fn">Text</span>(<span class="param">text</span> = <span class="str">"你好, $name!"</span>)
+}</code></pre>
+
+  <p>使用这支画笔也很自然 —— 在另一个 Composable 函数里直接调用即可，就像在大型壁画中复用同一种笔法：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">MyApp</span>() {
+    <span class="fn">Greeting</span>(<span class="str">"Kotlin 开发者"</span>)
+}</code></pre>
+
+  <p>在 Activity 中展开你的画布：</p>
+
+  <pre><code><span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle</span>?) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        <span class="fn">setContent</span> {
+            <span class="fn">MyApp</span>()   <span class="cmt">// 从这里开始在画布上作画</span>
+        }
+    }
+}</code></pre>
+
+  <h3>@Preview：工坊中的速写预览</h3>
+  <p>文艺复兴时期的大师在绘制正式作品前，总会先画速写来验证构图。<code>@Preview</code> 注解就是你的速写本 —— 无需将作品搬到手机上运行，Android Studio 会直接在屏幕上展示预览效果：</p>
+
+  <pre><code><span class="ann">@Preview</span>(<span class="param">showBackground</span> = <span class="kw">true</span>)
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">GreetingPreview</span>() {
+    <span class="fn">Greeting</span>(<span class="str">"Android"</span>)
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">速写预览的技巧</p>
+    <p>你可以添加多个 <code>@Preview</code>，用不同参数预览多种状态 —— 就像为同一个场景画多张不同光线条件下的速写。<code>showBackground = true</code> 会显示白色背景，<code>showSystemUi = true</code> 会显示手机外框。预览函数通常以 <code>Preview</code> 结尾命名，且不接受参数。</p>
+  </div>
+
+  <h3>Composable 函数的法则</h3>
+  <p>正如透视法有严格的数学规则，Composable 函数也有自己必须遵守的法则：</p>
+  <ul>
+    <li><strong>可以被重复调用（重组 Recomposition）</strong>：当状态变化时，Compose 会重新调用相关的 Composable 函数来刷新画面。你的函数必须像一个可靠的配方 —— 无论何时被调用，都能产生正确的结果。</li>
+    <li><strong>不能有副作用</strong>：不要在 Composable 函数里写文件、发网络请求、修改全局变量。画笔只负责作画，不应该去搬动家具。需要副作用时请用专门的 API（如 <code>LaunchedEffect</code>）。</li>
+    <li><strong>执行顺序不确定</strong>：Compose 可能以任意顺序执行子 Composable，就像画家可能先画天空再画地面，也可能反过来 —— 不要依赖执行顺序。</li>
+    <li><strong>可以并行执行</strong>：Compose 可能在不同线程上同时执行多个 Composable 函数，如同多位学徒同时在壁画的不同区域作画。</li>
+  </ul>
+
+  <!-- ======================== 8.3 常用组件 ======================== -->
+  <h2>8.3 常用组件</h2>
+
+  <p>每位画家的调色盘上都有基本色 —— 红、黄、蓝。Compose 的基本组件就是你调色盘上的原色，所有复杂的界面都由它们混合调配而成。</p>
+
+  <h3>Text：书法与铭文</h3>
+  <p><code>Text</code> 是最基础的组件，如同画作中的铭文与标注。通过参数可以精细控制字体、字号、颜色 —— 就像选择不同的鹅毛笔和墨水：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TextExamples</span>() {
+    <span class="fn">Column</span> {
+        <span class="cmt">// 基本文字 —— 朴素的铭文</span>
+        <span class="fn">Text</span>(<span class="str">"Hello Compose!"</span>)
+
+        <span class="cmt">// 设置大小和粗细 —— 如同大写花体字</span>
+        <span class="fn">Text</span>(
+            <span class="param">text</span> = <span class="str">"大标题"</span>,
+            <span class="param">fontSize</span> = <span class="num">24</span>.sp,
+            <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold
+        )
+
+        <span class="cmt">// 设置颜色和最大行数 —— 调色与裁剪</span>
+        <span class="fn">Text</span>(
+            <span class="param">text</span> = <span class="str">"这是一段带颜色的文字，最多显示两行..."</span>,
+            <span class="param">color</span> = <span class="type">Color</span>.Blue,
+            <span class="param">maxLines</span> = <span class="num">2</span>,
+            <span class="param">overflow</span> = <span class="type">TextOverflow</span>.Ellipsis
+        )
+    }
+}</code></pre>
+
+  <h3>Button：精雕的控制装置</h3>
+  <p>在我设计的机械装置中，每一个操纵杆都经过精心雕琢，既美观又实用。<code>Button</code> 就是你界面上精雕细琢的控制装置，<code>onClick</code> 是它的核心机关：</p>
+
+  <pre><code><span class="fn">Button</span>(
+    <span class="param">onClick</span> = { <span class="cmt">/* 触发机关 */</span> },
+    <span class="param">colors</span> = <span class="type">ButtonDefaults</span>.<span class="fn">buttonColors</span>(
+        <span class="param">containerColor</span> = <span class="type">Color</span>(<span class="num">0xFF6200EE</span>)
+    )
+) {
+    <span class="fn">Text</span>(<span class="str">"点击我"</span>)
+}
+
+<span class="cmt">// 其他按钮变体 —— 不同风格的控制装置</span>
+<span class="fn">OutlinedButton</span>(<span class="param">onClick</span> = { }) { <span class="fn">Text</span>(<span class="str">"描边按钮"</span>) }
+<span class="fn">TextButton</span>(<span class="param">onClick</span> = { }) { <span class="fn">Text</span>(<span class="str">"文字按钮"</span>) }</code></pre>
+
+  <h3>TextField：书写的羊皮纸</h3>
+  <p>输入框是用户与画面交互的入口，如同在羊皮纸上书写。它需要配合状态来使用 —— 每一笔输入都会被精密的齿轮系统记录下来：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">InputExample</span>() {
+    <span class="kw">var</span> text <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+
+    <span class="fn">TextField</span>(
+        <span class="param">value</span> = text,
+        <span class="param">onValueChange</span> = { text = it },
+        <span class="param">label</span> = { <span class="fn">Text</span>(<span class="str">"请输入用户名"</span>) },
+        <span class="param">placeholder</span> = { <span class="fn">Text</span>(<span class="str">"例如: zhangsan"</span>) }
+    )
+
+    <span class="cmt">// OutlinedTextField: 带描边的输入框，更常用</span>
+    <span class="fn">OutlinedTextField</span>(
+        <span class="param">value</span> = text,
+        <span class="param">onValueChange</span> = { text = it },
+        <span class="param">label</span> = { <span class="fn">Text</span>(<span class="str">"邮箱地址"</span>) }
+    )
+}</code></pre>
+
+  <h3>Image、Icon 与 Spacer：图像、图标与留白</h3>
+  <p>一幅好的画作，图像、符号和留白缺一不可。留白（Spacer）尤其重要 —— 正如我常说，画家要学会画"无"，空间本身就是构图的一部分：</p>
+
+  <pre><code><span class="cmt">// Image: 在画布上嵌入图像</span>
+<span class="fn">Image</span>(
+    <span class="param">painter</span> = <span class="fn">painterResource</span>(<span class="param">id</span> = R.drawable.photo),
+    <span class="param">contentDescription</span> = <span class="str">"用户头像"</span>,
+    <span class="param">modifier</span> = <span class="type">Modifier</span>
+        .<span class="fn">size</span>(<span class="num">80</span>.dp)
+        .<span class="fn">clip</span>(<span class="type">CircleShape</span>)         <span class="cmt">// 裁剪为圆形</span>
+)
+
+<span class="cmt">// Icon: Material 图标 —— 精炼的符号语言</span>
+<span class="fn">Icon</span>(
+    <span class="param">imageVector</span> = <span class="type">Icons</span>.Default.Favorite,
+    <span class="param">contentDescription</span> = <span class="str">"收藏"</span>,
+    <span class="param">tint</span> = <span class="type">Color</span>.Red
+)
+
+<span class="cmt">// Spacer: 留白 —— 构图中不可或缺的呼吸空间</span>
+<span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))  <span class="cmt">// 垂直留白</span>
+<span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">width</span>(<span class="num">8</span>.dp))    <span class="cmt">// 水平留白</span></code></pre>
+
+  <!-- ======================== 8.4 布局组件 ======================== -->
+  <h2>8.4 布局组件</h2>
+
+  <p>构图是一切视觉艺术的灵魂。在文艺复兴时期，我们用黄金分割和透视法来安排画面中每个元素的位置。在 Compose 中，<code>Column</code>、<code>Row</code>、<code>Box</code> 就是你的构图法则 —— 它们决定了画布上各元素如何排列、对齐、叠放。</p>
+
+  <h3>Column：纵向构图</h3>
+  <p><code>Column</code> 将子元素从上到下依次排列，如同在羊皮纸上从第一行书写到最后一行。这是最自然的纵向构图法：</p>
+
+  <pre><code><span class="fn">Column</span>(
+    <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16</span>.dp),
+    <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">8</span>.dp),  <span class="cmt">// 元素间的呼吸间距</span>
+    <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally  <span class="cmt">// 沿中轴线对齐</span>
+) {
+    <span class="fn">Text</span>(<span class="str">"第一行"</span>)
+    <span class="fn">Text</span>(<span class="str">"第二行"</span>)
+    <span class="fn">Text</span>(<span class="str">"第三行"</span>)
+}</code></pre>
+
+  <h3>Row：横向构图</h3>
+  <p><code>Row</code> 将子元素从左到右并排放置，如同在画架上横向排列颜料管。用 <code>horizontalArrangement</code> 控制水平分布，<code>verticalAlignment</code> 控制垂直对齐 —— 这就是工程精度在构图中的体现：</p>
+
+  <pre><code><span class="fn">Row</span>(
+    <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>(),
+    <span class="param">horizontalArrangement</span> = <span class="type">Arrangement</span>.SpaceBetween,  <span class="cmt">// 两端对齐</span>
+    <span class="param">verticalAlignment</span> = <span class="type">Alignment</span>.CenterVertically     <span class="cmt">// 垂直居中</span>
+) {
+    <span class="fn">Text</span>(<span class="str">"左边"</span>)
+    <span class="fn">Text</span>(<span class="str">"右边"</span>)
+}</code></pre>
+
+  <h3>Box：层叠构图</h3>
+  <p><code>Box</code> 让子元素互相叠放，如同油画中的分层技法 —— 先画背景，再画中景，最后画前景。每一层覆盖在上一层之上，形成丰富的层次感：</p>
+
+  <pre><code><span class="fn">Box</span>(
+    <span class="param">modifier</span> = <span class="type">Modifier</span>
+        .<span class="fn">size</span>(<span class="num">200</span>.dp)
+        .<span class="fn">background</span>(<span class="type">Color</span>.LightGray),
+    <span class="param">contentAlignment</span> = <span class="type">Alignment</span>.Center  <span class="cmt">// 内容居于画面正中</span>
+) {
+    <span class="fn">Text</span>(<span class="str">"我在正中间"</span>)
+}</code></pre>
+
+  <h3>Modifier：画笔的附加属性</h3>
+  <p><code>Modifier</code> 是 Compose 最核心的概念之一。如果说 Composable 函数是你的画笔，那么 Modifier 就是控制画笔粗细、颜色、压力和角度的那只手。它用优雅的链式调用来描述组件的大小、边距、背景、交互行为：</p>
+
+  <pre><code><span class="fn">Text</span>(
+    <span class="param">text</span> = <span class="str">"带修饰符的文字"</span>,
+    <span class="param">modifier</span> = <span class="type">Modifier</span>
+        .<span class="fn">fillMaxWidth</span>()                    <span class="cmt">// 宽度铺满整个画布</span>
+        .<span class="fn">padding</span>(<span class="num">16</span>.dp)                      <span class="cmt">// 四周留白</span>
+        .<span class="fn">background</span>(                         <span class="cmt">// 底色与圆角</span>
+            <span class="param">color</span> = <span class="type">Color</span>(<span class="num">0xFFF0F4FF</span>),
+            <span class="param">shape</span> = <span class="type">RoundedCornerShape</span>(<span class="num">8</span>.dp)
+        )
+        .<span class="fn">clickable</span> { <span class="cmt">/* 触发交互 */</span> }        <span class="cmt">// 赋予可点击能力</span>
+)</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">Modifier 的顺序如同画层的顺序！</p>
+    <p>在油画技法中，先上底色再画细节和先画细节再铺底色，效果截然不同。Modifier 也是如此 —— 它按顺序执行。<code>.padding(16.dp).background(Color.Red)</code> 和 <code>.background(Color.Red).padding(16.dp)</code> 效果完全不同：前者背景在留白内侧，后者背景包含留白区域。掌握这个规律，你就掌握了 Compose 构图的透视法。</p>
+  </div>
+
+  <h3>常用 Modifier 速查</h3>
+  <table>
+    <tr>
+      <th>Modifier</th>
+      <th>作用</th>
+      <th>示例</th>
+    </tr>
+    <tr>
+      <td><code>padding</code></td>
+      <td>内边距（留白）</td>
+      <td><code>.padding(16.dp)</code></td>
+    </tr>
+    <tr>
+      <td><code>fillMaxWidth</code></td>
+      <td>宽度铺满</td>
+      <td><code>.fillMaxWidth()</code></td>
+    </tr>
+    <tr>
+      <td><code>fillMaxSize</code></td>
+      <td>宽高都铺满</td>
+      <td><code>.fillMaxSize()</code></td>
+    </tr>
+    <tr>
+      <td><code>size</code></td>
+      <td>固定尺寸</td>
+      <td><code>.size(100.dp)</code></td>
+    </tr>
+    <tr>
+      <td><code>weight</code></td>
+      <td>按比例分配空间（Row/Column 内）</td>
+      <td><code>.weight(1f)</code></td>
+    </tr>
+    <tr>
+      <td><code>background</code></td>
+      <td>背景色（底色）</td>
+      <td><code>.background(Color.Gray)</code></td>
+    </tr>
+    <tr>
+      <td><code>clickable</code></td>
+      <td>可点击（交互机关）</td>
+      <td><code>.clickable { }</code></td>
+    </tr>
+    <tr>
+      <td><code>border</code></td>
+      <td>边框（画框）</td>
+      <td><code>.border(1.dp, Color.Gray)</code></td>
+    </tr>
+  </table>
+
+  <h3>实战：构建一幅联系人卡片</h3>
+  <p>现在，让我们将 Column、Row、Modifier 这些构图工具组合起来，像在画布上构图一样，精心安排一张联系人卡片的每一个元素 —— 左侧是圆形头像，右侧是姓名与电话，整体用圆角背景包裹：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">ContactCard</span>(<span class="param">name</span>: <span class="type">String</span>, <span class="param">phone</span>: <span class="type">String</span>) {
+    <span class="fn">Row</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxWidth</span>()
+            .<span class="fn">padding</span>(<span class="num">12</span>.dp)
+            .<span class="fn">background</span>(
+                <span class="param">color</span> = <span class="type">Color</span>.White,
+                <span class="param">shape</span> = <span class="type">RoundedCornerShape</span>(<span class="num">12</span>.dp)
+            )
+            .<span class="fn">padding</span>(<span class="num">16</span>.dp),  <span class="cmt">// 内层留白</span>
+        <span class="param">verticalAlignment</span> = <span class="type">Alignment</span>.CenterVertically
+    ) {
+        <span class="cmt">// 左侧：圆形头像 —— 如同肖像画中的面部</span>
+        <span class="fn">Box</span>(
+            <span class="param">modifier</span> = <span class="type">Modifier</span>
+                .<span class="fn">size</span>(<span class="num">48</span>.dp)
+                .<span class="fn">background</span>(<span class="type">Color</span>(<span class="num">0xFF7F5AF0</span>), <span class="type">CircleShape</span>),
+            <span class="param">contentAlignment</span> = <span class="type">Alignment</span>.Center
+        ) {
+            <span class="fn">Text</span>(
+                <span class="param">text</span> = name.<span class="fn">first</span>().<span class="fn">toString</span>(),
+                <span class="param">color</span> = <span class="type">Color</span>.White,
+                <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold
+            )
+        }
+
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">width</span>(<span class="num">12</span>.dp))
+
+        <span class="cmt">// 右侧：文字信息 —— 如同画作的题款</span>
+        <span class="fn">Column</span> {
+            <span class="fn">Text</span>(<span class="param">text</span> = name, <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold)
+            <span class="fn">Text</span>(<span class="param">text</span> = phone, <span class="param">color</span> = <span class="type">Color</span>.Gray, <span class="param">fontSize</span> = <span class="num">14</span>.sp)
+        }
+    }
+}</code></pre>
+
+  <!-- ======================== 8.5 列表 ======================== -->
+  <h2>8.5 列表：LazyColumn 与 LazyRow</h2>
+
+  <p>想象你要绘制一幅超长的卷轴画 —— 比如《清明上河图》那样的鸿篇巨制。如果你一次性把所有内容都画在内存中，画布会不堪重负。聪明的做法是：只绘制观者当前看到的部分，当卷轴滚动时再补充新的内容。这就是 <code>LazyColumn</code> 的精髓 —— 它只渲染屏幕上可见的元素，是传统 <code>RecyclerView</code> 的现代继承者。</p>
+
+  <p><strong>切记</strong>：不要用普通的 <code>Column</code> 加 <code>forEach</code> 来显示大量数据，那等于一次性展开整幅卷轴，内存会立刻爆掉。</p>
+
+  <h3>LazyColumn 基本用法</h3>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">ContactList</span>() {
+    <span class="kw">val</span> contacts = <span class="fn">listOf</span>(
+        <span class="str">"张三"</span> <span class="kw">to</span> <span class="str">"138-0000-0001"</span>,
+        <span class="str">"李四"</span> <span class="kw">to</span> <span class="str">"138-0000-0002"</span>,
+        <span class="str">"王五"</span> <span class="kw">to</span> <span class="str">"138-0000-0003"</span>,
+        <span class="str">"赵六"</span> <span class="kw">to</span> <span class="str">"138-0000-0004"</span>,
+        <span class="str">"钱七"</span> <span class="kw">to</span> <span class="str">"138-0000-0005"</span>
+    )
+
+    <span class="fn">LazyColumn</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+        <span class="param">contentPadding</span> = <span class="type">PaddingValues</span>(<span class="num">16</span>.dp),
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">8</span>.dp)
+    ) {
+        <span class="fn">items</span>(contacts) { (name, phone) <span class="op">-></span>
+            <span class="fn">ContactCard</span>(<span class="param">name</span> = name, <span class="param">phone</span> = phone)
+        }
+    }
+}</code></pre>
+
+  <h3>items() 的几种笔法</h3>
+  <p>就像书法有楷书、行书、草书之分，<code>items()</code> 也有几种不同的写法，适用于不同场景：</p>
+
+  <pre><code><span class="fn">LazyColumn</span> {
+    <span class="cmt">// 1. 传入列表 —— 最常用的写法</span>
+    <span class="fn">items</span>(contacts) { contact <span class="op">-></span>
+        <span class="fn">ContactCard</span>(contact)
+    }
+
+    <span class="cmt">// 2. 传入数量 —— 按数量重复绘制</span>
+    <span class="fn">items</span>(<span class="num">100</span>) { index <span class="op">-></span>
+        <span class="fn">Text</span>(<span class="str">"第 $index 项"</span>)
+    }
+
+    <span class="cmt">// 3. 单个固定项 —— 卷轴的题头或落款</span>
+    <span class="fn">item</span> {
+        <span class="fn">Text</span>(<span class="str">"--- 列表结尾 ---"</span>)
+    }
+
+    <span class="cmt">// 4. 带 key 提升性能（推荐） —— 给每个元素一个唯一身份</span>
+    <span class="fn">items</span>(
+        <span class="param">items</span> = contacts,
+        <span class="param">key</span> = { it.id }   <span class="cmt">// 唯一标识，避免不必要的重绘</span>
+    ) { contact <span class="op">-></span>
+        <span class="fn">ContactCard</span>(contact)
+    }
+}</code></pre>
+
+  <h3>LazyRow：横向卷轴</h3>
+  <p><code>LazyRow</code> 的用法与 <code>LazyColumn</code> 完全相同，只是卷轴展开的方向从纵向变为横向 —— 适合横向滚动的标签、图片廊等场景：</p>
+
+  <pre><code><span class="fn">LazyRow</span>(
+    <span class="param">horizontalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">8</span>.dp),
+    <span class="param">contentPadding</span> = <span class="type">PaddingValues</span>(<span class="param">horizontal</span> = <span class="num">16</span>.dp)
+) {
+    <span class="fn">items</span>(tags) { tag <span class="op">-></span>
+        <span class="fn">Chip</span>(<span class="param">text</span> = tag)  <span class="cmt">// 标签横向滚动</span>
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">LazyColumn vs RecyclerView</p>
+    <p>传统的 RecyclerView 需要写 Adapter、ViewHolder、布局文件，少说几十行代码 —— 就像用复杂的脚手架搭建一面壁画墙。LazyColumn 用寥寥数行就能完成同样的效果，构图清晰，可读性强。功能上它们不分伯仲 —— 都是只渲染可见区域，都支持不同类型的 item。</p>
+  </div>
+
+  <!-- ======================== 8.6 状态管理 ======================== -->
+  <h2>8.6 状态管理</h2>
+
+  <p>如果说 Composable 函数是画面上可见的笔触，那么状态管理就是画布背后隐藏的机械齿轮系统。在我的工坊里，许多精密装置的外表看起来很简单，但背后的齿轮、弹簧和连杆才是真正的核心。理解了状态，你就掌握了 Compose 这台精密机器的运转原理。</p>
+
+  <h3>remember 与 mutableStateOf：记忆齿轮</h3>
+  <p>Compose 在状态变化时会<strong>重组</strong>（重新调用 Composable 函数来刷新画面）。如果不做任何处理，每次重组时局部变量都会被重置 —— 就像齿轮每转一圈就回到起点，永远无法前进。<code>remember</code> 是一个记忆齿轮，让值在重组时保留下来；<code>mutableStateOf</code> 则让 Compose 能感知到值的变化，从而触发画面的更新。</p>
+
+  <pre><code><span class="cmt">// 错误：count 每次重组都会回到原点 —— 齿轮空转</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">BrokenCounter</span>() {
+    <span class="kw">var</span> count = <span class="num">0</span>  <span class="cmt">// 每次重组都重置！</span>
+    <span class="fn">Button</span>(<span class="param">onClick</span> = { count++ }) {
+        <span class="fn">Text</span>(<span class="str">"$count"</span>)  <span class="cmt">// 永远显示 0</span>
+    }
+}
+
+<span class="cmt">// 正确：用 remember + mutableStateOf —— 齿轮有了记忆</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">WorkingCounter</span>() {
+    <span class="kw">var</span> count <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }
+    <span class="fn">Button</span>(<span class="param">onClick</span> = { count++ }) {
+        <span class="fn">Text</span>(<span class="str">"$count"</span>)  <span class="cmt">// 正确递增</span>
+    }
+}</code></pre>
+
+  <h3>完整计数器：一台精密的计数装置</h3>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CounterApp</span>() {
+    <span class="kw">var</span> count <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }
+
+    <span class="fn">Column</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxSize</span>()
+            .<span class="fn">padding</span>(<span class="num">32</span>.dp),
+        <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally,
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.Center
+    ) {
+        <span class="fn">Text</span>(
+            <span class="param">text</span> = <span class="str">"$count"</span>,
+            <span class="param">fontSize</span> = <span class="num">64</span>.sp,
+            <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold
+        )
+
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">24</span>.dp))
+
+        <span class="fn">Row</span>(<span class="param">horizontalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">16</span>.dp)) {
+            <span class="fn">Button</span>(<span class="param">onClick</span> = { count-- }) {
+                <span class="fn">Text</span>(<span class="str">"-1"</span>)
+            }
+            <span class="fn">Button</span>(<span class="param">onClick</span> = { count = <span class="num">0</span> }) {
+                <span class="fn">Text</span>(<span class="str">"重置"</span>)
+            }
+            <span class="fn">Button</span>(<span class="param">onClick</span> = { count++ }) {
+                <span class="fn">Text</span>(<span class="str">"+1"</span>)
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>状态提升（State Hoisting）：工程师的分层设计</h3>
+  <p>在我设计飞行器时，控制系统和展示面板从来不是一体的 —— 控制杆在一处，指示器在另一处，但它们通过精密的连杆和齿轮相连。Compose 中的状态提升也遵循同样的工程原则：当多个 Composable 需要共享状态时，应该把状态<strong>提升</strong>到它们共同的父级。子组件只负责呈现画面，状态由外部传入。</p>
+
+  <pre><code><span class="cmt">// 无状态的 Composable —— 纯粹的显示面板，更容易复用和测试</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CounterDisplay</span>(
+    <span class="param">count</span>: <span class="type">Int</span>,
+    <span class="param">onIncrement</span>: () <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">onDecrement</span>: () <span class="op">-></span> <span class="type">Unit</span>
+) {
+    <span class="fn">Column</span>(<span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally) {
+        <span class="fn">Text</span>(<span class="param">text</span> = <span class="str">"$count"</span>, <span class="param">fontSize</span> = <span class="num">32</span>.sp)
+        <span class="fn">Row</span> {
+            <span class="fn">Button</span>(<span class="param">onClick</span> = onDecrement) { <span class="fn">Text</span>(<span class="str">"-"</span>) }
+            <span class="fn">Button</span>(<span class="param">onClick</span> = onIncrement) { <span class="fn">Text</span>(<span class="str">"+"</span>) }
+        }
+    }
+}
+
+<span class="cmt">// 父级持有状态 —— 控制中枢</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CounterScreen</span>() {
+    <span class="kw">var</span> count <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }
+
+    <span class="fn">CounterDisplay</span>(
+        <span class="param">count</span> = count,
+        <span class="param">onIncrement</span> = { count++ },
+        <span class="param">onDecrement</span> = { count-- }
+    )
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">状态提升的工程口诀</p>
+    <p><strong>状态下沉，事件上浮</strong>。父级把状态值传给子级（下沉，如同齿轮驱动指针），子级通过回调把事件传给父级（上浮，如同操纵杆的反馈）。这样子级变成无状态的纯展示组件，可以像标准零件一样在不同地方复用和单独测试。</p>
+  </div>
+
+  <h3>rememberSaveable：防灾备份机制</h3>
+  <p><code>remember</code> 只能在重组时保留状态。但当屏幕旋转（Configuration Change）时，Activity 会被销毁重建 —— 就像工坊遭遇了一场小火灾，所有临时草稿都会丢失。<code>rememberSaveable</code> 就是你的防灾备份机制，它把状态保存到 <code>Bundle</code> 中，即使 Activity 重建也能完整恢复：</p>
+
+  <pre><code><span class="cmt">// remember: 屏幕旋转后 count 回到 0 —— 草稿被火烧毁</span>
+<span class="kw">var</span> count <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }
+
+<span class="cmt">// rememberSaveable: 屏幕旋转后 count 保留 —— 存入了保险箱</span>
+<span class="kw">var</span> count <span class="kw">by</span> <span class="fn">rememberSaveable</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }</code></pre>
+
+  <div class="warning">
+    <p class="tip-title">注意</p>
+    <p><code>rememberSaveable</code> 只适合保存简单数据（Int, String, Boolean 等基础类型）。复杂对象需要实现 <code>Parcelize</code> 或自定义 <code>Saver</code>。对于大量数据，应该用 ViewModel 来管理 —— 那是一个更强大的保险库。</p>
+  </div>
+
+  <!-- ======================== 8.7 主题与 Material Design 3 ======================== -->
+  <h2>8.7 主题与 Material Design 3</h2>
+
+  <p>每一位大师都有自己的色彩哲学。提香以温暖的金色调闻名，卡拉瓦乔以戏剧性的明暗对比著称。在 Compose 中，<code>MaterialTheme</code> 就是你的色彩哲学 —— 它统一管理整个应用的调色盘、字体和形状，确保你的作品风格一致、浑然一体。</p>
+
+  <h3>MaterialTheme：你的调色哲学</h3>
+  <p>当你新建一个 Compose 项目时，Android Studio 会自动生成主题代码 —— 这就是你的调色盘模板：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">MyAppTheme</span>(
+    <span class="param">darkTheme</span>: <span class="type">Boolean</span> = <span class="fn">isSystemInDarkTheme</span>(),
+    <span class="param">content</span>: <span class="ann">@Composable</span> () <span class="op">-></span> <span class="type">Unit</span>
+) {
+    <span class="kw">val</span> colorScheme = <span class="kw">if</span> (darkTheme) {
+        <span class="fn">darkColorScheme</span>(
+            <span class="param">primary</span> = <span class="type">Color</span>(<span class="num">0xFFBB86FC</span>),
+            <span class="param">secondary</span> = <span class="type">Color</span>(<span class="num">0xFF03DAC5</span>)
+        )
+    } <span class="kw">else</span> {
+        <span class="fn">lightColorScheme</span>(
+            <span class="param">primary</span> = <span class="type">Color</span>(<span class="num">0xFF6200EE</span>),
+            <span class="param">secondary</span> = <span class="type">Color</span>(<span class="num">0xFF03DAC6</span>)
+        )
+    }
+
+    <span class="fn">MaterialTheme</span>(
+        <span class="param">colorScheme</span> = colorScheme,
+        <span class="param">typography</span> = <span class="type">Typography</span>(),   <span class="cmt">// 可自定义字体</span>
+        <span class="param">content</span> = content
+    )
+}</code></pre>
+
+  <p>在 Composable 中引用主题色 —— 就像从统一的调色盘上取色，保证画面的和谐统一：</p>
+
+  <pre><code><span class="fn">Text</span>(
+    <span class="param">text</span> = <span class="str">"使用主题色"</span>,
+    <span class="param">color</span> = <span class="type">MaterialTheme</span>.colorScheme.primary,
+    <span class="param">style</span> = <span class="type">MaterialTheme</span>.typography.headlineMedium
+)</code></pre>
+
+  <h3>Surface 和 Card：画框与装裱</h3>
+  <p>一幅画完成后需要画框和装裱。<code>Surface</code> 提供一个带背景色的基础画板，<code>Card</code> 则是自带阴影和圆角的精致画框：</p>
+
+  <pre><code><span class="cmt">// Surface：基础画板</span>
+<span class="fn">Surface</span>(
+    <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+    <span class="param">color</span> = <span class="type">MaterialTheme</span>.colorScheme.background
+) {
+    <span class="fn">Text</span>(<span class="str">"Hello"</span>)
+}
+
+<span class="cmt">// Card：带阴影的精致画框</span>
+<span class="fn">Card</span>(
+    <span class="param">modifier</span> = <span class="type">Modifier</span>
+        .<span class="fn">fillMaxWidth</span>()
+        .<span class="fn">padding</span>(<span class="num">16</span>.dp),
+    <span class="param">elevation</span> = <span class="type">CardDefaults</span>.<span class="fn">cardElevation</span>(<span class="param">defaultElevation</span> = <span class="num">4</span>.dp),
+    <span class="param">shape</span> = <span class="type">RoundedCornerShape</span>(<span class="num">12</span>.dp)
+) {
+    <span class="fn">Column</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16</span>.dp)) {
+        <span class="fn">Text</span>(<span class="str">"卡片标题"</span>, <span class="param">style</span> = <span class="type">MaterialTheme</span>.typography.titleMedium)
+        <span class="fn">Text</span>(<span class="str">"卡片内容"</span>, <span class="param">style</span> = <span class="type">MaterialTheme</span>.typography.bodyMedium)
+    }
+}</code></pre>
+
+  <h3>动态颜色（Android 12+）：画布随环境而变</h3>
+  <p>Android 12 引入了动态颜色（Dynamic Color），它能根据用户的壁纸自动调配色彩方案 —— 就像画家根据展厅的光线和墙壁颜色来调整作品的色调，让画面与环境融为一体：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">MyAppTheme</span>(
+    <span class="param">darkTheme</span>: <span class="type">Boolean</span> = <span class="fn">isSystemInDarkTheme</span>(),
+    <span class="param">dynamicColor</span>: <span class="type">Boolean</span> = <span class="kw">true</span>,
+    <span class="param">content</span>: <span class="ann">@Composable</span> () <span class="op">-></span> <span class="type">Unit</span>
+) {
+    <span class="kw">val</span> colorScheme = <span class="kw">when</span> {
+        <span class="cmt">// Android 12+ 且开启动态颜色 —— 与环境共鸣</span>
+        dynamicColor <span class="op">&amp;&amp;</span> <span class="type">Build</span>.VERSION.SDK_INT >= <span class="type">Build</span>.VERSION_CODES.S <span class="op">-></span> {
+            <span class="kw">val</span> context = <span class="fn">LocalContext</span>.current
+            <span class="kw">if</span> (darkTheme) <span class="fn">dynamicDarkColorScheme</span>(context)
+            <span class="kw">else</span> <span class="fn">dynamicLightColorScheme</span>(context)
+        }
+        darkTheme <span class="op">-></span> <span class="fn">darkColorScheme</span>()
+        <span class="kw">else</span> <span class="op">-></span> <span class="fn">lightColorScheme</span>()
+    }
+
+    <span class="fn">MaterialTheme</span>(
+        <span class="param">colorScheme</span> = colorScheme,
+        <span class="param">content</span> = content
+    )
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">暗色模式 —— 一键切换昼夜画面</p>
+    <p>用了 MaterialTheme 之后，只要在代码中用 <code>MaterialTheme.colorScheme.xxx</code> 来引用颜色（而不是硬编码颜色值），暗色模式就自动支持了。系统切换深色模式时，Compose 会自动使用 <code>darkColorScheme</code> 中定义的颜色 —— 就像同一幅画作在烛光和日光下呈现出不同的韵味。</p>
+  </div>
+
+  <!-- ======================== 8.8 导航 ======================== -->
+  <h2>8.8 导航（Navigation Compose）</h2>
+
+  <p>一座伟大的建筑不会只有一个房间。佛罗伦萨大教堂有中殿、侧廊、穹顶和地下墓室，参观者需要一条清晰的动线来游览。你的应用也是如此 —— Navigation Compose 就是你设计的参观动线，引导用户在不同的"展厅"（页面）之间流畅穿行。</p>
+
+  <h3>添加依赖</h3>
+  <p>首先在 <code>build.gradle.kts</code> 中准备好建筑材料：</p>
+
+  <pre><code><span class="cmt">// build.gradle.kts (Module)</span>
+dependencies {
+    <span class="fn">implementation</span>(<span class="str">"androidx.navigation:navigation-compose:2.7.7"</span>)
+}</code></pre>
+
+  <h3>NavController 和 NavHost：建筑师的蓝图</h3>
+  <p><code>NavController</code> 是导览员，负责记住当前位置和历史路径；<code>NavHost</code> 是建筑的主体结构，你在其中定义每个展厅的路由（route）和对应的内容：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AppNavigation</span>() {
+    <span class="kw">val</span> navController = <span class="fn">rememberNavController</span>()
+
+    <span class="fn">NavHost</span>(
+        <span class="param">navController</span> = navController,
+        <span class="param">startDestination</span> = <span class="str">"home"</span>   <span class="cmt">// 入口大厅</span>
+    ) {
+        <span class="cmt">// 定义"首页"展厅</span>
+        <span class="fn">composable</span>(<span class="str">"home"</span>) {
+            <span class="fn">HomeScreen</span>(<span class="param">navController</span> = navController)
+        }
+
+        <span class="cmt">// 定义"详情"展厅</span>
+        <span class="fn">composable</span>(<span class="str">"detail"</span>) {
+            <span class="fn">DetailScreen</span>(<span class="param">navController</span> = navController)
+        }
+    }
+}</code></pre>
+
+  <h3>页面跳转：展厅之间的通道</h3>
+  <p>用 <code>navController.navigate()</code> 引导用户穿过通道，到达目标展厅：</p>
+
+  <pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">HomeScreen</span>(<span class="param">navController</span>: <span class="type">NavController</span>) {
+    <span class="fn">Column</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxSize</span>()
+            .<span class="fn">padding</span>(<span class="num">32</span>.dp),
+        <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally,
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.Center
+    ) {
+        <span class="fn">Text</span>(<span class="str">"首页"</span>, <span class="param">fontSize</span> = <span class="num">24</span>.sp)
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+        <span class="fn">Button</span>(<span class="param">onClick</span> = {
+            navController.<span class="fn">navigate</span>(<span class="str">"detail"</span>)
+        }) {
+            <span class="fn">Text</span>(<span class="str">"去详情页"</span>)
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">DetailScreen</span>(<span class="param">navController</span>: <span class="type">NavController</span>) {
+    <span class="fn">Column</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxSize</span>()
+            .<span class="fn">padding</span>(<span class="num">32</span>.dp),
+        <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally,
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.Center
+    ) {
+        <span class="fn">Text</span>(<span class="str">"详情页"</span>, <span class="param">fontSize</span> = <span class="num">24</span>.sp)
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+        <span class="fn">Button</span>(<span class="param">onClick</span> = {
+            navController.<span class="fn">popBackStack</span>()  <span class="cmt">// 沿原路返回</span>
+        }) {
+            <span class="fn">Text</span>(<span class="str">"返回首页"</span>)
+        }
+    }
+}</code></pre>
+
+  <h3>带参数的路由：携带展品信息的通行证</h3>
+  <p>许多时候，跳转页面需要传递数据（比如用户 ID、作品名称）。这就像参观者带着一张标注了特定展品编号的通行证进入展厅：</p>
+
+  <pre><code><span class="fn">NavHost</span>(
+    <span class="param">navController</span> = navController,
+    <span class="param">startDestination</span> = <span class="str">"home"</span>
+) {
+    <span class="fn">composable</span>(<span class="str">"home"</span>) {
+        <span class="fn">HomeScreen</span>(
+            <span class="param">onUserClick</span> = { userId <span class="op">-></span>
+                <span class="cmt">// 跳转时带上通行证</span>
+                navController.<span class="fn">navigate</span>(<span class="str">"profile/$userId"</span>)
+            }
+        )
+    }
+
+    <span class="cmt">// 路由中用 {参数名} 定义占位符</span>
+    <span class="fn">composable</span>(<span class="str">"profile/{userId}"</span>) { backStackEntry <span class="op">-></span>
+        <span class="cmt">// 从通行证中读取信息</span>
+        <span class="kw">val</span> userId = backStackEntry.arguments?.<span class="fn">getString</span>(<span class="str">"userId"</span>)
+        <span class="fn">ProfileScreen</span>(<span class="param">userId</span> = userId <span class="op">?:</span> <span class="str">"unknown"</span>)
+    }
+}</code></pre>
+
+  <h3>完整双页面导航示例：一座小型画廊</h3>
+  <p>让我们把以上所有知识融会贯通，构建一座可以实际运行的小型画廊 —— 用户在列表中浏览作品，点击后进入详情页欣赏：</p>
+
+  <pre><code><span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle</span>?) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        <span class="fn">setContent</span> {
+            <span class="fn">MyAppTheme</span> {
+                <span class="fn">Surface</span>(<span class="param">color</span> = <span class="type">MaterialTheme</span>.colorScheme.background) {
+                    <span class="fn">AppNavigation</span>()
+                }
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AppNavigation</span>() {
+    <span class="kw">val</span> navController = <span class="fn">rememberNavController</span>()
+
+    <span class="fn">NavHost</span>(<span class="param">navController</span> = navController, <span class="param">startDestination</span> = <span class="str">"list"</span>) {
+        <span class="fn">composable</span>(<span class="str">"list"</span>) {
+            <span class="fn">FruitListScreen</span> { fruitName <span class="op">-></span>
+                navController.<span class="fn">navigate</span>(<span class="str">"detail/$fruitName"</span>)
+            }
+        }
+        <span class="fn">composable</span>(<span class="str">"detail/{fruit}"</span>) { backStackEntry <span class="op">-></span>
+            <span class="kw">val</span> fruit = backStackEntry.arguments?.<span class="fn">getString</span>(<span class="str">"fruit"</span>) <span class="op">?:</span> <span class="str">""</span>
+            <span class="fn">FruitDetailScreen</span>(<span class="param">fruit</span> = fruit) {
+                navController.<span class="fn">popBackStack</span>()
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">FruitListScreen</span>(<span class="param">onFruitClick</span>: (<span class="type">String</span>) <span class="op">-></span> <span class="type">Unit</span>) {
+    <span class="kw">val</span> fruits = <span class="fn">listOf</span>(<span class="str">"苹果"</span>, <span class="str">"香蕉"</span>, <span class="str">"橘子"</span>, <span class="str">"葡萄"</span>, <span class="str">"西瓜"</span>)
+
+    <span class="fn">LazyColumn</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+        <span class="param">contentPadding</span> = <span class="type">PaddingValues</span>(<span class="num">16</span>.dp),
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">8</span>.dp)
+    ) {
+        <span class="fn">items</span>(fruits) { fruit <span class="op">-></span>
+            <span class="fn">Card</span>(
+                <span class="param">modifier</span> = <span class="type">Modifier</span>
+                    .<span class="fn">fillMaxWidth</span>()
+                    .<span class="fn">clickable</span> { <span class="fn">onFruitClick</span>(fruit) }
+            ) {
+                <span class="fn">Text</span>(
+                    <span class="param">text</span> = fruit,
+                    <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">20</span>.dp),
+                    <span class="param">fontSize</span> = <span class="num">18</span>.sp
+                )
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">FruitDetailScreen</span>(<span class="param">fruit</span>: <span class="type">String</span>, <span class="param">onBack</span>: () <span class="op">-></span> <span class="type">Unit</span>) {
+    <span class="fn">Column</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxSize</span>()
+            .<span class="fn">padding</span>(<span class="num">32</span>.dp),
+        <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally,
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.Center
+    ) {
+        <span class="fn">Text</span>(<span class="param">text</span> = fruit, <span class="param">fontSize</span> = <span class="num">48</span>.sp)
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">8</span>.dp))
+        <span class="fn">Text</span>(
+            <span class="param">text</span> = <span class="str">"你选择了: $fruit"</span>,
+            <span class="param">style</span> = <span class="type">MaterialTheme</span>.typography.titleLarge
+        )
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">24</span>.dp))
+        <span class="fn">Button</span>(<span class="param">onClick</span> = onBack) {
+            <span class="fn">Text</span>(<span class="str">"返回列表"</span>)
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">导航的工程规范</p>
+    <p>在真正的大型建筑项目中，每条通道都有编号和标识，不会用模糊的口头描述。你的应用也应如此 —— 建议把路由字符串定义为常量或用 sealed class / enum 管理，避免到处写"魔法字符串"。对于复杂应用，可以考虑使用 Type-safe Navigation（Compose Navigation 2.8+ 支持）。</p>
+  </div>
+
+  <!-- ======================== 练习题 ======================== -->
+  <div class="exercise"><h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：绘制个人资料卡片 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用 Compose 绘制一张个人资料卡片。卡片应包含：圆形头像占位符（用 Box + CircleShape + 首字母）、姓名（粗体，大字号）、个人简介（灰色小字）。使用 <code>Card</code> 组件作为画框，内部用 <code>Column</code> 进行纵向构图，用 <code>Modifier</code> 设置留白与圆角。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>先用 <code>Card</code> 作为外层容器，设置 <code>elevation</code> 和 <code>shape</code>。内部用 <code>Column</code> 居中排列元素。头像用 <code>Box</code> + <code>CircleShape</code> + 固定 <code>size</code> 实现。姓名用 <code>Text</code> 设置 <code>fontWeight = FontWeight.Bold</code> 和较大的 <code>fontSize</code>。简介用 <code>Text</code> 设置 <code>color = Color.Gray</code>。各元素之间用 <code>Spacer</code> 添加留白。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content"><pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">ProfileCard</span>(<span class="param">name</span>: <span class="type">String</span>, <span class="param">bio</span>: <span class="type">String</span>) {
+    <span class="fn">Card</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxWidth</span>()
+            .<span class="fn">padding</span>(<span class="num">16</span>.dp),
+        <span class="param">elevation</span> = <span class="type">CardDefaults</span>.<span class="fn">cardElevation</span>(<span class="param">defaultElevation</span> = <span class="num">4</span>.dp),
+        <span class="param">shape</span> = <span class="type">RoundedCornerShape</span>(<span class="num">16</span>.dp)
+    ) {
+        <span class="fn">Column</span>(
+            <span class="param">modifier</span> = <span class="type">Modifier</span>
+                .<span class="fn">fillMaxWidth</span>()
+                .<span class="fn">padding</span>(<span class="num">24</span>.dp),
+            <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally
+        ) {
+            <span class="fn">Box</span>(
+                <span class="param">modifier</span> = <span class="type">Modifier</span>
+                    .<span class="fn">size</span>(<span class="num">72</span>.dp)
+                    .<span class="fn">background</span>(<span class="type">Color</span>(<span class="num">0xFF7F5AF0</span>), <span class="type">CircleShape</span>),
+                <span class="param">contentAlignment</span> = <span class="type">Alignment</span>.Center
+            ) {
+                <span class="fn">Text</span>(
+                    <span class="param">text</span> = name.<span class="fn">first</span>().<span class="fn">toString</span>(),
+                    <span class="param">color</span> = <span class="type">Color</span>.White,
+                    <span class="param">fontSize</span> = <span class="num">28</span>.sp,
+                    <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold
+                )
+            }
+            <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">12</span>.dp))
+            <span class="fn">Text</span>(
+                <span class="param">text</span> = name,
+                <span class="param">fontSize</span> = <span class="num">20</span>.sp,
+                <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold
+            )
+            <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">4</span>.dp))
+            <span class="fn">Text</span>(
+                <span class="param">text</span> = bio,
+                <span class="param">color</span> = <span class="type">Color</span>.Gray,
+                <span class="param">fontSize</span> = <span class="num">14</span>.sp,
+                <span class="param">textAlign</span> = <span class="type">TextAlign</span>.Center
+            )
+        }
+    }
+}</code></pre></div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：构建可滚动的作品画廊 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>使用 <code>LazyColumn</code> 构建一个可滚动的"名画画廊"列表。定义一个数据类 <code>Painting(val title: String, val artist: String, val year: Int)</code>，创建至少 5 幅名画的数据，用 <code>Card</code> 展示每一幅。每张卡片显示画作名称（粗体）、画家和年份。记得给 <code>items</code> 添加 <code>key</code> 参数。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>先定义 <code>data class Painting</code>，然后创建一个 <code>listOf(...)</code> 来存放数据。在 <code>LazyColumn</code> 中使用 <code>items(paintings, key = { it.title })</code>。每个 item 用 <code>Card</code> 包裹，内部用 <code>Column</code> 排列标题、画家和年份。用 <code>Arrangement.spacedBy()</code> 设置卡片之间的间距。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content"><pre><code><span class="kw">data class</span> <span class="type">Painting</span>(
+    <span class="kw">val</span> <span class="param">title</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">artist</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">year</span>: <span class="type">Int</span>
+)
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">PaintingGallery</span>() {
+    <span class="kw">val</span> paintings = <span class="fn">listOf</span>(
+        <span class="type">Painting</span>(<span class="str">"蒙娜丽莎"</span>, <span class="str">"达芬奇"</span>, <span class="num">1503</span>),
+        <span class="type">Painting</span>(<span class="str">"星夜"</span>, <span class="str">"梵高"</span>, <span class="num">1889</span>),
+        <span class="type">Painting</span>(<span class="str">"戴珍珠耳环的少女"</span>, <span class="str">"维米尔"</span>, <span class="num">1665</span>),
+        <span class="type">Painting</span>(<span class="str">"呐喊"</span>, <span class="str">"蒙克"</span>, <span class="num">1893</span>),
+        <span class="type">Painting</span>(<span class="str">"最后的晚餐"</span>, <span class="str">"达芬奇"</span>, <span class="num">1498</span>)
+    )
+
+    <span class="fn">LazyColumn</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+        <span class="param">contentPadding</span> = <span class="type">PaddingValues</span>(<span class="num">16</span>.dp),
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">12</span>.dp)
+    ) {
+        <span class="fn">items</span>(
+            <span class="param">items</span> = paintings,
+            <span class="param">key</span> = { it.title }
+        ) { painting <span class="op">-></span>
+            <span class="fn">Card</span>(
+                <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>(),
+                <span class="param">elevation</span> = <span class="type">CardDefaults</span>.<span class="fn">cardElevation</span>(
+                    <span class="param">defaultElevation</span> = <span class="num">2</span>.dp
+                )
+            ) {
+                <span class="fn">Column</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16</span>.dp)) {
+                    <span class="fn">Text</span>(
+                        <span class="param">text</span> = painting.title,
+                        <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold,
+                        <span class="param">fontSize</span> = <span class="num">18</span>.sp
+                    )
+                    <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">4</span>.dp))
+                    <span class="fn">Text</span>(
+                        <span class="param">text</span> = <span class="str">"${painting.artist} · ${painting.year}年"</span>,
+                        <span class="param">color</span> = <span class="type">Color</span>.Gray,
+                        <span class="param">fontSize</span> = <span class="num">14</span>.sp
+                    )
+                }
+            }
+        }
+    }
+}</code></pre></div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：实现一个待办事项管理器 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>构建一个简单的待办事项管理器，练习状态管理。功能要求：一个输入框让用户输入新待办，一个按钮将待办添加到列表中，用 <code>LazyColumn</code> 显示所有待办事项，每个待办旁边有一个删除按钮。使用 <code>remember</code> + <code>mutableStateListOf</code> 管理待办列表，<code>mutableStateOf</code> 管理输入框文本。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>用 <code>val todos = remember { mutableStateListOf&lt;String&gt;() }</code> 存储待办列表，用 <code>var inputText by remember { mutableStateOf("") }</code> 存储输入内容。界面用 <code>Column</code> 包裹：顶部是 <code>Row</code>（含 <code>OutlinedTextField</code> + <code>Button</code>），下方是 <code>LazyColumn</code> 显示列表。添加时检查输入非空，添加后清空输入框。删除使用 <code>todos.removeAt(index)</code>。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content"><pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TodoApp</span>() {
+    <span class="kw">var</span> inputText <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+    <span class="kw">val</span> todos = <span class="fn">remember</span> { <span class="fn">mutableStateListOf</span>&lt;<span class="type">String</span>&gt;() }
+
+    <span class="fn">Column</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxSize</span>()
+            .<span class="fn">padding</span>(<span class="num">16</span>.dp)
+    ) {
+        <span class="cmt">// 输入区域</span>
+        <span class="fn">Row</span>(
+            <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>(),
+            <span class="param">verticalAlignment</span> = <span class="type">Alignment</span>.CenterVertically
+        ) {
+            <span class="fn">OutlinedTextField</span>(
+                <span class="param">value</span> = inputText,
+                <span class="param">onValueChange</span> = { inputText = it },
+                <span class="param">label</span> = { <span class="fn">Text</span>(<span class="str">"新待办"</span>) },
+                <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">weight</span>(<span class="num">1</span>f)
+            )
+            <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">width</span>(<span class="num">8</span>.dp))
+            <span class="fn">Button</span>(
+                <span class="param">onClick</span> = {
+                    <span class="kw">if</span> (inputText.<span class="fn">isNotBlank</span>()) {
+                        todos.<span class="fn">add</span>(inputText.<span class="fn">trim</span>())
+                        inputText = <span class="str">""</span>
+                    }
+                }
+            ) {
+                <span class="fn">Text</span>(<span class="str">"添加"</span>)
+            }
+        }
+
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+
+        <span class="cmt">// 待办列表</span>
+        <span class="fn">LazyColumn</span>(
+            <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">8</span>.dp)
+        ) {
+            <span class="fn">items</span>(todos.size) { index <span class="op">-></span>
+                <span class="fn">Row</span>(
+                    <span class="param">modifier</span> = <span class="type">Modifier</span>
+                        .<span class="fn">fillMaxWidth</span>()
+                        .<span class="fn">background</span>(
+                            <span class="type">Color</span>(<span class="num">0xFFF0F4FF</span>),
+                            <span class="type">RoundedCornerShape</span>(<span class="num">8</span>.dp)
+                        )
+                        .<span class="fn">padding</span>(<span class="num">12</span>.dp),
+                    <span class="param">verticalAlignment</span> = <span class="type">Alignment</span>.CenterVertically
+                ) {
+                    <span class="fn">Text</span>(
+                        <span class="param">text</span> = todos[index],
+                        <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">weight</span>(<span class="num">1</span>f)
+                    )
+                    <span class="fn">IconButton</span>(
+                        <span class="param">onClick</span> = { todos.<span class="fn">removeAt</span>(index) }
+                    ) {
+                        <span class="fn">Icon</span>(
+                            <span class="type">Icons</span>.Default.Delete,
+                            <span class="param">contentDescription</span> = <span class="str">"删除"</span>,
+                            <span class="param">tint</span> = <span class="type">Color</span>.Red
+                        )
+                    }
+                }
+            }
+        }
+    }
+}</code></pre></div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：状态提升 —— 可复用的评分组件 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>运用状态提升原则，构建一个可复用的星级评分组件。要求：创建一个无状态的 <code>RatingBar</code> 组件，接收当前评分 <code>rating: Int</code> 和回调 <code>onRatingChange: (Int) -> Unit</code>，显示 5 颗星（选中的用实心图标，未选中的用空心图标）。然后创建一个父级 <code>RatingScreen</code>，持有状态，在评分下方显示文字（如 "你的评分：3 / 5"）。</p>
+      <details><summary>提示</summary><div class="answer-content"><p><code>RatingBar</code> 用 <code>Row</code> 排列 5 个 <code>IconButton</code>。通过 <code>if (i &lt;= rating)</code> 判断使用 <code>Icons.Default.Star</code>（实心）还是 <code>Icons.Default.StarBorder</code>（空心，实际中可用 <code>Icons.Default.Star</code> 配合不同 tint 实现）。点击第 i 颗星时调用 <code>onRatingChange(i)</code>。父级用 <code>var rating by remember { mutableStateOf(0) }</code> 持有状态。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content"><pre><code><span class="cmt">// 无状态组件 —— 纯粹的显示面板</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">RatingBar</span>(
+    <span class="param">rating</span>: <span class="type">Int</span>,
+    <span class="param">onRatingChange</span>: (<span class="type">Int</span>) <span class="op">-></span> <span class="type">Unit</span>,
+    <span class="param">maxRating</span>: <span class="type">Int</span> = <span class="num">5</span>
+) {
+    <span class="fn">Row</span> {
+        <span class="kw">for</span> (i <span class="kw">in</span> <span class="num">1</span>..maxRating) {
+            <span class="fn">IconButton</span>(<span class="param">onClick</span> = { <span class="fn">onRatingChange</span>(i) }) {
+                <span class="fn">Icon</span>(
+                    <span class="param">imageVector</span> = <span class="type">Icons</span>.Default.Star,
+                    <span class="param">contentDescription</span> = <span class="str">"$i 星"</span>,
+                    <span class="param">tint</span> = <span class="kw">if</span> (i <= rating)
+                        <span class="type">Color</span>(<span class="num">0xFFFFD700</span>)  <span class="cmt">// 金色</span>
+                    <span class="kw">else</span>
+                        <span class="type">Color</span>.LightGray
+                )
+            }
+        }
+    }
+}
+
+<span class="cmt">// 父级持有状态 —— 控制中枢</span>
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">RatingScreen</span>() {
+    <span class="kw">var</span> rating <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="num">0</span>) }
+
+    <span class="fn">Column</span>(
+        <span class="param">modifier</span> = <span class="type">Modifier</span>
+            .<span class="fn">fillMaxSize</span>()
+            .<span class="fn">padding</span>(<span class="num">32</span>.dp),
+        <span class="param">horizontalAlignment</span> = <span class="type">Alignment</span>.CenterHorizontally,
+        <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.Center
+    ) {
+        <span class="fn">Text</span>(
+            <span class="param">text</span> = <span class="str">"请为本章评分"</span>,
+            <span class="param">fontSize</span> = <span class="num">20</span>.sp,
+            <span class="param">fontWeight</span> = <span class="type">FontWeight</span>.Bold
+        )
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+        <span class="fn">RatingBar</span>(
+            <span class="param">rating</span> = rating,
+            <span class="param">onRatingChange</span> = { rating = it }
+        )
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">12</span>.dp))
+        <span class="fn">Text</span>(
+            <span class="param">text</span> = <span class="kw">if</span> (rating > <span class="num">0</span>) <span class="str">"你的评分：$rating / 5"</span>
+                   <span class="kw">else</span> <span class="str">"点击星星进行评分"</span>,
+            <span class="param">color</span> = <span class="type">Color</span>.Gray
+        )
+    }
+}</code></pre></div></details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：综合实战 —— 带搜索功能的联系人列表 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>综合运用本章所有知识，构建一个带搜索功能的联系人列表。要求：顶部有一个搜索框，用户输入时实时过滤联系人列表；下方用 <code>LazyColumn</code> 显示匹配的联系人卡片（复用之前的 <code>ContactCard</code>）；当搜索结果为空时显示提示文字。使用状态提升，将搜索逻辑与显示分离。</p>
+      <details><summary>提示</summary><div class="answer-content"><p>定义联系人数据列表。用 <code>var searchQuery by remember { mutableStateOf("") }</code> 管理搜索词。用 <code>val filteredContacts = contacts.filter { it.name.contains(searchQuery, ignoreCase = true) }</code> 过滤列表。界面用 <code>Column</code>：顶部放 <code>OutlinedTextField</code>，下方用 <code>if (filteredContacts.isEmpty())</code> 决定显示提示文字还是 <code>LazyColumn</code>。</p></div></details>
+      <details><summary>参考答案</summary><div class="answer-content"><pre><code><span class="kw">data class</span> <span class="type">Contact</span>(
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">phone</span>: <span class="type">String</span>
+)
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">SearchableContactList</span>() {
+    <span class="kw">val</span> contacts = <span class="fn">remember</span> {
+        <span class="fn">listOf</span>(
+            <span class="type">Contact</span>(<span class="str">"张三"</span>, <span class="str">"138-0000-0001"</span>),
+            <span class="type">Contact</span>(<span class="str">"李四"</span>, <span class="str">"138-0000-0002"</span>),
+            <span class="type">Contact</span>(<span class="str">"王五"</span>, <span class="str">"138-0000-0003"</span>),
+            <span class="type">Contact</span>(<span class="str">"赵六"</span>, <span class="str">"138-0000-0004"</span>),
+            <span class="type">Contact</span>(<span class="str">"张伟"</span>, <span class="str">"138-0000-0005"</span>),
+            <span class="type">Contact</span>(<span class="str">"李明"</span>, <span class="str">"138-0000-0006"</span>)
+        )
+    }
+    <span class="kw">var</span> searchQuery <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+
+    <span class="kw">val</span> filteredContacts = contacts.<span class="fn">filter</span> {
+        it.name.<span class="fn">contains</span>(searchQuery, <span class="param">ignoreCase</span> = <span class="kw">true</span>)
+    }
+
+    <span class="fn">Column</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>().<span class="fn">padding</span>(<span class="num">16</span>.dp)) {
+        <span class="cmt">// 搜索框</span>
+        <span class="fn">OutlinedTextField</span>(
+            <span class="param">value</span> = searchQuery,
+            <span class="param">onValueChange</span> = { searchQuery = it },
+            <span class="param">label</span> = { <span class="fn">Text</span>(<span class="str">"搜索联系人"</span>) },
+            <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>(),
+            <span class="param">leadingIcon</span> = {
+                <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Search, <span class="str">"搜索"</span>)
+            }
+        )
+
+        <span class="fn">Spacer</span>(<span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+
+        <span class="kw">if</span> (filteredContacts.<span class="fn">isEmpty</span>()) {
+            <span class="cmt">// 空状态提示</span>
+            <span class="fn">Box</span>(
+                <span class="param">modifier</span> = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+                <span class="param">contentAlignment</span> = <span class="type">Alignment</span>.Center
+            ) {
+                <span class="fn">Text</span>(
+                    <span class="param">text</span> = <span class="str">"未找到匹配的联系人"</span>,
+                    <span class="param">color</span> = <span class="type">Color</span>.Gray,
+                    <span class="param">fontSize</span> = <span class="num">16</span>.sp
+                )
+            }
+        } <span class="kw">else</span> {
+            <span class="cmt">// 联系人列表</span>
+            <span class="fn">LazyColumn</span>(
+                <span class="param">verticalArrangement</span> = <span class="type">Arrangement</span>.spacedBy(<span class="num">8</span>.dp)
+            ) {
+                <span class="fn">items</span>(
+                    <span class="param">items</span> = filteredContacts,
+                    <span class="param">key</span> = { it.phone }
+                ) { contact <span class="op">-></span>
+                    <span class="fn">ContactCard</span>(
+                        <span class="param">name</span> = contact.name,
+                        <span class="param">phone</span> = contact.phone
+                    )
+                }
+            }
+        }
+    }
+}</code></pre></div></details>
+    </div>
+
+  </div>
+
+  <!-- ======================== 底部导航 ======================== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

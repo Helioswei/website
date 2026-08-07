@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第11章：分页算法 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="11" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：分页算法——把排好的一串块，装进一页页</h1>
+  <p class="chapter-subtitle">换行把段落切成行，分页再把行装进页。屏幕没有无限长的一卷纸，放不下，就开新页。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄，决胜千里</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一章我们用动态规划把一段文字排成了行，可那只是一条没有尽头的长卷。屏幕却不会给你无限长的纸——它只有固定的一页高。于是问题变成了：手里这串行和图片，怎么分配到一个一个的页格里，既不把一页浪费大半，也不让内容撑破边界？这看起来只是"往下放、放不下就翻页"的体力活，正因为它简单，才最容易被低估。真正的高手，先算清每块占地多高，再决定何时落子。今天我们就用谋士的眼睛，把这段分页代码一层层看透。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 11.1 问题：从"一串块"到"一页页" ========== -->
+  <h2>11.1 问题：从"一串块"到"一页页"</h2>
+
+  <p>回顾整条流水线：<code>RubbishHtmlParser</code> 解析完一章的 XHTML 后，得到一串 <code>std::list&lt;Block *&gt; blocks</code>（<strong>块</strong>，说人话：排版里的最小单元，一段文字或一张图片就是一个块）。其中 <code>TextBlock</code> 已经用动态规划算好了断行点（存在 <code>line_breaks</code> 里），<code>ImageBlock</code> 已经记下图片源路径。但这一串 <code>blocks</code> 本质上是一条"不知道尽头在哪"的长卷——它自己根本不知道会被切成几页。电子墨水屏的每一页只有固定高度 <code>page_height</code>（说人话：<strong>页高</strong>就是屏幕一页能放多少行内容的总高度，超出就得另起一页；由渲染器的 <code>get_page_height()</code> 提供）。<strong>分页</strong>（pagination，说人话：把排好的内容按一屏一屏切分开，每屏就是一页）就是把这卷长卷，裁剪成一张张固定高度的页。</p>
+
+  <p>分页的输出是一个 <code>std::vector&lt;Page *&gt; pages</code>。每个 <code>Page</code> 只回答一个问题："这一页放了哪些元素？" 而每个元素（<code>PageElement</code>）记录两样东西：它来自哪个 <code>block</code>、以及它在本页的 <code>y_pos</code>（纵向位置）。这里的精髓在于：<strong>分页阶段一个像素都不画</strong>，它只做"记账"——把每个行/每张图应放的位置记下来，真正的绘制留到下一章。看 <code>lib/Epub/RubbishHtmlParser/Page.h</code> 里的真实定义。</p>
+
+<pre><code><span class="cmt">/* Page.h：一页 = 一串"带 y 坐标的元素" */</span>
+<span class="kw">class</span> <span class="type">PageElement</span> {
+<span class="kw">public</span>:
+  <span class="type">int</span> y_pos;                  <span class="cmt">// 元素在本页的纵向位置</span>
+  <span class="kw">virtual</span> <span class="type">void</span> render(Renderer *renderer, Epub *epub) = <span class="num">0</span>;
+};
+
+<span class="kw">class</span> <span class="type">PageLine</span> : <span class="kw">public</span> <span class="type">PageElement</span> {
+  TextBlock *block;            <span class="cmt">// 来自哪个文本块</span>
+  <span class="type">int</span> line_break_index;      <span class="cmt">// 该块的第几行</span>
+};
+
+<span class="kw">class</span> <span class="type">PageImage</span> : <span class="kw">public</span> <span class="type">PageElement</span> {
+  ImageBlock *block;           <span class="cmt">// 来自哪张图片</span>
+};
+
+<span class="kw">class</span> <span class="type">Page</span> {
+  std::vector&lt;PageElement *&gt; elements;   <span class="cmt">// 本页的所有元素</span>
+};</code></pre>
+
+  <p>分页工作的入口是 <code>RubbishHtmlParser::layout(renderer, epub)</code>。它先做两件准备工作：从渲染器取<strong>行高</strong>（说人话：一行文字占多高；用页高除以行高，就能算出一页能放几行）与页高，然后让每个 block 先自己"排好版"——文本块断行、图片块缩放。注意第二个循环里的 <code>vTaskDelay(1)</code>：解析整章可能很耗时，每次处理一个 block 就喂一次看门狗，避免触发 FreeRTOS 看门狗复位。这是嵌入式代码里"长任务主动让出"的典型写法。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser::layout —— 分页前的准备 */</span>
+<span class="kw">const</span> <span class="type">int</span> line_height = renderer-&gt;get_line_height();   <span class="cmt">// 一行多高</span>
+<span class="kw">const</span> <span class="type">int</span> page_height = renderer-&gt;get_page_height();  <span class="cmt">// 一页多高</span>
+
+<span class="kw">for</span> (<span class="kw">auto</span> block : blocks) {
+  block-&gt;layout(renderer, epub);   <span class="cmt">// 文本块断行、图片块缩放</span>
+  vTaskDelay(<span class="num">1</span>);                <span class="cmt">// 喂看门狗</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>为什么分页和渲染必须分开？其一，分页只操作"行/图的编号和坐标"，不碰像素，所以它可以在 <code>test/rubbish_html_parser.cpp</code> 里脱离硬件直接跑单元测试；其二，翻页时我们只需 <code>render_page(current_page)</code> 画当前这一页，而不必重新分页——分页结果被缓存成 <code>pages</code> 复用。职责分离，是运筹的第一步。</p>
+  </div>
+
+  <!-- ========== 11.2 块高度计算 ========== -->
+  <h2>11.2 块高度计算：文本行数 × 行高，图片等比缩放</h2>
+
+  <p>要把内容装进页，第一步是知道每个元素"占多高"。文本块的高度好算：<code>TextBlock::layout</code> 已经在上一章量好了每个单词的宽度并算出行断点，行数就是 <code>line_breaks.size()</code>；再乘上行高 <code>line_height</code> 就是整块的高度。而行高 <code>get_line_height()</code> 直接来自字体的度量信息——<code>EpdiyFrameBufferRenderer</code> 里它等于 <code>m_regular_font-&gt;advance_y</code>（字体的行步进值），字间距 <code>get_space_width()</code> 则取空格字形 <code>advance_x</code>。字体是"页面的度量单位"，所有高度都从它派生。</p>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer：行高与字间距都来自字体度量 */</span>
+<span class="type">int</span> get_line_height() {
+  <span class="kw">return</span> m_regular_font-&gt;advance_y;   <span class="cmt">// 字体的行步进 = 行高</span>
+}
+<span class="type">int</span> get_space_width() {
+  <span class="kw">auto</span> space_glyph = epd_get_glyph(m_regular_font, <span class="str">' '</span>);
+  <span class="kw">return</span> space_glyph-&gt;advance_x;     <span class="cmt">// 空格的宽度</span>
+}</code></pre>
+
+  <p>图片块的高度则要"算"出来。图片的原始尺寸存在 EPUB 里，可能比屏幕还大，必须等比缩放。看 <code>ImageBlock::layout</code> 的真实实现：先用 <code>get_image_size</code> 读出原始宽高；只要任意一边超过页面，就取 <code>min(页面宽/原宽, 页面高/原高)</code> 作为缩放比，宽高同乘——这是"等比缩小到能放进一页"的经典做法。缩放后的 <code>height</code>，就是这张图在分页时占用的高度。缩小的图片不会放大，这是有意的取舍（放大无意义且费内存）。</p>
+
+<pre><code><span class="cmt">/* ImageBlock::layout —— 读尺寸并等比缩放 */</span>
+<span class="type">uint8_t</span> *image_data = epub-&gt;get_item_contents(m_src, &amp;image_data_size);
+renderer-&gt;get_image_size(m_src, image_data, image_data_size, &amp;width, &amp;height);
+
+<span class="kw">if</span> (width &gt; renderer-&gt;get_page_width() ||
+    height &gt; renderer-&gt;get_page_height()) {
+  <span class="type">float</span> scale = std::min(
+      <span class="type">float</span>(renderer-&gt;get_page_width()) / <span class="type">float</span>(width),
+      <span class="type">float</span>(renderer-&gt;get_page_height()) / <span class="type">float</span>(height));
+  width  *= scale;
+  height *= scale;
+}
+<span class="cmt">// 水平居中：x 位置在分页时一并算好</span>
+x_pos = (renderer-&gt;get_page_width() - width) / <span class="num">2</span>;</code></pre>
+
+  <p>除了元素本身的高度，还有一块"隐性高度"：段落间距。在 <code>layout()</code> 的分页主循环里，每处理完一个文本块，都会在 <code>y</code> 上追加 <code>line_height * 0.5</code>——这是段与段之间留出的半行空白，让段落不会挤成一团。三类"占页量"汇总如下表。</p>
+
+  <table>
+    <tr><th>元素</th><th>占页高度</th><th>来源</th></tr>
+    <tr><td>文本行</td><td><code>line_height</code></td><td><code>get_line_height()</code> = <code>m_regular_font-&gt;advance_y</code></td></tr>
+    <tr><td>段落间</td><td><code>line_height * 0.5</code></td><td>文本块结束后无条件追加半行</td></tr>
+    <tr><td>图片</td><td>等比缩放后的 <code>height</code></td><td><code>ImageBlock::layout</code>，超限才缩放</td></tr>
+  </table>
+
+  <!-- ========== 11.3 装填策略 ========== -->
+  <h2>11.3 装填策略：从当前 y 开始放，放不下就开新页</h2>
+
+  <p>准备好了高度，就可以<strong>装填</strong>（说人话：按顺序把一个个块放进当前页，这一页放不下了就另起一页再继续放）了。分页主循环非常直白：用一个 <code>y</code> 指针跟踪"当前页已经用掉了多少高度"，从 0 开始；对每个文本块逐行、对每张图片逐个处理——<code>y + 元素高度 &gt; page_height</code> 就说明当前页放不下这个元素了，于是开一张新页并把 <code>y</code> 清零，再从页顶开始放。下面是 <code>RubbishHtmlParser::layout</code> 分页部分的完整真实代码。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser::layout —— 分页主循环 */</span>
+<span class="type">int</span> y = <span class="num">0</span>;
+pages.push_back(<span class="kw">new</span> <span class="type">Page</span>());              <span class="cmt">// 先开第一页</span>
+<span class="kw">for</span> (<span class="kw">auto</span> block : blocks) {
+  <span class="kw">if</span> (block-&gt;getType() == BlockType::TEXT_BLOCK) {
+    TextBlock *textBlock = (TextBlock *)block;
+    <span class="kw">for</span> (<span class="type">int</span> i = <span class="num">0</span>; i &lt; textBlock-&gt;line_breaks.size(); i++) {
+      <span class="kw">if</span> (y + line_height &gt; page_height) {   <span class="cmt">// 放不下这一行了</span>
+        pages.push_back(<span class="kw">new</span> <span class="type">Page</span>());
+        y = <span class="num">0</span>;                             <span class="cmt">// 新页从顶部开始</span>
+      }
+      pages.back()-&gt;elements.push_back(
+          <span class="kw">new</span> <span class="type">PageLine</span>(textBlock, i, y));  <span class="cmt">// 记下：第 i 行放在 y 处</span>
+      y += line_height;
+    }
+    y += line_height * <span class="num">0.5</span>;                 <span class="cmt">// 段间半行空白</span>
+  }
+  <span class="kw">if</span> (block-&gt;getType() == BlockType::IMAGE_BLOCK) {
+    ImageBlock *imageBlock = (ImageBlock *)block;
+    <span class="kw">if</span> (y + imageBlock-&gt;height &gt; page_height) { <span class="cmt">// 图片放不下</span>
+      pages.push_back(<span class="kw">new</span> <span class="type">Page</span>());
+      y = <span class="num">0</span>;
+    }
+    pages.back()-&gt;elements.push_back(<span class="kw">new</span> <span class="type">PageImage</span>(imageBlock, y));
+    y += imageBlock-&gt;height;
+  }
+}</code></pre>
+
+  <p>这是一次<strong>贪婪的"先到先放"装填</strong>：放得下就放，放不下就翻页，绝不回头。它不做任何全局优化——不会尝试把前一页末尾的空白补满，也不会为了保持某段完整而提前换页。好处是复杂度是线性的（一次遍历、每元素 O(1)），坏处是页面边界的落点比较"粗糙"。还要注意装填的最小单位：<strong>文本按"行"装、图片按"张"装</strong>——一行文字、一张图片都是不可再拆的原子。所以页边界永远落在某两行之间，而不会切在某个词的中间。</p>
+
+<pre><code><span class="cmt">/* 数值演算：page_height=925, line_height=28
+   一页最多 = 925 / 28 = 33 行（余 1 点放不下第 34 行）
+   一个 34 行的段落：
+     页 0：第 1..33 行（y 从 0 累加到 33*28=924）
+     第 34 行：y+28=952 &gt; 925 → 开新页，页 1 从顶部放 1 行 */</span>
+<span class="cmt">// 于是页 0 的 924px 被用完，页 1 只放了 1 行 + 半行段距</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>把"元素高度"与"剩余空间"分开想，分页就只是一道算术题：<code>剩余 = page_height - y</code>，能放进当前页的条件是 <code>元素高度 ≤ 剩余</code>，等价于代码里的 <code>y + height &gt; page_height</code> 才翻页。这个条件看起来简单，但它决定了一切的成败——翻页时机早了浪费空间，晚了内容溢出被裁掉。谋定而后动，先想清条件，再写循环。</p>
+  </div>
+
+  <!-- ========== 11.4 分页的局限 ========== -->
+  <h2>11.4 分页的局限：够用，但糙</h2>
+
+  <p>作者在 README 的 <strong>"How well does it work?"</strong> 一节里很坦诚地自评：<em>"The code makes no attempt to break pages at suitable places - there are hints that can be extracted from the XHTML files and there are also CSS files that could be used."</em>——<strong>代码从不尝试在"合适的地方"断页</strong>。所谓"合适"，是指章节标题不该孤悬在页面最底一行、图片不该和它的图注分家、遇到明确的断页提示（如 XHTML 里的分页样式或 CSS 的 <code>page-break-*</code>）应当尊重。这些"提示"就在 XHTML 和 CSS 里，只是当前实现完全无视了它们。</p>
+
+  <p>最直观的"糙"是标签覆盖的取舍：解析器维护了一张跳过表 <code>SKIP_TAGS = {"head", "table"}</code>——<strong>表格整个被跳过</strong>，遇到 <code>&lt;table&gt;</code> 就从解析树里 <code>return false</code>（不深入子树）。这延续了第 9 章"极简标签"的策略：只认 <code>p/div/li/br/h1..h6/b/i/img</code>，其余结构要么当文本、要么直接放弃。分页层面同样如此：不做孤儿行控制、不保证"标题跟着正文走"。下表列出几处可观察到的局限与改进方向。</p>
+
+<pre><code><span class="cmt">/* RubbishHtmlParser.cpp：被整体跳过的标签 */</span>
+<span class="kw">const</span> <span class="type">char</span> *SKIP_TAGS[] = {<span class="str">"head"</span>, <span class="str">"table"</span>};
+
+<span class="kw">if</span> (matches(tag_name, SKIP_TAGS, NUM_SKIP_TAGS)) {
+  <span class="kw">return</span> <span class="kw">false</span>;   <span class="cmt">// 不深入该子树 → 表格内容被忽略</span>
+}</code></pre>
+
+  <table>
+    <tr><th>局限</th><th>可观察到的现象</th><th>改进方向</th></tr>
+    <tr><td>不在"合适处"断页</td><td>标题/图片可能孤悬页尾</td><td>解析 XHTML 断页提示与 CSS</td></tr>
+    <tr><td>表格整体跳过</td><td>含 <code>&lt;table&gt;</code> 的章节内容缺失</td><td>把表格当作简单文本块</td></tr>
+    <tr><td>块尾半行无条件追加</td><td>每段结束都浪费半行，可能提早触发翻页</td><td>仅当下一块紧随其后时追加</td></tr>
+    <tr><td>文本行/图片不可拆</td><td>块整体搬页，留下难看的页尾空白</td><td>段落级"孤儿行"控制</td></tr>
+  </table>
+
+  <p>还有一个藏在细节里的微妙之处：<code>y += line_height * 0.5</code> 中 <code>0.5</code> 是浮点、<code>y</code> 是 <code>int</code>，赋值时会截断取整——若行高为奇数，实际追加的半行会比"恰好一半"少 1px。这在视觉上无伤大雅，但它说明这段代码"够用但糙"：处处都是能跑就行的小妥协。改进的思路也不难，关键是把"是否处于块首行"纳入翻页条件——伪代码如下。</p>
+
+<pre><code><span class="cmt">/* 改进示意：避免段落首行成为页面最后一行（防孤行） */</span>
+<span class="kw">for</span> (每行 i <span class="kw">in</span> textBlock-&gt;line_breaks) {
+  <span class="kw">bool</span> is_first_line = (i == <span class="num">0</span>);
+  <span class="kw">if</span> (is_first_line &amp;&amp; y + line_height * <span class="num">2</span> &gt; page_height) {
+    <span class="cmt">// 该块首行起算放不满两行 → 整块搬到下一页</span>
+    pages.push_back(<span class="kw">new</span> <span class="type">Page</span>());
+    y = <span class="num">0</span>;
+  }
+  <span class="cmt">/* ...原装填逻辑... */</span>
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>分页结果直接决定阅读体验：一页的开头若是孤零零的图片或标题，用户会觉得"排版坏了"。嵌入式开发里"能用"和"好用"之间往往就差这些细节——而改进的第一步，是把分页逻辑放进 <code>test/rubbish_html_parser.cpp</code> 的单元测试里，让"页数对不对、元素顺序对不对"可以在本机一键验证，再放手去改。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：模拟装填 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>设 <code>page_height = 925</code>、<code>line_height = 28</code>，一个 34 行的文本块会被分进几页？前几行在第 0 页、最后几行在哪一页？请按 11.3 的装填条件逐步演算。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先算一页最多放下几行：<code>925 / 28</code> 向下取整。第 34 行触发 <code>y + 28 &gt; 925</code> 时开新页。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>一页最多 <code>925 / 28 = 33</code> 行（33 行后 <code>y = 924</code>，再加一行 <code>924 + 28 = 952 &gt; 925</code>）。所以第 0 页放第 1..33 行，第 34 行开新页，第 1 页只放 1 行再加段间半行。可见 34 行的段落用了 2 页，第二页几乎全空。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：图片等比缩放 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>一张原始尺寸 800×1200 的图片，页面 <code>get_page_width() = 520</code>、<code>get_page_height() = 925</code>。按 <code>ImageBlock::layout</code> 的公式，缩放后的宽高各是多少？它会被居中放在 <code>x_pos</code> 的什么位置？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>scale = min(520/800, 925/1200)</code>，取较小者保证两边都不越界；<code>x_pos = (520 - 新宽) / 2</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>scale = min(0.65, 0.7708…) = 0.65</code>，于是 <code>width = 800 × 0.65 = 520</code>、<code>height = 1200 × 0.65 = 780</code>。正好顶满页面宽度、纵向留白 145px；<code>x_pos = (520 - 520) / 2 = 0</code>，图片贴着左边缘。若换一张窄图（如 200×100），不触发缩放，<code>x_pos = (520 - 200) / 2 = 160</code>，居中摆放。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：段间半行的影响 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>分页代码在每个文本块结束后都无条件追加 <code>line_height * 0.5</code> 的空行。这会造成怎样的浪费？什么情况下会让一页白白多翻一次？如果要修，该在什么地方加条件？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想"块尾的半行"占用了 <code>y</code>，紧接着下一块第一行就可能因这半行而放不下；还要考虑最后一页末尾那半行永远不会被下一块使用。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>半行虽然不大，却会推高 <code>y</code>：下一块首行可能恰好因这半行触发 <code>y + line_height &gt; page_height</code> 而整块搬去下一页，导致当前页底部空出大半页。更明显的浪费在全书最后一页：块结束后追加的半行永远不会再被填充。修法：只在该块之后确实还有内容需要放置时追加间距，例如用 <code>std::next(block) != blocks.end()</code> 判断是否存在后继块。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：设计"防孤标题"分页 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>章节标题是一个 <code>CENTER_ALIGN</code> 的加粗文本块，它可能独自出现在页面最底部。请你设计并写出改进版分页伪代码，保证"标题块首行起算放不满两行时就整块搬去下一页"。需要读取块的哪些信息？代价是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>需要知道"当前块是不是标题块、该行是不是它的首行"——结合第 9 章的样式信息（<code>style</code> 为 <code>CENTER_ALIGN</code>）与 <code>line_breaks</code> 判断。代价是可能让前一页多空一点。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>思路：在逐行装填循环里，若 <code>i == 0</code> 且块的样式是标题（<code>CENTER_ALIGN</code>），则把翻页条件从 <code>y + line_height &gt; page_height</code> 改为 <code>y + line_height * 2 &gt; page_height</code>——保证标题行之后至少还能放下一行正文。实现上需要把 block 转成 <code>TextBlock</code> 并读取 <code>TextBlock::get_style()</code>（第 9 章见过），这与 11.4 末尾给出的伪代码一致。代价是每个标题块可能让前一页少两行；但换来的是"标题不孤悬"的排版质量，值得。真正工程化时，还要把这条规则放进单元测试覆盖（标题在页尾、标题紧贴页底等用例）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

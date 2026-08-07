@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cpp-pistache源码编译之实现cpp restful接口 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="cpp实现restful类型的接口比较的复杂，我们使用pistache库来解决这个问题，经对比，这个库是速度最快的。 源码下载 第三方库更新 编译 依赖下载gcc升级 gcc5.1.0源码编译 我们虽然重新编译安装了gcc，但系统有多个gc">
+  <meta name="keywords" content="pistache">
+  <link rel="canonical" href="https://aigcwei.cn/notes/cpp/pistache源码编译之实现cpp-restful接口.html">
+  <meta property="og:title" content="cpp-pistache源码编译之实现cpp restful接口">
+  <meta property="og:description" content="cpp实现restful类型的接口比较的复杂，我们使用pistache库来解决这个问题，经对比，这个库是速度最快的。 源码下载 第三方库更新 编译 依赖下载gcc升级 gcc5.1.0源码编译 我们虽然重新编译安装了gcc，但系统有多个gc">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/cpp/pistache源码编译之实现cpp-restful接口.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>cpp-pistache源码编译之实现cpp restful接口</h1>
+          <div class="article-meta"><span>2020-06-19</span><span class="tag">pistache</span></div>
+        </header>
+        <div class="article-body">
+<p>cpp实现restful类型的接口比较的复杂，我们使用pistache库来解决这个问题，经对比，这个库是速度最快的。</p>
+<h3>源码下载</h3>
+<pre><code>
+git clone https://github.com/oktal/pistache.git
+</code></pre>
+<h3>第三方库更新</h3>
+<pre><code>
+ git submodule update --init
+</code></pre>
+<h3>编译</h3>
+<h5>依赖下载gcc升级</h5>
+<p><a href="http://www.helioswei.top/article/2230395924.html">gcc5.1.0源码编译</a></p>
+<pre><code>
+gcc version &gt;5.1.0 #我们需要支持c++14
+</code></pre>
+<p>我们虽然重新编译安装了gcc，但系统有多个gcc的环境，我们在使用的时候可能还是默认的调用gcc4.8的低级版本，为了解决这个问题，我们可以显示的设置调用，我们需要设置编译器的环境变量，将5.1.0的编译器命令行设置到环境变量中：</p>
+<pre><code>
+export CC=/usr/local/bin/gcc
+export CXX=/usr/local/bin/g++
+</code></pre>
+<h5>cmake升级</h5>
+<p><a href="https://cmake.org/download/">cmake下载</a>，选择最新的下载即可，然后执行安装三部曲</p>
+<pre><code>
+cmake version &gt; 3.18.0
+</code></pre>
+<h5>curl-devel下载</h5>
+<pre><code>
+yum install curl-devel -y
+</code></pre>
+<h5>编译</h5>
+<pre><code>
+cd pistache
+mkdir build
+cd build
+</code></pre>
+<pre><code>
+cmake -G &quot;Unix Makefiles&quot; -DCMAKE_BUILD_TYPE=Release -DPISTACHE_BUILD_EXAMPLES=true -DPISTACHE_BUILD_TESTS=true -DPISTACHE_BUILD_DOCS=false -DPISTACHE_USE_SSL=true -DCMAKE_INSTALL_PREFIX=/usr/local/pistache ..
+make -j 4
+make install
+</code></pre>
+<h3>使用</h3>
+<p><code>注意，这个在使用的时候需要选择c++的标准,设置</code></p>
+<pre><code>
+g++ -std=c++14 #一般常用的是c++11
+</code></pre>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

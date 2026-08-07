@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第16章：移植、优化与展望 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="16" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第16章：移植、优化与展望</h1>
+  <p class="chapter-subtitle">最后一章不教你新代码——把移植、局限、生态与学习路线串成一张地图，再把它们讲给下一个人</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：教是最好的学</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「学一个东西的最好方式，是把它讲给一个完全不懂的人听。十五个章节下来，你已经陪着这台阅读器从'拆开一个 zip'走到'睡一觉还能自己醒'——现在，试着把这一切讲给下一个人听吧。讲一遍，你才知道自己哪里还没真懂。移植、优化、加入社区，说到底都是在'讲'：用代码、用 PR、用一篇文章，把你学到的东西还给这个世界。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 16.1 移植新板：Board 子类 + platformio.ini env ========== -->
+  <h2>16.1 移植新板：Board 子类 + platformio.ini env</h2>
+
+  <p>移植是检验理解程度的试金石。第 4 章已经拆过 Board 工厂的"两条腿"，这里站在终点的位置回看一遍：<strong>读完整本书，移植一块新板其实只是回答一串问题</strong>——这块屏是 EPDiy 并行屏还是独立驱动（第 3 章）？按键是 GPIO 直连还是走 IO 扩展芯片、按下是什么电平（第 5 章）？SD 卡的四根 SPI 引脚在哪（第 6 章）？电池分压接在哪个 ADC 通道（第 15 章）？每个问题的答案，最后都变成 <code>platformio.ini</code> 里的一行 <code>-D</code> 宏。答案填对了，<code>Board::factory()</code> 就会在编译期替你实例化出正确的板类。</p>
+
+  <p>README 的 <strong>"Porting to other boards"</strong> 一节把步骤讲得很克制，共两步：<strong>(1) 在 <code>src/boards</code> 新建一个实现 <code>Board.h</code> 的板类</strong>，把它加进 <code>Board::factory()</code>；<strong>(2) 在 <code>platformio.ini</code> 新增一个 env</strong>。但作者立刻补了一条"快捷通道"：如果你的屏幕本身就是 EPDiy 并行屏，板类这一步可以整个省略——只需定义 <code>-DBOARD_TYPE_EPDIY</code> 加上屏幕型号与板卡修订两个宏，其余全由预处理指令接管。真正需要手写 <code>Board</code> 子类的是那些"既非 EPDiy 屏、也无现成板类"的全新板，最低限度要实现 <code>get_renderer()</code> 和 <code>get_button_controls()</code>（README 原话："Have a look at <code>M5Paper.h</code> for inspiration"）。第 4 章那张"扩展新板四步表"在这里依然成立。</p>
+
+  <p>新增一块板之后，有一道免费的"体检"在等你：仓库根 <code>.github/workflows/build-test-on-push.yml</code> 会在每次 push 上跑三块板的构建 <code>pio run -e lilygo_t5_47 -e epdiy -e m5_paper</code> 和本机单元测试 <code>pio test -e native</code>（<code>test/</code> 目录里是 EPUB 解析器的原生测试，<code>[env:native]</code> 用 <code>lib_ignore</code> 排掉 epdiy / sd_card / spiffs 等硬件依赖）。所以你移植的新 env 能不能过 <strong>CI</strong>（持续集成，说人话：每次提交代码后自动跑一遍构建和测试的流程）、能不能进 PR，既是门槛也是自检清单——把 <code>pio run -e my_board</code> 在本地先跑绿，再发 Pull Request，就是对一个开源项目最大的尊重。</p>
+
+<pre><code><span class="cmt">; platformio.ini：为一块全新板子新增 env（最小模板，对照 [env:epdiy]）</span>
+[env:my_board]
+extends = esp32_common
+build_flags =
+  ${common.build_flags}
+  <span class="cmt">; ① 工厂选板：EPDiy 兼容屏可复用 Epdiy 板类</span>
+  -DBOARD_TYPE_EPDIY
+  <span class="cmt">; ② 屏幕型号 + 板卡修订（来自 epdiy 库，第 3 章）</span>
+  -DCONFIG_EPD_DISPLAY_TYPE_ED060XC3
+  -DCONFIG_EPD_BOARD_REVISION_V6
+  <span class="cmt">; ③ 按键极性：0 = 按下为低（ULP 唤醒），1 = 按下为高（EXT1 唤醒）</span>
+  -DBUTONS_ACTIVE_LEVEL=0
+  <span class="cmt">; ④ SD 卡四根 SPI 引脚（第 6 章）</span>
+  -DSD_CARD_PIN_NUM_MISO=GPIO_NUM_36
+  -DSD_CARD_PIN_NUM_MOSI=GPIO_NUM_0
+  -DSD_CARD_PIN_NUM_CLK=GPIO_NUM_13
+  -DSD_CARD_PIN_NUM_CS=GPIO_NUM_14
+  <span class="cmt">; ⑤ 电池 ADC（第 15 章，不定义则不显示电量）</span>
+  -DBATTERY_ADC_CHANNEL=ADC1_CHANNEL_0</code></pre>
+
+<pre><code><span class="cmt"># .github/workflows/build-test-on-push.yml：移植者的免费体检</span>
+name: Build and Test
+on: [push]
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - <span class="fn">uses</span>: actions/checkout@v2
+        with:
+          submodules: recursive          <span class="cmt"># 别忘了 --recursive，见第 1 章</span>
+      - <span class="fn">uses</span>: actions/setup-python@v2
+      - run: pip install --upgrade platformio
+      - run: pio run -e lilygo_t5_47 -e epdiy -e m5_paper   <span class="cmt"># 三块板都要能编</span>
+      - run: pio test -e native                              <span class="cmt"># 本机单测（EPUB 解析）</span></code></pre>
+
+  <table>
+    <tr><th>宏</th><th>意义</th><th>对应本书章节</th></tr>
+    <tr><td><code>-DBOARD_TYPE_*</code></td><td>编译期选板，驱动 <code>Board::factory()</code></td><td>第 4 章</td></tr>
+    <tr><td><code>-DCONFIG_EPD_DISPLAY_TYPE_*</code> / <code>-DCONFIG_EPD_BOARD_REVISION_*</code></td><td>屏幕型号与板卡修订（EPDiy 库）</td><td>第 3 章</td></tr>
+    <tr><td><code>-DBUTONS_ACTIVE_LEVEL</code></td><td>按键极性，决定 ULP / EXT1 唤醒</td><td>第 5、15 章</td></tr>
+    <tr><td><code>-DSD_CARD_PIN_NUM_MISO/MOSI/CLK/CS</code></td><td>SD 卡四根 SPI 引脚</td><td>第 6 章</td></tr>
+    <tr><td><code>-DBATTERY_ADC_CHANNEL</code></td><td>电池电压采样通道（不定义则不显示电量）</td><td>第 15 章</td></tr>
+    <tr><td><code>-DUSE_SPIFFS</code> / <code>-DUSE_L58_TOUCH</code></td><td>文件系统与触摸开关</td><td>第 6、5 章</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>移植 = 一次"讲解"：把每块新板的每一个宏选择理由讲给别人听（或者写进 PR 描述），讲不顺的地方，就是你还没真正搞懂的地方。费曼技巧在这里非常好用——先假设自己要带一个新人完成移植，你会立刻发现哪些细节是自己含糊的。</p>
+  </div>
+
+  <!-- ========== 16.2 已知局限与改进空间 ========== -->
+  <h2>16.2 已知局限与改进空间</h2>
+
+  <p>README 的 <strong>"How well does it work?"</strong> 一节，作者对自己作品的自评相当坦诚："Surprisingly, it works pretty well"（意外地好用）。但紧接着就列了硬伤。最该被点名的是<strong>断页不看位置</strong>——"The code makes no attempt to break pages at suitable places"（代码完全不做在合适位置断页的努力），而 XHTML 文件里其实藏着断页的线索、也还有 CSS 文件可用。这正打在本书第 11 章的分页算法上：目前的策略是"页面装不下就翻下一页"的朴素逻辑，遇到段落、图片跨页时，行会被硬生生切断。</p>
+
+  <p>排版能力也受限于作者的取舍。开头那句 "It has limited support for formating - the CSS content of the ePub file is not parsed" 说得很直白：<strong>CSS 完全不解析</strong>，只认 <code>&lt;h1&gt;</code>、<code>&lt;h2&gt;</code>、<code>&lt;b&gt;</code>、<code>&lt;i&gt;</code> 等少数标签（正是第 9 章 <code>RubbishHtmlParser</code> 白名单的由来）。字体方面 "I've only included 4 font styles - regular, bold, italic and bold-italic. I've also only generated glyphs for Latin characters and punctuation"——<strong>只有 4 种字重、且只生成了拉丁字符和标点</strong>。这对中文读者是个硬约束：想看中文 EPUB，得先扩展第 14 章的 <code>scripts/generate_fonts.sh</code> 生成 CJK 字形。好在这是一个范围明确、可度量的改造入口。</p>
+
+  <p>最后一类局限是<strong>性能</strong>。README 原话：书单的显示取决于每本书的封面图，SD 卡上读封面 "can take a few seconds"，翻书单也会偏慢；倒是"Rendering the actual pages is pretty reasonable, even when they have images on them"（正文页渲染相当稳，哪怕带图）。改进方向很自然：封面缩略图缓存、异步预加载、把书单数据缓存进内存。README 在「Improvements」一节用一句话收尾："There's a lot of room for improvement. This is a very basic e-reader and I'm more than happy for people to contribute to this project."——"非常基础的阅读器" + "欢迎任何人来贡献"，这就是一份摆在明面上的"招工启事"。下面这张表把局限、现状与改进方向摊开，每一行都是一道能写进简历的题。</p>
+
+<pre><code><span class="cmt"># README "How well does it work?"（节选，作者自评）</span>
+<span class="cmt"># - "Surprisingly, it works pretty well. Layout is reasonable, but there are</span>
+<span class="cmt">#    a lot of improvements that could be made."</span>
+<span class="cmt"># - "The code makes no attempt to break pages at suitable places - there are</span>
+<span class="cmt">#    hints that can be extracted from the XHTML files and there are also</span>
+<span class="cmt">#    CSS files that could be used."</span>
+<span class="cmt"># - "Depending on the images ... displaying the list of ePub files on the SD</span>
+<span class="cmt">#    Card can take a few seconds and moving through the pages of ePub files</span>
+<span class="cmt">#    can be a bit slow."</span></code></pre>
+
+<pre><code><span class="cmt"># 一张"阅读器改造清单"（示例选项，每个都能写成一个独立项目）</span>
+<span class="num">1</span>. 断页优化       <span class="cmt">在 &lt;h1&gt;/&lt;div&gt; 等块级标签边界优先断页 → 第 11 章</span>
+<span class="num">2</span>. 子集 CSS      <span class="cmt">解析 margin / text-align 等少量样式 → 第 9 章</span>
+<span class="num">3</span>. CJK 字体       <span class="cmt">扩展 generate_fonts.sh 生成中文字形 → 第 14 章</span>
+<span class="num">4</span>. 封面缩略图     <span class="cmt">缓存/预加载，让书单秒开 → 第 13 章</span>
+<span class="num">5</span>. 统一睡眠超时   <span class="cmt">把 120 秒做成可配置，对齐 README 的 30 秒 → 第 15 章</span></code></pre>
+
+  <table>
+    <tr><th>局限</th><th>现状（代码事实）</th><th>改进方向</th></tr>
+    <tr><td>断页位置</td><td>不做任何"合适位置断页"，行被硬切</td><td>用 XHTML 块级标签 / <code>&lt;pagebreak&gt;</code> 提示优先断页</td></tr>
+    <tr><td>CSS 排版</td><td>完全不解析，只认 h1/h2/b/i 白名单</td><td>实现少量 CSS（居中、页边距、段首缩进）</td></tr>
+    <tr><td>字体</td><td>4 种字重、仅拉丁字符 + 标点</td><td>扩展 <code>generate_fonts.sh</code> 生成 CJK 字形</td></tr>
+    <tr><td>封面加载</td><td>书单显示要读 SD 卡封面，需数秒</td><td>封面缩略图缓存、异步预加载</td></tr>
+    <tr><td>睡眠超时</td><td>代码 120 秒 vs README 30 秒</td><td>参数化、可配置、文档对齐</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>"已知局限"是开源项目里最值钱的学习素材：每个局限都是一个<strong>范围明确、自带验收标准</strong>的小项目。挑一个，先写下"改完什么样算好"（例如"书单封面加载 &lt;1 秒"），再去动代码——比起漫无目的地读源码，这样学得快十倍。更妙的是，作者已经在 README 里说了"more than happy for people to contribute"，你的成果随时可以回馈社区。</p>
+  </div>
+
+  <!-- ========== 16.3 生态：Wiki、Hackaday、社区聊天室 ========== -->
+  <h2>16.3 生态：Wiki、Hackaday、社区聊天室</h2>
+
+  <p>一个 DIY 项目的生命力，很大程度写在它的<strong>生态入口</strong>里。README「Improvements」一节的末尾，作者把三个外部资源并列摆出：项目 <strong>Wiki</strong>（说人话：Wiki 就是项目的文档/wiki 页；原文 "Check additional notes and research in our esp-32 epub reader Wiki"，即官方 Wiki 里存着额外笔记与研究）、<strong>Hackaday 项目页</strong>（说人话：Hackaday 是一个硬件创客社区网站，很多 DIY 电子项目在这里展示；原文 "you can find the DIY-ePUB reader project in Hackaday"）、以及<strong>公开聊天室</strong>（"public chat-room"）。这几条链接是作者留给世界的"后门"——文档没写透的东西，藏在 Wiki、项目页与聊天记录里。注意：本教程只转述 README 里的链接文字与用途，不展开外部站点的具体内容——想深入了解，请自己点开链接核实。</p>
+
+  <p>仓库本身的"可持续性"也值得一提。根目录的 <code>LICENSE</code> 是一份<strong>开源许可证</strong>（说人话：规定代码可以怎么被使用的法律条款），具体是 <strong>MIT</strong>（版权 <code>Copyright (c) 2021 Chris Greening</code>），意味着任何人都可以自由使用、修改、分发——这也是"贡献文化"的土壤。配套文件还有 <code>.github/FUNDING.yml</code>（给作者的打赏通道）、README 顶部那块 <strong>build status 徽章</strong>（指向 GitHub Actions）、以及「Can you contribute/help?」一节的号召：原文 "please try the project out on any e-paper boards that you have and open up pull requests if you get it working with any fixes. And if you find bugs, feel free to report (or better yet, fix!) them :)"——试试你的板子、修好了就发 PR、发现 bug 就报（能修更好）。这套"用 MIT + CI + 明确的贡献入口"的组合，就是个小而完整的新型开源协作样板。</p>
+
+  <p>还有一串藏在 README 各处的<strong>视频</strong>：顶部是三支演示（三块支持环境 + LilyGo 上的运行 + M5Paper 上的运行），Deep sleep 一节引了一支「ESP32 Deep Dive into Deep Sleep」的深入讲解，SD 卡接线也有一支 hack 视频。它们的价值不只是"看效果"——作者把难讲的硬件细节（深睡眠、飞线接 SD）做成了视频，这本身就是一种"费曼式"的文档策略：能用嘴讲清楚的，不塞进代码注释。你在 16.4 写自己的改造计划时，也不妨学着用"给别人讲得明白"作为交付标准。</p>
+
+<pre><code><span class="cmt"># README：三个生态入口 + 贡献号召（节选）</span>
+<span class="cmt"># Check aditional notes and research in our esp-32 epub reader Wiki.</span>
+<span class="cmt"># Here you can find the DIY-ePUB reader project in Hackaday and the</span>
+<span class="cmt"># public chat-room.</span>
+
+<span class="cmt"># Can you contribute/help?</span>
+<span class="cmt"># "please try the project out on any e-paper boards that you have and open</span>
+<span class="cmt">#  up pull requests if you get it working with any fixes. And if you find</span>
+<span class="cmt">#  bugs, feel free to report (or better yet, fix!) them :)"</span></code></pre>
+
+<pre><code><span class="cmt"># 仓库"可持续性"文件一览</span>
+LICENSE                  <span class="cmt">MIT · Copyright (c) 2021 Chris Greening</span>
+.github/FUNDING.yml      <span class="cmt">打赏通道</span>
+.github/workflows/build-test-on-push.yml   <span class="cmt">每次 push 构建三板 + 跑单测</span>
+test/                    <span class="cmt">native 环境的 EPUB 解析单测（fixtures/ 配样本）</span></code></pre>
+
+  <table>
+    <tr><th>资源</th><th>类型</th><th>README 里的用途描述</th></tr>
+    <tr><td>esp-32 epub reader Wiki</td><td>文档 / 研究笔记</td><td>"additional notes and research"（额外笔记与研究）</td></tr>
+    <tr><td>Hackaday 项目页</td><td>项目展示</td><td>"DIY-ePUB reader project in Hackaday"</td></tr>
+    <tr><td>公开聊天室</td><td>即时交流</td><td>"public chat-room"</td></tr>
+    <tr><td>build status 徽章</td><td>CI 状态</td><td>指向 GitHub Actions</td></tr>
+    <tr><td>演示 / 讲解视频</td><td>视频</td><td>3 块板演示 + 深睡眠深度讲解 + SD 接线 hack</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>本教程提到 Wiki、Hackaday、聊天室，都是<strong>转述 README 原文的链接文字与用途</strong>，并没有去核实或复述外部站点的具体内容。外部链接是"活的"，今天的内容明天可能变。想看一手资料，请以 README 里的原始链接为准自行打开。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>参与开源的正确姿势是渐进的：先在 Issue 里问清楚 → 通读相关代码 → 做最小复现 → 提交小而完整的 PR。别一上来就甩一大坨改动。作者在 README 里已经把门开好了——"try it out on any e-paper boards you have"，这是给移植者发的邀请函。你的第一个 PR 不必完美，能编译、有说明、聚焦一件事，就够了。</p>
+  </div>
+
+  <!-- ========== 16.4 学习路线回顾：三条线串起来 ========== -->
+  <h2>16.4 学习路线回顾：三条线串起来</h2>
+
+  <p>站在十六章的终点回望，这套教程其实铺了三条并行的技术线：<strong>Kotlin</strong>（应用层：Android App 开发）、<strong>LVGL</strong>（库层：嵌入式图形库本身）、以及<strong>本项目</strong>（整机层：用一堆现成库组装出一台能用的设备）。本项目在嵌入式坐标系里的位置很独特——它不是库，而是一台"由现成库 + 自己的胶水逻辑拼起来的完整产品"：EPDiy 负责刷屏、miniz 负责解包、TinyXML2 负责 XML、tjpgd3 / PNGdec 负责解码，而项目自己写的是状态机、换行、分页与电源管理。学会"用库做产品"和"写库"是两种不同能力：LVGL 线教你"写库"，本项目教你"用库做出一个能被手捧着的产品"。</p>
+
+  <p>把十六个章节摊开，是一张可以复用到任何嵌入式产品的骨架图：<strong>解析（第 7–9 章 zip / XML / HTML）→ 排版（第 10–11 章换行与分页）→ 渲染（第 12–14 章帧缓冲、图像、字体）→ 低功耗（第 15 章深睡眠与唤醒）→ 移植与展望（第 16 章）</strong>。存储、解析、布局、输出、电源、适配——一台有屏幕的嵌入式设备，几乎都逃不出这六个模块。你在这十六章里练就的"读源码、grep 宏、算单位、量功耗"的功夫，比任何单一知识点都值钱，因为它们才是跨项目通用的元技能。</p>
+
+  <p>接下来往哪走？费曼的方法论是"教是最好的学"，所以下一步建议也围绕"产出"展开：<strong>(1) 挑 16.2 的一个局限，定一个可度量的目标</strong>（比如"书单封面加载 &lt;1 秒"、"中文 EPUB 能正常渲染"），写成你的"阅读器改造计划"并动手；<strong>(2) 把项目移植到你手头任意一块 e-ink 板</strong>，走一遍 16.1 的流程，能过 CI 就发 PR；<strong>(3) 把"如何解析 EPUB"或"电子墨水屏怎么翻页"讲给一个外行听</strong>——写成文章、录成视频、或只是讲给朋友，讲不清楚的地方就是你回去复习的起点。记住 16.2 那张改造清单上的每一行，都是别人为你铺好的下一站。</p>
+
+<pre><code><span class="cmt"># 本书十六章节地图：一台嵌入式阅读器的最小骨架</span>
+认识项目       第 1–2 章     环境、仓库地图           <span class="cmt">知道这是什么</span>
+解析           第 7–9 章     zip / XML / HTML         <span class="cmt">把"书"变成"数据"</span>
+排版           第 10–11 章   换行 / 分页              <span class="cmt">把"数据"变成"页面"</span>
+渲染           第 12–14 章   帧缓冲 / 图像 / 字体     <span class="cmt">把"页面"变成"画面"</span>
+低功耗         第 15 章      深睡眠 / ULP / EXT1      <span class="cmt">让它能"停下来"</span>
+移植与展望     第 16 章      配置 / 生态 / 成长路线   <span class="cmt">让它在别处也能活</span></code></pre>
+
+<pre><code><span class="cmt"># 你的"阅读器改造计划"模板（交付物驱动，可自行替换）</span>
+目标：<span class="param">&lt;一句可度量的话&gt;</span>  例：中文 EPUB 能正常渲染，10 页样例零乱码
+范围：<span class="param">&lt;动哪些文件 / 涉及本书哪一章&gt;</span>
+      例：scripts/generate_fonts.sh（第 14 章）+ Fonts/ 目录
+验收：<span class="param">&lt;怎么算成功&gt;</span>  例：pg 样例中文书名在书单正确显示、翻页正常
+风险：<span class="param">&lt;可能翻车的地方&gt;</span> 例：CJK 字形体积大，可能挤爆帧缓冲
+第 1 步：<span class="param">&lt;最小可验证动作&gt;</span>  例：先用 generate_fonts.sh 生成一张测试字形图
+第 2 步：<span class="param">&lt;…&gt;</span>
+验收方式：把改造成果讲给一个外行听，讲不明白 = 还没真懂</code></pre>
+
+  <table>
+    <tr><th>阶段</th><th>章节</th><th>核心技能</th><th>一句话价值</th></tr>
+    <tr><td>认识项目</td><td>第 1–2 章</td><td>环境搭建、仓库解剖</td><td>知道这是台什么东西</td></tr>
+    <tr><td>解析</td><td>第 7–9 章</td><td>zip / XML / HTML 解析</td><td>把"书"变成"数据"</td></tr>
+    <tr><td>排版</td><td>第 10–11 章</td><td>动态规划换行、分页</td><td>把"数据"变成"页面"</td></tr>
+    <tr><td>渲染</td><td>第 12–14 章</td><td>帧缓冲、图像、字体</td><td>把"页面"变成"画面"</td></tr>
+    <tr><td>低功耗</td><td>第 15 章</td><td>深睡眠、ULP/EXT1、电量</td><td>让它能"停下来"</td></tr>
+    <tr><td>移植与展望</td><td>第 16 章</td><td>Board 配置、生态参与</td><td>让它在别处也能活</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>十六章读完，最大的敌人是"伪完成"——看了一遍源码就以为自己懂了。检验标准永远是那个老办法：<strong>能不能把它讲给一个完全不懂的人</strong>。这本书对这台阅读器的叙述到此为止，但你的学习才刚拐弯：去移植、去改 16.2 的某个局限、去给作者发个 PR。把这本书"讲"给下一个人，你的十六个章节才算真正闭环。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：移植盘点 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>给你一块板：EPDiy 并行屏、按键按下为高电平、SD 四脚已知、<strong>没有电池</strong>。请列出这块板 <code>platformio.ini</code> 需要的宏，并说明哪一项可以省略、为什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>复用 Epdiy 板类可省 Board 子类；没电池就把电池 ADC 宏省掉。对照 16.1 的模板。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>需要：<code>-DBOARD_TYPE_EPDIY</code>（省掉手写 Board 子类）、<code>-DCONFIG_EPD_DISPLAY_TYPE_*</code> + <code>-DCONFIG_EPD_BOARD_REVISION_*</code>（屏幕）、<code>-DBUTONS_ACTIVE_LEVEL=1</code>（高有效 → EXT1 唤醒）、<code>-DSD_CARD_PIN_NUM_MISO/MOSI/CLK/CS</code> 四行。可省略：<code>BATTERY_ADC_CHANNEL</code>——<code>Board::get_battery()</code> 未定义该宏时返回 <code>nullptr</code>，主程序会跳过电量采样与绘制，不影响正常阅读。若你的屏不是 EPDiy 兼容屏，则必须新建 Board 子类并加入 <code>factory()</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：局限分析 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>从 16.2 的改造清单里任选两个局限，各回答：(a) 它卡在本书哪一章的哪段逻辑上；(b) 给出一个你想到的最小改进方案。要求方案具体到"动哪个文件 / 哪个函数"。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>断页 → 第 11 章分页分配页面的那段；CJK 字体 → 第 14 章 <code>generate_fonts.sh</code>；封面慢 → 第 13 章图像读取路径。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>示例一（断页）：卡在第 11 章 <code>RubbishHtmlParser::layout</code> 把 blocks 分配到页面时——目前"页面放不下就新建页"，可先扫描块级标签（<code>&lt;h1&gt;</code>/<code>&lt;div&gt;</code>）并优先在它们边界断页，改动集中在布局分配段。示例二（CJK 字体）：卡在第 14 章 <code>scripts/generate_fonts.sh</code>——它只生成拉丁字符 + 标点，可加入一套 CJK 字形并重新生成 <code>Fonts/</code> 下的数组，随后在渲染器里为中文分配字号。两个方案都满足"范围小、可度量"的标准，也都值得回馈 PR。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：制定你的阅读器改造计划 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>套用 16.4 的模板，为这台阅读器制定一份<strong>你自己的改造计划</strong>。要求包含：可度量的目标、明确的范围（文件 / 函数 / 涉及章节）、验收标准、风险点，以及第一步的最小可验证动作。可以选 16.2 的任一行，也可以是你自己的灵感。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>目标要可测量（"封面加载 &lt;1 秒"优于"更快"）；第一步要小到一天内能验证；验收标准最好能口述给外行。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>合格示例（可自由替换）：目标——"书单从打开到可翻页 ≤1 秒"；范围——<code>lib/Epub/EpubList/EpubList.cpp</code>（书单渲染与封面读取，第 13 章），给封面图加一个缩略图缓存文件 <code>/fs/covers/</code>；验收——放 10 本带封面书实测，书单首屏时间从数秒降到 1 秒内；风险——缩略图缓存占 SD 空间、首次生成仍慢，需考虑"首读生成 + 之后命中"策略；第一步——写一个把首张封面压成 64×64 缩略图并落盘的函数，单测验证尺寸与耗时。核心评判标准：目标可度量、第一步可验证、改造完能讲给外行听。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：费曼收官——把它讲出去 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用<strong>五句话</strong>向一个完全不懂硬件的人解释"这台 ESP32 电子书阅读器是怎么工作的"，再为它写一份 <strong>3 分钟口头讲解提纲</strong>。写完后，标出你自己讲得最不顺、最含糊的一句话——那里就是你回去重新复习的章节。这是本书最后一次、也是最重要的练习。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>别用术语；按"书 → 数据 → 页面 → 画面 → 睡眠"的骨架讲；讲不顺的地方往往是"你只是看过、没真正理解"的地方。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>五句示例（一）这台机器读的是电子书文件，它们其实是压缩包，里面装着文字和排版信息；（二）开机后它把压缩包解开、把文字排版成一页一页，存进一块很小的缓存；（三）屏幕是电子墨水屏——跟纸张一样，画面停住后就不耗电了；（四）所以你翻页时才花电，不翻时它就睡大觉，还能靠按键把自己叫醒；（五）最后它把所有进度记在一小块不掉电的"记忆"里，下次开机接着读。3 分钟提纲可按这五句各展开 30 秒；讲不顺的句子（比如"排版成一页一页"背后的换行与分页）就该回到第 10、11 章。真正学会的标志，是讲完这 3 分钟，听众的眼睛是亮的。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

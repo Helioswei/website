@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第13章：综合实战——做一个完整仪表盘界面 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="13" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第13章：综合实战——做一个完整仪表盘界面</h1>
+  <p class="chapter-subtitle">把前 12 章拧成一根绳：规划、搭建、样式、交互、动画，一步不落</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：统揽全局，先整体后局部</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案先看全局，画界面先画草图。控件怎么摆、样式什么调、事件往哪走、动画什么节奏——任何一个单点都容易，难的是把它们织成一张网。统揽全局的人，不是记住每个控件长什么样，而是心里先有一张完整的布局图，剩下的只是按图施工。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 13.1 统揽全局：五步法 ========== -->
+  <h2>13.1 统揽全局：五步法</h2>
+
+  <p>做完整界面最容易踩的坑，是"想到哪写到哪"——先画个控件，再调位置，最后发现整体乱成一团。狄仁杰的方法是先看全案卷宗：动手前先把界面拆成五步。① <strong>布局规划</strong>：页面骨架用什么容器、分成几块区域；② <strong>控件搭建</strong>：每块区域放什么控件；③ <strong>样式主题</strong>：统一配色、圆角、字体，让整页像一个整体；④ <strong>事件交互</strong>：点击、拖动、输入如何响应，数据如何联动；⑤ <strong>动画润色</strong>：过渡、往复动效、周期性刷新，让界面"活"起来。</p>
+
+  <p>这五步不是理论——LVGL 自带的 <code>demos/</code> 就是现成的范本。<code>demos/widgets</code> 是一个三页签的"控制面板"（Profile 个人资料 / Analytics 数据仪表与图表 / Shop 购物），用 <code>lv_tabview</code> 组织，其中 Analytics 页恰好是"仪表 + 图表"组合，本章会反复参照它；<code>demos/music</code> 是手机风格的播放器；<code>demos/benchmark</code> 是性能压测。这些 demo 都由 <code>lv_conf.h</code> 里的 <code>LV_USE_DEMO_*</code> 宏开关启用（<code>lv_conf_template.h</code> 中默认 0），启用后 <code>#include "demos/lv_demos.h"</code>，用 <code>lv_demos_create(&amp;argv[1], argc - 1)</code> 按名字运行——比如 <code>lv_demos widgets</code> 跑控件演示、<code>lv_demos benchmark 1</code> 跑压测。</p>
+
+  <table>
+    <tr><th>步骤</th><th>做什么</th><th>前章回顾</th><th>代表 API</th></tr>
+    <tr><td>1 布局规划</td><td>定容器与分区（Flex/Grid/对齐）</td><td>第 7 章</td><td><code>lv_obj_set_flex_flow</code> / <code>lv_obj_set_grid_cell</code></td></tr>
+    <tr><td>2 控件搭建</td><td>按分区放控件（scale/arc/chart/label）</td><td>第 5 章</td><td><code>lv_scale_create</code> / <code>lv_chart_create</code></td></tr>
+    <tr><td>3 样式主题</td><td>统一配色圆角，给数据分区上色</td><td>第 6 章</td><td><code>lv_style_*</code> / <code>lv_palette_main</code></td></tr>
+    <tr><td>4 事件交互</td><td>点按/拖动/输入响应，数据联动</td><td>第 8、11 章</td><td><code>lv_obj_add_event_cb</code> / <code>lv_*_bind_value</code></td></tr>
+    <tr><td>5 动画润色</td><td>过渡、往复动效、周期刷新</td><td>第 9 章</td><td><code>lv_anim_*</code> / <code>lv_timer_create</code></td></tr>
+  </table>
+
+  <p>启用 demo 的配置长这样（<code>demos/README.md</code> 的「Add the examples to your projects」一节原样给出了模板）。注意到 README 特别叮嘱：跑 widgets demo 时 <code>LV_MEM_SIZE</code> 至少要 <strong>38KB</strong>（推荐 48KB）——它在源码里甚至用 <code>#error</code> 硬性拦截过小配置。这类"内存预算"提示，就是第 14 章性能话题的预告。</p>
+
+<pre><code><span class="cmt">/* lv_conf.h 里启用 widgets demo（demos/README.md 真实模板） */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_DEMO_WIDGETS</span>   <span class="num">1</span>
+<span class="kw">#define</span> <span class="kw">LV_MEM_SIZE</span>          (<span class="num">38ul</span> * <span class="num">1024ul</span>)  <span class="cmt">/* 至少 38KB，推荐 48KB */</span>
+
+<span class="cmt">/* 应用入口：按名字创建 demo */</span>
+<span class="kw">#include</span> <span class="str">"demos/lv_demos.h"</span>
+<span class="kw">if</span>(!<span class="fn">lv_demos_create</span>(&amp;argv[<span class="num">1</span>], argc - <span class="num">1</span>)) {
+    <span class="fn">lv_demos_show_help</span>();
+}</code></pre>
+
+  <p>主循环则与普通 LVGL 程序毫无二致——demo 只是"往屏幕对象树上挂了一棵控件树"，剩下的交给 <code>lv_timer_handler()</code>：</p>
+
+<pre><code><span class="cmt">/* demos/README.md：运行 demo 的主循环 */</span>
+<span class="kw">while</span>(<span class="num">1</span>) {
+    <span class="type">uint32_t</span> delay = <span class="fn">lv_timer_handler</span>();
+    <span class="kw">if</span>(delay &lt; <span class="num">1</span>) delay = <span class="num">1</span>;
+    <span class="kw">else if</span>(delay == <span class="kw">LV_NO_TIMER_READY</span>) delay = <span class="kw">LV_DEF_REFR_PERIOD</span>;
+    <span class="fn">usleep</span>(delay * <span class="num">1000</span>);
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>动手前先在纸上画一张草图：屏幕分成哪几块、每块放什么、宽高大约多少。这张草图就是你的"全局图"。五步法不是固定顺序的流水线——样式和动画往往要回来反复调整——但<strong>先有规划再动手</strong>这个次序不能乱。</p>
+  </div>
+
+  <!-- ========== 13.2 布局规划：容器、Flex 与 Grid ========== -->
+  <h2>13.2 布局规划：容器、Flex 与 Grid</h2>
+
+  <p>布局是界面骨架，LVGL 给出三种"摆法"：<strong>绝对对齐</strong>（<code>lv_obj_align</code> 指哪打哪）、<strong>Flex</strong>（一维流式，子对象沿主轴自动排布）、<strong>Grid</strong>（二维表格，把对象钉进行列网格）。真实 demo 里布局密度最高的当属 Analytics 页：页根 <code>lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_ROW)</code> 把整页切成横向一列的卡片，卡片内 <code>lv_obj_set_flex_grow(cont, 1)</code> 等宽均分，再用 <code>lv_obj_set_flex_in_new_track</code> 控制换行。小屏幕上装不下就换行，大屏幕上并排展示——一个 Flex 属性切换，响应式布局就到手了。</p>
+
+  <p>一个"小而全"的 Flex 用法藏在 <code>examples/widgets/scale/lv_example_scale_heart_rate.c</code>：仪表盘中心的圆形容器里开一个 flex 列，<code>lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER)</code> 让"数值 + 单位"两行文字水平、垂直都居中。布局规划的本质就是"想清楚谁在谁的肚子里、怎么排"，想清楚了再写代码，比边写边挪坐标高效一个量级。</p>
+
+<pre><code><span class="cmt">/* heart_rate 示例：中心圆形容器里开一个 flex 列，文字两行居中 */</span>
+<span class="type">lv_obj_t</span> * circle = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_size</span>(circle, <span class="num">130</span>, <span class="num">130</span>);
+<span class="fn">lv_obj_center</span>(circle);
+<span class="fn">lv_obj_set_style_radius</span>(circle, <span class="kw">LV_RADIUS_CIRCLE</span>, <span class="num">0</span>);
+
+<span class="type">lv_obj_t</span> * cont = <span class="fn">lv_obj_create</span>(circle);
+<span class="fn">lv_obj_set_layout</span>(cont, <span class="kw">LV_LAYOUT_FLEX</span>);
+<span class="fn">lv_obj_set_flex_flow</span>(cont, <span class="kw">LV_FLEX_FLOW_COLUMN</span>);
+<span class="fn">lv_obj_set_flex_align</span>(cont, <span class="kw">LV_FLEX_ALIGN_CENTER</span>,
+                         <span class="kw">LV_FLEX_ALIGN_CENTER</span>, <span class="kw">LV_FLEX_ALIGN_CENTER</span>);
+
+<span class="type">lv_obj_t</span> * value_label = <span class="fn">lv_label_create</span>(cont);
+<span class="fn">lv_label_set_text_fmt</span>(value_label, <span class="str">"%d"</span>, <span class="num">145</span>);
+<span class="type">lv_obj_t</span> * unit_label = <span class="fn">lv_label_create</span>(cont);
+<span class="fn">lv_label_set_text</span>(unit_label, <span class="str">"bpm"</span>);</code></pre>
+
+  <p>当布局更"表格化"时用 Grid。Analytics 页的图表卡内部就是这样：先 <code>lv_obj_set_grid_dsc_array(parent, col_dsc, row_dsc)</code> 声明列、行描述（<code>LV_GRID_CONTENT</code> 表示"按内容自适应"，<code>LV_GRID_FR(1)</code> 表示"把剩余空间按比例分"），再用 <code>lv_obj_set_grid_cell</code> 把标题、垂直刻度、图表分别钉进对应格子。</p>
+
+<pre><code><span class="cmt">/* analytics 示例：grid 把"标签行 + 主体 + 刻度"钉进网格 */</span>
+<span class="kw">static const</span> <span class="type">int32_t</span> col_dsc[] = {<span class="num">40</span>, <span class="kw">LV_GRID_FR</span>(<span class="num">1</span>), <span class="kw">LV_GRID_TEMPLATE_LAST</span>};
+<span class="kw">static const</span> <span class="type">int32_t</span> row_dsc[] = {<span class="kw">LV_GRID_CONTENT</span>, <span class="kw">LV_GRID_FR</span>(<span class="num">1</span>), <span class="num">40</span>, <span class="kw">LV_GRID_TEMPLATE_LAST</span>};
+
+<span class="fn">lv_obj_set_grid_dsc_array</span>(parent, col_dsc, row_dsc);
+
+<span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(parent);
+<span class="fn">lv_obj_set_grid_cell</span>(label, <span class="kw">LV_GRID_ALIGN_START</span>, <span class="num">0</span>, <span class="num">1</span>, <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">0</span>, <span class="num">1</span>);
+
+<span class="type">lv_obj_t</span> * scale_ver = <span class="fn">lv_scale_create</span>(parent);
+<span class="fn">lv_scale_set_mode</span>(scale_ver, <span class="kw">LV_SCALE_MODE_VERTICAL_LEFT</span>);
+<span class="fn">lv_obj_set_grid_cell</span>(scale_ver, <span class="kw">LV_GRID_ALIGN_END</span>, <span class="num">0</span>, <span class="num">1</span>, <span class="kw">LV_GRID_ALIGN_STRETCH</span>, <span class="num">1</span>, <span class="num">1</span>);
+<span class="fn">lv_scale_set_total_tick_count</span>(scale_ver, <span class="num">11</span>);
+<span class="fn">lv_scale_set_major_tick_every</span>(scale_ver, <span class="num">2</span>);
+<span class="fn">lv_scale_set_range</span>(scale_ver, <span class="num">0</span>, <span class="num">100</span>);</code></pre>
+
+  <!-- ========== 13.3 控件搭建：一个仪表盘的最小骨架 ========== -->
+  <h2>13.3 控件搭建：一个仪表盘的最小骨架</h2>
+
+  <p>本章的目标界面定为"仪表盘"。先纠正一个容易踩的坑：LVGL 9 里<strong>没有独立的 meter 控件</strong>（老版本叫 meter 的仪表，在 9.x 已被 scale 取代）。仪表盘的标准做法是 <code>lv_scale</code>（刻度 + 量程）+ 指针 + 中心文字 三件套：<code>lv_scale_create()</code> 提供环形模式 <code>LV_SCALE_MODE_ROUND_INNER</code>（圆环、刻度朝内）。真实示例 <code>lv_example_scale_needles.c</code> 用不到二十行就搭出一个带指针的圆表：范围 10~40、共 31 个刻度、主刻度每 5 格一个、扫角 270° 并旋转到 135°（让缺口朝下，表盘"开口"）。</p>
+
+<pre><code><span class="cmt">/* needles 示例：一个 150×150 的环形表盘骨架 */</span>
+<span class="type">lv_obj_t</span> * scale = <span class="fn">lv_scale_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_size</span>(scale, <span class="num">150</span>, <span class="num">150</span>);
+<span class="fn">lv_scale_set_mode</span>(scale, <span class="kw">LV_SCALE_MODE_ROUND_INNER</span>);
+<span class="fn">lv_scale_set_range</span>(scale, <span class="num">10</span>, <span class="num">40</span>);
+<span class="fn">lv_scale_set_total_tick_count</span>(scale, <span class="num">31</span>);
+<span class="fn">lv_scale_set_major_tick_every</span>(scale, <span class="num">5</span>);
+<span class="fn">lv_scale_set_angle_range</span>(scale, <span class="num">270</span>);
+<span class="fn">lv_scale_set_rotation</span>(scale, <span class="num">135</span>);
+<span class="fn">lv_obj_set_style_length</span>(scale, <span class="num">5</span>, <span class="kw">LV_PART_ITEMS</span>);
+<span class="fn">lv_obj_set_style_length</span>(scale, <span class="num">10</span>, <span class="kw">LV_PART_INDICATOR</span>);</code></pre>
+
+  <p>指针有两种挂法：<strong>直线指针</strong>用 <code>lv_line_create</code> 挂进 scale，再调用 <code>lv_scale_set_line_needle_value(scale, needle, needle_length, value)</code> 让库按数值把指针转到对应角度；<strong>图片指针</strong>用 <code>lv_image_create</code> 挂一张指针图，用 <code>lv_scale_set_image_needle_value</code> 驱动，配合 <code>lv_image_set_pivot</code> 设定绕哪一点转（needles 示例里指针图片的旋转轴心是 (3,4)）。表盘中心再放一个圆形覆盖层容纳数值与单位文字，就拼出了 heart_rate 示例的核心结构。</p>
+
+<pre><code><span class="cmt">/* needles 示例：直线指针 + 动画驱动 */</span>
+<span class="type">lv_obj_t</span> * needle_line = <span class="fn">lv_line_create</span>(scale);
+<span class="fn">lv_obj_set_style_line_width</span>(needle_line, <span class="num">6</span>, <span class="kw">LV_PART_MAIN</span>);
+<span class="fn">lv_obj_set_style_line_rounded</span>(needle_line, <span class="kw">true</span>, <span class="kw">LV_PART_MAIN</span>);
+
+<span class="kw">static void</span> <span class="fn">set_needle_value</span>(<span class="kw">void</span> * var, <span class="type">int32_t</span> v)
+{
+    <span class="fn">lv_scale_set_line_needle_value</span>(scale, needle_line, <span class="num">60</span>, v);
+}
+
+<span class="type">lv_anim_t</span> a;
+<span class="fn">lv_anim_init</span>(&amp;a);
+<span class="fn">lv_anim_set_var</span>(&amp;a, scale);
+<span class="fn">lv_anim_set_exec_cb</span>(&amp;a, set_needle_value);
+<span class="fn">lv_anim_set_values</span>(&amp;a, <span class="num">10</span>, <span class="num">40</span>);
+<span class="fn">lv_anim_set_duration</span>(&amp;a, <span class="num">1000</span>);
+<span class="fn">lv_anim_set_reverse_duration</span>(&amp;a, <span class="num">1000</span>);
+<span class="fn">lv_anim_set_repeat_count</span>(&amp;a, <span class="kw">LV_ANIM_REPEAT_INFINITE</span>);
+<span class="fn">lv_anim_start</span>(&amp;a);</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>把"刻度"和"指针"分开想，是理解 scale 的关键：<code>lv_scale_*</code> 管刻度盘本身（量程、刻度数、扫角），指针是另一个对象（line 或 image），只是"借" scale 的坐标算角度。这样你就能自由组合——同一个刻度盘，换直线指针还是图片指针，只是挂法不同。</p>
+  </div>
+
+  <!-- ========== 13.4 样式主题与数据表达 ========== -->
+  <h2>13.4 样式主题与数据表达</h2>
+
+  <p>仪表盘光有刻度盘还"冷冰冰"，样式系统的价值在于把数据讲出颜色来。heart_rate 示例把仪表按心率分区染色：<code>lv_scale_add_section</code> 加一个分区，<code>lv_scale_set_section_range</code> 定它的数值区间，再给每个分区配三套样式——<code>lv_scale_set_section_style_main</code> 管主弧、<code>lv_scale_set_section_style_indicator</code> 管指示刻度、<code>lv_scale_set_section_style_items</code> 管普通刻度。五个区间分别用灰/蓝/绿/橙/红，恰好对应心率五档：低于 117 是灰色区，一路到 176 以上是红色区。数据一进区间，颜色自己就说话。</p>
+
+<pre><code><span class="cmt">/* heart_rate 示例：给分区上色的三套样式（节选） */</span>
+<span class="kw">static void</span> <span class="fn">init_section_styles</span>(<span class="type">lv_style_t</span> * items, <span class="type">lv_style_t</span> * indicator,
+                                <span class="type">lv_style_t</span> * main, <span class="type">lv_color_t</span> color)
+{
+    <span class="fn">lv_style_init</span>(items);
+    <span class="fn">lv_style_set_line_color</span>(items, color);
+    <span class="fn">lv_style_set_line_width</span>(items, <span class="num">0</span>);
+    <span class="fn">lv_style_init</span>(indicator);
+    <span class="fn">lv_style_set_line_color</span>(indicator, color);
+    <span class="fn">lv_style_set_line_width</span>(indicator, <span class="num">0</span>);
+    <span class="fn">lv_style_init</span>(main);
+    <span class="fn">lv_style_set_arc_color</span>(main, color);
+    <span class="fn">lv_style_set_arc_width</span>(main, <span class="num">20</span>);
+}
+
+<span class="type">lv_scale_section_t</span> * sec = <span class="fn">lv_scale_add_section</span>(scale);
+<span class="fn">lv_scale_set_section_range</span>(scale, sec, <span class="num">98</span>, <span class="num">117</span>);   <span class="cmt">/* 第一档区间 */</span>
+<span class="fn">lv_scale_set_section_style_items</span>(scale, sec, &amp;items);
+<span class="fn">lv_scale_set_section_style_indicator</span>(scale, sec, &amp;indicator);
+<span class="fn">lv_scale_set_section_style_main</span>(scale, sec, &amp;main);</code></pre>
+
+  <p>除了刻度盘，数据表达还能上图表。Analytics 页的 "Unique visitors" 折线图与 "Monthly revenue" 柱状图就是模板：<code>lv_chart_add_series</code> 往图里加一条序列（可多条，各配一条 Y 轴），<code>lv_chart_set_type(chart, LV_CHART_TYPE_BAR)</code> 切到柱状（默认折线），<code>lv_chart_set_next_value</code> 逐个喂数据点；坐标轴刻度则复用 scale——垂直方向 <code>LV_SCALE_MODE_VERTICAL_LEFT</code>、水平方向 <code>LV_SCALE_MODE_HORIZONTAL_BOTTOM</code>，配上文字源就是横轴标签。配色上有两件顺手工具：<code>lv_palette_main(LV_PALETTE_RED)</code> 取色板主色，<code>lv_theme_get_color_primary(obj)</code> 取当前主题主色——整页配色跟着主题走，不会跑偏。</p>
+
+<pre><code><span class="cmt">/* analytics 示例：一条柱状序列 + 12 个随机数据点 */</span>
+<span class="type">lv_obj_t</span> * chart = <span class="fn">lv_chart_create</span>(parent);
+<span class="fn">lv_chart_set_div_line_count</span>(chart, <span class="num">0</span>, <span class="num">12</span>);
+<span class="fn">lv_chart_set_point_count</span>(chart, <span class="num">12</span>);
+
+<span class="type">lv_chart_series_t</span> * ser = <span class="fn">lv_chart_add_series</span>(chart,
+                          <span class="fn">lv_theme_get_color_primary</span>(chart),
+                          <span class="kw">LV_CHART_AXIS_PRIMARY_Y</span>);
+<span class="fn">lv_chart_set_type</span>(chart, <span class="kw">LV_CHART_TYPE_BAR</span>);   <span class="cmt">/* 或保持默认折线 */</span>
+
+<span class="type">uint32_t</span> i;
+<span class="kw">for</span>(i = <span class="num">0</span>; i &lt; <span class="num">12</span>; i++) {
+    <span class="fn">lv_chart_set_next_value</span>(chart, ser, <span class="fn">lv_rand</span>(<span class="num">10</span>, <span class="num">80</span>));
+}</code></pre>
+
+  <!-- ========== 13.5 事件交互与动画润色 ========== -->
+  <h2>13.5 事件交互与动画润色</h2>
+
+  <p>交互有两种"流派"。一是<strong>数据驱动</strong>：让控件直接订阅 subject，几乎不写回调。官方示例 <code>examples/widgets/arc/lv_example_arc_bind_value.c</code> 把滑块和弧表盘绑到同一个 <code>subject_value</code>——<code>lv_slider_bind_value(slider, &amp;subject)</code> 让它当编辑入口，<code>lv_arc_bind_value(arc, &amp;subject)</code> 让它当只读展示（<code>lv_obj_set_clickable(arc, false)</code> 关掉点击），再 <code>lv_label_bind_text(label, &amp;subject, "%d %%")</code> 显示数值。拖一下滑块，表盘与文字一起动——第 11 章讲的"数据是唯一事实来源"在这里直接落地。</p>
+
+<pre><code><span class="cmt">/* arc_bind_value 示例：一个 subject，三个控件同时订阅 */</span>
+<span class="kw">static</span> <span class="type">lv_subject_t</span> subject_value;
+<span class="fn">lv_subject_init_int</span>(&amp;subject_value, <span class="num">50</span>);
+<span class="fn">lv_subject_set_min_value_int</span>(&amp;subject_value, <span class="num">0</span>);
+<span class="fn">lv_subject_set_max_value_int</span>(&amp;subject_value, <span class="num">100</span>);
+
+<span class="type">lv_obj_t</span> * arc = <span class="fn">lv_arc_create</span>(screen);
+<span class="fn">lv_obj_set_size</span>(arc, <span class="num">160</span>, <span class="num">160</span>);
+<span class="fn">lv_arc_bind_value</span>(arc, &amp;subject_value);      <span class="cmt">/* 表盘：只读展示 */</span>
+<span class="fn">lv_obj_set_clickable</span>(arc, <span class="kw">false</span>);
+
+<span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(arc);
+<span class="fn">lv_label_bind_text</span>(label, &amp;subject_value, <span class="str">"%d %%"</span>);
+
+<span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(screen);
+<span class="fn">lv_slider_bind_value</span>(slider, &amp;subject_value); <span class="cmt">/* 滑块：编辑入口 */</span></code></pre>
+
+  <p>二是<strong>手动事件 + 周期刷新</strong>。需要自己逻辑时用 <code>lv_obj_add_event_cb(obj, cb, LV_EVENT_*, user_data)</code>；需要"心跳"式的周期更新时用 <code>lv_timer_create(cb, period_ms, user_data)</code>。heart_rate 的 80ms 计时器就是教科书：数值先走一步（撞到上下界就反向），再同时更新指针角度和文字颜色。动效则由 <code>lv_anim_t</code> 编排——needles 示例里 <code>lv_anim_set_values(&amp;a, 10, 40)</code> + <code>lv_anim_set_exec_cb</code> + <code>lv_anim_set_duration(1000)</code> + <code>lv_anim_set_reverse_duration(1000)</code> + <code>lv_anim_set_repeat_count(&amp;a, LV_ANIM_REPEAT_INFINITE)</code>，指针就在 10~40 之间无限往复。别忘了生命周期：对象销毁时 <code>LV_EVENT_DELETE</code> 里要 <code>lv_timer_delete</code>、<code>lv_style_reset</code> 把资源还回去（Analytics 的 <code>delete_timer_event_cb</code> 正是这么清理计时器的）。</p>
+
+<pre><code><span class="cmt">/* heart_rate 示例：周期计时器驱动指针与文字（节选） */</span>
+<span class="kw">static</span> <span class="type">int32_t</span> hr = <span class="num">98</span>;
+<span class="kw">static int8_t</span> step = <span class="num">1</span>;
+<span class="kw">static void</span> <span class="fn">hr_timer_cb</span>(<span class="type">lv_timer_t</span> * t)
+{
+    hr += step;
+    <span class="kw">if</span>(hr &gt;= <span class="num">195</span>) { hr = <span class="num">195</span>; step = -<span class="num">1</span>; }
+    <span class="kw">else if</span>(hr &lt;= <span class="num">98</span>) { hr = <span class="num">98</span>; step = <span class="num">1</span>; }
+    <span class="fn">lv_scale_set_line_needle_value</span>(scale, needle_line, <span class="num">180</span>, hr);
+    <span class="fn">lv_label_set_text_fmt</span>(value_label, <span class="str">"%d"</span>, hr);
+}
+<span class="fn">lv_timer_create</span>(hr_timer_cb, <span class="num">80</span>, <span class="kw">NULL</span>);
+
+<span class="cmt">/* 对象销毁时清理计时器（analytics 的 delete_timer_event_cb 思路） */</span>
+<span class="kw">static void</span> <span class="fn">on_delete_cb</span>(<span class="type">lv_event_t</span> * e)
+{
+    <span class="kw">if</span>(<span class="fn">lv_event_get_code</span>(e) == <span class="kw">LV_EVENT_DELETE</span>) {
+        <span class="type">lv_timer_t</span> * t = <span class="fn">lv_event_get_user_data</span>(e);
+        <span class="kw">if</span>(t) <span class="fn">lv_timer_delete</span>(t);
+    }
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>动画与滑块<strong>不要各写各的更新逻辑</strong>，否则它们会互相打架——指针刚被动画拨到 40，滑块又把 subject 写成 20，界面就抽搐。正确的姿势是让两者写<strong>同一个 subject</strong>：动画回调只 <code>lv_subject_set_int</code>，observer 或绑定统一负责刷新指针与文字。一个数据源、多处读取，这是第 11 章那套思想的实战版。</p>
+  </div>
+
+  <!-- ========== 13.6 组装完整示例：一个迷你仪表盘 ========== -->
+  <h2>13.6 组装完整示例：一个迷你仪表盘</h2>
+
+  <p>现在把五步合拢，写一个完整可读的程序：一个"音量仪表盘"。整体结构：顶部一个标题；中间一个环形 scale（量程 0~100、270° 扫角、直线指针），指针由动画驱动；动画回调只改 <code>volume_subject</code>，数值文字通过 observer 跟随；底部一个滑块，拖动时同样写 <code>volume_subject</code>——于是<strong>动画、滑块、指针、文字</strong>四者共享同一个数据源，互相不会打架。全部 API 都是前面各章出现过的。</p>
+
+<pre><code><span class="cmt">/* 迷你仪表盘：lv_scale 圆表 + 指针动画 + 滑块绑定 + 数据驱动刷新 */</span>
+<span class="kw">#include</span> <span class="str">"lvgl/lvgl.h"</span>
+
+<span class="kw">static</span> <span class="type">lv_subject_t</span> volume_subject;   <span class="cmt">/* 唯一的"事实来源" */</span>
+<span class="kw">static</span> <span class="type">lv_obj_t</span> * scale;
+<span class="kw">static</span> <span class="type">lv_obj_t</span> * needle_line;
+<span class="kw">static</span> <span class="type">lv_obj_t</span> * value_label;
+
+<span class="cmt">/* 数据变化 → 统一刷新指针与文字 */</span>
+<span class="kw">static void</span> <span class="fn">volume_observer_cb</span>(<span class="type">lv_observer_t</span> * observer, <span class="type">lv_subject_t</span> * subject)
+{
+    <span class="kw">LV_UNUSED</span>(observer);
+    <span class="type">int32_t</span> v = <span class="fn">lv_subject_get_int</span>(subject);
+    <span class="fn">lv_scale_set_line_needle_value</span>(scale, needle_line, <span class="num">40</span>, v);
+    <span class="fn">lv_label_set_text_fmt</span>(value_label, <span class="str">"%d %%"</span>, v);
+}
+
+<span class="cmt">/* 动画回调：只改 subject，不碰任何控件 */</span>
+<span class="kw">static void</span> <span class="fn">needle_anim_cb</span>(<span class="kw">void</span> * var, <span class="type">int32_t</span> v)
+{
+    <span class="kw">LV_UNUSED</span>(var);
+    <span class="fn">lv_subject_set_int</span>(&amp;volume_subject, v);
+}
+
+<span class="kw">void</span> <span class="fn">demo_volume_gauge_create</span>(<span class="type">lv_obj_t</span> * parent)
+{
+    <span class="fn">lv_subject_init_int</span>(&amp;volume_subject, <span class="num">0</span>);
+    <span class="fn">lv_subject_set_min_value_int</span>(&amp;volume_subject, <span class="num">0</span>);
+    <span class="fn">lv_subject_set_max_value_int</span>(&amp;volume_subject, <span class="num">100</span>);
+
+    <span class="cmt">/* ① 布局：整页 flex 列，垂直水平居中 */</span>
+    <span class="fn">lv_obj_set_flex_flow</span>(parent, <span class="kw">LV_FLEX_FLOW_COLUMN</span>);
+    <span class="fn">lv_obj_set_style_flex_main_place</span>(parent, <span class="kw">LV_FLEX_ALIGN_CENTER</span>, <span class="num">0</span>);
+    <span class="fn">lv_obj_set_style_flex_cross_place</span>(parent, <span class="kw">LV_FLEX_ALIGN_CENTER</span>, <span class="num">0</span>);
+    <span class="fn">lv_obj_set_style_pad_row</span>(parent, <span class="num">12</span>, <span class="num">0</span>);
+
+    <span class="cmt">/* ② 控件：标题 + 表盘 + 数值 + 滑块 */</span>
+    <span class="type">lv_obj_t</span> * title = <span class="fn">lv_label_create</span>(parent);
+    <span class="fn">lv_label_set_text</span>(title, <span class="str">"Volume"</span>);
+
+    scale = <span class="fn">lv_scale_create</span>(parent);
+    <span class="fn">lv_obj_set_size</span>(scale, <span class="num">200</span>, <span class="num">200</span>);
+    <span class="fn">lv_scale_set_mode</span>(scale, <span class="kw">LV_SCALE_MODE_ROUND_INNER</span>);
+    <span class="fn">lv_scale_set_range</span>(scale, <span class="num">0</span>, <span class="num">100</span>);
+    <span class="fn">lv_scale_set_total_tick_count</span>(scale, <span class="num">21</span>);
+    <span class="fn">lv_scale_set_major_tick_every</span>(scale, <span class="num">5</span>);
+    <span class="fn">lv_scale_set_angle_range</span>(scale, <span class="num">270</span>);
+    <span class="fn">lv_scale_set_rotation</span>(scale, <span class="num">135</span>);
+    <span class="fn">lv_obj_set_style_length</span>(scale, <span class="num">6</span>, <span class="kw">LV_PART_ITEMS</span>);
+    <span class="fn">lv_obj_set_style_length</span>(scale, <span class="num">10</span>, <span class="kw">LV_PART_INDICATOR</span>);
+
+    needle_line = <span class="fn">lv_line_create</span>(scale);
+    <span class="fn">lv_obj_set_style_line_width</span>(needle_line, <span class="num">6</span>, <span class="kw">LV_PART_MAIN</span>);
+    <span class="fn">lv_obj_set_style_line_rounded</span>(needle_line, <span class="kw">true</span>, <span class="kw">LV_PART_MAIN</span>);
+
+    value_label = <span class="fn">lv_label_create</span>(parent);
+    <span class="fn">lv_label_set_text</span>(value_label, <span class="str">"0 %%"</span>);
+
+    <span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(parent);
+    <span class="fn">lv_obj_set_width</span>(slider, <span class="num">220</span>);
+    <span class="fn">lv_slider_bind_value</span>(slider, &amp;volume_subject);
+
+    <span class="cmt">/* ③ 样式：交给默认主题；④ 交互：订阅 subject */</span>
+    <span class="fn">lv_subject_add_observer</span>(&amp;volume_subject, volume_observer_cb, <span class="kw">NULL</span>);
+
+    <span class="cmt">/* ⑤ 动画：让指针在 0~100 之间往返，演示动效 */</span>
+    <span class="type">lv_anim_t</span> a;
+    <span class="fn">lv_anim_init</span>(&amp;a);
+    <span class="fn">lv_anim_set_var</span>(&amp;a, <span class="kw">NULL</span>);
+    <span class="fn">lv_anim_set_exec_cb</span>(&amp;a, needle_anim_cb);
+    <span class="fn">lv_anim_set_values</span>(&amp;a, <span class="num">0</span>, <span class="num">100</span>);
+    <span class="fn">lv_anim_set_duration</span>(&amp;a, <span class="num">2000</span>);
+    <span class="fn">lv_anim_set_reverse_duration</span>(&amp;a, <span class="num">2000</span>);
+    <span class="fn">lv_anim_set_repeat_count</span>(&amp;a, <span class="kw">LV_ANIM_REPEAT_INFINITE</span>);
+    <span class="fn">lv_anim_start</span>(&amp;a);
+}</code></pre>
+
+  <p>这段代码怎么跑起来？把它放进第 2 章搭好的模拟器工程里，编译时加入 <code>lvgl-master</code> 与上面这个 <code>.c</code> 文件；在 <code>lv_init()</code>、创建好显示设备后，调用 <code>demo_volume_gauge_create(lv_screen_active())</code>，再进入 <code>lv_timer_handler()</code> 主循环。你会看到：指针 0→100→0 往复旋转，数值文字同步跳动；拖动滑块，指针和文字立刻跟上。五步法里的每一步都落地了——这就是一个完整的界面。</p>
+
+<pre><code><span class="cmt">/* 入口：第 2、4 章的初始化就绪之后，挂上仪表盘并进入主循环 */</span>
+<span class="fn">lv_init</span>();
+
+<span class="cmt">/* ... 创建显示设备与输入设备（display / indev，见第 4 章） ... */</span>
+
+<span class="fn">demo_volume_gauge_create</span>(<span class="fn">lv_screen_active</span>());
+
+<span class="kw">while</span>(<span class="num">1</span>) {
+    <span class="type">uint32_t</span> delay = <span class="fn">lv_timer_handler</span>();
+    <span class="kw">if</span>(delay &lt; <span class="num">1</span>) delay = <span class="num">1</span>;
+    <span class="cmt">/* 交给宿主：sleep 对应毫秒，再继续下一帧 */</span>
+}</code></pre>
+
+  <p>回头看这一个 <code>demo_volume_gauge_create</code>，它几乎没有一行"新知识"：Flex 布局（13.2）、scale 表盘与指针（13.3）、分区与主题色（13.4）、subject 绑定与动画计时器（13.5），全是前面章节 API 的重新组合。这正是一个成熟 UI 工程师的状态——不是会更多 API，而是把已知的 API 组织得更像一个整体。第 14 章起，我们会进一步关心它跑得快不快、吃多少内存。</p>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>给自己定个"复盘清单"：界面做完了，回头逐条核对五步法——布局有没有冗余容器？样式是不是散的（应该能收敛成几条 <code>lv_style_t</code>）？事件有没有各写各的（应该汇聚到数据源）？动画是不是只为炫而存在（好动画服务于信息）？每对一个，你就离"统揽全局"更近一步。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：解剖 widgets demo <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>阅读 <code>demos/widgets/</code> 的源码与 <code>demos/README.md</code>，回答三个问题：(1) widgets demo 用 <code>lv_tabview</code> 建了哪三个页签？(2) 要在 <code>lv_conf.h</code> 里启用它需要把哪个宏改成 1、对 <code>LV_MEM_SIZE</code> 有什么硬性要求？(3) <code>lv_demos_create(&amp;argv[1], argc - 1)</code> 里的参数是什么语义？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 <code>lv_demo_widgets.c</code> 的 <code>lv_demo_widgets_with_args</code>：三个 <code>lv_tabview_add_tab</code>；README 里提到 38KB 与 48KB；<code>argv</code> 是命令行参数数组，demo 名从 <code>argv[1]</code> 开始。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>(1) 三个页签：Profile（个人资料）、Analytics（数据仪表与图表）、Shop（购物），由 <code>lv_tabview_create</code> + 三次 <code>lv_tabview_add_tab</code> 建立，页签标题分别是 "Profile"、"Analytics"、"Shop"。(2) 把 <code>LV_USE_DEMO_WIDGETS</code> 改成 1；<code>LV_MEM_SIZE</code> 至少 38KB（推荐 48KB），源码里配置过小时有 <code>#error</code> 拦截。(3) 语义是"命令行参数 + 数量"：<code>lv_demos_create</code> 按 <code>info[0]</code> 的名字（如 <code>widgets</code>、<code>benchmark</code>）在注册表里查入口函数并调用；不传名字则跑第一个 demo。这实现了"一个可执行文件、按参数切换 demo"。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：复刻一个圆表 demo <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>参照 <code>examples/widgets/scale/lv_example_scale_needles.c</code>，把它改造成两圈不同量程的表盘：左表 0~50，右表 0~100（其余刻度、扫角、指针可照搬）。说明要改哪些参数，以及为什么"改量程"通常要同时改 <code>lv_scale_set_range</code> 与刻度相关参数。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>量程由 <code>lv_scale_set_range</code> 决定；刻度密度由 <code>lv_scale_set_total_tick_count</code>（总刻度数）与 <code>lv_scale_set_major_tick_every</code>（每几个算一个主刻度）决定。动画的 <code>lv_anim_set_values</code> 也要同步。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>对左表把 <code>lv_scale_set_range(scale, 0, 50)</code>、<code>lv_anim_set_values(&amp;a, 0, 50)</code>；右表 <code>lv_scale_set_range(scale, 0, 100)</code>、<code>lv_anim_set_values(&amp;a, 0, 100)</code>；总刻度数可保持 31，主刻度每 5 个。原因：<code>range</code> 定的是"数值端点"，刻度怎么摆由"总刻度数"和"主刻度间隔"共同决定——只改 range 不改刻度数，数值区间变了但刻度密度不变，看起来刻度会变得过密或过疏。指针动画的取值范围也必须落在新的 range 内，否则指针会越界。顺带可以试试把其中一圈的直线指针换成图片指针（<code>LV_IMAGE_DECLARE(img_hand)</code> + <code>lv_scale_set_image_needle_value</code>）。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：改造心率表的分区 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把 <code>lv_example_scale_heart_rate.c</code> 的五个心率分区改成三档（例如 98~140 / 140~170 / 170~195），自选三组颜色。作答时说明：section 的 <code>main</code> / <code>indicator</code> / <code>items</code> 三套样式分别作用于刻度盘的哪个部分？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 13.4 的 <code>init_section_styles</code>：<code>main</code> 用 <code>lv_style_set_arc_color/width</code>，<code>indicator</code> 与 <code>items</code> 用 <code>lv_style_set_line_color/width</code>。主弧、主刻度、普通刻度，三对一。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>改法：把 <code>add_section(scale, ...)</code> 的 5 次调用收成 3 次，区间改为 98~140、140~170、170~195，每档配一种 <code>lv_palette_main</code> 颜色即可（grey/blue/red 之类）。三套样式的分工：<code>main</code> 管主弧（环形底，即表盘外圈那条圆弧，<code>lv_style_set_arc_width/arc_color</code>）；<code>indicator</code> 管指示刻度（每个主刻度那条短线，<code>lv_style_set_line_color/width</code>）；<code>items</code> 管普通刻度（次刻度短线）。所以"分区上色"实际是给同一区间的主弧与两组刻度同时换色，让该区间从外圈到刻度都亮起同一颜色。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：从零规划一个环境监测面板 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用五步法从零规划并（可选）实现一个"环境监测面板"：三块圆表（温度 / 湿度 / 气压）+ 一张 12 点历史折线图 + 一个超限滑块（超过阈值时把面板标题染成警示色）。先写出规划清单：布局怎么分区、各用什么容器与布局；每块放什么控件；样式主题怎么定；交互与数据源如何设计（是否用 subject）；动画/刷新放哪里。参考 <code>demos/widgets/lv_demo_widgets_analytics.c</code> 的结构。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>布局可以"一行 Flex：三块圆表卡片 + 一张图表卡"，复用 analytics 的 grid 卡片写法；数据建议统一放到几个 <code>lv_subject_t</code>，超限判断用 observer 或 <code>lv_obj_bind_state_if_gt</code>；刷新用 <code>lv_timer_create</code> 周期喂数据。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>一份可参考的规划：① 布局——页根 <code>LV_FLEX_FLOW_ROW</code> 分两列：左列三张卡片（温度/湿度/气压，各含一个 <code>LV_SCALE_MODE_ROUND_INNER</code> 圆表 + 数值 label），右列一张图表卡（grid 里放 <code>lv_chart</code> + 两个 scale 做坐标轴，参照 <code>create_chart_with_scales</code>）；小屏改用 flex 换行或 <code>lv_tabview</code>。② 控件——每块圆表用 13.3 的骨架，图表用 13.4 的 <code>lv_chart_add_series</code>（折线，12 个点）。③ 样式——定义 3 条 <code>lv_style_t</code> 统一卡片底色/圆角，温度表按 13.4 分区间上色，超限时用 <code>LV_STATE_USER_1</code> + 一条警示样式。④ 交互——三个传感器值各建一个 <code>lv_subject_t</code>；超限判断用 observer 回调（参照本章 <code>volume_observer_cb</code>）把标题染警示色；滑块 <code>lv_slider_bind_value</code> 当阈值输入。⑤ 动画——<code>lv_timer_create(cb, 500, NULL)</code> 周期更新三块表与图表（<code>lv_chart_set_next_value</code>），指针用 <code>lv_scale_set_line_needle_value</code> 写回。逐条对照五步法自查，就是一次完整的"统揽全局"演练。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

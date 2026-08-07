@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rabbitmq-AMQPCPP使用问题记录 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="​ 记录AMQP_CPP的使用过程中出现的问题，我是用的主要是LibEvHandler这个类来进行处理的,以下所有的问题都是在这个基础上面,仔细的查看头文件可以了解更多的使用方法。 任务执行长时间后导致连接丢失的问题 LibEvHandle">
+  <meta name="keywords" content="rabbitmq">
+  <link rel="canonical" href="https://aigcwei.cn/notes/database/AMQPCPP使用问题记录.html">
+  <meta property="og:title" content="rabbitmq-AMQPCPP使用问题记录">
+  <meta property="og:description" content="​ 记录AMQP_CPP的使用过程中出现的问题，我是用的主要是LibEvHandler这个类来进行处理的,以下所有的问题都是在这个基础上面,仔细的查看头文件可以了解更多的使用方法。 任务执行长时间后导致连接丢失的问题 LibEvHandle">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/database/AMQPCPP使用问题记录.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>rabbitmq-AMQPCPP使用问题记录</h1>
+          <div class="article-meta"><span>2020-09-29</span><span class="tag">rabbitmq</span></div>
+        </header>
+        <div class="article-body">
+<p>​		记录<a href="https://github.com/CopernicaMarketingSoftware/AMQP-CPP">AMQP_CPP</a>的使用过程中出现的问题，我是用的主要是<code>LibEvHandler</code>这个类来进行处理的,以下所有的问题都是在这个基础上面,仔细的查看头文件可以了解更多的使用方法。</p>
+<h3>任务执行长时间后导致连接丢失的问题</h3>
+<p><code>LibEvHandler</code>中对于rabbitmq的默认心跳是60s，如果当前队列没有任务处理，则其会自动的发送心跳，保持client和server之间的连接，如果你执行某个任务的时间过长，大于60s，则在执行任务期间，其不会自动的发送心跳导致两者之间的连接断开，导致下次获取数据时提示链接错误，获取数据失败。解决办法：</p>
+<ol><li>重写LibEvHandler中的<code>onNegotiate</code>以及<code>onHeartbeat</code>这两个方法，前者用于设置心跳的时间，后者用于心跳发送时的函数。</li></ol>
+<p>   ~~~cpp</p>
+<p>   &gt;&gt; 23 class MyHandler : public AMQP::LibEvHandler { 24 25    public:</p>
+<p>   &gt;&gt; 26     MyHandler(struct ev_loop* loop) : AMQP::LibEvHandler(loop) {} 27     //解决consume在处理任务时的连接超时的问题</p>
+<p>   &gt;&gt; 28     uint16_t onNegotiate(AMQP::TcpConnection* connection, uint16_t timeout) { 29         return 70;//必须设置一个值 30     }</p>
+<p>   &gt;&gt; 31     virtual void onHeartbeat(AMQP::TcpConnection* connection) { 32         connection-&gt;heartbeat(); 33     } 34 };</p>
+<p>   ~~~</p>
+<ol><li>另外开一个线程，定时手动的发送心跳给rabbitmq</li></ol>
+<p>   ~~~cpp 46     void run() {</p>
+<p>   &gt;&gt; 47         struct ev_loop* loop = ev_loop_new(); 48         // AMQP::LibEvHandler handler(loop); 49         MyHandler handler(loop); 50         AMQP::TcpConnection connection(&amp;handler, *_address); 51         _connection = &amp;connection; 52         AMQP::TcpChannel channel(&amp;connection); 53         //// channel.setQos(1); 54         _channel = &amp;channel; //另外开一个线程，用于检测rabbitmq的链接，以及定时的发送心跳 55         std::thread check(&amp;Consume::checkConnect, this); 56         // 1s后执行一次回调，之后每10s执行一次 57         ev_timer_init(&amp;_timer, TClass::callback, 1, 0); 58         _timer.data = this; 59         ev_timer_start(loop, &amp;_timer); 60         ev_run(loop, 0); 61         check.join(); 62     }</p>
+<p>   ~~~</p>
+<p>   ~~~cpp 165     void checkConnect() { 166         while (true) { //判读链接是否可用，可用即发送心跳 167             if (_connection-&gt;usable()) _connection-&gt;heartbeat(); //判读当前通道是否可用，如果失败则杀死当前程序 168             _channel-&gt;onError(<a href="const char* message">&amp;</a> { 169                 LOG(ERROR) &lt;&lt; "The channel is error, exit: " &lt;&lt; message; 170                 killAll(); 171             }); //判读当前连接是否关闭，如果关闭则杀死当前程序 172             if (_connection-&gt;closed()) { 173                 if (_connection != NULL) _connection-&gt;close(); 174                 LOG(ERROR) &lt;&lt; "The connection is closed,exit"; 175                 killAll(); 176             } //sleep 5s 177             Poco::Thread::sleep(5000); 178         } 179     } 180     void killAll() { kill(0, SIGABRT); }</p>
+<p>   ~~~</p>
+<h3>每次仅仅处理一个任务的问题</h3>
+<p>​		对于消息者来说，监听一个队列，如果队列里面有多条的数据，其会一下子都消费掉（有个最大值可查文档），比如你的队列里面有100条数据，其会都拿到放到内存中，如果过程中你的服务挂掉，则数据会丢失，为了解决这个问题，我们需要设置消费者每次拿到的数据量。AMQP_CPP中使用<code>setQos()</code>来进行设置</p>
+<p><strong>注意：仅对手动ack有效</strong></p>
+<pre><code>
+ AMQP::TcpChannel channel(&amp;connection);
+ channel.setQos(1);
+</code></pre>
+<h3>无法重新连接的问题</h3>
+<p>如果我们的rabbitmq挂了我们的服务应该怎么办了，一般对于这种有两种方法来处理</p>
+<ol><li>实现rabbitmq的重试机制，rabbitmq连接断开后，我们能够自动的恢复；</li><li>服务中断机制，rabbitmq连接断开，我们的服务也中断，再通过某个服务能够拉起（守护进程）</li></ol>
+<p>再AMQP_CPP中重连的机制不好处理，所以我们选择第二种方法</p>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

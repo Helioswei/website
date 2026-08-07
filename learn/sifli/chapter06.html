@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章：电池与低功耗 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="6" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：电池与低功耗</h1>
+  <p class="chapter-subtitle">一个"能读一整晚"的墨水屏阅读器，电量到底怎么算？电压、百分比、充电、低电量、关机——这条链路每一步都由谁负责？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私，以数据为准绳，不放过任何一个数字</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案讲究'铁证如山'：电压就是铁证，百分比是推理出来的结论。有人说电量 98% 了、有人说还差一点，本官只信一条——'只在数据真正变化时才去刷新画面'，不许在毫伏的抖动上做文章，更不许把一丁点电量报多。这条链路里的每一个数字（50 毫伏阈值、3 次滤波、10 秒周期、2% 低电临界）都不是随手写的，它们共同决定这台设备能不能'铁面无私'地告诉你真实电量、并把自己的功耗压到最低。这一章，我们逐项过堂。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 电池管理：ADC 电压采样与电量表 ========== -->
+  <h2>6.1 电池管理：ADC 电压采样与电量表</h2>
+
+  <p>先解释三个术语。<strong>ADC</strong>（模数转换器，Analog-to-Digital Converter）是一类把"连续变化的模拟电压"转换成"离散数字数值"的硬件模块——MCU 只能读数字，而电池电压是模拟量，所以必须靠它"翻译"。<strong>电压采样</strong>就是用 ADC 周期性去读电池当前的电压值，这是我们获取电量信息的唯一直接手段。<strong>电量表</strong>（battery calculator）则是一段软件：它拿到电压采样，查表、插值、滤波，最终输出一个 0–100 的百分比。为什么要这么绕？因为<strong>电池没有一个寄存器能直接告诉你"还剩百分之几"</strong>——剩下的只有电压，百分比全靠软件从电压推出来。</p>
+
+  <p>看真实实现 <code>ADCBattery.cpp</code>：构造函数里用 <code>rt_device_find("bat1")</code> 找到电池 ADC 设备，通道号是 <code>7</code>，然后 <code>rt_adc_enable</code> 打开采样。<code>get_voltage()</code> 调 <code>rt_adc_read</code> 读回原始数值，<strong>除以 10 转成毫伏</strong>（1mV 精度）；<code>get_percentage()</code> 把电压（毫伏 ×10 还原）交给电量表 <code>battery_calculator_get_percent</code> 换出百分比。这里的关键是：电压到百分比的换算不是一条直线公式，而是一张<strong>查表 + 插值</strong>——放电和充电各有一张曲线表（<code>sf32-oed-epd_base/battery_table.c</code>），比如放电表 100% ≈ 41950mV，一路降到 0% ≈ 35007mV；充电表 100% ≈ 42180mV，0% ≈ 36990mV。为什么两张表不一样？因为<strong>充电时的电池电压比放电时偏高</strong>（同一电量，充电中电压更高），用同一条曲线会在充电时误报偏高电量，所以分表。</p>
+
+  <p>曲线表中间只有离散的 101 个点（每 1% 一个电压），落在两点之间的电压怎么算？SDK 的 <code>battery_percent_from_curve_table</code> 用<strong>线性插值</strong>：找到上下两个相邻的已知点，按电压比例把百分比"夹"出来。光有插值还不够——电池电压会在负载、温度影响下<strong>抖动</strong>，直接查表会让百分比来回跳。于是电量表再加了<strong>两级滤波</strong>：一级滤波按充/放电状态分别处理（电压在 50mV 阈值内的小波动直接接受，超过阈值的突变要连续累计 3 次才采纳，防止把采样毛刺当真变化）；二级滤波是 90/10 的<strong>加权平均</strong>（上次电压占 90%、本次占 10%），让百分比平滑过渡。最后还有一道"方向校验"：充电时百分比不许下跌、放电时不许上涨，且每次最多 ±1，从软件层面杜绝数字"说谎"。</p>
+
+  <table>
+    <tr><th>数据</th><th>放电曲线表</th><th>充电曲线表</th></tr>
+    <tr><td>100% 对应电压</td><td><code>41950</code> mV</td><td><code>42180</code> mV</td></tr>
+    <tr><td>0% 对应电压</td><td><code>35007</code> mV</td><td><code>36990</code> mV</td></tr>
+    <tr><td>趋势</td><td>随放电单调下降</td><td>随充电整体偏高</td></tr>
+    <tr><td>用途</td><td>不充电时的百分比查询</td><td>充电中的百分比查询</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/boards/battery/ADCBattery.cpp：构造函数——找设备、开采样、喂曲线表 */</span>
+ADCBattery::ADCBattery(rt_mq_t ui_queue)
+{
+    this-&gt;ui_queue = ui_queue;
+    s_adc_dev = rt_device_find(<span class="str">"bat1"</span>);   <span class="cmt">// 找到电池 ADC 设备</span>
+    channel = <span class="num">7</span>;                        <span class="cmt">// 采样通道</span>
+    low_power = <span class="num">0</span>;                    <span class="cmt">// 低功耗状态：0=正常</span>
+    <span class="kw">if</span> (s_adc_dev) {
+        rt_adc_enable((rt_adc_device_t)s_adc_dev, channel);
+    }
+
+    <span class="cmt">// 初始化电量表：喂给它充电 / 放电两张曲线表 + 滤波参数</span>
+    <span class="kw">static const</span> battery_calculator_config_t config = {
+        .charging_table              = charging_curve_table,
+        .charging_table_size         = charging_curve_table_size,
+        .discharging_table           = discharge_curve_table,
+        .discharging_table_size      = discharge_curve_table_size,
+        .charge_filter_threshold     = <span class="num">50</span>,  <span class="cmt">// 充电时电压波动滤波阈值(mV)</span>
+        .discharge_filter_threshold  = <span class="num">50</span>,  <span class="cmt">// 放电时电压波动滤波阈值(mV)</span>
+        .filter_count                = <span class="num">3</span>,   <span class="cmt">// 滤波计数阈值</span>
+        .secondary_filter_enabled    = <span class="kw">true</span>, <span class="cmt">// 启用二级滤波</span>
+        .secondary_filter_weight_pre = <span class="num">90</span>,  <span class="cmt">// 上次电压权重</span>
+        .secondary_filter_weight_cur = <span class="num">10</span>   <span class="cmt">// 当前电压权重</span>
+    };
+    battery_calculator_init(&amp;battery_calc, &amp;config);
+}</code></pre>
+
+  <pre><code><span class="cmt">/* ADCBattery.cpp：电压采样 → 百分比 → 充电状态 */</span>
+<span class="type">float</span> ADCBattery::get_voltage()
+{
+    <span class="kw">if</span> (!s_adc_dev) <span class="kw">return</span> <span class="num">0</span>;
+    rt_uint32_t value = rt_adc_read((rt_adc_device_t)s_adc_dev, channel);
+    <span class="type">float</span> voltage = value / <span class="num">10.0f</span>;  <span class="cmt">// 原始采样值 → 毫伏(mV)</span>
+    <span class="kw">return</span> voltage;
+}
+
+<span class="type">int</span> ADCBattery::get_percentage()
+{
+    <span class="type">float</span> voltage = get_voltage();
+    uint8_t percentage = battery_calculator_get_percent(&amp;battery_calc,
+                                                        (uint32_t)(voltage * <span class="num">10</span>));
+    <span class="kw">return</span> percentage;
+}
+
+<span class="type">bool</span> ADCBattery::is_charging()
+{
+    <span class="type">int</span> pin_val = rt_pin_read(CHG_STATUS);  <span class="cmt">// 读充电状态引脚</span>
+    <span class="kw">return</span> pin_val == <span class="num">0</span>;                   <span class="cmt">// 低电平有效：读到 0 = 正在充电</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">/* middleware/battery/battery_calculator.c：查表 + 线性插值（节选） */</span>
+<span class="kw">return</span> p_cur-&gt;percent
+       + ((p_pre-&gt;percent - p_cur-&gt;percent)
+          * (voltage - p_cur-&gt;voltage)
+          / (p_pre-&gt;voltage - p_cur-&gt;voltage));   <span class="cmt">// 两点之间按比例夹出百分比</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>记一句话：<strong>电压是证据，百分比是推理。</strong>推理要让人信服，就得"查表 + 插值 + 两级滤波 + 方向校验"四步全做——缺了任何一步，屏幕上那个数字就可能抖动、虚高或说谎。等你以后做自己的电池管理，这套"先滤波、再查表、最后限速"的顺序可以直接复用。</p>
+  </div>
+
+  <!-- ========== 6.2 充电检测：充电状态、满电图标与刷屏控制 ========== -->
+  <h2>6.2 充电检测：充电状态、满电图标与刷屏控制</h2>
+
+  <p>怎么知道在充电？<strong>充电状态</strong>由硬件引脚给出：<code>CHG_STATUS</code>（GPIO 26）是充电芯片输出的状态脚，<strong>低电平有效</strong>——读到 0 表示正在充电，读到 1 表示未充电。软件里 <code>is_charging()</code> 就是一行 <code>rt_pin_read(CHG_STATUS) == 0</code>。别小看这个引脚，它是后面整个低功耗状态机迁移的重要输入之一。</p>
+
+  <p>充电链路有一个"满电收尾"的细节：充电完成后百分比会停在 98%–100% 之间波动，如果每次波动都重画状态栏，墨水屏会被反复刷新。看主循环的 <code>MSG_UPDATE_CHARGE_STATUS</code> 处理：<strong>百分比 ≥ 98 且还没清除过图标时，调 <code>clear_charge_icon</code> 抹掉充电闪电图标、置 <code>charge_full = true</code>，之后就不再重复处理；一旦低于 98%，才把 <code>charge_full</code> 复位并重画状态栏。</strong>这样"满电"这件事只处理一次，而不是每轮都刷。</p>
+
+  <p>更彻底的优化在电池刷新环节：主循环末尾专门有一段——<strong>只有 <code>cur_percent != last_battery_percent</code> 或 <code>cur_charging != last_battery_charging</code> 时，才调用 <code>draw_status_bar</code> + <code>request_flush</code> 重画</strong>，否则什么都不做。为什么墨水屏尤其要避免无谓刷新？因为电子墨水屏的"刷新"不是像 LCD 那样瞬间换一帧，而是一次物理上的粒子翻转，慢、耗电、还会闪屏——一次无关紧要的状态栏刷新，代价可能比 LCD 高一个数量级。"只在真正变化时刷屏"是墨水屏设备的黄金法则，本方案在电量这一路贯彻得最彻底。状态栏的呈现也值得一看：<code>draw_charge_status</code> 在充电时用两个 <code>fill_triangle</code> 拼一个闪电图标，<code>draw_battery_level</code> 用一个 40×20 的矩形按百分比填充来表示电量。</p>
+
+  <table>
+    <tr><th>触发条件</th><th>动作</th><th>目的</th></tr>
+    <tr><td><code>percentage &gt;= 98</code> 且 <code>charge_full == false</code></td><td><code>clear_charge_icon</code> + <code>request_flush</code>，置 <code>charge_full = true</code></td><td>满电只处理一次，避免反复刷</td></tr>
+    <tr><td><code>percentage &lt; 98</code></td><td><code>charge_full = false</code>，重画状态栏</td><td>离开满电，恢复充电/放电显示</td></tr>
+    <tr><td><code>cur_percent != last_battery_percent</code> 或 <code>cur_charging != last_battery_charging</code></td><td><code>draw_status_bar</code> + <code>request_flush</code></td><td>仅在电量/充电状态真正变化时刷屏</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/main.cpp：充电状态消息——满电收尾 */</span>
+<span class="kw">if</span> (ui_action == MSG_UPDATE_CHARGE_STATUS)
+{
+    <span class="type">int</span> percentage = battery-&gt;get_percentage();
+    <span class="kw">if</span> (percentage &gt;= <span class="num">98</span> &amp;&amp; charge_full == <span class="kw">false</span>)
+    {
+        clear_charge_icon(renderer);   <span class="cmt">// 抹掉充电闪电图标</span>
+        request_flush();
+        charge_full = <span class="kw">true</span>;       <span class="cmt">// 记录：已显示过满电，不再重复</span>
+    }
+    <span class="kw">else if</span> (percentage &lt; <span class="num">98</span>)
+    {
+        charge_full = <span class="kw">false</span>;        <span class="cmt">// 离开满电状态</span>
+        draw_status_bar(renderer, battery);
+        request_flush();
+    }
+    <span class="kw">continue</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">/* src/main.cpp：主循环末尾——仅在电量/充电状态变化时才刷新 */</span>
+<span class="kw">if</span> (battery) {
+    <span class="type">int</span> cur_percent = battery-&gt;get_percentage();
+    <span class="type">bool</span> cur_charging = battery-&gt;is_charging();
+    <span class="kw">if</span> (cur_percent != last_battery_percent ||
+        cur_charging != last_battery_charging) {
+        draw_status_bar(renderer, battery);   <span class="cmt">// 画电量 + 充电图标</span>
+        request_flush();                       <span class="cmt">// 真正刷一次屏</span>
+        last_battery_percent = cur_percent;
+        last_battery_charging = cur_charging;
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">/* src/main.cpp：状态栏里的充电图标（节选） */</span>
+<span class="kw">void</span> draw_charge_status(Renderer *renderer, Battery *battery)
+{
+    <span class="kw">if</span> (battery-&gt;is_charging())
+    {
+        draw_lightning(renderer, xpos + icon_size / <span class="num">2</span>,
+                       ypos + icon_size / <span class="num">2</span>, icon_size);
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>记住"<strong>只在变化时刷新</strong>"这条铁律：墨水屏刷新贵，凡是画状态栏、画电量这类高频但低频变化的内容，都必须先比较再决定要不要刷。这条原则在第 4 章学波形、在第 12 章学书库重绘时都会反复出现——它是墨水屏功耗优化的第一课。</p>
+  </div>
+
+  <!-- ========== 6.3 低功耗状态机：WELCOME / LOW_POWER / CHARGING / SHUTDOWN ========== -->
+  <h2>6.3 低功耗状态机：WELCOME / LOW_POWER / CHARGING / SHUTDOWN</h2>
+
+  <p><strong>状态机</strong>是一个描述"系统处于哪个状态、什么事件导致状态跳转"的模型——它把纷杂的事件流整理成一张"谁在什么条件下到哪去"的路线图。全项目的 UI 状态机在 <code>AppUIState</code> 里有 12 个状态（<code>src/type.h</code>），本章只聚焦电量相关的一条子链：<strong>WELCOME_PAGE（欢迎页）→ LOW_POWER_PAGE（低电量页）→ CHARGING_PAGE（充电页）→ SHUTDOWN_PAGE（关机页）</strong>。它们的迁移由一个低功耗标志 <code>low_power_state</code> 和一个定时消息驱动，规则是"铁面无私"的。</p>
+
+  <p>驱动源是一个 10 秒周期的 RT-Thread <strong>软定时器</strong>（<code>RT_TIMER_FLAG_PERIODIC | RT_TIMER_FLAG_SOFT_TIMER</code>）。这里有个值得学习的工程细节：定时器回调里<strong>不做任何重活</strong>（不读 ADC、不算电量、不打日志），只往消息队列发一条 <code>MSG_BATTERY_CHECK</code>——真正的 ADC 读取、电量计算、状态迁移全部回到主循环上下文执行。为什么？定时器回调运行在定时器线程上下文，在里面做耗时的采样和计算，会卡住整个定时器调度；"回调只发消息、主线做重活"是嵌入式里标准的线程安全范式。</p>
+
+  <p>主循环收到 <code>MSG_BATTERY_CHECK</code> 后，用三个条件把"电量 × 充电"组合映射成状态迁移：<strong>百分比 &lt; 2 且没在充电且还没进低功耗 → 置 <code>low_power_state=1</code>、发 <code>MSG_DRAW_LOW_POWER_PAGE</code></strong>（进低电量页，屏幕显示电池见底提示）；<strong>正在充电但还停留在低功耗态 → 发 <code>MSG_DRAW_CHARGE_PAGE</code></strong>（插上电，切到充电页）；<strong>百分比回升到 ≥ 2 且仍在低功耗态 → 置 <code>low_power_state=0</code>、发 <code>MSG_DRAW_WELCOME_PAGE</code></strong>（电量够用了，回欢迎页）。一旦 <code>low_power_state == 1</code>，<code>handleUserInteraction</code> 开头就 <code>return</code>——<strong>所有按键和触控都被吞掉</strong>，防止用户在低电量下误操作把最后一点电耗光。</p>
+
+  <p>最后一道保险是<strong>硬关机</strong>。主循环的整体条件是"距上次交互不足 <code>60 × 1000 × 60 × TIMEOUT_SHUTDOWN_TIME</code> 毫秒"，也就是<strong>连续 5 小时没有任何交互就退出循环</strong>，依次执行 <code>renderer-&gt;dehydrate()</code>（保存阅读进度）、<code>board-&gt;stop_filesystem()</code>（安全卸载文件系统）、<code>draw_shutdown_page()</code>（画关机页，屏幕提示"请长按 Key1 开机"）、<code>board-&gt;prepare_to_sleep()</code>（进入深睡眠）。关机页配的位图叫 <code>shutdown_map</code>，和欢迎页 <code>welcome_map</code>、低电量页 <code>low_power_map</code>、充电页 <code>chargeing_map</code> 是同一批素材。</p>
+
+  <table>
+    <tr><th>状态</th><th>进入条件</th><th>表现</th><th>退出条件</th></tr>
+    <tr><td><code>WELCOME_PAGE</code></td><td>开机 / 电量回升 ≥ 2%</td><td>显示欢迎页，等待交互</td><td>电量 &lt; 2% 且未充电</td></tr>
+    <tr><td><code>LOW_POWER_PAGE</code></td><td><code>percentage &lt; 2</code> 且未充电</td><td>低电量提示，交互被吞</td><td>插入充电器 / 电量回升</td></tr>
+    <tr><td><code>CHARGING_PAGE</code></td><td>低功耗态下检测到充电</td><td>显示充电页</td><td>电量 ≥ 2% 后回欢迎页</td></tr>
+    <tr><td><code>SHUTDOWN_PAGE</code></td><td>5 小时无交互（硬关机）</td><td>"请长按 Key1 开机"，进入深睡眠</td><td>长按 Key1 重新开机</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/main.cpp：MSG_BATTERY_CHECK——三个条件驱动低功耗状态迁移 */</span>
+<span class="kw">if</span> (ui_action == MSG_BATTERY_CHECK)
+{
+    <span class="type">float</span> voltage = battery-&gt;get_voltage();
+    uint8_t percentage = battery-&gt;get_percentage();
+    <span class="type">bool</span> is_charging = battery-&gt;is_charging();
+
+    ADCBattery* adc_battery = <span class="kw">static_cast</span>&lt;ADCBattery*&gt;(battery);
+    <span class="kw">if</span> (percentage &lt; <span class="num">2</span> &amp;&amp; !is_charging &amp;&amp; adc_battery-&gt;get_low_power_state() != <span class="num">1</span>) {
+        adc_battery-&gt;set_low_power_state(<span class="num">1</span>);      <span class="cmt">// 电量见底 → 进入低功耗</span>
+        UIAction msg = MSG_DRAW_LOW_POWER_PAGE;     <span class="cmt">// 画低电量页</span>
+        rt_mq_send(ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+    } <span class="kw">else if</span> (is_charging &amp;&amp; adc_battery-&gt;get_low_power_state() == <span class="num">1</span>) {
+        UIAction msg = MSG_DRAW_CHARGE_PAGE;        <span class="cmt">// 插上电 → 充电页</span>
+        rt_mq_send(ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+    } <span class="kw">else if</span> (percentage &gt;= <span class="num">2</span> &amp;&amp; adc_battery-&gt;get_low_power_state() == <span class="num">1</span>) {
+        adc_battery-&gt;set_low_power_state(<span class="num">0</span>);      <span class="cmt">// 电量回升 → 退出低功耗</span>
+        UIAction msg = MSG_DRAW_WELCOME_PAGE;       <span class="cmt">// 回欢迎页</span>
+        rt_mq_send(ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">/* ADCBattery.cpp：10 秒软定时器——回调只发消息，重活留到主循环 */</span>
+<span class="kw">void</span> ADCBattery::start_battery_monitor()
+{
+    battery_check_timer = rt_timer_create(<span class="str">"battery_check"</span>,
+                                          battery_check_callback,
+                                          <span class="kw">this</span>,
+                                          rt_tick_from_millisecond(<span class="num">10000</span>), <span class="cmt">// 10 秒周期</span>
+                                          RT_TIMER_FLAG_PERIODIC | RT_TIMER_FLAG_SOFT_TIMER);
+    <span class="kw">if</span> (battery_check_timer != RT_NULL) rt_timer_start(battery_check_timer);
+}
+
+<span class="kw">void</span> ADCBattery::battery_check_callback(<span class="type">void</span>* parameter)
+{
+    <span class="cmt">// Timer 回调只发消息：ADC 读值 / 计算都在主循环做</span>
+    ADCBattery* battery = <span class="kw">static_cast</span>&lt;ADCBattery*&gt;(parameter);
+    <span class="kw">if</span> (battery &amp;&amp; battery-&gt;ui_queue) {
+        UIAction msg = MSG_BATTERY_CHECK;
+        rt_mq_send(battery-&gt;ui_queue, &amp;msg, <span class="kw">sizeof</span>(UIAction));
+    }
+}
+
+<span class="cmt">/* main.cpp：低功耗态下吞掉所有交互 */</span>
+<span class="kw">void</span> handleUserInteraction(Renderer *renderer, UIAction ui_action, <span class="type">bool</span> needs_redraw)
+{
+    <span class="kw">if</span> (battery &amp;&amp; battery-&gt;get_low_power_state() == <span class="num">1</span>) {
+        <span class="kw">return</span>;   <span class="cmt">// 低电量：一切操作无效</span>
+    }
+    <span class="cmt">// ... 正常交互处理</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">/* src/main.cpp：5 小时硬关机流程 */</span>
+<span class="kw">#define</span> TIMEOUT_SHUTDOWN_TIME <span class="num">5</span> <span class="cmt">// 默认关机超时（小时）；0 表示不关机</span>
+
+<span class="cmt">// 主循环：距上次交互 < 60*1000*60*5 毫秒（即 5 小时）才继续运行</span>
+<span class="kw">while</span> ((rt_tick_get_millisecond() - last_user_interaction
+         &lt; <span class="num">60</span> * <span class="num">1000</span> * <span class="num">60</span> * TIMEOUT_SHUTDOWN_TIME))
+{
+    <span class="cmt">// ... 处理消息、刷屏</span>
+}
+
+<span class="cmt">// 退出循环：执行关机四步曲</span>
+renderer-&gt;dehydrate();        <span class="cmt">// 1. 保存阅读进度</span>
+board-&gt;stop_filesystem();     <span class="cmt">// 2. 安全卸载文件系统</span>
+draw_shutdown_page();         <span class="cmt">// 3. 画关机页："请长按 Key1 开机"</span>
+board-&gt;prepare_to_sleep();    <span class="cmt">// 4. 进入深睡眠</span></code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>这里有一个"同一常量、两处含义"的坑，正是第 1 章警告框埋的伏笔：<code>TIMEOUT_SHUTDOWN_TIME = 5</code> 在 <code>while</code> 循环里被当成<strong>小时</strong>（<code>60×1000×60×5</code> 毫秒 = 5 小时关机）；但它又被当成参数传给 <code>screen_init(TIMEOUT_SHUTDOWN_TIME)</code>，而 <code>screen_init</code> 的实现把参数当作<strong>分钟</strong>使用——于是欢迎页默认超时变成 5 分钟。更隐蔽的是 <code>epub_screen.h</code> 把形参写成 <code>default_timeout_hours</code>、<code>epub_screen.cpp</code> 却按 <code>default_timeout_minutes</code> 实现，头文件与实现连名字都对不上。这类"名字说小时、代码算分钟"的漂移，正是移植项目里最值得警惕的隐患。</p>
+  </div>
+
+  <!-- ========== 6.4 超时策略：5 / 10 / 30 分钟 / 1 小时 / 不关机 ========== -->
+  <h2>6.4 超时策略：5 / 10 / 30 分钟 / 1 小时 / 不关机</h2>
+
+  <p>前面 6.3 的硬关机是"最后一道保险"，而真正经常被用户调的是<strong>超时策略</strong>——设备空闲多久后自动回到欢迎页。注意这个"回欢迎页"和"关机"是两码事：回到欢迎页是为了省电（欢迎页是纯静态图，几乎不耗电，且停在欢迎页时屏幕、触摸都可保持最低功耗），而关机是彻底断电。设置页里超时选项来自 <code>epub_screen.cpp</code> 的 <code>kTimeoutOptions[]</code>：<strong>{5, 10, 30, 60, 0}，单位分钟，0 表示不关机</strong>，默认 30 分钟。用户每按一次调整，<code>adjust_timeout</code> 就在数组里用取模循环切换——到了"不关机"再按就绕回 5 分钟。</p>
+
+  <p>主循环怎么用这个值？每轮开头有一个条件判断：<strong>距上次交互 ≥ <code>60×1000×screen_get_timeout_shutdown_minutes()</code> 毫秒、且当前不在低功耗/欢迎/充电页时，重画欢迎页</strong>。注意末尾那句 <code>&& screen_get_timeout_shutdown_minutes()</code>——当策略是"不关机"（0）时，整个条件为假，设备永远不会自动回欢迎页。结合 6.3 你就会发现两个"5"的并置：欢迎页默认超时 5 分钟来自 <code>screen_init(TIMEOUT_SHUTDOWN_TIME)</code>，硬关机 5 小时来自 <code>while</code> 循环里的同一个宏。它们共用同一个宏、单位却不同，这就是上面警告框说的"两处含义"。</p>
+
+  <p>还有个值得较真的细节：<strong>"不关机"（0）只是让设备不再自动回欢迎页，并不会关掉 5 小时硬关机</strong>——因为硬关机循环用的是写死的 <code>TIMEOUT_SHUTDOWN_TIME</code>，与设置里的超时策略无关。也就是说，即便选了"不关机"，若连续 5 小时完全无交互，设备依然会断电。这是"设置文案与底层行为不完全一致"的又一例证。站在包青天的立场：行为以代码为准，README 和菜单文案只能当参考。</p>
+
+  <table>
+    <tr><th>选项</th><th>意义</th><th>欢迎页自动回退</th><th>5 小时硬关机</th></tr>
+    <tr><td><code>5 / 10 / 30 / 60</code> 分钟</td><td>空闲多久回欢迎页</td><td>按所选分钟数触发</td><td>仍为兜底（与选项无关）</td></tr>
+    <tr><td><code>0</code>（不关机）</td><td>不回欢迎页</td><td>不触发</td><td>仍存在（5 小时兜底）</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/epub_screen.cpp：超时选项与循环切换 */</span>
+<span class="kw">static const int</span> kTimeoutOptions[] = {<span class="num">5</span>, <span class="num">10</span>, <span class="num">30</span>, <span class="num">60</span>, <span class="num">0</span>}; <span class="cmt">// 单位：分钟，0为不关机</span>
+<span class="kw">static const int</span> kTimeoutOptionsCount =
+    <span class="kw">sizeof</span>(kTimeoutOptions) / <span class="kw">sizeof</span>(kTimeoutOptions[<span class="num">0</span>]);
+<span class="kw">static int</span> timeout_shutdown_minutes = <span class="num">30</span>; <span class="cmt">// 默认30分钟</span>
+
+<span class="cmt">// 在选项间循环切换（取模绕回）</span>
+<span class="kw">static void</span> adjust_timeout(<span class="type">bool</span> increase)
+{
+    <span class="kw">if</span> (increase) {
+        timeout_idx = (timeout_idx + <span class="num">1</span>) % kTimeoutOptionsCount;
+    } <span class="kw">else</span> {
+        timeout_idx = (timeout_idx - <span class="num">1</span> + kTimeoutOptionsCount) % kTimeoutOptionsCount;
+    }
+    timeout_shutdown_minutes = kTimeoutOptions[timeout_idx];
+}
+
+<span class="type">int</span> screen_get_timeout_shutdown_minutes() { <span class="kw">return</span> timeout_shutdown_minutes; }</code></pre>
+
+  <pre><code><span class="cmt">/* src/main.cpp：每轮主循环——超时后自动回欢迎页（带多重守卫） */</span>
+<span class="kw">if</span> (rt_tick_get_millisecond() - last_user_interaction
+        &gt;= <span class="num">60</span> * <span class="num">1000</span> * screen_get_timeout_shutdown_minutes()
+    &amp;&amp; battery &amp;&amp; battery-&gt;get_low_power_state() != <span class="num">1</span>     <span class="cmt">// 不在低功耗</span>
+    &amp;&amp; ui_state != WELCOME_PAGE &amp;&amp; ui_state != CHARGING_PAGE  <span class="cmt">// 不在欢迎/充电页</span>
+    &amp;&amp; ui_state != LOW_POWER_PAGE                              <span class="cmt">// 不在低电量页</span>
+    &amp;&amp; screen_get_timeout_shutdown_minutes())                  <span class="cmt">// 0 = 不关机，跳过</span>
+{
+    draw_welcome_page(battery);
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>把 6.4 和 6.3 连起来看，就是一个完整的三级省电策略：<strong>① 超时回欢迎页（分钟级，可配置）；② 低电量只保留关机页（2% 临界，由 10 秒定时器巡逻）；③ 5 小时无交互硬关机（小时级兜底）。</strong>三级各管一段，既不会因为一次超时就把书丢掉，也保证哪怕用户忘了关机，电量也不会被放干。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：为什么百分比不能"直接读" <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>电池为什么没有寄存器能直接给出百分比？本项目的"电压 → 百分比"要经历哪几步（结合 6.1 的查表、插值、滤波）？充电和放电为什么各用一张曲线表？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>电池只输出模拟电压；同一电量下，充电中的电压比放电时偏高，所以分表。步骤可从"ADC 读电压 → 除 10 转 mV → 一级滤波 → 二级滤波 → 查表插值 → 方向校验"梳理。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>电池是电化学器件，只能对外表现为模拟电压，没有任何数字接口告诉 MCU"剩余电量"。所以软件必须：ADC 读电压（<code>rt_adc_read</code>，除 10 转毫伏）→ 一级状态滤波（50mV 阈值、累计 3 次才采纳）→ 二级加权滤波（上次 90% / 本次 10%）→ 按充/放电状态查对应曲线表 → 线性插值得到百分比 → 方向校验（充电不许跌、放电不许涨，单次最多 ±1）。充电中电池电压整体偏高，若共用放电表会误报虚高电量，因此两张表分开。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：两级滤波各防什么 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>分别说明电量表一级滤波（<code>_battery_voltage_filter</code>）和二级滤波（<code>_battery_secondary_filter</code>）解决什么问题。50mV 阈值、<code>filter_count = 3</code>、90/10 加权各是什么含义？为什么充电状态下"电压上涨"与"电压下跌"的处理不完全对称？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>一级滤波对抗"采样毛刺/突变"，先判断是充电还是放电；二级滤波对抗"残留抖动"，做平滑。充电时电压应上升，突然下跌多为噪声；放电时电压应下跌，突然上涨也多为噪声——二者处理对称性取决于各自"合理方向"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>一级滤波是"状态相关"的：充电状态优先信任电压上涨、放电状态优先信任电压下跌；凡是在"合理方向"内的波动且幅度小于 50mV 阈值就立即采纳，反之（突变）要连续累计 <code>filter_count=3</code> 次才更新，把单次采样毛刺过滤掉。二级滤波对滤波后的电压再做 90/10 加权平均（上次占 90%），让百分比平滑过渡、抑制残留抖动。充电/放电处理的不对称来自物理方向：充电中电压合理走势是上升，上升偏差小可信、下跌多疑；放电中反之——所以两分支的信任方向正好相反。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：低功耗状态迁移推断 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>结合 6.3 的迁移规则，推断以下场景当前应处于哪个 UI 状态、接下来会怎么走：(1) 电量 1%、未充电、当前在欢迎页；(2) 低功耗态下插入充电器；(3) 电量回升到 3%、仍在充电、当前停在充电页。再说明：为什么 <code>handleUserInteraction</code> 在低功耗态要直接 <code>return</code>？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三条规则：百分比 &lt; 2 且未充电 → 低功耗；低功耗 + 充电 → 充电页；百分比 ≥ 2 且低功耗 → 回欢迎页。交互被吞是为了保护最后一点电量。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 满足"百分比 &lt; 2 且未充电且低功耗标志≠1"，下一次 <code>MSG_BATTERY_CHECK</code> 会置 <code>low_power_state=1</code> 并画 <code>LOW_POWER_PAGE</code>。(2) 满足"正在充电且低功耗标志==1"，发 <code>MSG_DRAW_CHARGE_PAGE</code>，切到 <code>CHARGING_PAGE</code>。(3) 百分比 ≥ 2 但低功耗标志已被 (2) 清成 0，三条都不命中，继续停在充电页直到下次迁移。(4) <code>handleUserInteraction</code> 在 <code>low_power_state==1</code> 时直接 <code>return</code>，是为了让任何按键/触控都无效——低电量下用户操作（开书、翻页、刷新屏幕）都是最耗电的行为，必须全部拦截，把电量留给"长按 Key1 开机"之外的最后一格。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：常量两用与刷屏节制 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>(1) <code>TIMEOUT_SHUTDOWN_TIME = 5</code> 在两处被使用，含义各是什么？<code>epub_screen.h</code> 与 <code>epub_screen.cpp</code> 对 <code>screen_init</code> 形参的名字为什么不一致？这暴露了什么风险？(2) 为什么"不关机"（0）选项不能让设备彻底不关机？(3) 结合 6.2，说明"仅在电量/充电状态真正变化时才刷屏"为什么对墨水屏设备尤其重要。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(1) while 循环按小时算（5 小时关机），<code>screen_init</code> 按分钟算（欢迎页 5 分钟超时）。(2) 硬关机循环写死用宏，不看设置值。(3) 墨水屏刷新是一次物理粒子翻转，慢、耗电、闪屏。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 在 <code>while ((rt_tick_get_millisecond() - last_user_interaction &lt; 60*1000*60*TIMEOUT_SHUTDOWN_TIME))</code> 里它是"5 小时硬关机"；在 <code>screen_init(TIMEOUT_SHUTDOWN_TIME)</code> 里它被当作分钟，初始化出"5 分钟欢迎页超时"。宏注释说"小时"，<code>screen_init</code> 却按分钟实现，且 <code>epub_screen.h</code> 形参名 <code>default_timeout_hours</code> 与 <code>epub_screen.cpp</code> 的 <code>default_timeout_minutes</code> 对不上——"命名即文档"在此失效，暴露的是"同一语义被两个单位引用"的配置漂移风险，也是教学里最该警惕的一类坑。</p>
+          <p>(2) 主循环的退出条件写死 <code>TIMEOUT_SHUTDOWN_TIME</code>（5 小时），从不读取设置里的超时策略；"不关机"（0）只是让回欢迎页的条件为假。所以选"不关机"后，5 小时无交互依然会硬关机——菜单文案与底层行为存在偏差。</p>
+          <p>(3) LCD 刷一帧瞬间完成、耗电极低；墨水屏刷新是把带电粒子上翻下翻的物理过程，耗时、费电且伴随残影/闪屏。电量百分比本来变化就很慢（每 10 秒才查一次），若每次都重画状态栏，等于把宝贵的刷新次数浪费在没有实际变化的内容上——所以必须"先比较、再刷新"。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

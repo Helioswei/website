@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第15章：集成与多平台部署 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="15" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：集成与多平台部署</h1>
+  <p class="chapter-subtitle">一次编写，处处运行——从 PC 模拟器到量产硬件，都拿证据说话</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私，一切以仓库里的真实文件为准</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「集成这条路，最怕的不是复杂，而是『想当然』。哪个平台该用哪个文件、哪个宏对应哪个开关，都得回到仓库里逐条对证。本官断案讲证据，你集成也要讲证据——把每条路径、每个文件都核实过，部署时才能铁面无私、胸有成竹。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 CMake 集成 ========== -->
+  <h2>15.1 CMake：add_subdirectory 与 lvgl 目标</h2>
+
+  <p>CMake 是 LVGL 官方首选的集成方式，入口就是仓库根的 <code>CMakeLists.txt</code>——文件开头的 <code>cmake_minimum_required(VERSION 3.12.4)</code> 写明了最低版本要求。集成方式简单到出乎意料：在你的工程里 <code>add_subdirectory(lvgl)</code>，LVGL 就会暴露出一个名为 <code>lvgl</code> 的 CMake 目标，你的可执行文件只要 <code>target_link_libraries</code> 到它即可。</p>
+
+<pre><code><span class="cmt"># 你的应用工程 CMakeLists.txt</span>
+<span class="fn">cmake_minimum_required</span>(VERSION <span class="num">3.12.4</span>)
+<span class="fn">project</span>(my_ui C)
+
+<span class="fn">add_subdirectory</span>(lvgl)                      <span class="cmt"># LVGL 源码目录</span>
+<span class="fn">target_link_libraries</span>(my_ui PRIVATE lvgl)    <span class="cmt"># 链接 lvgl 目标</span></code></pre>
+
+  <p>这个 <code>CMakeLists.txt</code> 还有个"见招拆招"的分流逻辑：一进来就判断宿主环境——检测到 <code>ESP_PLATFORM</code> 就自动 include <code>env_support/cmake/esp.cmake</code>（ESP-IDF 专用）；检测到 <code>MICROPY_DIR</code> 就 include <code>env_support/cmake/micropython.cmake</code>（MicroPython 绑定构建）；其余普通工程统一走 <code>env_support/cmake/main.cmake</code>。也就是说，同一份 CMakeLists 会根据宿主自动切换集成策略，不需要你手动选。</p>
+
+<pre><code><span class="cmt"># CMakeLists.txt（节选）</span>
+<span class="kw">if</span>(<span class="kw">ESP_PLATFORM</span>)
+  <span class="fn">include</span>(${<span class="kw">CMAKE_CURRENT_LIST_DIR</span>}/env_support/cmake/esp.cmake)
+<span class="kw">elseif</span>(<span class="kw">MICROPY_DIR</span>)
+  <span class="fn">include</span>(${<span class="kw">CMAKE_CURRENT_LIST_DIR</span>}/env_support/cmake/micropython.cmake)
+<span class="kw">else</span>()
+  <span class="fn">include</span>(${<span class="kw">CMAKE_CURRENT_LIST_DIR</span>}/env_support/cmake/main.cmake)
+<span class="kw">endif</span>()</code></pre>
+
+  <p>如果你想把 LVGL 安装到系统、或作为第三方包分发，仓库同样备好了路：<code>env_support/cmake/lvglConfig.cmake.in</code> 会生成 CMake 包配置（配合导出的 <code>lvglTargets.cmake</code>），让下游工程可以 <code>find_package(lvgl)</code>；<code>lvgl.pc.in</code> 则是 pkg-config 用的描述文件。至于老式构建（Make、<code>lvgl.mk</code>、SConscript），README 明确说了仍受支持——LVGL 在"怎么编译进去"这件事上从不挑食。</p>
+
+  <table>
+    <tr><th>文件</th><th>作用</th></tr>
+    <tr><td><code>CMakeLists.txt</code></td><td>构建入口，暴露 <code>lvgl</code> 目标</td></tr>
+    <tr><td><code>env_support/cmake/main.cmake</code></td><td>普通工程集成（配置路径、Kconfig 选项）</td></tr>
+    <tr><td><code>env_support/cmake/esp.cmake</code></td><td>ESP-IDF 环境集成</td></tr>
+    <tr><td><code>env_support/cmake/micropython.cmake</code></td><td>MicroPython 绑定集成</td></tr>
+    <tr><td><code>env_support/cmake/lvglConfig.cmake.in</code></td><td>生成包配置，支持 <code>find_package(lvgl)</code></td></tr>
+    <tr><td><code>env_support/cmake/lvgl.pc.in</code></td><td>pkg-config 描述文件</td></tr>
+  </table>
+
+  <!-- ========== 15.2 env_support 地图 ========== -->
+  <h2>15.2 env_support：一张集成地图</h2>
+
+  <p><code>env_support/</code> 是整个仓库的"平台适配层"，按宿主分类排布：<code>cmake/</code>（CMake 辅助脚本）、<code>esp/</code>（ESP 相关）、<code>kconfig/</code>（Kconfig 片段，如 <code>Kconfig.build</code>、<code>Kconfig.compiler</code>）、<code>qnx/</code>（QNX）、<code>rt-thread/</code>（RT-Thread）、<code>pikascript/</code>（PikaScript）、<code>cmsis-pack/</code>（ARM CMSIS-Pack）、<code>debian/</code>（Debian 打包）。README 说 Make、CMake、简单通配符编译都支持——这里就是各类构建与平台的具体落点。</p>
+
+<pre><code><span class="cmt"># env_support/ 目录地图</span>
+env_support/
+├── cmake/          <span class="cmt">CMake 辅助脚本（main/esp/micropython/kconfig/...）</span>
+├── esp/            <span class="cmt">ESP 相关（rlottie 等）</span>
+├── kconfig/        <span class="cmt">Kconfig 片段（Kconfig.build / Kconfig.compiler）</span>
+├── qnx/            <span class="cmt">QNX 平台</span>
+├── rt-thread/      <span class="cmt">RT-Thread 平台</span>
+├── pikascript/     <span class="cmt">PikaScript</span>
+├── cmsis-pack/     <span class="cmt">ARM CMSIS-Pack</span>
+└── debian/         <span class="cmt">Debian 打包</span></code></pre>
+
+  <p>其中 <code>cmake/</code> 子目录最值得逐文件读一遍。看看 <code>main.cmake</code> 提供的选项，就能理解 LVGL 的构建有多"可配置"：<code>LV_BUILD_CONF_PATH</code> 让你指定 <code>lv_conf.h</code> 的位置；<code>LV_BUILD_USE_KCONFIG</code> 决定是否走 Kconfig；<code>LV_BUILD_DEFCONFIG_PATH</code> 与 <code>LV_BUILD_DOTCONFIG_PATH</code> 用于 Kconfig 的默认配置与现有 <code>.config</code>。还有 <code>dependencies.cmake</code>，它按 <code>find_package</code> → pkg-config → FetchContent 的顺序依次尝试解析可选依赖，找不到就自动拉源码编译。</p>
+
+<pre><code><span class="cmt"># env_support/cmake/main.cmake（节选）</span>
+<span class="fn">set</span>(<span class="kw">LV_BUILD_CONF_PATH</span> <span class="str">""</span> CACHE PATH
+    <span class="str">"Use this to specify the location of and/or filename of lv_conf.h"</span>)
+<span class="fn">option</span>(<span class="kw">LV_BUILD_USE_KCONFIG</span> <span class="str">"Use Kconfig"</span> OFF)
+<span class="fn">set</span>(<span class="kw">LV_BUILD_DEFCONFIG_PATH</span> <span class="str">""</span> CACHE PATH
+    <span class="str">"Supply the default Kconfig configuration - used with Kconfig"</span>)
+<span class="fn">option</span>(<span class="kw">LV_USE_FIND_PACKAGE</span> <span class="str">"Resolve dependencies via find_package"</span> ON)</code></pre>
+
+  <p>读这份地图的价值在于：以后遇到"我在某某平台集成 LVGL"，第一反应不该是去搜博客，而是先看 <code>env_support/</code> 下有没有对应的宿主目录，再顺着它找到具体的 cmake 脚本。仓库已经把答案按目录摆好了——包青天的方法就是：先翻证物，再下结论。</p>
+
+  <!-- ========== 15.3 主流平台集成 ========== -->
+  <h2>15.3 主流平台：ESP-IDF / Arduino / PlatformIO / Zephyr / MicroPython</h2>
+
+  <p>先看 <strong>ESP-IDF</strong>。仓库根的 <code>idf_component.yml</code> 让 LVGL 可以直接作为 ESP-IDF 组件被引用（README 的链接指向 <code>components.espressif.com</code> 上的官方组件，通过 <code>idf.py add-dependency</code> 引入）；<code>component.mk</code> 则是旧版 make 构建的遗留物。配合上一节说的 <code>env_support/cmake/esp.cmake</code>，在 <code>idf_component_register()</code> 里注册源文件与头文件，即可把整个 <code>src/</code> 编进去。</p>
+
+<pre><code><span class="cmt"># idf_component.yml（仓库根，节选）</span>
+description: LVGL - Light and Versatile Graphics Library
+url: https://lvgl.io/
+repository: https://github.com/lvgl/lvgl.git
+documentation: https://docs.lvgl.io/
+issues: https://github.com/lvgl/lvgl/issues</code></pre>
+
+  <p>再看 <strong>Arduino 与 PlatformIO</strong>。仓库根同时放着 <code>library.json</code>（PlatformIO 的清单，声明 <code>"frameworks": "*"</code>、<code>"platforms": "*"</code>、license 为 MIT）和 <code>library.properties</code>（Arduino IDE 的清单，<code>architectures=*</code>、<code>includes=lvgl.h</code>）。也就是说，两个生态的包管理器都直接认识这个仓库，开箱即用。这里有个值得留意的细节：这两份元数据里写的版本号是 <span class="num">9.5.0</span>，略滞后于源码自身的 <span class="num">9.6.0</span>-dev——注册表的版本与 dev 分支不同步，是常见且正常的事。</p>
+
+  <p><strong>Zephyr</strong> 则是标准的 module 集成：仓库根的 <code>zephyr/</code> 目录声明它是一个 Zephyr module。<code>zephyr/module.yml</code> 写着模块名 <code>lvgl</code>、启用 CMake 扩展、并把 Kconfig 入口指回 <code>zephyr/Kconfig</code>；而 <code>zephyr/Kconfig</code> 的内容只有三行——<code>if LVGL</code> 时 <code>rsource "../Kconfig"</code> 回到根配置。这样在 Zephyr 工程的 <code>prj.conf</code> 里打开 <code>CONFIG_LVGL=y</code>，整个 LVGL 的菜单就都接进来了。</p>
+
+<pre><code><span class="cmt"># zephyr/module.yml</span>
+name: lvgl
+build:
+  cmake-ext: True
+  kconfig: zephyr/Kconfig
+
+<span class="cmt"># zephyr/Kconfig（全文）</span>
+<span class="kw">if</span> LVGL
+<span class="fn">rsource</span> <span class="str">"../Kconfig"</span>
+<span class="kw">endif</span></code></pre>
+
+  <p><strong>MicroPython</strong> 在仓库里不是顶层目录，但集成点是实实在在的：<code>env_support/cmake/micropython.cmake</code> 把 LVGL 编成一个 <code>lvgl_interface</code> 接口库（INTERFACE），供上层绑定库链接；内存后端 <code>src/stdlib/micropython/lv_mem_core_micropython.c</code> 让 LVGL 直接从 MicroPython 堆上分配。官方 MicroPython 绑定（lv_bindings/lv_micropython）生成的 <code>lv_mp.c</code> 等胶水文件，正是挂在这个接口库之上。</p>
+
+  <table>
+    <tr><th>类别</th><th>README「Pre-integrated」列出的平台</th></tr>
+    <tr><td>芯片厂商</td><td>ESP32、NXP MCUXpresso 组件、Renesas FSP、STM32</td></tr>
+    <tr><td>RTOS</td><td>Zephyr、NuttX、RT-Thread</td></tr>
+    <tr><td>框架</td><td>Arduino、PlatformIO、CMSIS-Pack</td></tr>
+    <tr><td>板卡厂商</td><td>Seeed Studio、Elecrow、Riverdi、VIEWE 等</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>判断一个平台"预集成"到什么程度，别只看 README 的宣传，要看三个信号：有没有对应的 <code>env_support/</code> 宿主目录、有没有包管理器清单（<code>idf_component.yml</code> / <code>library.json</code> / <code>library.properties</code>）、有没有模块声明（<code>zephyr/module.yml</code>）。三者占全的，才是"真·开箱即用"。</p>
+  </div>
+
+  <!-- ========== 15.4 桌面模拟器与真实硬件 ========== -->
+  <h2>15.4 桌面模拟器与真实硬件部署</h2>
+
+  <p>在动手画板子之前，先在 PC 上把 UI 跑起来是迭代最快的路径。LVGL 把桌面窗口驱动直接做进了库：<code>src/drivers/</code> 下的 <code>sdl/</code>、<code>x11/</code>、<code>wayland/</code> 提供三种窗口后端。用 SDL 时，<code>lv_sdl_window_create()</code> 打开一个窗口并返回 <code>lv_display_t *</code>，<code>lv_sdl_mouse_create()</code> / <code>lv_sdl_keyboard_create()</code> 接上鼠标键盘；Wayland 下对应 <code>lv_wayland_window_create()</code>。README 的 "Built-in drivers" 一节把这三者列为 Simulator / desktop 类别——开发期主力。</p>
+
+<pre><code><span class="cmt">/* 桌面模拟器：SDL 窗口 + 输入 */</span>
+<span class="type">lv_display_t</span> * disp = <span class="fn">lv_sdl_window_create</span>(<span class="num">800</span>, <span class="num">480</span>);
+<span class="type">lv_indev_t</span> * mouse = <span class="fn">lv_sdl_mouse_create</span>();
+<span class="type">lv_indev_t</span> * kbd   = <span class="fn">lv_sdl_keyboard_create</span>();
+
+<span class="kw">while</span>(<span class="num">1</span>) {
+    <span class="type">uint32_t</span> t = <span class="fn">lv_timer_handler</span>();   <span class="cmt">/* 让 LVGL 处理计时器/刷新/事件 */</span>
+    <span class="fn">lv_delay_ms</span>(t);                     <span class="cmt">/* 睡到下一个计时器到期 */</span>
+}</code></pre>
+
+  <p>从模拟器过渡到<strong>真实硬件</strong>，要核对的无非几件事：一是分辨率与面板一致（<code>lv_display_create</code> 的参数就是显示分辨率）；二是缓冲大小与色深匹配（16 位色深每像素 2 字节，缓冲 = 宽 × 高 × 字节数 × 缓冲份数）；三是主循环按周期喂 <code>lv_timer_handler()</code>；四是排查问题时打开 <code>LV_USE_LOG</code>。除了窗口驱动，README 的驱动清单还覆盖了嵌入式 Linux 的 <code>fbdev</code>（framebuffer）、DRM/KMS、<code>libinput</code>/<code>evdev</code>，以及 ILI9341、ST7789 这类常见 LCD 控制器。</p>
+
+  <p>工程层面，仓库根部的 <code>CMakePresets.json</code> 给了两套现成的构建预设：<code>linux-base</code> 用 <code>Ninja Multi-Config</code> 生成器，<code>windows-base</code> 用 <code>Visual Studio 17 2022</code> 与 <code>cl.exe</code>，输出目录统一是 <code>${sourceDir}/build/${presetName}</code>，还带 debug/release 变体（<code>linux-base_dbg</code> / <code>linux-base_rel</code> 等）与 Kconfig 变体（<code>linux-kconfig</code>）。配合第 14 章见过的 <code>configs/defconfigs/</code>（<code>sdl2.defconfig</code>、<code>linux.defconfig</code>、<code>drm.defconfig</code>），从"桌面验证"到"目标机裁剪"就串成了一条可复制的流水线。</p>
+
+<pre><code><span class="cmt"># CMakePresets.json（节选）</span>
+{
+  <span class="str">"name"</span>: <span class="str">"linux-base"</span>,
+  <span class="str">"generator"</span>: <span class="str">"Ninja Multi-Config"</span>,
+  <span class="str">"binaryDir"</span>: <span class="str">"${sourceDir}/build/linux-base"</span>
+},
+{
+  <span class="str">"name"</span>: <span class="str">"windows-base"</span>,
+  <span class="str">"generator"</span>: <span class="str">"Visual Studio 17 2022"</span>,
+  <span class="str">"binaryDir"</span>: <span class="str">"${sourceDir}/build/windows-base"</span>
+}</code></pre>
+
+  <table>
+    <tr><th>阶段</th><th>用什么</th><th>解决什么</th></tr>
+    <tr><td>开发预览</td><td>SDL / X11 / Wayland 驱动</td><td>不碰硬件快速迭代 UI</td></tr>
+    <tr><td>构建预设</td><td><code>CMakePresets.json</code></td><td>统一桌面端的编译环境</td></tr>
+    <tr><td>目标裁剪</td><td><code>configs/defconfigs/</code></td><td>按目标机关闭功能、定色深</td></tr>
+    <tr><td>量产部署</td><td>面板驱动 + <code>lv_timer_handler()</code> 主循环</td><td>分辨率/缓冲/刷新全部对齐</td></tr>
+  </table>
+
+  <!-- ========== 15.5 LVGL Pro 一键生成 ========== -->
+  <h2>15.5 LVGL Pro 一键生成工程</h2>
+
+  <p>如果你觉得"手动搭工程 + 写 C"还是太重，LVGL Pro 提供了第三条路。README 的 "In LVGL Pro" 小节原话是：<em>In LVGL Pro you can create ready-to-use UI-only, VSCode, Zephyr, and Linux projects with a single click</em>——也就是说，在设计器里画完界面，导出的不只是纯 C 代码，而是<strong>带好构建系统的完整工程</strong>：UI-only、VSCode、Zephyr、Linux 四种模板，一次点击生成。</p>
+
+  <p>这与本工作区的 <code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code> 工具一一对应。看仓库里 <code>examples/xml_project/</code> 的结构就能明白 XML 工程长什么样：<code>project.xml</code>（工程文件）、<code>globals.xml</code>（全局配置）、<code>images/</code>（图片资源）、<code>fonts/</code>（字体资源）各司其职。LVGL Pro 把这份 XML 翻译成 C，再套进你选的目标模板，编译就是全自动的。</p>
+
+<pre><code><span class="cmt"># examples/xml_project/ —— LVGL Pro XML 工程布局</span>
+xml_project/
+├── project.xml    <span class="cmt">工程描述</span>
+├── globals.xml    <span class="cmt">全局配置</span>
+├── images/        <span class="cmt">图片资源</span>
+└── fonts/         <span class="cmt">字体资源</span></code></pre>
+
+<pre><code><span class="cmt"># README.md —— In LVGL Pro（节选）</span>
+In LVGL Pro you can create ready-to-use UI-only, VSCode, Zephyr, and
+Linux projects with a single click.</code></pre>
+
+  <p>把这条路与本系列串起来看：手写 C（前面所有章节）+ CMake/平台集成（本章）+ LVGL Pro 一键工程化，三者是互补而非互斥。小 demo 手写最快；要交付一个完整产品，先让工具把工程骨架生成好，再在需要的地方手写微调——这才是现代嵌入式 UI 开发的常态分工。包青天最后提醒一句：无论走哪条路，动手前把目标平台的芯片手册、面板时序、以及仓库里对应的驱动文件都核实一遍，"证据齐了，才能下判决书"。</p>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>仓库内 <code>src/drivers/</code> 下的头文件大多只是"转发头"（顶部带 <code>#warning</code> 提示已废弃），真正的新头文件在 <code>include/lvgl/drivers/</code>。写驱动代码时请包含 <code>include/lvgl/drivers/sdl/lv_sdl_window.h</code> 这类路径，或直接 <code>#include "lvgl/lvgl.h"</code>。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：最小的 CMake 集成 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>写出把一个应用集成到 LVGL 所需的最小 <code>CMakeLists.txt</code>（至少包含版本声明、工程声明、<code>add_subdirectory</code> 与链接）。指出你链接的 CMake 目标名，并说明为什么不需要手动列 <code>src/</code> 下的全部源文件。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>照抄 15.1 的第一个代码块，再把 CMake 最低版本换成仓库要求的 <code>3.12.4</code>。目标名在 <code>CMakeLists.txt</code> 里就是 <code>lvgl</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>cmake_minimum_required(VERSION 3.12.4)</code> + <code>project(my_ui C)</code> + <code>add_subdirectory(lvgl)</code> + <code>target_link_libraries(my_ui PRIVATE lvgl)</code>。<code>lvgl</code> 目标是 LVGL 的 <code>CMakeLists.txt</code> 暴露出来的库目标，它已经把 <code>src/</code> 下的源码、<code>include/</code> 头文件路径全部打包进去了，应用只需要链接它，CMake 会负责编译与头文件搜索。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读 env_support 地图 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>打开 <code>env_support/</code>，说出 <code>cmake/</code>、<code>esp/</code>、<code>rt-thread/</code>、<code>qnx/</code>、<code>cmsis-pack/</code> 各自服务什么宿主。再解释：为什么绝大多数普通工程走 <code>env_support/cmake/main.cmake</code> 这一支就够了？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 15.2 的目录地图。想想 <code>main.cmake</code> 里那些 <code>LV_BUILD_*</code> 选项为什么对"任何没有专有构建系统的工程"都够用。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>cmake/</code> 是所有 CMake 集成的底座；<code>esp/</code> 服务 ESP-IDF；<code>rt-thread/</code> 服务 RT-Thread；<code>qnx/</code> 服务 QNX；<code>cmsis-pack/</code> 服务 ARM CMSIS-Pack 打包。普通工程没有任何专用构建系统，唯一的需求就是"把 <code>src/</code> 编成库、把 <code>include/</code> 加进头文件搜索路径、并允许我指定 <code>lv_conf.h</code> 的位置"——这三件事 <code>main.cmake</code> 用 <code>LV_BUILD_CONF_PATH</code>、<code>LV_BUILD_USE_KCONFIG</code> 等选项全能覆盖，所以它是默认分支。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：换平台，能换到什么程度 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你的 UI 代码目前跑在 SDL 模拟器上。现在要把它部署到一块 STM32 + ILI9341（320×240、RGB565）的板子上。请列出你需要改动与需要新增的内容（UI 代码本身、<code>lv_conf.h</code>、显示初始化、主循环、构建系统各是什么状态），并说明 <code>zephyr/module.yml</code> 在这条链路里能扮演什么角色。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 15.4 的表格：分辨率、色深、缓冲、刷新、日志开关。想想 UI 代码为什么可以一行不改，以及 Zephyr module 的 <code>cmake-ext</code> 与 Kconfig 接入意味着什么。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>改动清单：UI 代码（widgets/样式/事件）不变，因为后端差异对 UI 透明；<code>lv_conf.h</code> 要改——<code>LV_COLOR_DEPTH</code> 从模拟器的 32 降到 16（RGB565），按需关闭模拟器专用开关（如 <code>LV_USE_SDL</code>）；显示初始化从 <code>lv_sdl_window_create()</code> 换成面板驱动（ILI9341 通过 MIPI-DBI/SPI 接入）+ <code>lv_display_create()</code> + <code>lv_display_set_buffers()</code>；主循环保持 <code>lv_timer_handler()</code> 模式，但睡眠由裸机延时或 RTOS 延时承担；构建系统换成目标机的（裸机 Make / ESP-IDF / Zephyr 任选）。<code>zephyr/module.yml</code> 的角色：如果目标平台走 Zephyr，它就是接入的"插头"——声明 CMake 扩展与 Kconfig 入口，让 LVGL 作为一个 Zephyr module 被 <code>CONFIG_LVGL=y</code> 拉进构建，面板驱动则由 Zephyr 的 devicetree/驱动栈提供。核心结论：跨平台时，变的是驱动与配置，不变的是 UI 层代码。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>hexo-gulp压缩 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="插件安装 在这里说明一下，使用该工具可以压缩 HTML、CSS、JavaScript 文件，但我并没有压缩 JavaScript 文件，因为有很大的概率会报错，实际也并不需要压缩，因为大部分 JavaScript 都已压缩过。 如果你也考虑">
+  <meta name="keywords" content="gulp">
+  <link rel="canonical" href="https://aigcwei.cn/notes/tools/hexo-gulp压缩.html">
+  <meta property="og:title" content="hexo-gulp压缩">
+  <meta property="og:description" content="插件安装 在这里说明一下，使用该工具可以压缩 HTML、CSS、JavaScript 文件，但我并没有压缩 JavaScript 文件，因为有很大的概率会报错，实际也并不需要压缩，因为大部分 JavaScript 都已压缩过。 如果你也考虑">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/tools/hexo-gulp压缩.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>hexo-gulp压缩</h1>
+          <div class="article-meta"><span>2020-05-25</span><span class="tag">gulp</span></div>
+        </header>
+        <div class="article-body">
+<h3>插件安装</h3>
+<pre><code>
+#全局安装
+npm install gulp -g
+#站点目录安装
+npm install gulp-htmlclean gulp-htmlmin gulp-minify-css gulp-uglify --save
+
+</code></pre>
+<p>在这里说明一下，使用该工具可以压缩 HTML、CSS、JavaScript 文件，但我并没有压缩 JavaScript 文件，因为有很大的概率会报错，实际也并不需要压缩，因为大部分 JavaScript 都已压缩过。</p>
+<p>如果你也考虑不压缩 JavaScript 文件，可以选择不安装 <code>gulp-uglify</code>。</p>
+<h3>gulpfile.js</h3>
+<p>在站点文件夹的根目录下，新建一个文件。命名为gulpfile.js</p>
+<pre><code>
+var gulp = require(&#x27;gulp&#x27;);
+
+// Plugins 模块获取
+var minifycss = require(&#x27;gulp-minify-css&#x27;);
+var uglify = require(&#x27;gulp-uglify&#x27;);
+var htmlmin = require(&#x27;gulp-htmlmin&#x27;);
+var htmlclean = require(&#x27;gulp-htmlclean&#x27;);
+
+// 压缩 css
+gulp.task(&#x27;minify-css&#x27;, function () {
+	return gulp.src(&#x27;./public/**/*.css&#x27;)
+		.pipe(minifycss())
+		.pipe(gulp.dest(&#x27;./public&#x27;));
+});
+
+// 压缩 html
+gulp.task(&#x27;minify-html&#x27;, function () {
+	return gulp.src(&#x27;./public/**/*.html&#x27;)
+		.pipe(htmlclean())
+		.pipe(htmlmin({
+			removeComments: true,
+			minifyJS: true,
+			minifyCSS: true,
+			minifyURLs: true,
+		}))
+		.pipe(gulp.dest(&#x27;./public&#x27;))
+});
+
+// 压缩 js 不压缩 min.js
+gulp.task(&#x27;minify-js&#x27;, function () {
+	return gulp.src([&#x27;./public/**/*.js&#x27;, &#x27;!./public/**/*.min.js&#x27;])
+		.pipe(uglify())
+		.pipe(gulp.dest(&#x27;./public&#x27;));
+});
+
+// 4.0 以前的写法
+// gulp.task(&#x27;default&#x27;, [
+  //   &#x27;minify-html&#x27;, &#x27;minify-css&#x27;, &#x27;minify-js&#x27;
+// ]);
+
+// 4.0 以后的写法
+// 执行 gulp 命令时执行的任务
+gulp.task(&#x27;default&#x27;, gulp.parallel(&#x27;minify-html&#x27;, &#x27;minify-css&#x27;, &#x27;minify-js&#x27;));
+
+</code></pre>
+<p><code>如果不压缩 JavaScript 文件，则将上述代码中有关 </code>minify-js<code> 的代码删除即可</code></p>
+<h3>运行结果</h3>
+<pre><code>
+[10:24:57] Starting &#x27;default&#x27;...
+[10:24:57] Starting &#x27;minify-html&#x27;...
+[10:24:57] Starting &#x27;minify-css&#x27;...
+[10:24:57] Starting &#x27;minify-js&#x27;...
+[10:25:05] Finished &#x27;minify-css&#x27; after 8.3 s
+[10:25:05] Finished &#x27;minify-js&#x27; after 8.49 s
+[10:25:09] Finished &#x27;minify-html&#x27; after 12 s
+[10:25:09] Finished &#x27;default&#x27; after 12 s
+
+</code></pre>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章：Android 应用基础 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="07" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：Android 应用基础</h1>
+  <p class="chapter-subtitle">从平台架构到四大组件，掌握 Android 开发的核心概念</p>
+
+  <!-- ==================== 导师卡片 ==================== -->
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析，层层递进查案</p>
+      </div>
+    </div>
+    <div class="mentor-quote"><p>「诸位，今日我们受理一桩大案——Android 系统之全貌。此案牵涉五层机构、四大要员、无数案卷文书。查案讲究层层分析、步步为营，切不可囫囵吞枣。且随本官从底层内核一路勘察到应用之巅，逐级查明每一层的职责与运作之道。待审理完毕，诸位便能洞悉这座庞大体系的运转真相。」</p></div>
+  </div>
+
+  <!-- ==================== 7.1 ==================== -->
+  <h2>7.1 Android 平台概览</h2>
+
+  <h3>Android 系统架构</h3>
+  <p>诸位，要查明 Android 之全貌，须先勘察其体制架构。Android 乃基于 Linux 内核的开源移动操作系统，其架构如同大唐朝廷，自下而上共分五级衙门，各司其职，层层递进：</p>
+
+<pre><code><span class="cmt">┌─────────────────────────────────────────────┐</span>
+<span class="cmt">│            Applications (应用层)              │</span>
+<span class="cmt">│   你写的 App、系统自带 App (电话、短信...)       │</span>
+<span class="cmt">├─────────────────────────────────────────────┤</span>
+<span class="cmt">│        Application Framework (框架层)         │</span>
+<span class="cmt">│   ActivityManager, WindowManager, 各种 Manager │</span>
+<span class="cmt">├─────────────────────────────────────────────┤</span>
+<span class="cmt">│     Android Runtime (ART) + 核心库             │</span>
+<span class="cmt">│   运行 DEX 字节码、标准 Java/Kotlin 库          │</span>
+<span class="cmt">├─────────────────────────────────────────────┤</span>
+<span class="cmt">│     Hardware Abstraction Layer (HAL)          │</span>
+<span class="cmt">│   摄像头、蓝牙、传感器等硬件的抽象接口             │</span>
+<span class="cmt">├─────────────────────────────────────────────┤</span>
+<span class="cmt">│            Linux Kernel (内核层)               │</span>
+<span class="cmt">│   驱动程序、内存管理、进程管理、安全机制           │</span>
+<span class="cmt">└─────────────────────────────────────────────┘</span></code></pre>
+
+  <p>层层分析可知：最底层的 <strong>Linux Kernel</strong> 如同朝廷根基，掌管驱动、内存与安全；<strong>HAL</strong> 是连接硬件与上层的中间吏员；<strong>ART 运行时</strong>如同朝廷律法，确保所有代码按规矩运行；而你我日常办案打交道最多的，便是 <strong>框架层 (Framework)</strong>——Android SDK 提供的各种 API（如 <code>Activity</code>、<code>View</code>、<code>Intent</code>）皆属此层，好比朝廷六部，是你上达天听、下传旨意的关键枢纽。</p>
+
+  <h3>四大应用组件</h3>
+  <p>经本官勘察，Android 应用由四大核心要员构成，各有分工，缺一不可：</p>
+
+  <table>
+    <tr>
+      <th>组件</th>
+      <th>作用</th>
+      <th>典型场景</th>
+    </tr>
+    <tr>
+      <td><code>Activity</code></td>
+      <td>提供用户界面的"屏幕"</td>
+      <td>登录页、首页、设置页</td>
+    </tr>
+    <tr>
+      <td><code>Service</code></td>
+      <td>在后台执行长时间运行的操作</td>
+      <td>音乐播放、文件下载</td>
+    </tr>
+    <tr>
+      <td><code>BroadcastReceiver</code></td>
+      <td>监听和响应系统或应用广播</td>
+      <td>开机启动、网络变化</td>
+    </tr>
+    <tr>
+      <td><code>ContentProvider</code></td>
+      <td>管理应用间共享的数据</td>
+      <td>通讯录、媒体库</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <p class="tip-title">本章重点</p>
+    <p>四大要员之中，<strong>Activity</strong> 是最为基础、出场最频繁的角色——如同大理寺的主审堂，是一切审理活动的核心场所。本章将围绕 Activity 展开审理，Service 等其他要员会在后续案件中逐步登场。</p>
+  </div>
+
+  <!-- ==================== 7.2 ==================== -->
+  <h2>7.2 Activity 与生命周期</h2>
+
+  <h3>Activity 是什么</h3>
+  <p>本官先审理第一桩关键案情：<code>Activity</code> 究竟为何物？简而言之，一个 Activity 就是一个"公堂"——你在手机上所见的每一个界面（登录页、聊天列表、设置页），背后都对应一个 Activity，正如大唐每审理一桩案件，便要开设一次公堂。</p>
+  <p>若你有 Web 开发经验，可将 Activity 理解为一个"堂审主官"——它负责布置公堂（创建界面）、审理案情（处理用户交互）、并按律令管理整个审理过程的起止（生命周期）。</p>
+
+  <h3>生命周期回调</h3>
+  <p>查明真相须知：Activity 从开堂到散堂，会经历一系列状态变化。系统如同朝廷典仪官，在每个状态转换时鸣锣通报，调用对应的回调方法。且看此流程图，犹如一份详尽的审理程序案卷：</p>
+
+<pre><code><span class="cmt">Activity 生命周期流程：</span>
+
+<span class="cmt">    启动 Activity</span>
+<span class="cmt">         │</span>
+<span class="cmt">         ▼</span>
+<span class="cmt">    ┌──────────┐</span>
+<span class="cmt">    │ onCreate │  ← 初始化：加载布局、绑定数据</span>
+<span class="cmt">    └────┬─────┘</span>
+<span class="cmt">         ▼</span>
+<span class="cmt">    ┌──────────┐</span>
+<span class="cmt">    │ onStart  │  ← 可见但尚未获得焦点</span>
+<span class="cmt">    └────┬─────┘</span>
+<span class="cmt">         ▼</span>
+<span class="cmt">    ┌──────────┐</span>
+<span class="cmt">    │ onResume │  ← 前台运行，用户可交互</span>
+<span class="cmt">    └────┬─────┘</span>
+<span class="cmt">         │</span>
+<span class="cmt">    (用户离开/被遮挡)</span>
+<span class="cmt">         │</span>
+<span class="cmt">         ▼</span>
+<span class="cmt">    ┌──────────┐</span>
+<span class="cmt">    │ onPause  │  ← 部分可见，失去焦点</span>
+<span class="cmt">    └────┬─────┘</span>
+<span class="cmt">         ▼</span>
+<span class="cmt">    ┌──────────┐</span>
+<span class="cmt">    │ onStop   │  ← 完全不可见</span>
+<span class="cmt">    └────┬─────┘</span>
+<span class="cmt">         ▼</span>
+<span class="cmt">    ┌───────────┐</span>
+<span class="cmt">    │ onDestroy │  ← 被销毁，释放所有资源</span>
+<span class="cmt">    └───────────┘</span></code></pre>
+
+  <p>此六步如同审案六道程序：<code>onCreate</code> 乃升堂布置之时；<code>onStart</code> 公堂已开、众人就位但尚未正式问案；<code>onResume</code> 惊堂木一拍、审理正式开始；<code>onPause</code> 好比有人上堂递折子，审理暂停片刻；<code>onStop</code> 散堂退朝，公堂已无人可见；<code>onDestroy</code> 则是案件归档、拆除公堂，一切恢复原状。</p>
+
+  <h3>代码示例：一个简单的 Activity</h3>
+  <p>且看此案卷中的代码实例，记录了一个 Activity 在各个生命阶段的行为：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">AppCompatActivity</span>() {
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+        <span class="kw">super</span>.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)  <span class="cmt">// 加载布局文件</span>
+
+        <span class="cmt">// 在这里做初始化工作</span>
+        Log.d(<span class="str">"Lifecycle"</span>, <span class="str">"onCreate: Activity 正在创建"</span>)
+    }
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onStart</span>() {
+        <span class="kw">super</span>.onStart()
+        Log.d(<span class="str">"Lifecycle"</span>, <span class="str">"onStart: Activity 即将可见"</span>)
+    }
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onResume</span>() {
+        <span class="kw">super</span>.onResume()
+        Log.d(<span class="str">"Lifecycle"</span>, <span class="str">"onResume: Activity 已在前台"</span>)
+    }
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onPause</span>() {
+        <span class="kw">super</span>.onPause()
+        Log.d(<span class="str">"Lifecycle"</span>, <span class="str">"onPause: Activity 即将失去焦点"</span>)
+        <span class="cmt">// 保存轻量级数据（如用户输入的草稿）</span>
+    }
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onStop</span>() {
+        <span class="kw">super</span>.onStop()
+        Log.d(<span class="str">"Lifecycle"</span>, <span class="str">"onStop: Activity 已不可见"</span>)
+        <span class="cmt">// 释放不需要的资源</span>
+    }
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onDestroy</span>() {
+        <span class="kw">super</span>.onDestroy()
+        Log.d(<span class="str">"Lifecycle"</span>, <span class="str">"onDestroy: Activity 正在被销毁"</span>)
+        <span class="cmt">// 释放所有资源、取消注册监听器</span>
+    }
+}</code></pre>
+
+  <h3>生命周期的实际意义</h3>
+  <p>本官提醒诸位：理解生命周期的关键不在死记方法名称——那不过是背诵律条而已。真正要紧的是查明 <strong>在哪个阶段该办哪些事</strong>，如同查案要在正确的时机调取正确的证据：</p>
+
+  <table>
+    <tr>
+      <th>回调方法</th>
+      <th>应该做什么</th>
+      <th>不该做什么</th>
+    </tr>
+    <tr>
+      <td><code>onCreate</code></td>
+      <td>初始化布局、绑定 ViewModel</td>
+      <td>启动动画（界面还没显示）</td>
+    </tr>
+    <tr>
+      <td><code>onResume</code></td>
+      <td>恢复暂停的操作、开始动画</td>
+      <td>做耗时操作（会卡界面）</td>
+    </tr>
+    <tr>
+      <td><code>onPause</code></td>
+      <td>暂停动画、保存草稿</td>
+      <td>做耗时的数据库写入</td>
+    </tr>
+    <tr>
+      <td><code>onStop</code></td>
+      <td>保存数据、释放重量级资源</td>
+      <td>更新 UI（用户已看不到）</td>
+    </tr>
+    <tr>
+      <td><code>onDestroy</code></td>
+      <td>释放所有资源、取消订阅</td>
+      <td>依赖此方法一定会被调用</td>
+    </tr>
+  </table>
+
+  <div class="warning">
+    <p class="tip-title">注意</p>
+    <p>本官查明一项关键隐情：系统在内存不足时可能直接杀掉进程，<code>onDestroy</code> 并不保证一定会被调用——好比朝廷突遇战事，公堂可能未及正式散堂便被紧急清场。因此，重要案卷（数据）应在 <code>onPause</code> 或 <code>onStop</code> 阶段便妥善归档保存，切不可拖延至最后。</p>
+  </div>
+
+  <!-- ==================== 7.3 ==================== -->
+  <h2>7.3 Intent 与页面跳转</h2>
+
+  <p>接下来勘察第二桩要案：组件之间如何传递消息？答案便是 <code>Intent</code>（意图）。Intent 是 Android 各组件之间通信的核心机制，犹如大唐朝廷中各衙门之间传递的公文与圣旨——你可以用它来启动 Activity、启动 Service、发送广播，一纸 Intent 便可调动整个系统。</p>
+
+  <h3>显式 Intent：跳转到指定 Activity</h3>
+  <p>显式 Intent 好比一道点名圣旨，明确指定了目标官员的姓名与衙门。它用于应用内部的页面跳转，目标明确、毫不含糊：</p>
+
+<pre><code><span class="cmt">// 从当前 Activity 跳转到 DetailActivity</span>
+<span class="kw">val</span> intent <span class="op">=</span> <span class="type">Intent</span>(<span class="kw">this</span>, <span class="type">DetailActivity</span>::<span class="kw">class</span>.java)
+startActivity(intent)</code></pre>
+
+  <h3>隐式 Intent：让系统选择合适的 App</h3>
+  <p>隐式 Intent 则如一道不点名的朝廷通告——只声明"需要一个能办此事之人"，由系统（吏部）找到能处理该事务的合适 App。此乃跨应用协作的妙法：</p>
+
+<pre><code><span class="cmt">// 打开浏览器访问网页</span>
+<span class="kw">val</span> webIntent <span class="op">=</span> <span class="type">Intent</span>(<span class="type">Intent</span>.ACTION_VIEW, <span class="type">Uri</span>.parse(<span class="str">"https://kotlinlang.org"</span>))
+startActivity(webIntent)
+
+<span class="cmt">// 拨打电话（跳转到拨号界面，不会直接拨出）</span>
+<span class="kw">val</span> dialIntent <span class="op">=</span> <span class="type">Intent</span>(<span class="type">Intent</span>.ACTION_DIAL, <span class="type">Uri</span>.parse(<span class="str">"tel:10086"</span>))
+startActivity(dialIntent)
+
+<span class="cmt">// 分享文本</span>
+<span class="kw">val</span> shareIntent <span class="op">=</span> <span class="type">Intent</span>(<span class="type">Intent</span>.ACTION_SEND).apply {
+    type <span class="op">=</span> <span class="str">"text/plain"</span>
+    putExtra(<span class="type">Intent</span>.EXTRA_TEXT, <span class="str">"来看看这个 Kotlin 教程！"</span>)
+}
+startActivity(<span class="type">Intent</span>.createChooser(shareIntent, <span class="str">"分享到"</span>))</code></pre>
+
+  <h3>传递数据：putExtra / getStringExtra</h3>
+  <p>Intent 不仅可传递旨意，还能附带案卷证据（额外数据），以键值对形式在 Activity 之间流转。本官且用一个实例来审理此机制：</p>
+
+<pre><code><span class="cmt">// ===== Activity A：发送数据 =====</span>
+<span class="kw">class</span> <span class="type">ListActivity</span> : <span class="type">AppCompatActivity</span>() {
+
+    <span class="kw">private fun</span> <span class="fn">openDetail</span>(<span class="param">articleId</span>: <span class="type">Int</span>, <span class="param">title</span>: <span class="type">String</span>) {
+        <span class="kw">val</span> intent <span class="op">=</span> <span class="type">Intent</span>(<span class="kw">this</span>, <span class="type">DetailActivity</span>::<span class="kw">class</span>.java).apply {
+            putExtra(<span class="str">"article_id"</span>, articleId)    <span class="cmt">// 传递 Int</span>
+            putExtra(<span class="str">"article_title"</span>, title)      <span class="cmt">// 传递 String</span>
+        }
+        startActivity(intent)
+    }
+}
+
+<span class="cmt">// ===== Activity B：接收数据 =====</span>
+<span class="kw">class</span> <span class="type">DetailActivity</span> : <span class="type">AppCompatActivity</span>() {
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+        <span class="kw">super</span>.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_detail)
+
+        <span class="cmt">// 从 Intent 中取出数据</span>
+        <span class="kw">val</span> articleId <span class="op">=</span> intent.getIntExtra(<span class="str">"article_id"</span>, <span class="num">-1</span>)
+        <span class="kw">val</span> title <span class="op">=</span> intent.getStringExtra(<span class="str">"article_title"</span>) <span class="op">?:</span> <span class="str">"无标题"</span>
+
+        Log.d(<span class="str">"Detail"</span>, <span class="str">"文章 ID=$articleId, 标题=$title"</span>)
+    }
+}</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">最佳实践</p>
+    <p>本官经验之谈：若传递的案卷内容复杂，推荐使用 <code>Parcelable</code> 或 <code>Serializable</code> 接口将证物打包。在现代 Android 办案中，更可通过 <strong>ViewModel + Navigation</strong> 组件来统一管理各公堂之间的案卷共享，既规范又高效。</p>
+  </div>
+
+  <!-- ==================== 7.4 ==================== -->
+  <h2>7.4 资源管理</h2>
+
+  <p>继续勘察下一层线索。Android 将代码与资源分开管理，正如朝廷将律法条文与案卷档案分库存放。资源文件（布局、图片、字符串等）统一归入 <code>res/</code> 目录之下，编译时系统会自动生成一个 <code>R</code> 类作为索引册，供你随时调阅。</p>
+
+  <h3>res/ 目录结构</h3>
+  <p>让本官带你勘察这座"案卷档案室"的布局：</p>
+
+<pre><code>app/src/main/res/
+├── layout/          <span class="cmt">← 布局文件 (XML 描述的界面)</span>
+│   ├── activity_main.xml
+│   └── activity_detail.xml
+├── drawable/        <span class="cmt">← 图片和矢量图</span>
+│   ├── ic_logo.png
+│   └── bg_gradient.xml
+├── mipmap/          <span class="cmt">← 应用图标（不同分辨率）</span>
+│   ├── ic_launcher.png
+│   └── ic_launcher_round.png
+├── values/          <span class="cmt">← 字符串、颜色、尺寸等常量</span>
+│   ├── strings.xml
+│   ├── colors.xml
+│   └── dimens.xml
+└── values-en/       <span class="cmt">← 英文资源（多语言支持）</span>
+    └── strings.xml</code></pre>
+
+  <p>每个子目录如同不同类别的案卷架：<code>layout/</code> 存放公堂布局图纸，<code>drawable/</code> 存放画像证据，<code>values/</code> 存放各类常量记录。分门别类，井然有序——查案时方能迅速调取所需。</p>
+
+  <h3>strings.xml：字符串资源</h3>
+  <p>本官特别提醒：所有面向百姓（用户）的文字告示，都应统一登记在 <code>strings.xml</code> 中，而非硬编码在律法（代码）里。如此方能实现多语言通告的便利切换：</p>
+
+<pre><code><span class="cmt">&lt;!-- res/values/strings.xml (默认中文) --&gt;</span>
+<span class="op">&lt;</span><span class="kw">resources</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"app_name"</span><span class="op">&gt;</span>我的应用<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"welcome_msg"</span><span class="op">&gt;</span>欢迎回来，%s！<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"btn_login"</span><span class="op">&gt;</span>登录<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">resources</span><span class="op">&gt;</span>
+
+<span class="cmt">&lt;!-- res/values-en/strings.xml (英文) --&gt;</span>
+<span class="op">&lt;</span><span class="kw">resources</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"app_name"</span><span class="op">&gt;</span>My App<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"welcome_msg"</span><span class="op">&gt;</span>Welcome back, %s!<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"btn_login"</span><span class="op">&gt;</span>Login<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">resources</span><span class="op">&gt;</span></code></pre>
+
+  <h3>colors.xml 与 dimens.xml</h3>
+  <p>色彩与尺寸亦有专门的案卷登记簿，统一管理、统一调用：</p>
+
+<pre><code><span class="cmt">&lt;!-- res/values/colors.xml --&gt;</span>
+<span class="op">&lt;</span><span class="kw">resources</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">color</span> <span class="param">name</span><span class="op">=</span><span class="str">"primary"</span><span class="op">&gt;</span>#7F5AF0<span class="op">&lt;/</span><span class="kw">color</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">color</span> <span class="param">name</span><span class="op">=</span><span class="str">"on_primary"</span><span class="op">&gt;</span>#FFFFFF<span class="op">&lt;/</span><span class="kw">color</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">color</span> <span class="param">name</span><span class="op">=</span><span class="str">"background"</span><span class="op">&gt;</span>#F8F9FA<span class="op">&lt;/</span><span class="kw">color</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">resources</span><span class="op">&gt;</span>
+
+<span class="cmt">&lt;!-- res/values/dimens.xml --&gt;</span>
+<span class="op">&lt;</span><span class="kw">resources</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">dimen</span> <span class="param">name</span><span class="op">=</span><span class="str">"padding_standard"</span><span class="op">&gt;</span>16dp<span class="op">&lt;/</span><span class="kw">dimen</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">dimen</span> <span class="param">name</span><span class="op">=</span><span class="str">"text_body"</span><span class="op">&gt;</span>16sp<span class="op">&lt;/</span><span class="kw">dimen</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">dimen</span> <span class="param">name</span><span class="op">=</span><span class="str">"text_title"</span><span class="op">&gt;</span>20sp<span class="op">&lt;/</span><span class="kw">dimen</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">resources</span><span class="op">&gt;</span></code></pre>
+
+  <h3>R 类：代码中引用资源</h3>
+  <p>编译器会根据 <code>res/</code> 目录下的全部资源自动生成一个 <code>R</code> 类，此乃案卷档案的总索引册。你通过它便能在代码中精准调阅任何资源：</p>
+
+<pre><code><span class="cmt">// 在 Activity 中使用资源</span>
+<span class="kw">val</span> appName <span class="op">=</span> getString(R.string.app_name)            <span class="cmt">// "我的应用"</span>
+<span class="kw">val</span> welcome <span class="op">=</span> getString(R.string.welcome_msg, <span class="str">"小明"</span>)  <span class="cmt">// "欢迎回来，小明！"</span>
+<span class="kw">val</span> color <span class="op">=</span> getColor(R.color.primary)                  <span class="cmt">// 颜色值</span>
+
+<span class="cmt">// 在布局 XML 中引用</span>
+<span class="cmt">// android:text="@string/btn_login"</span>
+<span class="cmt">// android:textColor="@color/primary"</span>
+<span class="cmt">// android:padding="@dimen/padding_standard"</span></code></pre>
+
+  <h3>dp 和 sp 单位</h3>
+  <p>本官还须查明一项重要度量制度：Android 不用 <code>px</code>（像素），而采用密度无关的标准单位，确保在各种屏幕上呈现一致——如同朝廷颁布统一的度量衡：</p>
+  <ul>
+    <li><strong>dp</strong>（Density-independent Pixels）：用于布局尺寸和间距。在不同屏幕密度下，1dp 对应不同的实际像素数，确保在各种设备上视觉效果一致。</li>
+    <li><strong>sp</strong>（Scale-independent Pixels）：用于字体大小。在 dp 基础上，还会根据用户的字体大小偏好进行缩放，尊重百姓的个人意愿。</li>
+  </ul>
+
+  <div class="tip">
+    <p class="tip-title">简单记忆</p>
+    <p>尺寸用 <code>dp</code>，字号用 <code>sp</code>。一般情况下，1dp 在 160dpi 的屏幕上等于 1px。此乃本官查案多年总结的速记口诀。</p>
+  </div>
+
+  <!-- ==================== 7.5 ==================== -->
+  <h2>7.5 AndroidManifest.xml</h2>
+
+  <p>现在本官要审理一份至关重要的文书：<code>AndroidManifest.xml</code>。此文件乃每个 Android 应用的"户籍档案"与"官凭印信"。它声明了应用的基本信息、所有注册在编的组件、所需权限等。系统在安装和运行 App 时都要审查此档案——少一条记录，便可能案件搁浅（应用崩溃）。</p>
+
+<pre><code><span class="op">&lt;?</span><span class="kw">xml</span> <span class="param">version</span><span class="op">=</span><span class="str">"1.0"</span> <span class="param">encoding</span><span class="op">=</span><span class="str">"utf-8"</span><span class="op">?&gt;</span>
+<span class="op">&lt;</span><span class="kw">manifest</span>
+    <span class="param">xmlns:android</span><span class="op">=</span><span class="str">"http://schemas.android.com/apk/res/android"</span>
+    <span class="param">package</span><span class="op">=</span><span class="str">"com.example.myapp"</span><span class="op">&gt;</span>
+
+    <span class="cmt">&lt;!-- 权限声明 --&gt;</span>
+    <span class="op">&lt;</span><span class="kw">uses-permission</span> <span class="param">android:name</span><span class="op">=</span><span class="str">"android.permission.INTERNET"</span> <span class="op">/&gt;</span>
+
+    <span class="op">&lt;</span><span class="kw">application</span>
+        <span class="param">android:allowBackup</span><span class="op">=</span><span class="str">"true"</span>
+        <span class="param">android:icon</span><span class="op">=</span><span class="str">"@mipmap/ic_launcher"</span>
+        <span class="param">android:label</span><span class="op">=</span><span class="str">"@string/app_name"</span>
+        <span class="param">android:theme</span><span class="op">=</span><span class="str">"@style/Theme.MyApp"</span><span class="op">&gt;</span>
+
+        <span class="cmt">&lt;!-- 主 Activity：设置为启动入口 --&gt;</span>
+        <span class="op">&lt;</span><span class="kw">activity</span>
+            <span class="param">android:name</span><span class="op">=</span><span class="str">".MainActivity"</span>
+            <span class="param">android:exported</span><span class="op">=</span><span class="str">"true"</span><span class="op">&gt;</span>
+            <span class="op">&lt;</span><span class="kw">intent-filter</span><span class="op">&gt;</span>
+                <span class="op">&lt;</span><span class="kw">action</span> <span class="param">android:name</span><span class="op">=</span><span class="str">"android.intent.action.MAIN"</span> <span class="op">/&gt;</span>
+                <span class="op">&lt;</span><span class="kw">category</span> <span class="param">android:name</span><span class="op">=</span><span class="str">"android.intent.category.LAUNCHER"</span> <span class="op">/&gt;</span>
+            <span class="op">&lt;/</span><span class="kw">intent-filter</span><span class="op">&gt;</span>
+        <span class="op">&lt;/</span><span class="kw">activity</span><span class="op">&gt;</span>
+
+        <span class="cmt">&lt;!-- 其他 Activity 也需要在这里注册 --&gt;</span>
+        <span class="op">&lt;</span><span class="kw">activity</span> <span class="param">android:name</span><span class="op">=</span><span class="str">".DetailActivity"</span> <span class="op">/&gt;</span>
+
+    <span class="op">&lt;/</span><span class="kw">application</span><span class="op">&gt;</span>
+
+<span class="op">&lt;/</span><span class="kw">manifest</span><span class="op">&gt;</span></code></pre>
+
+  <p>本官逐条审理各项要点：</p>
+  <ul>
+    <li><strong><code>package</code></strong>：应用的唯一身份编号（包名），犹如官员的籍贯户帖，在整个应用市场中独一无二。</li>
+    <li><strong><code>uses-permission</code></strong>：声明应用所需的系统权限。此乃向朝廷请示之文书——未声明 <code>INTERNET</code> 权限便不能访问网络，如同未获朝廷批文便不可调兵。</li>
+    <li><strong><code>android:icon</code> / <code>android:label</code></strong>：应用的官印图案与名号。</li>
+    <li><strong><code>android:theme</code></strong>：应用的全局外观风格，如同衙门的装饰规制。</li>
+    <li><strong><code>intent-filter</code></strong>：包含 <code>MAIN</code> + <code>LAUNCHER</code> 的 Activity 会出现在手机桌面的应用列表中——此乃标注"正门入口"的门匾。</li>
+    <li><strong><code>android:exported="true"</code></strong>：Android 12+ 要求所有带 intent-filter 的组件必须显式声明是否可被外部访问，犹如新律规定衙门须明示是否对外接案。</li>
+  </ul>
+
+  <div class="warning">
+    <p class="tip-title">常见错误</p>
+    <p>本官查办过无数此类疏忽之案：新建的 Activity 忘记在 <code>AndroidManifest.xml</code> 中注册，乃新手最常犯之错。运行时会抛出 <code>ActivityNotFoundException</code>——好比差役去传唤一位未入户籍的官员，自然无从查找。若你使用 Android Studio 的模板创建 Activity，它会自动帮你办妥登记手续。</p>
+  </div>
+
+  <!-- ==================== 7.6 ==================== -->
+  <h2>7.6 Gradle 构建系统（Android 视角）</h2>
+
+  <p>最后一桩待审之案：<strong>Gradle</strong> 构建系统。它是 Android 工程的总管衙门，负责将你的代码、资源、依赖统统编排成一个可运行的应用。一个典型的 Android 项目有两份关键构建文书：</p>
+
+  <h3>项目级 build.gradle.kts (Project)</h3>
+  <p>位于项目根目录，如同朝廷通令，配置所有衙门（模块）共用的构建规则：</p>
+
+<pre><code><span class="cmt">// build.gradle.kts (Project)</span>
+plugins {
+    alias(libs.plugins.android.application) apply <span class="kw">false</span>
+    alias(libs.plugins.kotlin.android) apply <span class="kw">false</span>
+}</code></pre>
+
+  <h3>模块级 build.gradle.kts (App)</h3>
+  <p>位于 <code>app/</code> 目录下，是每个具体衙门（模块）的详细施政纲领：</p>
+
+<pre><code><span class="cmt">// app/build.gradle.kts</span>
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+
+android {
+    namespace <span class="op">=</span> <span class="str">"com.example.myapp"</span>
+    compileSdk <span class="op">=</span> <span class="num">35</span>              <span class="cmt">// 编译时使用的 SDK 版本</span>
+
+    defaultConfig {
+        applicationId <span class="op">=</span> <span class="str">"com.example.myapp"</span>
+        minSdk <span class="op">=</span> <span class="num">24</span>               <span class="cmt">// 最低支持 Android 7.0</span>
+        targetSdk <span class="op">=</span> <span class="num">35</span>            <span class="cmt">// 目标 SDK 版本</span>
+        versionCode <span class="op">=</span> <span class="num">1</span>
+        versionName <span class="op">=</span> <span class="str">"1.0"</span>
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled <span class="op">=</span> <span class="kw">false</span>
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility <span class="op">=</span> <span class="type">JavaVersion</span>.VERSION_17
+        targetCompatibility <span class="op">=</span> <span class="type">JavaVersion</span>.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget <span class="op">=</span> <span class="str">"17"</span>
+    }
+}
+
+dependencies {
+    <span class="cmt">// AndroidX 核心库</span>
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+
+    <span class="cmt">// 测试</span>
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+}</code></pre>
+
+  <h3>SDK 版本参数详解</h3>
+  <p>本官层层分析这三个版本参数——它们如同朝廷法令的适用范围，决定了你的应用能在哪些设备上运行：</p>
+
+  <table>
+    <tr>
+      <th>参数</th>
+      <th>含义</th>
+      <th>建议</th>
+    </tr>
+    <tr>
+      <td><code>compileSdk</code></td>
+      <td>编译时使用的 API 版本</td>
+      <td>始终用最新的稳定版</td>
+    </tr>
+    <tr>
+      <td><code>targetSdk</code></td>
+      <td>应用适配的目标 API 版本</td>
+      <td>Google Play 有最低要求</td>
+    </tr>
+    <tr>
+      <td><code>minSdk</code></td>
+      <td>应用支持的最低 API 版本</td>
+      <td>24 (Android 7.0) 覆盖 99%+ 设备</td>
+    </tr>
+  </table>
+
+  <h3>依赖添加方式</h3>
+  <p>引入外部依赖如同调用各地衙门的资源协助办案，须通过规范的文书格式声明：</p>
+
+<pre><code>dependencies {
+    <span class="cmt">// implementation: 仅当前模块可用（最常用）</span>
+    implementation(<span class="str">"androidx.core:core-ktx:1.13.1"</span>)
+
+    <span class="cmt">// api: 当前模块和依赖本模块的模块都可用</span>
+    <span class="cmt">// 适用于你在封装的库模块中暴露的 API</span>
+    api(<span class="str">"com.google.code.gson:gson:2.11.0"</span>)
+
+    <span class="cmt">// testImplementation: 仅单元测试可用</span>
+    testImplementation(<span class="str">"junit:junit:4.13.2"</span>)
+
+    <span class="cmt">// androidTestImplementation: 仅 Android 仪器测试可用</span>
+    androidTestImplementation(<span class="str">"androidx.test.ext:junit:1.2.1"</span>)
+}</code></pre>
+
+  <h3>版本目录 (libs.versions.toml)</h3>
+  <p>现代 Android 项目推荐使用 <strong>版本目录</strong> 来集中管理依赖版本——如同朝廷将所有法令条文的版本号统一登记在册，修订时只改总册一处，各衙门自动同步。文件位于 <code>gradle/libs.versions.toml</code>：</p>
+
+<pre><code><span class="cmt"># gradle/libs.versions.toml</span>
+[versions]
+agp <span class="op">=</span> <span class="str">"8.7.0"</span>
+kotlin <span class="op">=</span> <span class="str">"2.0.21"</span>
+coreKtx <span class="op">=</span> <span class="str">"1.13.1"</span>
+appcompat <span class="op">=</span> <span class="str">"1.7.0"</span>
+material <span class="op">=</span> <span class="str">"1.12.0"</span>
+
+[libraries]
+androidx-core-ktx <span class="op">=</span> { group <span class="op">=</span> <span class="str">"androidx.core"</span>, name <span class="op">=</span> <span class="str">"core-ktx"</span>, version.ref <span class="op">=</span> <span class="str">"coreKtx"</span> }
+androidx-appcompat <span class="op">=</span> { group <span class="op">=</span> <span class="str">"androidx.appcompat"</span>, name <span class="op">=</span> <span class="str">"appcompat"</span>, version.ref <span class="op">=</span> <span class="str">"appcompat"</span> }
+material <span class="op">=</span> { group <span class="op">=</span> <span class="str">"com.google.android.material"</span>, name <span class="op">=</span> <span class="str">"material"</span>, version.ref <span class="op">=</span> <span class="str">"material"</span> }
+
+[plugins]
+android-application <span class="op">=</span> { id <span class="op">=</span> <span class="str">"com.android.application"</span>, version.ref <span class="op">=</span> <span class="str">"agp"</span> }
+kotlin-android <span class="op">=</span> { id <span class="op">=</span> <span class="str">"org.jetbrains.kotlin.android"</span>, version.ref <span class="op">=</span> <span class="str">"kotlin"</span> }</code></pre>
+
+  <p>在 <code>build.gradle.kts</code> 中通过 <code>libs.xxx</code> 引用，如 <code>libs.androidx.core.ktx</code>。如此一来，各模块共享同一版本，升级时只改一处——正如朝廷修法，改总册则天下同行。</p>
+
+  <div class="tip">
+    <p class="tip-title">案件审理总结</p>
+    <p>本章案件至此审理完毕。本官带领诸位层层勘察了 Android 系统的五层架构、审理了 Activity 生命周期的六道程序、查明了 Intent 传递旨意的机制、清点了资源管理的案卷档案、核实了 Manifest 户籍文书，以及检阅了 Gradle 构建衙门的运作规章。这些知识乃构建任何 Android 应用的根基。下一章，我们将进入 <strong>Jetpack Compose</strong> 的殿堂，勘察现代 Android 界面构建之道。</p>
+  </div>
+
+  <!-- ==================== 练习 ==================== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：生命周期侦查 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>假设用户正在使用你的 App（Activity 处于 <code>onResume</code> 状态），此时来了一个电话，系统弹出通话界面覆盖了你的 App。请按顺序写出此时 Activity 会依次触发哪些生命周期回调。当用户挂断电话返回你的 App 时，又会依次触发哪些回调？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>思考 Activity 从"前台可交互"到"被遮挡不可见"需要经过哪些状态转换。回来时则是反向过程。注意区分"部分遮挡"和"完全不可见"两种情况。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>电话来时（Activity 被完全遮挡）：<code>onPause</code> → <code>onStop</code>。</p>
+          <p>挂断电话返回时：<code>onStart</code> → <code>onResume</code>。</p>
+          <p>若通话界面仅部分遮挡（如画中画模式），则可能只触发 <code>onPause</code>，返回时触发 <code>onResume</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：Intent 传递案卷 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>请编写代码，实现以下场景：从 <code>SearchActivity</code> 跳转到 <code>ResultActivity</code>，并传递三项数据——搜索关键词（String）、页码（Int）、是否精确匹配（Boolean）。在 <code>ResultActivity</code> 的 <code>onCreate</code> 中取出这些数据并打印日志。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>使用 <code>putExtra</code> 可传递多种基本类型的数据。取出时注意使用对应的 <code>getStringExtra</code>、<code>getIntExtra</code>、<code>getBooleanExtra</code> 方法，且每个 get 方法都需要提供默认值（String 类型除外，返回可空值）。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// SearchActivity 中发送数据</span>
+<span class="kw">val</span> intent <span class="op">=</span> <span class="type">Intent</span>(<span class="kw">this</span>, <span class="type">ResultActivity</span>::<span class="kw">class</span>.java).apply {
+    putExtra(<span class="str">"keyword"</span>, <span class="str">"Kotlin 教程"</span>)
+    putExtra(<span class="str">"page"</span>, <span class="num">1</span>)
+    putExtra(<span class="str">"exact_match"</span>, <span class="kw">true</span>)
+}
+startActivity(intent)
+
+<span class="cmt">// ResultActivity 中接收数据</span>
+<span class="kw">override</span> <span class="kw">fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+    <span class="kw">super</span>.onCreate(savedInstanceState)
+    setContentView(R.layout.activity_result)
+
+    <span class="kw">val</span> keyword <span class="op">=</span> intent.getStringExtra(<span class="str">"keyword"</span>) <span class="op">?:</span> <span class="str">""</span>
+    <span class="kw">val</span> page <span class="op">=</span> intent.getIntExtra(<span class="str">"page"</span>, <span class="num">1</span>)
+    <span class="kw">val</span> exactMatch <span class="op">=</span> intent.getBooleanExtra(<span class="str">"exact_match"</span>, <span class="kw">false</span>)
+
+    Log.d(<span class="str">"Result"</span>, <span class="str">"关键词=$keyword, 页码=$page, 精确匹配=$exactMatch"</span>)
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：资源档案管理 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>你的应用需要支持中文和英文两种语言。请写出 <code>strings.xml</code> 的内容，包含以下三条字符串资源：应用名称（中文"待办清单"、英文"Todo List"）、添加按钮文字（中文"新建任务"、英文"New Task"）、空状态提示（中文"暂无任务，点击添加"、英文"No tasks yet, tap to add"）。同时说明这两个文件应分别放在哪个目录下。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>默认语言的 <code>strings.xml</code> 放在 <code>res/values/</code> 目录下，其他语言版本放在对应的限定符目录下，如英文为 <code>res/values-en/</code>。每个 string 资源通过 <code>name</code> 属性保持一致。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>中文文件位于 <code>res/values/strings.xml</code>：</p>
+<pre><code><span class="op">&lt;</span><span class="kw">resources</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"app_name"</span><span class="op">&gt;</span>待办清单<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"btn_add"</span><span class="op">&gt;</span>新建任务<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"empty_state"</span><span class="op">&gt;</span>暂无任务，点击添加<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">resources</span><span class="op">&gt;</span></code></pre>
+          <p>英文文件位于 <code>res/values-en/strings.xml</code>：</p>
+<pre><code><span class="op">&lt;</span><span class="kw">resources</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"app_name"</span><span class="op">&gt;</span>Todo List<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"btn_add"</span><span class="op">&gt;</span>New Task<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">string</span> <span class="param">name</span><span class="op">=</span><span class="str">"empty_state"</span><span class="op">&gt;</span>No tasks yet, tap to add<span class="op">&lt;/</span><span class="kw">string</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">resources</span><span class="op">&gt;</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：Manifest 户籍核查 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以下 <code>AndroidManifest.xml</code> 片段中有三处错误或遗漏，请找出并说明原因：</p>
+<pre><code><span class="op">&lt;</span><span class="kw">manifest</span> <span class="param">package</span><span class="op">=</span><span class="str">"com.example.myapp"</span><span class="op">&gt;</span>
+    <span class="op">&lt;</span><span class="kw">application</span>
+        <span class="param">android:icon</span><span class="op">=</span><span class="str">"@mipmap/ic_launcher"</span>
+        <span class="param">android:label</span><span class="op">=</span><span class="str">"@string/app_name"</span><span class="op">&gt;</span>
+
+        <span class="op">&lt;</span><span class="kw">activity</span> <span class="param">android:name</span><span class="op">=</span><span class="str">".MainActivity"</span><span class="op">&gt;</span>
+            <span class="op">&lt;</span><span class="kw">intent-filter</span><span class="op">&gt;</span>
+                <span class="op">&lt;</span><span class="kw">action</span> <span class="param">android:name</span><span class="op">=</span><span class="str">"android.intent.action.MAIN"</span> <span class="op">/&gt;</span>
+                <span class="op">&lt;</span><span class="kw">category</span> <span class="param">android:name</span><span class="op">=</span><span class="str">"android.intent.category.LAUNCHER"</span> <span class="op">/&gt;</span>
+            <span class="op">&lt;/</span><span class="kw">intent-filter</span><span class="op">&gt;</span>
+        <span class="op">&lt;/</span><span class="kw">activity</span><span class="op">&gt;</span>
+
+    <span class="op">&lt;/</span><span class="kw">application</span><span class="op">&gt;</span>
+<span class="op">&lt;/</span><span class="kw">manifest</span><span class="op">&gt;</span></code></pre>
+      <p>假设该应用需要访问网络，并且包含一个 <code>SettingsActivity</code> 页面。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>从三个方面勘察：一是权限声明是否完整；二是所有 Activity 是否都已登记在册；三是 Android 12+ 对含 intent-filter 组件的新要求。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><strong>错误 1</strong>：缺少 <code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;</code>。应用需要访问网络却未声明权限，将无法联网。</p>
+          <p><strong>错误 2</strong>：<code>SettingsActivity</code> 未在 Manifest 中注册。需要添加 <code>&lt;activity android:name=".SettingsActivity" /&gt;</code>，否则跳转时会抛出 <code>ActivityNotFoundException</code>。</p>
+          <p><strong>错误 3</strong>：<code>MainActivity</code> 含有 intent-filter 但缺少 <code>android:exported="true"</code> 属性。在 Android 12 (API 31) 及以上版本，这是必须显式声明的，否则应用将无法安装。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ==================== 底部导航 ==================== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

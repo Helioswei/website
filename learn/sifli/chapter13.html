@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第13章：覆盖操作层与触控区域 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="13" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第13章：覆盖操作层与触控区域</h1>
+  <p class="chapter-subtitle">「柯南破案，真相只有一个」——阅读页里一个上滑，屏幕下三分之一浮出一层"操作面板"（13.1）；这层面板凭什么能接住你的每一次点击，背后是一张动态注册的"触控区域表"在决定谁该响应（13.2）；面板中央的格子最是刁钻，一个拨动触控硬件上电下电、一个数着局刷次数决定何时全刷（13.3）；最后揭开一条"从阅读页直达设置、改完再回原页"的捷径（13.4）。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个——把"上滑 → 浮层 → 12 个按钮 → 命中检测"这条线索链逐环取证，每条结论都能在源码里找到唯一出处</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「真相只有一个。阅读页里一个上滑，屏幕下三分之一多出一片浮层（13.1），浮层里 12 个按钮谁被点、谁响应，全由一张每次重绘都会重建的触控区域表说了算（13.2）。表中央的格子最是刁钻：一个拨动触控硬件上电下电，一个数着局刷次数、数够了才舍得全刷一次（13.3）。收尾的捷径更有意思：从阅读页直接钻回设置页，改完还能落回刚才那一页（13.4）。每一条线索，都能在代码里找到唯一的答案——真相只有一个。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 13.1 覆盖操作层是什么 ========== -->
+  <h2>13.1 覆盖操作层是什么</h2>
+
+  <p>先给"覆盖操作层"（overlay）下个定义，一句话说人话：它是<strong>盖在阅读页上方、临时呼出的一层半屏操作面板，用完即走</strong>。它只占屏幕下三分之一——代码里 <code>area_y = (page_h * 2) / 3</code>、<code>area_h = page_h - area_y</code>——正文区域保持不动，浮层盖住底部，画满 <code>12</code> 个按钮。呼出它的动作是 <code>UPGLIDE</code>：触摸屏上往上一划（<code>SF32_TouchControls.cpp</code> 里上滑距离超过阈值 <code>SWIPE_THRESHOLD = 100</code> 像素就发这个动作），或者按键<strong>长按</strong>（<code>SF32_ButtonControls.cpp</code> 里 <code>BUTTON_LONG_PRESSED</code> 也发 <code>UPGLIDE</code>）。这就是 README 说的"上滑/映射动作"。</p>
+
+  <p>呼出动作交给 <code>handleEpub</code> 的 <code>case UPGLIDE</code>：先检查 <code>reader-&gt;is_overlay_active()</code> 防止重复激活，然后 <code>start_overlay()</code>。这个启动函数一次性把浮层状态复位：<code>overlay_active = true</code>、选中格 <code>overlay_selected = 0</code>、跳页累积 <code>overlay_jump_acc = 0</code>、目标页 <code>overlay_target_page = 当前页 + 1</code>（1-based）。浮层一旦激活，阅读页的 <code>UP</code>/<code>DOWN</code> 就不再翻页，而是变成在 12 个按钮之间左右移动选中格（<code>overlay_move_left/right</code>，索引 <code>(sel ± 1 + 12) % 12</code> 循环）。</p>
+
+  <p>12 个按钮排成三行，代码里写得明明白白：<code>const int cols[rows] = {3, 5, 4}</code>。第一行三个格子是 <strong>「&lt;」/ 中心 / 「&gt;」</strong>——左右两个格子在两种"中心属性"之间切换，中间的格子显示并执行当前属性（13.3 展开）；第二行五个格子是跳页步进 <strong>-5 / -1 / 目标页显示 / +1 / +5</strong>；第三行四个格子是 <strong>确认 / 目录 / 书库 / 设置</strong>。每次点跳页步进，<code>overlay_adjust_target_page(d)</code> 就把目标页 <code>±5 / ±1</code>，并夹在 <code>[1, 本章总页数]</code> 之间；确认后（索引 8）<code>current_page = 目标页 - 1</code> 并关闭浮层。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：UPGLIDE 呼出覆盖操作层（防重复激活 + 初始同步触控状态） */</span>
+<span class="kw">case</span> UPGLIDE:
+    <span class="cmt">// 激活阅读页下半屏覆盖操作层</span>
+    <span class="cmt">// 防止重复激活</span>
+    <span class="kw">if</span> (!reader-&gt;is_overlay_active()) {
+        reader-&gt;start_overlay();
+        <span class="cmt">// 默认中心属性为触控开关，初始同步当前触控状态</span>
+        reader-&gt;overlay_set_center_mode_touch();
+        <span class="kw">if</span> (touch_controls)
+            reader-&gt;overlay_set_touch_enabled(touch_controls-&gt;isTouchEnabled());
+    }
+    <span class="kw">break</span>;</code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/EpubList/EpubReader.cpp：render_overlay 的三行布局（3 + 5 + 4）与标签填充（节选） */</span>
+<span class="cmt">// 三行布局：3, 5, 4（第三行加了"设置"按钮）</span>
+<span class="kw">const</span> <span class="type">int</span> rows = <span class="num">3</span>;
+<span class="kw">const</span> <span class="type">int</span> cols[rows] = {<span class="num">3</span>, <span class="num">5</span>, <span class="num">4</span>};
+<span class="kw">const</span> <span class="type">int</span> gap_w = <span class="num">10</span>;
+...
+<span class="kw">switch</span> (idx)
+{
+  <span class="kw">case</span> <span class="num">0</span>: rt_snprintf(label, cap, <span class="str">"&lt;"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">1</span>: <span class="cmt">/* 中心：触摸开关 / 全刷周期（13.3）*/</span> <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">2</span>: rt_snprintf(label, cap, <span class="str">"&gt;"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">3</span>: rt_snprintf(label, cap, <span class="str">"-5"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">4</span>: rt_snprintf(label, cap, <span class="str">"-1"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">5</span>: <span class="cmt">/* 显示 "目标页/总页数" */</span> <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">6</span>: rt_snprintf(label, cap, <span class="str">"+1"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">7</span>: rt_snprintf(label, cap, <span class="str">"+5"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">8</span>: rt_snprintf(label, cap, <span class="str">"确认"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">9</span>: rt_snprintf(label, cap, <span class="str">"目录"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">10</span>: rt_snprintf(label, cap, <span class="str">"书库"</span>); <span class="kw">break</span>;
+  <span class="kw">case</span> <span class="num">11</span>: rt_snprintf(label, cap, <span class="str">"设置"</span>); <span class="kw">break</span>;
+  <span class="kw">default</span>: label[<span class="num">0</span>] = <span class="str">'\0'</span>; <span class="kw">break</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>索引</th><th>标签</th><th>作用</th></tr>
+    <tr><td>0 / 2</td><td><code>&lt;</code> / <code>&gt;</code></td><td>切换中心属性：触控开关 ⇄ 全刷周期</td></tr>
+    <tr><td>1</td><td>触摸开关 / 全刷周期</td><td>显示当前中心属性；执行它（拨触控 / 循环全刷周期）</td></tr>
+    <tr><td>3 / 4 / 6 / 7</td><td>-5 / -1 / +1 / +5</td><td>跳页步进，把目标页 ±5 / ±1（夹在 1 与本章总页数之间）</td></tr>
+    <tr><td>5</td><td><code>目标页/总页数</code></td><td>显示累积出的目标页（只显示，不响应动作）</td></tr>
+    <tr><td>8</td><td>确认</td><td><code>current_page = 目标页 - 1</code>，关闭浮层（含点浮层外正文区）</td></tr>
+    <tr><td>9</td><td>目录</td><td>进入章节目录页</td></tr>
+    <tr><td>10</td><td>书库</td><td>返回书库页</td></tr>
+    <tr><td>11</td><td>设置</td><td>进入阅读设置（13.4，带锚点恢复）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>线索要对齐。注意"防重复激活"这道防线：<code>is_overlay_active()</code> 既挡触摸侧（上滑只在浮层未激活时触发），又挡按键侧（长按同理）。两层输入走同一条 <code>UPGLIDE</code> 管道，却因为这道检查不会互相打架——这是"多种输入共享一个动作语义"的标准写法。</p>
+  </div>
+
+  <!-- ========== 13.2 UIRegionsManager：触控区域动态注册与命中检测 ========== -->
+  <h2>13.2 UIRegionsManager：触控区域动态注册与命中检测</h2>
+
+  <p>先说两个词。浮层上 12 个按钮，每个都对应屏幕上一块矩形区域——叫<strong>触控区域</strong>（region）；判断"你点下的坐标落在哪块区域里、该触发哪个动作"，叫<strong>命中检测</strong>（hit test）。整个机制的核心是 <code>UIRegionsManager.cpp</code>：它维护一个全局数组 <code>g_area_array[MAX_AREAS]</code>，每一项是一个 <code>AreaRect</code>——结构体里只有四个坐标字段 <code>start_x / start_y / end_x / end_y</code>，外加一个 <code>UIAction action</code> 字段，容量上限 <code>MAX_AREAS = 30</code>。</p>
+
+  <p>它提供三个函数，分工非常清晰：<code>clear_areas()</code> 把计数 <code>g_area_count</code> 归零（数组内容一并 <code>memset</code> 清零），<strong>每次重绘页面都要先清一次</strong>；<code>add_area(x, y, w, h)</code> 是<strong>动态注册</strong>——追加到数组尾部、计数加一，满了返回 <code>false</code>；<code>static_add_area(x, y, w, h, index)</code> 是<strong>静态注册</strong>——直接写进指定的下标，不占用"尾部追加"的语义。覆盖层的 <code>render_overlay()</code> 用的是动态版（每画一个按钮就 <code>add_area</code> 一次，下标天然 0..11），而设置页用的是静态版（按 <code>SET_TOUCH * 3</code> 这样的公式定位到固定下标，因为设置项的行号是固定的）。</p>
+
+  <p>一个容易被忽略的真相：<strong>真正的命中检测并不在 UIRegionsManager 里</strong>。这个文件只管"区域表的读写"，判断坐标落在哪块区域、映射成哪个动作，是触控回调 <code>SF32_TouchControls::tp_rx_indicate</code> 里那个巨大的 <code>switch (ui_state)</code> 干的——每个页面状态一段 <code>if (x &gt;= g_area_array[i].start_x &amp;&amp; ...)</code> 逐块比对。区域表是"地"，命中检测是"判"，两者各司其职。还有个值得如实标注的细节：<code>AreaRect</code> 里那个 <code>action</code> 字段从头到尾没被赋值——动作映射写在触控回调里，区域表只是纯坐标。</p>
+
+  <p>对比更清楚：阅读页<strong>浮层未激活</strong>时的左右翻页，用的不是区域表，而是两个<strong>硬编码矩形</strong>——<code>x 在 10..200、y 在 10..1010</code> 算上一页，<code>x 在 550..750</code> 算下一页。这就是"动态注册"和"硬编码"两种做法的活例子：区域表随重绘重建、位置灵活，硬编码写死、简单粗暴。浮层激活后命中检测切回区域表：逐个比对 0..11 号按钮，命中就 <code>touch_sel = btn</code> 发 <code>SELECT</code>；若点到浮层外、即正文区（<code>y &lt; area_y</code>），则 <code>touch_sel = 8</code>——等于按了一次"确认"，关闭浮层。</p>
+
+<pre><code><span class="cmt">/* src/UIRegionsManager.cpp：区域表的清空与两种注册方式 */</span>
+<span class="type">void</span> clear_areas()
+{
+    g_area_count = <span class="num">0</span>;
+    memset(g_area_array, <span class="num">0</span>, <span class="kw">sizeof</span>(g_area_array));
+}
+
+<span class="cmt">// 动态添加：追加到数组尾部，满了返回 false</span>
+<span class="type">bool</span> add_area(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height)
+{
+    <span class="kw">if</span> (g_area_count &gt;= MAX_AREAS) {
+        <span class="kw">return</span> <span class="kw">false</span>; <span class="cmt">// 数组已满</span>
+    }
+    g_area_array[g_area_count].start_x = x;
+    g_area_array[g_area_count].start_y = y;
+    g_area_array[g_area_count].end_x = x + width;
+    g_area_array[g_area_count].end_y = y + height;
+    g_area_count++;
+    <span class="kw">return</span> <span class="kw">true</span>;
+}
+
+<span class="cmt">// 静态添加：直接写到指定下标（设置页按 SET_* * 3 定位）</span>
+<span class="type">bool</span> static_add_area(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height, <span class="type">int</span> index)
+{
+    <span class="kw">if</span>(index &lt; <span class="num">0</span> || index &gt;= MAX_AREAS) {
+        <span class="kw">return</span> <span class="kw">false</span>; <span class="cmt">// 索引超出范围</span>
+    }
+    g_area_array[index].start_x = x;
+    g_area_array[index].start_y = y;
+    g_area_array[index].end_x = x + width;
+    g_area_array[index].end_y = y + height;
+    <span class="kw">return</span> <span class="kw">true</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/boards/controls/SF32_TouchControls.cpp：浮层激活时的命中检测（READING_EPUB 分支） */</span>
+<span class="kw">case</span> READING_EPUB:
+    <span class="kw">if</span> (reader &amp;&amp; reader-&gt;is_overlay_active())
+    {
+      <span class="cmt">// overlay 激活时：检测 12 个按钮的触控区域（由 render_overlay 通过 add_area 注册）</span>
+      <span class="type">bool</span> hit = <span class="kw">false</span>;
+      <span class="kw">for</span> (<span class="type">int</span> btn = <span class="num">0</span>; btn &lt; <span class="num">12</span>; btn++)
+      {
+        <span class="kw">if</span> (x &gt;= g_area_array[btn].start_x &amp;&amp; x &lt;= g_area_array[btn].end_x &amp;&amp;
+            y &gt;= g_area_array[btn].start_y &amp;&amp; y &lt;= g_area_array[btn].end_y)
+        {
+          touch_sel = btn;
+          action = SELECT;
+          hit = <span class="kw">true</span>;
+          <span class="kw">break</span>;
+        }
+      }
+      <span class="cmt">// 点击 overlay 区域外的正文部分 → 关闭 overlay（相当于按确认）</span>
+      <span class="kw">if</span> (!hit)
+      {
+        <span class="type">int</span> area_y = (instance-&gt;renderer-&gt;get_page_height() * <span class="num">2</span>) / <span class="num">3</span>;
+        <span class="kw">if</span> (y &lt; area_y)
+        {
+          touch_sel = <span class="num">8</span>; <span class="cmt">// 确认</span>
+          action = SELECT;
+        }
+      }
+    }</code></pre>
+
+  <table>
+    <tr><th>API</th><th>行为</th><th>典型调用方</th></tr>
+    <tr><td><code>clear_areas()</code></td><td>清空区域表（计数归零 + 数据清零）</td><td>每个页面的渲染函数开头</td></tr>
+    <tr><td><code>add_area(x, y, w, h)</code></td><td>动态追加，尾部计数加一；满 30 返回 <code>false</code></td><td>覆盖层 <code>render_overlay</code>、主页面、天气页</td></tr>
+    <tr><td><code>static_add_area(x, y, w, h, idx)</code></td><td>按指定下标写入，不占尾部语义</td><td>设置页 <code>SET_* * 3</code>、书库/目录列表项</td></tr>
+    <tr><td>命中检测</td><td>坐标 vs <code>g_area_array[i]</code> 逐块比对，映射 <code>UIAction</code></td><td><code>SF32_TouchControls::tp_rx_indicate</code> 的 <code>switch(ui_state)</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>证据要区分"谁画的"和"谁判的"。区域表是纯坐标的"地"，动作映射写在触控回调里；<code>AreaRect.action</code> 字段有声明没赋值。读代码时别被结构体字段带偏——<strong>结构体里声明了什么，不等于真的用了什么</strong>。动手改项目时，若想让区域自带动作，就把 <code>action</code> 填上并在命中检测里直接读取，能少写半页 <code>if</code>。</p>
+  </div>
+
+  <!-- ========== 13.3 中心功能：触控开关与全刷周期 ========== -->
+  <h2>13.3 中心功能：触控开关与全刷周期</h2>
+
+  <p>浮层第一行的中央格子（索引 1）是"执行键"，左右两个箭头（索引 0 / 2）负责在<strong>两种中心属性</strong>之间切换：<code>OverlayCenterMode { CENTER_TOUCH = 0, CENTER_FULL_REFRESH = 1 }</code>。切到"触控开关"时，中央格显示 <code>触摸开关：开/关</code>；切到"全刷周期"时，显示 <code>全刷周期：N次/每次</code>。按中央格，就执行当前属性。</p>
+
+  <p>属性一：<strong>触控开关</strong>。它不只改一个软件标志，还<strong>同步触控硬件上电 / 下电</strong>——README 原话"同步触控硬件上电/下电"。执行分支里：<code>touch_controls-&gt;setTouchEnable(!cur)</code> 翻转软件开关，然后若原来关着就 <code>powerOnTouch()</code>、原来开着就 <code>powerOffTouch()</code>。这两个函数最终调用 <code>rt_device_control(tp_device, RTGRAPHIC_CTRL_POWERON / POWEROFF)</code>，真正把触控芯片的电给断了（省电）或重新给上（恢复触控）。连开机都有一条：<code>SF32_TouchControls</code> 构造函数里，若启动时 <code>!touch_enable</code>，就直接把触控设备 <code>POWEROFF</code>——软件开关与硬件电源始终对齐。</p>
+
+  <p>属性二：<strong>全刷周期</strong>。墨水屏局刷久了会残影，所以刷新计数满一个周期就强制全刷一次。选项定义在 <code>epub_screen.cpp</code>：<code>kFullRefreshOptions[] = {5, 10, 20, 0}</code>，默认下标 1 即 <strong>10 次</strong>；<code>screen_cycle_full_refresh_period()</code> 循环切换。执行分支里调 <code>reader-&gt;overlay_cycle_full_refresh()</code>（内部就是 <code>screen_cycle_full_refresh_period(true)</code>），再 <code>set_part_disp_times(当前周期值)</code> 应用到底层显示驱动。驱动里 <code>g_part_disp_times = val &gt; 0 ? val : 1</code>，每刷 <code>g_part_disp_times</code> 次（<code>reflesh_times % g_part_disp_times == 0</code>）全刷一次——所以"每次(0)"会被归一成 1，等于每次都全刷。</p>
+
+  <p>关键观察：<strong>浮层与功能设置页共享同一份全局状态</strong>。<code>screen_cycle_full_refresh_period</code> / <code>screen_get_full_refresh_period</code> 是 <code>epub_screen.cpp</code> 里的全局函数，设置页第 3 行和浮层中央格改的是<strong>同一个</strong> <code>full_refresh_idx</code>——在设置页把全刷周期改成 20 次，回到浮层中央格看到的也是 20 次。这一设计避免了两处各存一份的"状态分叉"，代价是两者永远联动。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：浮层中央格（sel==1）执行当前中心属性 */</span>
+<span class="kw">else if</span> (sel == <span class="num">1</span> || touch_sel == <span class="num">1</span>)
+{
+    <span class="cmt">// 中心矩形：根据当前属性执行</span>
+    <span class="kw">if</span> (reader-&gt;overlay_is_center_touch())
+    {
+        <span class="type">bool</span> cur = touch_controls ? touch_controls-&gt;isTouchEnabled() : <span class="kw">false</span>;
+        <span class="kw">if</span> (touch_controls)
+        {
+            touch_controls-&gt;setTouchEnable(!cur);
+            <span class="kw">if</span> (!cur) touch_controls-&gt;powerOnTouch(); <span class="kw">else</span> touch_controls-&gt;powerOffTouch();
+        }
+        reader-&gt;overlay_set_touch_enabled(!cur);
+    }
+    <span class="kw">else</span>
+    {
+        reader-&gt;overlay_cycle_full_refresh();  <span class="cmt">// 5/10/20/每次(0) 之间循环</span>
+        set_part_disp_times(reader-&gt;overlay_get_full_refresh_value());
+    }
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/epub_screen.cpp：全刷周期选项表 + src/boards/display_dbi/epd_display.c 的应用 */</span>
+<span class="cmt">// 全刷周期选项：5、10、20、每次(0)</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int</span> kFullRefreshOptions[] = {<span class="num">5</span>, <span class="num">10</span>, <span class="num">20</span>, <span class="num">0</span>};
+<span class="kw">static</span> <span class="type">int</span> full_refresh_idx = <span class="num">1</span>; <span class="cmt">// 默认10次</span>
+
+<span class="type">void</span> screen_cycle_full_refresh_period(<span class="type">bool</span> refresh)
+{
+  <span class="kw">if</span>(refresh)
+    full_refresh_idx = (full_refresh_idx + <span class="num">1</span>) % kFullRefreshOptionsCount;
+  <span class="kw">else</span>
+    full_refresh_idx = (full_refresh_idx - <span class="num">1</span> + kFullRefreshOptionsCount) % kFullRefreshOptionsCount;
+}
+
+<span class="cmt">/* epd_display.c：局刷计数到周期即全刷 */</span>
+<span class="kw">static</span> <span class="type">int</span> g_part_disp_times = <span class="num">10</span>;  <span class="cmt">// 局刷 g_part_disp_times-1 次后全刷一次</span>
+<span class="kw">static</span> <span class="type">int</span> reflesh_times = <span class="num">0</span>;
+<span class="type">void</span> set_part_disp_times(<span class="type">int</span> val)
+{
+    g_part_disp_times = val &gt; <span class="num">0</span> ? val : <span class="num">1</span>;  <span class="cmt">// "每次(0)"归一成 1 → 每次都全刷</span>
+    reflesh_times = <span class="num">1</span>;
+}
+<span class="cmt">/* 刷新时：if (reflesh_times % g_part_disp_times == 0) { 全刷 } else { 局刷 } */</span></code></pre>
+
+  <table>
+    <tr><th>选项</th><th>下标</th><th>驱动实际值（<code>g_part_disp_times</code>）</th><th>刷新行为</th></tr>
+    <tr><td>5 次</td><td>0</td><td>5</td><td>局刷 4 次后第 5 次全刷</td></tr>
+    <tr><td>10 次（默认）</td><td>1</td><td>10</td><td>局刷 9 次后第 10 次全刷</td></tr>
+    <tr><td>20 次</td><td>2</td><td>20</td><td>局刷 19 次后第 20 次全刷</td></tr>
+    <tr><td>每次（0）</td><td>3</td><td>1</td><td><code>reflesh_times % 1 == 0</code> 恒真 → 每次都全刷</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>真相藏在"共享"二字里。设置页与浮层改的是同一个 <code>full_refresh_idx</code>，这才让两处显示永远一致。但也提醒你：全局可变状态是双刃剑——浮层中央格能改全局全刷周期，改动会"泄漏"回设置页。读这类项目时，凡见全局 <code>static</code> 变量，先问一句"还有谁在改它"。</p>
+  </div>
+
+  <!-- ========== 13.4 从阅读页直接进阅读设置并恢复位置 ========== -->
+  <h2>13.4 从阅读页直接进阅读设置并恢复位置</h2>
+
+  <p>README 把这条捷径标为"<strong>新增</strong>"：覆盖操作层第 12 格「设置」可从阅读页直接进入阅读设置（字体/字号/行距/边距），退出后<strong>自动恢复到当前阅读位置</strong>。入口代码在 <code>main.cpp</code> 的 <code>sel == 11</code> 分支：先 <code>reader-&gt;save_anchor(g_anchor_block, g_anchor_line)</code> 把"当前读到哪"存进两个全局变量，置 <code>g_has_anchor = true</code>，再记下 <code>g_state_before_settings = READING_EPUB</code>，随后 <code>stop_overlay()</code>、切到 <code>READING_SETTINGS</code> 状态并 <code>reading_settings_draw()</code>。</p>
+
+  <p><strong>锚点</strong>（anchor）是什么？它把"当前页"翻译成"当前页开头在正文里的块/行坐标"：<code>save_anchor</code> 调用 <code>parser-&gt;get_page_anchor(state.current_page)</code>，拿到 <code>PageAnchor{block_index, line_index}</code>。为什么存坐标而不是页码？因为改完字号、行距、边距后<strong>整本书重新排版，页码会变</strong>——但"第几块正文的第几行"这个语义位置不会变。退出时 <code>restore_by_anchor</code> 反向用锚点 <code>parser-&gt;find_page_by_anchor(anchor)</code> 重新找到排版后的新页码，这就是"自动恢复到当前阅读位置"的原理。注意：若锚点找不到（极端情况下排版吞掉了那行），代码只打个 warning，<strong>停在当前页不蹦跶</strong>——容错处理得很克制。</p>
+
+  <p>退出路径由 <code>g_state_before_settings</code> 决定，这也是两处入口的对照。若从<strong>功能设置页</strong>进（<code>handleSettingsPage</code> 返回 2，此时 <code>g_state_before_settings = SETTINGS_PAGE</code>），退出回设置页；若从<strong>阅读页浮层</strong>进（<code>g_state_before_settings = READING_EPUB</code>），退出回阅读页——<code>delete reader</code> 后用 <code>handleEpub(renderer, NONE)</code> 按新设置重建阅读器，再 <code>restore_by_anchor</code> 定位。README 明说"退出后自动恢复到当前阅读位置"，锚点正是这句话的实现。</p>
+
+<pre><code><span class="cmt">/* src/main.cpp：浮层「设置」格 → 存锚点、进阅读设置 */</span>
+<span class="kw">else if</span> (sel == <span class="num">11</span> || touch_sel == <span class="num">11</span>) <span class="cmt">//设置（阅读设置）</span>
+{
+    <span class="cmt">// 保存锚点</span>
+    reader-&gt;save_anchor(g_anchor_block, g_anchor_line);
+    g_has_anchor = <span class="kw">true</span>;
+    g_state_before_settings = READING_EPUB;
+    renderer-&gt;set_margin_bottom(<span class="num">0</span>);
+    reader-&gt;stop_overlay();
+    ui_state = READING_SETTINGS;
+    reading_settings_draw(renderer);
+    touch_sel = -<span class="num">1</span>;
+    <span class="kw">return</span>;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：READING_SETTINGS 退出 → 按来源回阅读页（用锚点恢复位置） */</span>
+<span class="kw">case</span> READING_SETTINGS:
+{
+    <span class="type">bool</span> still_in_settings = reading_settings_handle_action(renderer, ui_action);
+    <span class="kw">if</span> (!still_in_settings) {
+        <span class="kw">if</span> (g_state_before_settings == READING_EPUB) {
+            <span class="cmt">// 从阅读页的覆盖层进入的 → 回到阅读页</span>
+            ui_state = READING_EPUB;
+            <span class="kw">delete</span> reader;
+            reader = <span class="kw">nullptr</span>;
+            handleEpub(renderer, NONE);
+            <span class="cmt">// 用锚点恢复阅读位置</span>
+            <span class="kw">if</span> (g_has_anchor &amp;&amp; reader) {
+                reader-&gt;restore_by_anchor(g_anchor_block, g_anchor_line);
+                reader-&gt;render();
+                g_has_anchor = <span class="kw">false</span>;
+            }
+        } <span class="kw">else</span> {
+            <span class="cmt">// 从主界面设置页进入的 → 回到设置页</span>
+            ui_state = SETTINGS_PAGE;
+            (void)handleSettingsPage(renderer, NONE, <span class="kw">true</span>);
+        }
+    }
+    <span class="kw">return</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>入口</th><th>设置 <code>g_state_before_settings</code></th><th>退出回到</th><th>是否用锚点恢复</th></tr>
+    <tr><td>功能设置页 → 阅读设置</td><td><code>SETTINGS_PAGE</code></td><td>设置页</td><td>否（只回设置页）</td></tr>
+    <tr><td>阅读页浮层 → 设置格</td><td><code>READING_EPUB</code></td><td>阅读页（重建阅读器）</td><td>是（<code>save_anchor</code>/<code>restore_by_anchor</code>）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>这条捷径的证据链最完整：入口存锚点（<code>save_anchor</code>）→ 中间改排版（<code>reading_settings_handle_action</code>）→ 退出重建阅读器 → 锚点找回新页码（<code>restore_by_anchor</code>）。核心思想一句话：<strong>排版可变，语义位置不可变</strong>——所以存"第几块第几行"而不是"第几页"。以后做任何"改配置后回原位置"的功能，都可以照搬这套锚点思路。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：十二格地图 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>对照 13.1，写出覆盖操作层三行按钮的完整布局（每行几个、索引范围、各自作用）。哪一格只显示、不响应动作？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三行 3 + 5 + 4，共 12 格，索引 0..11；索引 5 显示"目标页/总页数"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>第一行（3 格，索引 0-2）：「&lt;」/ 中心属性 / 「&gt;」，左右切换中心属性、中央执行；第二行（5 格，索引 3-7）：-5 / -1 / 目标页显示 / +1 / +5；第三行（4 格，索引 8-11）：确认 / 目录 / 书库 / 设置。索引 5 只显示当前累积的目标页与本章总页数，不响应动作。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：谁在画、谁在判 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>add_area</code> 与 <code>static_add_area</code> 有什么区别？真正的命中检测（坐标→动作）发生在哪个文件、以什么结构组织？<code>AreaRect</code> 里的 <code>action</code> 字段被赋值了吗？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>前者追加到尾部，后者写指定下标；命中检测在 SF32_TouchControls.cpp 的 switch(ui_state)；action 字段从头到尾没人写。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>add_area</code> 动态追加到数组尾部（满了返回 false），适合浮层这种"每画一个按钮注册一个"的场景；<code>static_add_area</code> 直接写到固定下标，适合设置页按 <code>SET_* * 3</code> 公式定位。命中检测在 <code>SF32_TouchControls::tp_rx_indicate</code> 里，按 <code>ui_state</code> 分页面、再逐块比对坐标映射成 <code>UIAction</code>。<code>AreaRect.action</code> 只是结构体里声明了，从未赋值——动作映射写在触控回调里，区域表只存坐标。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：中心属性的两副面孔 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>浮层中央格有哪两种中心属性？各自按下去会执行什么（特别是"触控开关"为什么能真正省电）？为什么浮层里改的全刷周期在功能设置页也生效？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>OverlayCenterMode 两个值；powerOnTouch/powerOffTouch 调 rt_device_control 的 POWERON/POWEROFF；两者共享 epub_screen.cpp 的全局 full_refresh_idx。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>两种属性：触控开关（CENTER_TOUCH）与全刷周期（CENTER_FULL_REFRESH）。触控开关按下时，翻转 <code>touch_enable</code> 并调用 <code>powerOnTouch()/powerOffTouch()</code>，后者经 <code>rt_device_control(..., RTGRAPHIC_CTRL_POWERON/POWEROFF)</code> 真正切断/恢复触控芯片电源，所以能省电。全刷周期按下时循环 <code>screen_cycle_full_refresh_period(true)</code> 并 <code>set_part_disp_times</code> 应用到显示驱动。因为浮层与设置页共享 <code>epub_screen.cpp</code> 里的全局 <code>full_refresh_idx</code>，改一处、两处同步显示。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：锚点破案 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>从浮层进阅读设置后，"自动恢复到当前阅读位置"靠什么实现？为什么存的是块/行坐标而不是页码？退出时若锚点找不到，代码会怎么处理？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>save_anchor 拿 get_page_anchor；restore_by_anchor 拿 find_page_by_anchor；找不到只 ulog_w 不蹦跳，停在当前页。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>入口用 <code>save_anchor(g_anchor_block, g_anchor_line)</code> 把当前页开头的 <code>PageAnchor{block_index, line_index}</code> 存进全局变量；退出时重建阅读器后 <code>restore_by_anchor</code> 用 <code>find_page_by_anchor</code> 在新排版里找到锚点对应的页码并渲染。存坐标而非页码，是因为改字号/行距/边距后整书重排、页码会变，而"第几块正文的第几行"语义位置稳定。若找不到锚点，代码只打 warning 并保持当前页，不会崩溃或乱跳——这是精心设计的容错。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

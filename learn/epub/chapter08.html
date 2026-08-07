@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第8章：XML 解析：content.opf（TinyXML2） - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="8" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：XML 解析——content.opf 与 TinyXML2</h1>
+  <p class="chapter-subtitle">书名的真凶、封面的去向、章节的顺序，全部写在这份小小的 XML 里。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一章我们证明了 EPUB 是一具 zip 的尸体，可尸体不会说话。真正能作证的，是藏在 <code>OEBPS/content.opf</code> 里的那份口供——它一分为三：<code>metadata</code> 供出书名与作者，<code>manifest</code> 交出了整本书的文件清单，<code>spine</code> 则交代了该按什么顺序翻开每一页。要听懂这份口供，我们得请一位精通 XML 的翻译官：TinyXML2。今天我们就跟着 <code>Epub</code> 类，把这份口供逐字问出来——真相，藏在一层层的 <code>FirstChildElement</code> 里。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 content.opf 三部分 ========== -->
+  <h2>8.1 content.opf 三部分：metadata / manifest / spine</h2>
+
+  <p>上一章我们把 <code>content.opf</code> 定位为"整本书的清单"。现在把它拆开，它清清楚楚地分成三部分，README 的原话是："The <code>content.opf</code> contains three sections, <code>metadata</code>, <code>manifest</code> and <code>spine</code>. The <code>metadata</code> section contains the title of the book, the author and the cover image. The <code>manifest</code> section contains the list of files in the epub archive. The <code>spine</code> section tells you what order to read the files in."（content.opf 包含三个区块：metadata、manifest 和 spine。metadata 含书名、作者与封面图；manifest 含归档内所有文件的清单；spine 告诉你按什么顺序读这些文件。）三个区块各司其职，说人话：<code>metadata</code> 是书的元信息，<code>manifest</code> 是文件清单，<code>spine</code> 是阅读顺序。以仓库里那本 <code>pg43-images.epub</code>（《The Strange Case of Dr. Jekyll and Mr. Hyde》）为例，三部分一目了然。</p>
+
+  <p>先说 <code>metadata</code>（元数据）。它的内容一眼扫过去全是"书的基本信息"：书名 <code>dc:title</code>、作者 <code>dc:creator</code>、语言 <code>dc:language</code>、主题 <code>dc:subject</code>……真正的线索藏在最后一行 <code>&lt;meta name="cover" content="item1"/&gt;</code>——它用 <code>content="item1"</code> 指向了清单里一个名叫 <code>item1</code> 的<strong>条目</strong>（说人话：条目就是清单里登记一个文件的一行记录，一章正文、一张封面各占一条），而那个条目就是封面图。也就是说，<strong>封面不是 metadata 直接给出来的，而是 metadata 与 manifest 联手"指认"出来的</strong>：metadata 说"封面叫 item1"，manifest 才告诉你 item1 到底是哪个文件。这种"跨区块用 id 咬合"的机制贯穿整份 opf，是破译它的钥匙。</p>
+
+<pre><code><span class="cmt">/* OEBPS/content.opf：metadata + manifest（真实内容节选，已精简） */</span>
+&lt;package xmlns:dc=<span class="str">"http://purl.org/dc/elements/1.1/"</span> version=<span class="str">"2.0"</span> unique-identifier=<span class="str">"id"</span>&gt;
+  &lt;metadata&gt;
+    &lt;dc:creator&gt;Robert Louis Stevenson&lt;/dc:creator&gt;
+    &lt;dc:title&gt;The Strange Case of Dr. Jekyll and Mr. Hyde&lt;/dc:title&gt;
+    &lt;dc:language&gt;en&lt;/dc:language&gt;
+    &lt;dc:subject&gt;Horror tales&lt;/dc:subject&gt;
+    &lt;meta name=<span class="str">"cover"</span> content=<span class="str">"item1"</span>/&gt;                    <span class="cmt"># 封面 → 指认 manifest 里的 item1</span>
+  &lt;/metadata&gt;
+  &lt;manifest&gt;
+    &lt;item href=<span class="str">"@public@...@images@cover.jpg"</span> id=<span class="str">"item1"</span> media-type=<span class="str">"image/jpeg"</span>/&gt;  <span class="cmt"># 封面图</span>
+    &lt;item href=<span class="str">"pgepub.css"</span> id=<span class="str">"item2"</span> media-type=<span class="str">"text/css"</span>/&gt;
+    &lt;item href=<span class="str">"@public@...@43-h-0.htm.html"</span> id=<span class="str">"item5"</span> media-type=<span class="str">"application/xhtml+xml"</span>/&gt;
+    &lt;item href=<span class="str">"@public@...@43-h-1.htm.html"</span> id=<span class="str">"item6"</span> media-type=<span class="str">"application/xhtml+xml"</span>/&gt;
+    <span class="cmt"># ... 其余章节 ...</span>
+    &lt;item href=<span class="str">"toc.ncx"</span> id=<span class="str">"ncx"</span> media-type=<span class="str">"application/x-dtbncx+xml"</span>/&gt;  <span class="cmt"># 目录文件，id 固定为 ncx</span>
+    &lt;item href=<span class="str">"wrap0000.html"</span> id=<span class="str">"coverpage-wrapper"</span> media-type=<span class="str">"application/xhtml+xml"</span>/&gt;
+  &lt;/manifest&gt;</code></pre>
+
+  <p><code>manifest</code>（清单）是"文件登记簿"：每一个 <code>&lt;item&gt;</code> 都有 <code>id</code>、<code>href</code>、<code>media-type</code> 三个属性，分别对应"代号"、"文件路径"、"文件类型"。注意两个约定俗成的 id：封面图常被 metadata 指认为 <code>item1</code>，而目录文件 <code>toc.ncx</code> 的 id 固定是 <code>ncx</code>——<code>Epub</code> 类正是靠"找 id 为 ncx 的条目"来记住目录文件在哪的。最后是 <code>spine</code>（书脊），它不重复文件内容，只按<strong>阅读顺序</strong>列出一串 <code>&lt;itemref idref="..."&gt;</code>，靠 <code>idref</code> 回指 manifest 里的 id。spine 里第几个、就按第几个读——这就是"阅读顺序"的物理形态。本书的 spine 以 <code>wrap0000.html</code>（封面页）开头，之后是 item5、item6……直到末章。</p>
+
+<pre><code><span class="cmt">/* OEBPS/content.opf：spine —— 阅读顺序（真实内容节选） */</span>
+  &lt;spine toc=<span class="str">"ncx"</span>&gt;                          <span class="cmt"># toc="ncx"：目录文件是清单里 id 为 ncx 的条目</span>
+    &lt;itemref idref=<span class="str">"coverpage-wrapper"</span> linear=<span class="str">"yes"</span>/&gt;  <span class="cmt"># 第 1 位：封面页</span>
+    &lt;itemref idref=<span class="str">"item5"</span> linear=<span class="str">"yes"</span>/&gt;             <span class="cmt"># 第 2 位：第一章</span>
+    &lt;itemref idref=<span class="str">"item6"</span> linear=<span class="str">"yes"</span>/&gt;             <span class="cmt"># 第 3 位：第二章</span>
+    <span class="cmt"># ... 按 manifest 里的 id 依次引用 ...</span>
+    &lt;itemref idref=<span class="str">"item16"</span> linear=<span class="str">"yes"</span>/&gt;            <span class="cmt"># 最后一位：末章</span>
+  &lt;/spine&gt;</code></pre>
+
+  <table>
+    <tr><th>区块</th><th>内容</th><th>解析后存到 <code>Epub</code> 的哪里</th></tr>
+    <tr><td><code>metadata</code></td><td>书名、作者、语言、封面指认</td><td><code>m_title</code>、<code>m_cover_image_item</code></td></tr>
+    <tr><td><code>manifest</code></td><td>文件清单：id → href + media-type</td><td>局部 <code>std::map</code> <code>items</code>；<code>m_toc_ncx_item</code></td></tr>
+    <tr><td><code>spine</code></td><td>阅读顺序：一串 <code>itemref</code></td><td><code>m_spine</code>（<code>std::vector&lt;std::pair&lt;...&gt;&gt;</code>）</td></tr>
+    <tr><td>（另）<code>toc.ncx</code></td><td>人看的章节目录</td><td><code>m_toc</code>（<code>std::vector&lt;EpubTocEntry&gt;</code>）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>理解 opf 的关键是记住这套<strong>"id 咬合"</strong>的关系：metadata 用 <code>content="item1"</code> 指认封面 → manifest 用 <code>id="item1"</code> 定义封面路径 → spine 用 <code>idref="item5"</code> 决定章节顺序。id 是贯穿三份口供的"证物编号"，解析代码里所有的"查表"都在追这些编号。顺着编号读，三部分就串成了一条链。</p>
+  </div>
+
+  <!-- ========== 8.2 TinyXML2 ========== -->
+  <h2>8.2 TinyXML2：极简 XML 解析器，为什么嵌入式用它</h2>
+
+  <p><code>content.opf</code>、<code>container.xml</code>、<code>toc.ncx</code> 都是 <strong>XML</strong>（说人话：一种用标签描述数据的文本格式，像 <code>&lt;metadata&gt;</code>、<code>&lt;spine&gt;</code> 这样一对对尖括号标签把内容包起来）。解析 XML 就得请<strong>解析器</strong>——说人话就是"把文本读成程序能用的结构"的程序。项目用的是 <strong>TinyXML2</strong>（一个极小的 XML 解析库），README 对它的评价只有一句："a very small and simple XML parser"（一个非常小且简单的 XML 解析器）。它由 leethomason 维护，整个库就是 <code>tinyxml2.cpp</code> + <code>tinyxml2.h</code> 两个文件、零外部依赖、纯 C++ 实现，通过 <code>platformio.ini</code> 的 <code>lib_deps</code> 从 GitHub 直接拉取（<code>https://github.com/leethomason/tinyxml2.git</code>）。对 ESP32 这样"内存按 KB 算"的环境，这几乎是唯一合理的选择——而像 libxml2 这类功能完整的重型解析器，光是自身代码量就足以把固件体积顶爆。</p>
+
+  <p>TinyXML2 的用法是典型的 <strong>DOM 风格</strong>：先 <code>XMLDocument doc; doc.Parse(contents)</code> 把整段 XML 解析成一棵内存里的元素树，然后用 <code>doc.FirstChildElement("package")</code> 取根元素、<code>element-&gt;NextSiblingElement("item")</code> 在兄弟节点间游走、<code>element-&gt;Attribute("href")</code> 读属性、<code>element-&gt;GetText()</code> 取元素文本。解析结果用一个枚举 <code>tinyxml2::XML_SUCCESS</code> 判断成败，失败时还能用 <code>doc.ErrorIDToName(result)</code> 把错误码翻译成人话。这段"取根 → 找子 → 遍历兄弟"的套路，会在这章接下来的每份 XML 里反复出现，是整个 EPUB 解析的地基。</p>
+
+<pre><code><span class="cmt">; platformio.ini：TinyXML2 作为唯一第三方依赖拉取</span>
+lib_deps =
+  https://github.com/leethomason/tinyxml2.git</code></pre>
+
+<pre><code><span class="cmt">/* Epub.cpp：TinyXML2 的最小使用范式（真实代码风格） */</span>
+tinyxml2::XMLDocument doc;
+<span class="kw">auto</span> result = doc.Parse(contents);                    <span class="cmt">// 解析整段 XML</span>
+<span class="kw">if</span> (result != tinyxml2::XML_SUCCESS)
+{
+  ESP_LOGE(TAG, <span class="str">"Error parsing content.opf - %s"</span>, doc.ErrorIDToName(result));
+  <span class="kw">return</span> <span class="kw">false</span>;
+}
+<span class="kw">auto</span> package = doc.FirstChildElement(<span class="str">"package"</span>);      <span class="cmt">// 取根元素</span>
+<span class="kw">auto</span> metadata = package-&gt;FirstChildElement(<span class="str">"metadata"</span>); <span class="cmt">// 往下找子元素</span>
+<span class="kw">auto</span> title = metadata-&gt;FirstChildElement(<span class="str">"dc:title"</span>);
+m_title = title-&gt;GetText();                             <span class="cmt">// 读元素文本</span></code></pre>
+
+  <p>为什么嵌入式偏爱 TinyXML2 而不是更"强大"的解析器？答案在"恰到好处"四个字。第一，<strong>体积小</strong>：两个文件、无依赖，不引入额外的运行时环境。第二，<strong>容错好</strong>：面对古登堡书那些不那么规范、缺东少西的 XML，它很少崩溃，解析失败只是返回一个错误码。第三，<strong>API 直白</strong>：取元素、取属性、取文本三个动作覆盖了本项目全部需求，没有用不上的重型特性。取舍逻辑和第 1 章技术栈那节一脉相承——约束匹配：需求是"读几份小 XML"，就选"刚好够用"的库，不为用不上的功能买单。</p>
+
+  <table>
+    <tr><th>TinyXML2 API</th><th>在本项目中的用途</th></tr>
+    <tr><td><code>XMLDocument::Parse()</code></td><td>解析整段 XML 文本，建 DOM 树</td></tr>
+    <tr><td><code>FirstChildElement()</code></td><td>取第一个同名子元素（如 <code>package</code>、<code>metadata</code>）</td></tr>
+    <tr><td><code>NextSiblingElement()</code></td><td>遍历同名兄弟元素（如一个个 <code>item</code> / <code>navPoint</code>）</td></tr>
+    <tr><td><code>Attribute()</code></td><td>读属性值（如 <code>full-path</code>、<code>media-type</code>、<code>idref</code>）</td></tr>
+    <tr><td><code>GetText()</code></td><td>读元素文本（如书名）</td></tr>
+    <tr><td><code>ErrorIDToName()</code> / <code>XML_SUCCESS</code></td><td>解析成败判断与错误信息</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>注意 <code>Epub.cpp</code> 里一个耐人寻味的细节：<code>doc.Parse(contents)</code> 之后，紧接着就是 <code>free(contents)</code>——原文那份 char 数组在解析完立刻被还掉。因为 DOM 解析已经把内容"复制"进了元素树，原文不再需要。这种"解析完立即释放原文"的习惯，配合上一章的 PSRAM 阈值，就是嵌入式内存管理里最朴素也最有效的"随用随还"。</p>
+  </div>
+
+  <!-- ========== 8.3 Epub 类解析流程 ========== -->
+  <h2>8.3 Epub 类如何解析 opf 并读入内容</h2>
+
+  <p>真正的解析落在 <code>lib/Epub/EpubList/Epub.h</code>（声明）与 <code>Epub.cpp</code>（实现）的 <code>Epub</code> 类里。先看它的"记忆"：<code>m_title</code>（书名）、<code>m_cover_image_item</code>（封面路径）、<code>m_toc_ncx_item</code>（目录文件路径）、<code>m_base_path</code>（opb 所在目录）、<code>m_spine</code>（阅读顺序，<code>std::vector&lt;std::pair&lt;std::string, std::string&gt;&gt;</code>）、<code>m_toc</code>（章节目录）。这些字段，正好对应 8.1 表格里那一行行"解析后存到哪里"。而把它们填满的，是 <code>Epub::load()</code> 里三条依次执行的流水线：<code>find_content_opf_file</code> → <code>parse_content_opf</code> → <code>parse_toc_ncx_file</code>。</p>
+
+  <p>第一步 <code>find_content_opf_file()</code>，把 7.1 的地图真正用起来：它用 <code>ZipFile::read_file_to_memory("META-INF/container.xml")</code> 读出 container.xml，用 TinyXML2 解析，然后沿着 <code>container → rootfiles → rootfile</code> 一层层 <code>FirstChildElement</code> 往下钻，遍历每个 <code>rootfile</code>，专门找 <code>media-type</code> 等于 <code>"application/oebps-package+xml"</code> 的那个，把它 <code>full-path</code> 属性的值当作 <code>content.opf</code> 的路径。为什么不能直接假设路径是 <code>OEBPS/content.opf</code>？因为规范允许书商把 opf 放任意目录——只有地图说了算。拿到路径后，<code>m_base_path = content_opf_file.substr(0, content_opf_file.find_last_of('/') + 1)</code> 顺手算出目录前缀（这里是 <code>"OEBPS/"</code>），为后面拼接相对路径做准备。</p>
+
+<pre><code><span class="cmt">/* Epub.cpp：find_content_opf_file —— 读地图、找真凶（真实代码节选） */</span>
+<span class="kw">char</span> *meta_info = (<span class="kw">char</span> *)zip.read_file_to_memory(<span class="str">"META-INF/container.xml"</span>);
+<span class="kw">if</span> (!meta_info) { <span class="cmt">/* ESP_LOGE(TAG, "Could not find META-INF/container.xml"); */</span> <span class="kw">return</span> <span class="kw">false</span>; }
+
+tinyxml2::XMLDocument meta_data_doc;
+<span class="kw">auto</span> result = meta_data_doc.Parse(meta_info);
+free(meta_info);                                            <span class="cmt">// 解析完立刻还掉原文</span>
+<span class="kw">if</span> (result != tinyxml2::XML_SUCCESS) { <span class="cmt">/* ... */</span> <span class="kw">return</span> <span class="kw">false</span>; }
+
+<span class="kw">auto</span> container = meta_data_doc.FirstChildElement(<span class="str">"container"</span>);
+<span class="kw">auto</span> rootfiles  = container-&gt;FirstChildElement(<span class="str">"rootfiles"</span>);
+<span class="kw">auto</span> rootfile   = rootfiles-&gt;FirstChildElement(<span class="str">"rootfile"</span>);
+<span class="kw">while</span> (rootfile)
+{
+  <span class="kw">const</span> <span class="kw">char</span> *media_type = rootfile-&gt;Attribute(<span class="str">"media-type"</span>);
+  <span class="kw">if</span> (media_type &amp;&amp; strcmp(media_type, <span class="str">"application/oebps-package+xml"</span>) == <span class="num">0</span>)
+  {
+    <span class="kw">const</span> <span class="kw">char</span> *full_path = rootfile-&gt;Attribute(<span class="str">"full-path"</span>);
+    <span class="kw">if</span> (full_path) { content_opf_file = full_path; <span class="kw">return</span> <span class="kw">true</span>; }
+  }
+  rootfile = rootfile-&gt;NextSiblingElement(<span class="str">"rootfile"</span>);      <span class="cmt">// 遍历下一个 rootfile</span>
+}</code></pre>
+
+  <p>第二步 <code>parse_content_opf()</code>，把 8.1 的三份口供逐个问出来。先 <code>package</code> → <code>metadata</code> → <code>dc:title</code> 读出书名存入 <code>m_title</code>；再在 metadata 里遍历 <code>&lt;meta&gt;</code>，专门找 <code>name="cover"</code> 的那个，把它的 <code>content</code> 值（<code>"item1"</code>）记作 <code>cover_item</code>。接着进 manifest：把每个 <code>&lt;item&gt;</code> 的 <code>id</code> 与 <code>m_base_path + href</code> 配对塞进一个 <code>std::map&lt;std::string, std::string&gt; items</code>，顺手做两件事——若该 id 等于 <code>cover_item</code> 就把 href 存进 <code>m_cover_image_item</code>（封面就此落案），若 id 是 <code>"ncx"</code> 就把 href 存进 <code>m_toc_ncx_item</code>。最后进 spine：按序遍历 <code>&lt;itemref&gt;</code>，把每个 <code>idref</code> 在 <code>items</code> 里查到对应路径，<code>m_spine.push_back(std::make_pair(id, items[id]))</code>。一张 id→路径 的对照表 <code>items</code>，串起了封面、目录和整个阅读顺序。</p>
+
+<pre><code><span class="cmt">/* Epub.cpp：parse_content_opf —— manifest 建表 + spine 定序（真实代码节选） */</span>
+<span class="kw">auto</span> metadata = package-&gt;FirstChildElement(<span class="str">"metadata"</span>);
+<span class="kw">auto</span> title = metadata-&gt;FirstChildElement(<span class="str">"dc:title"</span>);
+m_title = title-&gt;GetText();                               <span class="cmt">// ① 书名落案</span>
+
+<span class="kw">auto</span> cover = metadata-&gt;FirstChildElement(<span class="str">"meta"</span>);        <span class="cmt">// ② 找 meta[name=cover]</span>
+<span class="kw">while</span> (cover &amp;&amp; cover-&gt;Attribute(<span class="str">"name"</span>) &amp;&amp;
+       strcmp(cover-&gt;Attribute(<span class="str">"name"</span>), <span class="str">"cover"</span>) != <span class="num">0</span>)
+  cover = cover-&gt;NextSiblingElement(<span class="str">"meta"</span>);
+<span class="kw">auto</span> cover_item = cover ? cover-&gt;Attribute(<span class="str">"content"</span>) : <span class="kw">nullptr</span>;
+
+<span class="kw">auto</span> manifest = package-&gt;FirstChildElement(<span class="str">"manifest"</span>);
+std::map&lt;std::string, std::string&gt; items;                 <span class="cmt">// id → 实际路径</span>
+<span class="kw">auto</span> item = manifest-&gt;FirstChildElement(<span class="str">"item"</span>);
+<span class="kw">while</span> (item)
+{
+  std::string item_id = item-&gt;Attribute(<span class="str">"id"</span>);
+  std::string href = m_base_path + item-&gt;Attribute(<span class="str">"href"</span>); <span class="cmt">// 拼上目录前缀</span>
+  <span class="kw">if</span> (cover_item &amp;&amp; item_id == cover_item) m_cover_image_item = href; <span class="cmt">// ③ 封面落案</span>
+  <span class="kw">if</span> (item_id == <span class="str">"ncx"</span>) m_toc_ncx_item = href;               <span class="cmt">// ④ 目录落案</span>
+  items[item_id] = href;
+  item = item-&gt;NextSiblingElement(<span class="str">"item"</span>);
+}
+
+<span class="kw">auto</span> spine = package-&gt;FirstChildElement(<span class="str">"spine"</span>);
+<span class="kw">auto</span> itemref = spine-&gt;FirstChildElement(<span class="str">"itemref"</span>);
+<span class="kw">while</span> (itemref)
+{
+  <span class="kw">auto</span> id = itemref-&gt;Attribute(<span class="str">"idref"</span>);
+  <span class="kw">if</span> (items.find(id) != items.end())
+    m_spine.push_back(std::make_pair(id, items[id]));     <span class="cmt">// ⑤ 按序入队阅读顺序</span>
+  itemref = itemref-&gt;NextSiblingElement(<span class="str">"itemref"</span>);
+}</code></pre>
+
+  <p>第三步 <code>parse_toc_ncx_file()</code> 读章节目录，放到 8.4 展开。三条流水线走完，<code>Epub</code> 对象就"验明正身"了——书有书名、有封面、有阅读顺序、有目录。此后任何"取某一章正文"的需求，都通过 <code>get_item_contents()</code>（第 7 章讲过）按路径去 zip 里解压。值得一提的是作者还留了防护：<code>get_spine_item()</code> 用 <code>m_spine.at()</code>（带越界检查的访问）外加 <code>try/catch</code> 捕获 <code>std::out_of_range</code>，越界时回退到第 0 项，注释原话是 "so it does not crashes when you want to go after last page"（翻过最后一页也不至于崩溃）。</p>
+
+  <table>
+    <tr><th>步骤</th><th>函数</th><th>产出 / 填充的字段</th></tr>
+    <tr><td>① 找 opf 路径</td><td><code>find_content_opf_file</code></td><td><code>content_opf_file</code>、<code>m_base_path</code></td></tr>
+    <tr><td>② 解析清单</td><td><code>parse_content_opf</code></td><td><code>m_title</code>、<code>m_cover_image_item</code>、<code>m_toc_ncx_item</code>、<code>m_spine</code></td></tr>
+    <tr><td>③ 解析目录</td><td><code>parse_toc_ncx_file</code></td><td><code>m_toc</code>（章节目录条目）</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>Epub</code> 类对"越界"的防护是<strong>不一致</strong>的：<code>get_spine_item()</code> 用 <code>try/catch</code> 兜底回退到第 0 项，而 <code>get_toc_item()</code> 直接 <code>m_toc[toc_index]</code>（<code>std::vector</code> 的 <code>operator[]</code>，不检查越界）。读源码时要把这两种访问方式分开对待——前一个能扛住翻过末页，后一个在目录索引越界时会行为未定义。这正是真实项目里"补丁式防护"的常态，也是你该自己留意的地方。</p>
+  </div>
+
+  <!-- ========== 8.4 目录与章节列表 ========== -->
+  <h2>8.4 目录/章节列表的建立：toc.ncx 与 spine 的"对表"</h2>
+
+  <p>书单界面上看到的"章节目录"，数据不是来自 spine，而是来自另一份文件 <code>toc.ncx</code>——8.1 的 manifest 里 id 为 <code>ncx</code> 的那个条目。为什么目录和正文顺序要分家？因为二者职责不同：<code>toc.ncx</code> 是<strong>给人看的目录</strong>（标题文本 + 跳转锚点），spine 是<strong>给机器读的正文顺序</strong>。它们是两张表，靠 <code>href</code> 对齐。先看第一张表怎么建：<code>parse_toc_ncx_file()</code> 解析 <code>ncx → navMap → navPoint</code>，对每个 <code>navPoint</code> 取 <code>navLabel/text</code> 的文本作标题、<code>content</code> 的 <code>src</code> 作目标地址，再把 <code>href</code> 按 <code>'#'</code> 拆成"章节路径 + 锚点"两段（如 <code>...43-h-1.htm.html</code> 与 <code>pgepubid00002</code>），最后每条压成 <code>EpubTocEntry(title, href, anchor, 0)</code> 塞进 <code>m_toc</code>。真实目录里，第 3 条正是 "STORY OF THE DOOR"，指向第一章的 <code>#pgepubid00002</code>。</p>
+
+<pre><code><span class="cmt">/* Epub.cpp：parse_toc_ncx_file —— 从 toc.ncx 建章节目录（真实代码节选） */</span>
+<span class="kw">auto</span> ncx = doc.FirstChildElement(<span class="str">"ncx"</span>);
+<span class="kw">auto</span> navMap = ncx-&gt;FirstChildElement(<span class="str">"navMap"</span>);
+<span class="kw">auto</span> navPoint = navMap-&gt;FirstChildElement(<span class="str">"navPoint"</span>);
+
+<span class="kw">while</span> (navPoint)
+{
+  <span class="kw">auto</span> navLabel = navPoint-&gt;FirstChildElement(<span class="str">"navLabel"</span>)
+                          -&gt;FirstChildElement(<span class="str">"text"</span>)-&gt;FirstChild();
+  std::string title = navLabel-&gt;Value();                  <span class="cmt">// 目录标题</span>
+  <span class="kw">auto</span> content = navPoint-&gt;FirstChildElement(<span class="str">"content"</span>);
+  std::string href = m_base_path + content-&gt;Attribute(<span class="str">"src"</span>);
+
+  <span class="type">size_t</span> pos = href.find(<span class="str">'#'</span>);                       <span class="cmt">// 拆 href#anchor</span>
+  std::string anchor = <span class="str">""</span>;
+  <span class="kw">if</span> (pos != std::string::npos)
+  {
+    anchor = href.substr(pos + <span class="num">1</span>);
+    href = href.substr(<span class="num">0</span>, pos);
+  }
+  m_toc.push_back(EpubTocEntry(title, href, anchor, <span class="num">0</span>));
+  navPoint = navPoint-&gt;NextSiblingElement(<span class="str">"navPoint"</span>);   <span class="cmt">// 下一个目录项</span>
+}</code></pre>
+
+  <p>两张表建好后，<code>Epub</code> 还欠一张"对照表"：用户在目录里选中的是 <code>m_toc</code> 的下标，可阅读器真正要读的是 <code>m_spine</code> 的下标——两者不一定一致（目录第 3 项可能对应正文第 5 章）。<code>get_spine_index_for_toc_index()</code> 就是干这个的：它遍历 <code>m_spine</code>，找出 <code>href</code> 与所选目录项 <code>m_toc[toc_index].href</code> 完全相等的那个 spine 下标；找不到就默认 0（回到书开头）。这正是 8.1 说的"靠 href 对齐"的具体实现。UI 层则靠 <code>EpubToc</code> 类（<code>lib/Epub/EpubList/EpubToc.h/.cpp</code>）驱动：<code>load()</code> 时构造 <code>Epub</code> 并 <code>load()</code>，<code>render()</code> 每页渲染 <code>ITEMS_PER_PAGE = 6</code> 条目录，<code>get_selected_toc()</code> 返回 <code>get_spine_index_for_toc_index(state.selected_item)</code>。</p>
+
+<pre><code><span class="cmt">/* Epub.cpp：把"目录下标"翻译成"正文章节下标"（真实代码） */</span>
+<span class="type">int</span> Epub::get_spine_index_for_toc_index(<span class="type">int</span> toc_index)
+{
+  <span class="cmt">// the toc entry should have an href that matches the spine item</span>
+  <span class="kw">for</span> (<span class="type">int</span> i = <span class="num">0</span>; i &lt; m_spine.size(); i++)
+  {
+    <span class="kw">if</span> (m_spine[i].second == m_toc[toc_index].href)   <span class="cmt">// 按 href 对表</span>
+      <span class="kw">return</span> i;
+  }
+  <span class="cmt">// not found - default to the start of the book</span>
+  <span class="kw">return</span> <span class="num">0</span>;                                          <span class="cmt">// 找不到则回到书开头</span>
+}
+
+<span class="cmt">/* EpubToc.cpp：get_selected_toc —— 把目录选中项交给阅读器 */</span>
+<span class="type">uint16_t</span> EpubToc::get_selected_toc()
+{
+  <span class="kw">return</span> epub-&gt;get_spine_index_for_toc_index(state.selected_item);
+}</code></pre>
+
+  <p>把整条链路接起来，就是你在屏幕上按 SELECT 后发生的全部：书单里选中一本书 → <code>main.cpp</code> 构造 <code>EpubToc</code> 进入目录态 → <code>EpubToc::load()</code> 重新 <code>new Epub(...)</code> 并 <code>load()</code>（再一次走完 8.3 的三步，把目录解析出来）→ <code>EpubToc::render()</code> 每页画 6 条目录 → 用户按 SELECT → <code>get_selected_toc()</code> 对表出章节下标 → <code>EpubReader::set_state_section()</code> 写入 <code>state.current_section</code> → 进入阅读态，<code>EpubReader</code> 按这个下标用 <code>get_spine_item()</code> 取正文。到这一步，"找书 → 看目录 → 读正文"的完整闭环，终于在数据层面全部打通。</p>
+
+  <table>
+    <tr><th>类 / 结构</th><th>职责</th><th>关键成员</th></tr>
+    <tr><td><code>Epub</code></td><td>解析整本书：清单 + 目录 + 按路径取内容</td><td><code>load()</code>、<code>get_title()</code>、<code>get_spine_item()</code>、<code>get_toc_item()</code>、<code>get_spine_index_for_toc_index()</code></td></tr>
+    <tr><td><code>EpubTocEntry</code></td><td>一条章节目录项</td><td><code>title</code>、<code>href</code>、<code>anchor</code>、<code>level</code></td></tr>
+    <tr><td><code>EpubToc</code></td><td>章节目录界面</td><td><code>load()</code>、<code>next()/prev()</code>、<code>render()</code>、<code>get_selected_toc()</code></td></tr>
+    <tr><td><code>EpubReader</code></td><td>阅读某章并翻页</td><td><code>set_state_section()</code>、<code>next()/prev()</code>、<code>parse_and_layout_current_section()</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>记住"<strong>目录 ≠ 正文顺序</strong>"这个易错点：toc.ncx 的条目数量和顺序，与 spine 的 <code>itemref</code> 通常对不上（本书 <code>oebps.epub</code> 实测目录 12 条、spine 13 项，就是证据）。任何"目录第几条 ↔ 正文第几章"的换算，都必须经过 <code>get_spine_index_for_toc_index</code> 那张 href 对照表，不能想当然地按下标直接对应。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：三份口供 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>拆开 <code>fixtures/oebps.epub</code>，打开 <code>OEBPS/content.opf</code>，回答：(a) metadata 里 <code>&lt;meta name="cover" .../&gt;</code> 的 <code>content</code> 值是什么？(b) manifest 里 id 为 <code>ncx</code> 的条目指向哪个文件？(c) spine 的 <code>toc</code> 属性值是什么？(d) spine 第一个 <code>itemref</code> 的 <code>idref</code> 指向谁？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 8.1 的代码块逐行找：封面指认在 metadata，目录文件在 manifest，顺序在 spine。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>item1</code>（即封面图在 manifest 里的 id）。(b) <code>toc.ncx</code>（<code>media-type="application/x-dtbncx+xml"</code>）。(c) <code>ncx</code>——告诉阅读器"目录文件是 manifest 里 id 为 ncx 的条目"。(d) <code>coverpage-wrapper</code>，也就是 <code>wrap0000.html</code> 封面页，之后才是正文章节 item5、item6……。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：找 content.opf <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>Epub::find_content_opf_file()</code>，回答：(a) 它先读的是 zip 里的哪个文件？为什么不能直接假设 opf 路径是 <code>OEBPS/content.opf</code>？(b) 判定"这个 rootfile 就是 opf"的依据是哪个属性的哪个取值？(c) 若 <code>META-INF/container.xml</code> 缺失，<code>read_file_to_memory</code> 会返回什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先读 <code>META-INF/container.xml</code>，再沿 <code>container → rootfiles → rootfile</code> 钻取；判定依据是 <code>media-type</code>；回忆第 7 章 <code>read_file_to_memory</code> 失败时的返回值。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 先读 <code>META-INF/container.xml</code>，因为规范允许书商把 <code>content.opf</code> 放在任意目录（甚至不在 <code>OEBPS/</code> 下），只有 container.xml 的 <code>full-path</code> 说了算，拍脑袋猜路径会翻车。(b) 依据 <code>media-type</code> 属性等于 <code>"application/oebps-package+xml"</code>，命中后取它的 <code>full-path</code> 属性值作为 opf 路径。(c) <code>read_file_to_memory</code> 定位不到文件会返回 <code>nullptr</code>，于是 <code>find_content_opf_file</code> 打印 "Could not find META-INF/container.xml" 并返回 false，最终 <code>Epub::load()</code> 失败——在设备上会进入"10 秒后重启"的兜底分支。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：封面指认链 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>Epub::parse_content_opf()</code>，把"封面图路径是怎么一步步定位出来的"完整写出来。特别说明：(a) metadata 里哪一行是"封面指认"？(b) <code>cover_item</code> 存的是什么？(c) manifest 遍历时凭什么把某条 item 的 href 存进 <code>m_cover_image_item</code>？(d) href 为什么要拼上 <code>m_base_path</code>？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>链路：metadata 的 <code>&lt;meta name="cover" content="item1"/&gt;</code> → <code>cover_item="item1"</code> → manifest 里 <code>item_id == cover_item</code> 的那条 → 拼上 <code>m_base_path</code> 存入 <code>m_cover_image_item</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>&lt;meta name="cover" content="item1"/&gt;</code>，它的 <code>name="cover"</code> 表明身份、<code>content="item1"</code> 给出 manifest 里的 id。(b) <code>cover_item</code> 存的就是这个 <code>content</code> 值（"item1"），即封面在 manifest 里的 id。(c) manifest 遍历时，当某条 <code>&lt;item&gt;</code> 的 <code>id</code> 恰好等于 <code>cover_item</code>，就把它的 href 存进 <code>m_cover_image_item</code>——封面由"metadata 指认 + manifest 定义"联合定位。(d) manifest 里的 <code>href</code> 是相对 <code>content.opf</code> 所在目录的（如 <code>@public@...@images@cover.jpg</code>），必须拼上 <code>m_base_path</code>（<code>OEBPS/</code>）才能得到 zip 里的完整路径。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：目录到正文的对表 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>读 <code>parse_toc_ncx_file()</code>、<code>get_spine_index_for_toc_index()</code> 与 <code>EpubToc::get_selected_toc()</code>，回答：(a) toc.ncx 的目录项 <code>href</code> 为何要按 <code>'#'</code> 拆成两段？(b) 为什么"目录下标"不能直接当作"spine 下标"用？(c) 若用户在目录里选了《STORY OF THE DOOR》（真实测试中它在 <code>m_toc</code> 的下标是 2，href 为 <code>...43-h-1.htm.html</code>），<code>get_spine_index_for_toc_index(2)</code> 会返回多少？返回的该下标在 spine 里对应哪个 id？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(a) 锚点用于章节内定位；(b) 目录与 spine 是两张表、数目与顺序都不同（oebps.epub 实测 12 条目录 vs 13 个 spine 项）；(c) 在 <code>test/test_epub_index_load.cpp</code> 与 <code>test/test_epub_load.cpp</code> 里找真实数字。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>content src</code> 形如 <code>...43-h-1.htm.html#pgepubid00002</code>，'#' 前是章节文件路径（供 <code>get_spine_item</code> 取正文），'#' 后是章节内锚点（供精确定位，本项目未深入使用但仍保留在 <code>EpubTocEntry.anchor</code>）。(b) 目录条目数与 spine 项数、顺序都未必一致（oebps.epub 实测目录 12 条、spine 13 项，且第一条目录"书名"对应的正文文件是 43-h-0.htm.html），所以必须用 href 对表换算。(c) 从真实测试数据看，<code>STORY OF THE DOOR</code> 的 toc 项（下标 2）href 为 <code>OEBPS/@public@...@43-h-1.htm.html</code>；<code>get_spine_index_for_toc_index(2)</code> 遍历 <code>m_spine</code>，找到 href 相等的那一项，返回<strong>下标 2</strong>——它对应 spine 里 id 为 <code>item6</code> 的条目（spine 下标 0=封面页、1=item5/43-h-0、2=item6/43-h-1）。若对不上表，则返回 0，回到书开头兜底。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第13章：Compose 动画与副作用 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="13" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第13章：Compose 动画与副作用</h1>
+  <p class="chapter-subtitle">让界面"活"起来 —— 掌握动画系统与副作用管理，打造流畅且可靠的用户体验</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：赋予画面生命与呼吸</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一幅伟大的画作，关键不在于静止的完美，而在于它能让观者感受到运动与生命。Compose 的动画系统正是如此——你赋予界面呼吸的节奏，用户便能感受到应用的生命力。让我们像文艺复兴的大师一样，用工程的精确与艺术的感性，为每一个像素注入灵魂。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 13.1 Compose 动画概览 ========== -->
+  <h2>13.1 Compose 动画概览</h2>
+
+  <p>在我的画室里，每一幅杰作都始于对运动的深刻理解。鸟的飞翔、水的流淌、光影的变幻——自然界中没有真正静止的事物。同样，现代移动应用中，动画是不可或缺的灵魂。恰到好处的动画就像画作中精心设计的视线引导——它牵引用户的注意力，为操作提供反馈，让界面过渡如丝般自然。Compose 的声明式特性让动画创作变得前所未有的简单，就像我发明的晕涂法（sfumato）一样，你只需要告诉画布目标状态，Compose 就会自动帮你完成那优雅的过渡。</p>
+
+  <p>Compose 为你准备了一套层次分明的动画工具，如同画家工作台上从粗到细的各种画笔：</p>
+
+  <table>
+    <thead>
+      <tr><th>API 层级</th><th>代表 API</th><th>适用场景</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>高级 API</td><td>AnimatedVisibility, AnimatedContent, Crossfade</td><td>组件显示/隐藏、内容切换</td></tr>
+      <tr><td>值动画 API</td><td>animate*AsState, animateContentSize</td><td>单个属性值的动画过渡</td></tr>
+      <tr><td>过渡 API</td><td>updateTransition, rememberInfiniteTransition</td><td>多属性协调动画、无限循环</td></tr>
+      <tr><td>低级 API</td><td>Animatable, AnimationState</td><td>精确控制时机、手势驱动</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">选择合适的画笔</div>
+    <p>正如绘画中应先用宽笔铺大色块、再用细笔勾勒细节，动画 API 的选择也遵循同样的原则：优先使用高级 API。只有当高级 API 无法满足需求时，才降级到低级 API。大多数业务场景下，<code>animate*AsState</code> 和 <code>AnimatedVisibility</code> 就已经足够了——好的大师知道何时克制，何时精雕。</p>
+  </div>
+
+  <!-- ========== 13.2 值动画: animate*AsState ========== -->
+  <h2>13.2 值动画：animate*AsState</h2>
+
+  <p>如果说文艺复兴绘画的精髓在于"渐变"——从光到影的柔和过渡、从暖色到冷色的微妙转换——那么 <code>animate*AsState</code> 就是 Compose 中的渐变大师。这个系列是 Compose 中最常用的动画 API。给它一个目标值，当目标值变化时，它会如同我用画笔混合颜料一样，自动从当前值平滑过渡到新值。常用的有 <code>animateDpAsState</code>（尺寸）、<code>animateColorAsState</code>（颜色）、<code>animateFloatAsState</code>（透明度、角度）等。</p>
+
+  <p>下面是一个卡片在点击时同时改变大小和颜色的示例——想象一下，这就像一朵花在晨光中绽放，尺寸舒展、色彩流转：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AnimatedCard</span>() {
+    <span class="kw">var</span> expanded <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="kw">false</span>) }
+
+    <span class="kw">val</span> cardWidth <span class="kw">by</span> <span class="fn">animateDpAsState</span>(
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="kw">if</span> (expanded) <span class="num">300.dp</span> <span class="kw">else</span> <span class="num">150.dp</span>,
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"cardWidth"</span>
+    )
+    <span class="kw">val</span> cardHeight <span class="kw">by</span> <span class="fn">animateDpAsState</span>(
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="kw">if</span> (expanded) <span class="num">200.dp</span> <span class="kw">else</span> <span class="num">100.dp</span>,
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"cardHeight"</span>
+    )
+    <span class="kw">val</span> cardColor <span class="kw">by</span> <span class="fn">animateColorAsState</span>(
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="kw">if</span> (expanded) <span class="type">Color</span>(<span class="num">0xFF6200EE</span>) <span class="kw">else</span> <span class="type">Color</span>(<span class="num">0xFF03DAC5</span>),
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"cardColor"</span>
+    )
+    <span class="kw">val</span> cornerRadius <span class="kw">by</span> <span class="fn">animateDpAsState</span>(
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="kw">if</span> (expanded) <span class="num">24.dp</span> <span class="kw">else</span> <span class="num">8.dp</span>,
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"corner"</span>
+    )
+
+    <span class="fn">Box</span>(
+        <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>
+            .<span class="fn">width</span>(cardWidth).<span class="fn">height</span>(cardHeight)
+            .<span class="fn">clip</span>(<span class="fn">RoundedCornerShape</span>(cornerRadius))
+            .<span class="fn">background</span>(cardColor)
+            .<span class="fn">clickable</span> { expanded <span class="op">=</span> <span class="op">!</span>expanded },
+        <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center
+    ) {
+        <span class="fn">Text</span>(
+            <span class="kw">if</span> (expanded) <span class="str">"点击收起"</span> <span class="kw">else</span> <span class="str">"点击展开"</span>,
+            <span class="param">color</span> <span class="op">=</span> <span class="type">Color</span>.White
+        )
+    }
+}</code></pre>
+
+  <h3>animationSpec：掌控运动的节拍</h3>
+
+  <p>在我看来，运动的灵魂在于节奏。一个物体从高处落下，它不是匀速的——它加速、减速、反弹。<code>animationSpec</code> 参数正是你掌控这种运动韵律的工具，就像指挥家手中的指挥棒，决定了乐章的快慢与轻重。默认使用弹簧动画，但你可以通过 <code>animationSpec</code> 参数自定义：</p>
+
+  <table>
+    <thead>
+      <tr><th>animationSpec</th><th>特点</th><th>适用场景</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>spring()</code></td><td>基于物理弹簧模型，自然流畅</td><td>大多数 UI 动画（默认）</td></tr>
+      <tr><td><code>tween()</code></td><td>基于时长的插值，可设置缓动曲线</td><td>精确控制时长</td></tr>
+      <tr><td><code>snap()</code></td><td>瞬间切换，无过渡</td><td>调试或即时切换</td></tr>
+      <tr><td><code>keyframes()</code></td><td>在指定时间点设置关键帧</td><td>分段控制动画过程</td></tr>
+      <tr><td><code>repeatable()</code></td><td>重复指定次数</td><td>脉冲、闪烁效果</td></tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cmt">// 弹簧动画：设置阻尼比和刚度</span>
+<span class="kw">val</span> size <span class="kw">by</span> <span class="fn">animateDpAsState</span>(
+    <span class="param">targetValue</span> <span class="op">=</span> targetSize,
+    <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">spring</span>(
+        <span class="param">dampingRatio</span> <span class="op">=</span> <span class="type">Spring</span>.DampingRatioMediumBouncy,
+        <span class="param">stiffness</span> <span class="op">=</span> <span class="type">Spring</span>.StiffnessLow
+    ),
+    <span class="param">label</span> <span class="op">=</span> <span class="str">"size"</span>
+)
+
+<span class="cmt">// 补间动画：500ms，带缓动曲线</span>
+<span class="kw">val</span> alpha <span class="kw">by</span> <span class="fn">animateFloatAsState</span>(
+    <span class="param">targetValue</span> <span class="op">=</span> targetAlpha,
+    <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">tween</span>(<span class="param">durationMillis</span> <span class="op">=</span> <span class="num">500</span>, <span class="param">easing</span> <span class="op">=</span> <span class="type">FastOutSlowInEasing</span>),
+    <span class="param">label</span> <span class="op">=</span> <span class="str">"alpha"</span>
+)</code></pre>
+
+  <!-- ========== 13.3 可见性动画: AnimatedVisibility ========== -->
+  <h2>13.3 可见性动画：AnimatedVisibility</h2>
+
+  <p>在文艺复兴时期的戏剧中，角色的登场与退场总是经过精心编排的——光线渐亮、帷幕徐开，绝不是突然闪现。<code>AnimatedVisibility</code> 正是这位舞台导演，它控制组件优雅地出场与谢幕。你只需控制一个布尔值，如同拉动帷幕的绳索，剩下的编排交给 Compose。它提供了丰富的进入/退出动画，且可以用 <code>+</code> 号组合多种效果，就像在画布上叠加多层颜料以创造更丰富的视觉效果：</p>
+
+  <table>
+    <thead>
+      <tr><th>进入动画</th><th>退出动画</th><th>效果</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>fadeIn()</code></td><td><code>fadeOut()</code></td><td>淡入 / 淡出</td></tr>
+      <tr><td><code>slideInHorizontally()</code></td><td><code>slideOutHorizontally()</code></td><td>水平滑入 / 滑出</td></tr>
+      <tr><td><code>slideInVertically()</code></td><td><code>slideOutVertically()</code></td><td>垂直滑入 / 滑出</td></tr>
+      <tr><td><code>expandVertically()</code></td><td><code>shrinkVertically()</code></td><td>垂直展开 / 收缩</td></tr>
+      <tr><td><code>expandIn()</code></td><td><code>shrinkOut()</code></td><td>从中心展开 / 收缩</td></tr>
+      <tr><td><code>scaleIn()</code></td><td><code>scaleOut()</code></td><td>缩放进入 / 退出</td></tr>
+    </tbody>
+  </table>
+
+  <p>下面是一个可折叠 FAQ 面板的示例——请注意它如何像一幅卷轴画般徐徐展开，将答案优雅地呈现给观者：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">ExpandableFAQ</span>(<span class="param">question</span>: <span class="type">String</span>, <span class="param">answer</span>: <span class="type">String</span>) {
+    <span class="kw">var</span> expanded <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="kw">false</span>) }
+    <span class="kw">val</span> rotationAngle <span class="kw">by</span> <span class="fn">animateFloatAsState</span>(
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="kw">if</span> (expanded) <span class="num">180f</span> <span class="kw">else</span> <span class="num">0f</span>,
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"rotation"</span>
+    )
+
+    <span class="fn">Card</span>(<span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>().<span class="fn">padding</span>(<span class="param">vertical</span> <span class="op">=</span> <span class="num">4.dp</span>)) {
+        <span class="fn">Column</span> {
+            <span class="fn">Row</span>(
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>()
+                    .<span class="fn">clickable</span> { expanded <span class="op">=</span> <span class="op">!</span>expanded }.<span class="fn">padding</span>(<span class="num">16.dp</span>),
+                <span class="param">horizontalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.SpaceBetween,
+                <span class="param">verticalAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.CenterVertically
+            ) {
+                <span class="fn">Text</span>(question, <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">weight</span>(<span class="num">1f</span>))
+                <span class="fn">Icon</span>(
+                    <span class="type">Icons</span>.Default.KeyboardArrowDown, <span class="kw">null</span>,
+                    <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">rotate</span>(rotationAngle)
+                )
+            }
+
+            <span class="fn">AnimatedVisibility</span>(
+                <span class="param">visible</span> <span class="op">=</span> expanded,
+                <span class="param">enter</span> <span class="op">=</span> <span class="fn">fadeIn</span>(<span class="fn">tween</span>(<span class="num">300</span>)) + <span class="fn">expandVertically</span>(
+                    <span class="fn">tween</span>(<span class="num">300</span>), <span class="param">expandFrom</span> <span class="op">=</span> <span class="type">Alignment</span>.Top
+                ),
+                <span class="param">exit</span> <span class="op">=</span> <span class="fn">fadeOut</span>(<span class="fn">tween</span>(<span class="num">200</span>)) + <span class="fn">shrinkVertically</span>(<span class="fn">tween</span>(<span class="num">200</span>))
+            ) {
+                <span class="fn">Text</span>(
+                    answer,
+                    <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>),
+                    <span class="param">color</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}</code></pre>
+
+  <!-- ========== 13.4 内容切换: Crossfade 与 AnimatedContent ========== -->
+  <h2>13.4 内容切换：Crossfade 与 AnimatedContent</h2>
+
+  <h3>Crossfade：如同黎明与黄昏的交替</h3>
+
+  <p>回忆一下我在画布上描绘日出的过程——夜色并非骤然消失，而是缓缓被晨光取代，新旧光线在交界处互相渗透、融合。<code>Crossfade</code> 正是如此运作的：它接受一个目标状态值，状态变化时旧内容如夕阳般淡去、新内容如朝霞般显现：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CrossfadeDemo</span>() {
+    <span class="kw">var</span> currentPage <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">"home"</span>) }
+
+    <span class="fn">Column</span> {
+        <span class="fn">Row</span>(<span class="param">horizontalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">8.dp</span>)) {
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { currentPage <span class="op">=</span> <span class="str">"home"</span> }) { <span class="fn">Text</span>(<span class="str">"首页"</span>) }
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { currentPage <span class="op">=</span> <span class="str">"profile"</span> }) { <span class="fn">Text</span>(<span class="str">"我的"</span>) }
+        }
+
+        <span class="fn">Crossfade</span>(
+            <span class="param">targetState</span> <span class="op">=</span> currentPage,
+            <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">tween</span>(<span class="num">400</span>),
+            <span class="param">label</span> <span class="op">=</span> <span class="str">"pageCrossfade"</span>
+        ) { page <span class="op">-></span>
+            <span class="kw">when</span> (page) {
+                <span class="str">"home"</span> <span class="op">-></span> <span class="fn">Text</span>(<span class="str">"首页内容"</span>, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.headlineMedium)
+                <span class="str">"profile"</span> <span class="op">-></span> <span class="fn">Text</span>(<span class="str">"我的页面"</span>, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.headlineMedium)
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>AnimatedContent：编排有方向的场景切换</h3>
+
+  <p><code>AnimatedContent</code> 是一位更具野心的舞台设计师。如同我在《最后的晚餐》中精心安排每个人物的位置与动态关系，<code>AnimatedContent</code> 允许你自定义进入和退出动画的方向，赋予场景切换以叙事感。非常适合标签页切换等需要方向感的场景：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">TabSwitchDemo</span>() {
+    <span class="kw">var</span> selectedTab <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableIntStateOf</span>(<span class="num">0</span>) }
+    <span class="kw">val</span> tabs <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"推荐"</span>, <span class="str">"关注"</span>, <span class="str">"热榜"</span>)
+
+    <span class="fn">Column</span> {
+        <span class="fn">TabRow</span>(<span class="param">selectedTabIndex</span> <span class="op">=</span> selectedTab) {
+            tabs.<span class="fn">forEachIndexed</span> { index, title <span class="op">-></span>
+                <span class="fn">Tab</span>(selectedTab <span class="op">==</span> index, { selectedTab <span class="op">=</span> index }) { <span class="fn">Text</span>(title) }
+            }
+        }
+
+        <span class="fn">AnimatedContent</span>(
+            <span class="param">targetState</span> <span class="op">=</span> selectedTab,
+            <span class="param">transitionSpec</span> <span class="op">=</span> {
+                <span class="kw">if</span> (targetState > initialState) {
+                    <span class="cmt">// 向右切换：新内容从右侧滑入</span>
+                    (<span class="fn">slideInHorizontally</span> { it } + <span class="fn">fadeIn</span>()) togetherWith
+                        (<span class="fn">slideOutHorizontally</span> { -it } + <span class="fn">fadeOut</span>())
+                } <span class="kw">else</span> {
+                    <span class="cmt">// 向左切换：新内容从左侧滑入</span>
+                    (<span class="fn">slideInHorizontally</span> { -it } + <span class="fn">fadeIn</span>()) togetherWith
+                        (<span class="fn">slideOutHorizontally</span> { it } + <span class="fn">fadeOut</span>())
+                } using <span class="fn">SizeTransform</span>(<span class="param">clip</span> <span class="op">=</span> <span class="kw">false</span>)
+            },
+            <span class="param">label</span> <span class="op">=</span> <span class="str">"tabContent"</span>
+        ) { tab <span class="op">-></span>
+            <span class="fn">Box</span>(
+                <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>().<span class="fn">height</span>(<span class="num">300.dp</span>),
+                <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center
+            ) {
+                <span class="fn">Text</span>(<span class="str">"${tabs[tab]}页面内容"</span>, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.headlineMedium)
+            }
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">Crossfade vs AnimatedContent</div>
+    <p>如同选择画技——若只需柔和的色彩过渡，用 <code>Crossfade</code>，API 更简洁，如同晕涂法般自然。若需要讲述一个有方向的故事（如左右滑动切换标签页），则用 <code>AnimatedContent</code>，它就像透视法一样，赋予画面深度与方向。</p>
+  </div>
+
+  <!-- ========== 13.5 布局动画 ========== -->
+  <h2>13.5 布局动画</h2>
+
+  <h3>animateContentSize：画布的自然伸缩</h3>
+
+  <p>在我的工作室里，画布的尺寸从来不是一成不变的——有时需要展开更大的空间来容纳更宏大的构图。<code>animateContentSize</code> 正是这样一个智慧的 Modifier，当组件内容尺寸发生变化时，它会如同活的画框一般自动添加动画，是实现"展开/收起"效果最简单的方式：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">ExpandableText</span>(<span class="param">title</span>: <span class="type">String</span>, <span class="param">body</span>: <span class="type">String</span>) {
+    <span class="kw">var</span> expanded <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="kw">false</span>) }
+
+    <span class="fn">Card</span>(
+        <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>().<span class="fn">padding</span>(<span class="num">8.dp</span>).<span class="fn">clickable</span> { expanded <span class="op">=</span> <span class="op">!</span>expanded }
+    ) {
+        <span class="fn">Column</span>(
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>).<span class="fn">animateContentSize</span>(
+                <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">spring</span>(<span class="param">stiffness</span> <span class="op">=</span> <span class="type">Spring</span>.StiffnessMedium)
+            )
+        ) {
+            <span class="fn">Text</span>(title, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.titleMedium)
+            <span class="kw">if</span> (expanded) {
+                <span class="fn">Spacer</span>(<span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">8.dp</span>))
+                <span class="fn">Text</span>(body, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.bodyMedium)
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>Modifier.animateItem：列表中的芭蕾舞</h3>
+
+  <p>想象一群舞者在舞台上重新排列位置——每一个人都不是瞬间移动，而是沿着优美的弧线滑向新的站位。在 <code>LazyColumn</code> 中，<code>Modifier.animateItem()</code> 正是这位编舞大师，为列表项的添加、删除和重新排序提供流畅的位移动画：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AnimatedListDemo</span>() {
+    <span class="kw">var</span> items <span class="kw">by</span> <span class="fn">remember</span> {
+        <span class="fn">mutableStateOf</span>(<span class="fn">listOf</span>(<span class="str">"苹果"</span>, <span class="str">"香蕉"</span>, <span class="str">"橙子"</span>, <span class="str">"葡萄"</span>, <span class="str">"西瓜"</span>))
+    }
+
+    <span class="fn">Column</span> {
+        <span class="fn">Row</span>(<span class="param">horizontalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">8.dp</span>)) {
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { items <span class="op">=</span> items.<span class="fn">shuffled</span>() }) { <span class="fn">Text</span>(<span class="str">"打乱"</span>) }
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { items <span class="op">=</span> items.<span class="fn">sorted</span>() }) { <span class="fn">Text</span>(<span class="str">"排序"</span>) }
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> {
+                <span class="kw">if</span> (items.<span class="fn">isNotEmpty</span>()) items <span class="op">=</span> items.<span class="fn">drop</span>(<span class="num">1</span>)
+            }) { <span class="fn">Text</span>(<span class="str">"删除首项"</span>) }
+        }
+
+        <span class="fn">LazyColumn</span> {
+            <span class="fn">items</span>(<span class="param">items</span> <span class="op">=</span> items, <span class="param">key</span> <span class="op">=</span> { it }) { item <span class="op">-></span>
+                <span class="fn">Card</span>(
+                    <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>()
+                        .<span class="fn">padding</span>(<span class="param">vertical</span> <span class="op">=</span> <span class="num">4.dp</span>)
+                        .<span class="fn">animateItem</span>()  <span class="cmt">// key 是动画正确运作的关键</span>
+                ) {
+                    <span class="fn">Text</span>(item, <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>))
+                }
+            }
+        }
+    }
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">大师的忠告</div>
+    <p>使用 <code>Modifier.animateItem()</code> 时，必须为列表项提供稳定且唯一的 <code>key</code>。如同画作中每个人物都需要独特的身份标识——没有 key，Compose 就像一个无法辨认舞者面孔的编舞，无法追踪哪些项被移动了，动画就无法正确执行。</p>
+  </div>
+
+  <!-- ========== 13.6 副作用 API 概览 ========== -->
+  <h2>13.6 副作用 API 概览</h2>
+
+  <p>绘画不仅仅是颜料与画布的事——画家需要调配颜料、清洗画笔、固定画框、等待干燥。这些"画面之外"的工作虽不直接出现在作品中，却是创作过程中不可或缺的环节。在 Compose 中，<strong>副作用</strong>（Side Effect）正是这类"画面之外"的操作——任何逃脱了可组合函数作用域的行为，如网络请求、写入数据库、注册监听器、显示 Toast 等。</p>
+
+  <p>为什么需要专门的副作用 API？因为可组合函数如同一幅随时可能被重新绘制的画——它可以随时被重组、执行顺序不保证、可能被跳过。如果你直接在可组合函数中发网络请求，就像每次重新画一笔都要重新购买颜料一样荒谬——每次重组都会重复执行。副作用 API 为你提供了安全、可控的执行时机，如同画室中严谨的工作流程。</p>
+
+  <table>
+    <thead>
+      <tr><th>API</th><th>特点</th><th>典型场景</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>LaunchedEffect</code></td><td>启动协程，key 变化时取消并重启</td><td>加载数据、定时器</td></tr>
+      <tr><td><code>DisposableEffect</code></td><td>有配套清理操作（onDispose）</td><td>注册/注销监听器</td></tr>
+      <tr><td><code>SideEffect</code></td><td>每次成功重组后执行，非挂起</td><td>日志记录、同步外部状态</td></tr>
+      <tr><td><code>rememberCoroutineScope</code></td><td>获取绑定组合生命周期的协程作用域</td><td>在 onClick 中启动协程</td></tr>
+      <tr><td><code>derivedStateOf</code></td><td>从其他状态派生新状态</td><td>列表过滤、格式化</td></tr>
+      <tr><td><code>snapshotFlow</code></td><td>将 Compose 快照状态转换为 Flow</td><td>监听状态变化并去抖</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ========== 13.7 LaunchedEffect ========== -->
+  <h2>13.7 LaunchedEffect</h2>
+
+  <p><code>LaunchedEffect</code> 如同你派出的一位信使，携带着你的指令奔赴远方。它接受一个或多个 key，在组件首次进入组合树时启动协程。当 key 变化时，旧的信使被召回、新的信使被派出；当组件离开组合树时，信使自动归队。这确保了每一个异步任务都在正确的时机启动和终止。</p>
+
+  <h3>示例 1：加载数据</h3>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">UserProfileScreen</span>(<span class="param">userId</span>: <span class="type">String</span>, <span class="param">viewModel</span>: <span class="type">UserViewModel</span> <span class="op">=</span> <span class="fn">viewModel</span>()) {
+    <span class="kw">val</span> uiState <span class="kw">by</span> viewModel.uiState.<span class="fn">collectAsState</span>()
+
+    <span class="cmt">// 当 userId 改变时，重新加载数据</span>
+    <span class="fn">LaunchedEffect</span>(userId) {
+        viewModel.<span class="fn">loadUserProfile</span>(userId)
+    }
+
+    <span class="kw">when</span> (<span class="kw">val</span> state <span class="op">=</span> uiState) {
+        <span class="kw">is</span> <span class="type">UiState</span>.Loading <span class="op">-></span> <span class="fn">CircularProgressIndicator</span>()
+        <span class="kw">is</span> <span class="type">UiState</span>.Success <span class="op">-></span> <span class="fn">UserContent</span>(state.user)
+        <span class="kw">is</span> <span class="type">UiState</span>.Error <span class="op">-></span> <span class="fn">Text</span>(state.message)
+    }
+}</code></pre>
+
+  <h3>示例 2：倒计时计时器</h3>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CountdownTimer</span>(<span class="param">totalSeconds</span>: <span class="type">Int</span>) {
+    <span class="kw">var</span> remaining <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableIntStateOf</span>(totalSeconds) }
+
+    <span class="fn">LaunchedEffect</span>(totalSeconds) {
+        remaining <span class="op">=</span> totalSeconds
+        <span class="kw">while</span> (remaining > <span class="num">0</span>) {
+            <span class="fn">delay</span>(<span class="num">1000L</span>)
+            remaining--
+        }
+    }
+
+    <span class="fn">Text</span>(<span class="str">"剩余 $remaining 秒"</span>, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.headlineLarge)
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">常见陷阱：将 Unit 作为 key</div>
+    <p><code>LaunchedEffect(Unit)</code> 意味着协程只在组件首次进入组合树时启动一次，之后不会重新启动。这就像你只在画室第一天派出信使，之后无论委托人更换了多少次需求，信使都不再出发。如果你需要响应某个值的变化（如 userId），必须将该值作为 key，否则即使 userId 改变也不会重新加载数据。</p>
+  </div>
+
+  <!-- ========== 13.8 DisposableEffect ========== -->
+  <h2>13.8 DisposableEffect</h2>
+
+  <p><code>DisposableEffect</code> 体现了一位严谨大师的工作哲学：每一次创作的开始都对应着一次有序的收尾。正如我在画室中——展开画布前必先准备画架，收工时必须清洗画笔、封存颜料。它用于需要"配对操作"的场景：注册 + 注销、绑定 + 解绑。它有一个必须实现的 <code>onDispose</code> 块来做清理工作，确保你的画室永远整洁有序。</p>
+
+  <h3>示例 1：生命周期观察者</h3>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">LifecycleObserverEffect</span>(<span class="param">onStart</span>: () <span class="op">-></span> <span class="type">Unit</span>, <span class="param">onStop</span>: () <span class="op">-></span> <span class="type">Unit</span>) {
+    <span class="kw">val</span> lifecycleOwner <span class="op">=</span> <span class="type">LocalLifecycleOwner</span>.current
+
+    <span class="fn">DisposableEffect</span>(lifecycleOwner) {
+        <span class="kw">val</span> observer <span class="op">=</span> <span class="type">LifecycleEventObserver</span> { _, event <span class="op">-></span>
+            <span class="kw">when</span> (event) {
+                <span class="type">Lifecycle</span>.<span class="type">Event</span>.ON_START <span class="op">-></span> <span class="fn">onStart</span>()
+                <span class="type">Lifecycle</span>.<span class="type">Event</span>.ON_STOP <span class="op">-></span> <span class="fn">onStop</span>()
+                <span class="kw">else</span> <span class="op">-></span> { }
+            }
+        }
+        lifecycleOwner.lifecycle.<span class="fn">addObserver</span>(observer)
+
+        <span class="fn">onDispose</span> {
+            lifecycleOwner.lifecycle.<span class="fn">removeObserver</span>(observer)
+        }
+    }
+}</code></pre>
+
+  <h3>示例 2：页面统计</h3>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AnalyticsScreen</span>(<span class="param">screenName</span>: <span class="type">String</span>) {
+    <span class="fn">DisposableEffect</span>(screenName) {
+        <span class="kw">val</span> startTime <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+        <span class="type">Analytics</span>.<span class="fn">trackScreenView</span>(screenName)
+
+        <span class="fn">onDispose</span> {
+            <span class="kw">val</span> duration <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>() - startTime
+            <span class="type">Analytics</span>.<span class="fn">trackScreenDuration</span>(screenName, duration)
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">LaunchedEffect vs DisposableEffect</div>
+    <p>如同绘画中的两种不同工序：需要在协程中执行耗时操作（挂起函数）时——如同派信使远行——用 <code>LaunchedEffect</code>。需要非挂起的即时设置/清理配对操作时——如同搭起画架然后拆除画架——用 <code>DisposableEffect</code>。</p>
+  </div>
+
+  <!-- ========== 13.9 其他副作用 API ========== -->
+  <h2>13.9 其他副作用 API</h2>
+
+  <h3>SideEffect：画作完成后的签名</h3>
+
+  <p>一位画家在完成每一笔之后，可能需要退后一步审视全局，或在画作完成后签上名字。<code>SideEffect</code> 正是这种"完成后的附加动作"——它在每次成功重组后执行，不接受 key，非挂起函数。适合将 Compose 的内部状态同步到外部系统：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">SideEffectDemo</span>(<span class="param">userName</span>: <span class="type">String</span>) {
+    <span class="fn">SideEffect</span> {
+        <span class="type">Analytics</span>.<span class="fn">setUserProperty</span>(<span class="str">"current_user"</span>, userName)
+    }
+    <span class="fn">Text</span>(<span class="str">"欢迎, $userName"</span>)
+}</code></pre>
+
+  <h3>rememberCoroutineScope：应观者之请而挥笔</h3>
+
+  <p><code>LaunchedEffect</code> 在组合阶段自动启动协程，如同画家按计划作画。但有时你需要在观者按下按钮时才执行某个动作——这种"按需启动"的场景需要 <code>rememberCoroutineScope</code>：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CoroutineScopeDemo</span>() {
+    <span class="kw">val</span> scope <span class="op">=</span> <span class="fn">rememberCoroutineScope</span>()
+    <span class="kw">val</span> snackbarHostState <span class="op">=</span> <span class="fn">remember</span> { <span class="type">SnackbarHostState</span>() }
+
+    <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> {
+        scope.<span class="fn">launch</span> { snackbarHostState.<span class="fn">showSnackbar</span>(<span class="str">"操作已完成"</span>) }
+    }) {
+        <span class="fn">Text</span>(<span class="str">"显示 Snackbar"</span>)
+    }
+}</code></pre>
+
+  <h3>derivedStateOf：从主旋律中提炼和声</h3>
+
+  <p>在音乐中，和声是从主旋律中自然派生出来的，只有当旋律真正改变时和声才需要更新。<code>derivedStateOf</code> 正是如此——当需要从频繁变化的状态派生新状态时，它只在派生结果实际变化时触发重组，避免了不必要的重绘：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">FilteredListDemo</span>() {
+    <span class="kw">var</span> query <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+    <span class="kw">val</span> allItems <span class="op">=</span> <span class="fn">remember</span> { <span class="fn">listOf</span>(<span class="str">"Kotlin"</span>, <span class="str">"Java"</span>, <span class="str">"Swift"</span>, <span class="str">"Dart"</span>, <span class="str">"Rust"</span>) }
+
+    <span class="kw">val</span> filtered <span class="kw">by</span> <span class="fn">remember</span> {
+        <span class="fn">derivedStateOf</span> {
+            <span class="kw">if</span> (query.<span class="fn">isBlank</span>()) allItems
+            <span class="kw">else</span> allItems.<span class="fn">filter</span> { it.<span class="fn">contains</span>(query, <span class="param">ignoreCase</span> <span class="op">=</span> <span class="kw">true</span>) }
+        }
+    }
+
+    <span class="fn">Column</span> {
+        <span class="fn">OutlinedTextField</span>(<span class="param">value</span> <span class="op">=</span> query, <span class="param">onValueChange</span> <span class="op">=</span> { query <span class="op">=</span> it }, <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"搜索"</span>) })
+        filtered.<span class="fn">forEach</span> { <span class="fn">Text</span>(it, <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">8.dp</span>)) }
+    }
+}</code></pre>
+
+  <h3>snapshotFlow：将画布的脉搏转化为河流</h3>
+
+  <p>有时你需要倾听画布的"脉搏"——感知用户滚动的节奏、状态变化的频率——并对这些脉动做出响应。<code>snapshotFlow</code> 将 Compose 快照状态转换为 Flow，让你能够使用 Flow 操作符（去抖、过滤等）来优雅地处理这些变化：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">ScrollTracker</span>() {
+    <span class="kw">val</span> listState <span class="op">=</span> <span class="fn">rememberLazyListState</span>()
+
+    <span class="fn">LaunchedEffect</span>(listState) {
+        <span class="fn">snapshotFlow</span> { listState.firstVisibleItemIndex }
+            .<span class="fn">collect</span> { index <span class="op">-></span>
+                <span class="type">Analytics</span>.<span class="fn">trackScrollPosition</span>(index)
+            }
+    }
+
+    <span class="fn">LazyColumn</span>(<span class="param">state</span> <span class="op">=</span> listState) {
+        <span class="fn">items</span>(<span class="num">100</span>) { <span class="fn">Text</span>(<span class="str">"第 $it 项"</span>, <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>)) }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">副作用工具箱速查</div>
+    <p>如同画家的工具箱，每件工具都有其专属用途：需要派信使执行耗时任务 → <code>LaunchedEffect</code>。需要搭架子又要拆架子 → <code>DisposableEffect</code>。画完后签名 → <code>SideEffect</code>。观者点击后才动笔 → <code>rememberCoroutineScope</code>。从主旋律提炼和声 → <code>derivedStateOf</code>。倾听画布脉搏 → <code>snapshotFlow</code>。</p>
+  </div>
+
+  <!-- ========== 13.10 Scaffold 页面骨架 ========== -->
+  <h2>13.10 Scaffold 页面骨架</h2>
+
+  <p>每一座文艺复兴时期的大教堂，都有其精密的建筑骨架——穹顶、中殿、侧廊、祭坛，各司其职又浑然一体。<code>Scaffold</code> 正是 Material Design 为你提供的应用"教堂骨架"，它定义了标准的页面结构：顶部栏如穹顶般统领全局、底部栏如基座般稳固承托、浮动操作按钮如尖塔般画龙点睛、Snackbar 如壁画般适时呈现信息。</p>
+
+  <table>
+    <thead>
+      <tr><th>参数</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>topBar</code></td><td>顶部应用栏（TopAppBar / CenterAlignedTopAppBar）</td></tr>
+      <tr><td><code>bottomBar</code></td><td>底部导航栏（NavigationBar）</td></tr>
+      <tr><td><code>floatingActionButton</code></td><td>浮动操作按钮</td></tr>
+      <tr><td><code>snackbarHost</code></td><td>Snackbar 宿主</td></tr>
+      <tr><td><code>content</code></td><td>主要内容区域，接收 PaddingValues</td></tr>
+    </tbody>
+  </table>
+
+  <h3>完整的 Scaffold 示例</h3>
+
+  <p>下面我们将所有建筑元素组合在一起，构建一座完整的"应用教堂"，并搭配 Snackbar 消息提示——这就像在宏伟的穹顶之下，为观者呈上一份精美的导览手册：</p>
+
+<pre><code><span class="ann">@OptIn</span>(<span class="type">ExperimentalMaterial3Api</span><span class="op">::</span><span class="kw">class</span>)
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">MainScreen</span>() {
+    <span class="kw">var</span> selectedTab <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableIntStateOf</span>(<span class="num">0</span>) }
+    <span class="kw">val</span> snackbarHostState <span class="op">=</span> <span class="fn">remember</span> { <span class="type">SnackbarHostState</span>() }
+    <span class="kw">val</span> scope <span class="op">=</span> <span class="fn">rememberCoroutineScope</span>()
+
+    <span class="fn">Scaffold</span>(
+        <span class="param">topBar</span> <span class="op">=</span> {
+            <span class="fn">TopAppBar</span>(
+                <span class="param">title</span> <span class="op">=</span> {
+                    <span class="fn">Text</span>(<span class="kw">when</span> (selectedTab) {
+                        <span class="num">0</span> <span class="op">-></span> <span class="str">"首页"</span>; <span class="num">1</span> <span class="op">-></span> <span class="str">"收藏"</span>; <span class="kw">else</span> <span class="op">-></span> <span class="str">"我的"</span>
+                    })
+                },
+                <span class="param">actions</span> <span class="op">=</span> {
+                    <span class="fn">IconButton</span>(<span class="param">onClick</span> <span class="op">=</span> {
+                        scope.<span class="fn">launch</span> {
+                            snackbarHostState.<span class="fn">showSnackbar</span>(
+                                <span class="param">message</span> <span class="op">=</span> <span class="str">"这是一条消息通知"</span>,
+                                <span class="param">actionLabel</span> <span class="op">=</span> <span class="str">"知道了"</span>,
+                                <span class="param">duration</span> <span class="op">=</span> <span class="type">SnackbarDuration</span>.Short
+                            )
+                        }
+                    }) {
+                        <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Notifications, <span class="str">"通知"</span>)
+                    }
+                }
+            )
+        },
+        <span class="param">bottomBar</span> <span class="op">=</span> {
+            <span class="fn">NavigationBar</span> {
+                <span class="fn">NavigationBarItem</span>(
+                    <span class="param">selected</span> <span class="op">=</span> selectedTab <span class="op">==</span> <span class="num">0</span>,
+                    <span class="param">onClick</span> <span class="op">=</span> { selectedTab <span class="op">=</span> <span class="num">0</span> },
+                    <span class="param">icon</span> <span class="op">=</span> { <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Home, <span class="kw">null</span>) },
+                    <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"首页"</span>) }
+                )
+                <span class="fn">NavigationBarItem</span>(
+                    <span class="param">selected</span> <span class="op">=</span> selectedTab <span class="op">==</span> <span class="num">1</span>,
+                    <span class="param">onClick</span> <span class="op">=</span> { selectedTab <span class="op">=</span> <span class="num">1</span> },
+                    <span class="param">icon</span> <span class="op">=</span> { <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Favorite, <span class="kw">null</span>) },
+                    <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"收藏"</span>) }
+                )
+                <span class="fn">NavigationBarItem</span>(
+                    <span class="param">selected</span> <span class="op">=</span> selectedTab <span class="op">==</span> <span class="num">2</span>,
+                    <span class="param">onClick</span> <span class="op">=</span> { selectedTab <span class="op">=</span> <span class="num">2</span> },
+                    <span class="param">icon</span> <span class="op">=</span> { <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Person, <span class="kw">null</span>) },
+                    <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"我的"</span>) }
+                )
+            }
+        },
+        <span class="param">floatingActionButton</span> <span class="op">=</span> {
+            <span class="fn">FloatingActionButton</span>(<span class="param">onClick</span> <span class="op">=</span> {
+                scope.<span class="fn">launch</span> { snackbarHostState.<span class="fn">showSnackbar</span>(<span class="str">"新建内容"</span>) }
+            }) {
+                <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Add, <span class="str">"添加"</span>)
+            }
+        },
+        <span class="param">snackbarHost</span> <span class="op">=</span> { <span class="fn">SnackbarHost</span>(snackbarHostState) }
+    ) { innerPadding <span class="op">-></span>
+        <span class="cmt">// 必须使用 innerPadding，否则内容会被 topBar/bottomBar 遮挡</span>
+        <span class="fn">AnimatedContent</span>(
+            <span class="param">targetState</span> <span class="op">=</span> selectedTab,
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(innerPadding),
+            <span class="param">label</span> <span class="op">=</span> <span class="str">"mainContent"</span>
+        ) { tab <span class="op">-></span>
+            <span class="kw">when</span> (tab) {
+                <span class="num">0</span> <span class="op">-></span> <span class="fn">HomeContent</span>()
+                <span class="num">1</span> <span class="op">-></span> <span class="fn">FavoritesContent</span>()
+                <span class="num">2</span> <span class="op">-></span> <span class="fn">ProfileContent</span>()
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>Snackbar 与 ViewModel 配合</h3>
+
+  <p>在大型工程项目中，消息的触发往往来自深层逻辑——就像教堂的钟声由钟楼内部的机械装置驱动，而非由站在门口的向导手动敲响。实际项目中 Snackbar 消息通常由 ViewModel 触发，用 <code>LaunchedEffect</code> 作为忠实的传令官，监听并显示：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">SnackbarWithViewModel</span>(<span class="param">viewModel</span>: <span class="type">MyViewModel</span> <span class="op">=</span> <span class="fn">viewModel</span>()) {
+    <span class="kw">val</span> snackbarHostState <span class="op">=</span> <span class="fn">remember</span> { <span class="type">SnackbarHostState</span>() }
+    <span class="kw">val</span> message <span class="kw">by</span> viewModel.snackbarMessage.<span class="fn">collectAsState</span>()
+
+    <span class="fn">LaunchedEffect</span>(message) {
+        message?.<span class="fn">let</span> { msg <span class="op">-></span>
+            <span class="kw">val</span> result <span class="op">=</span> snackbarHostState.<span class="fn">showSnackbar</span>(
+                <span class="param">message</span> <span class="op">=</span> msg, <span class="param">actionLabel</span> <span class="op">=</span> <span class="str">"撤销"</span>
+            )
+            <span class="kw">if</span> (result <span class="op">==</span> <span class="type">SnackbarResult</span>.ActionPerformed) {
+                viewModel.<span class="fn">undoLastAction</span>()
+            }
+            viewModel.<span class="fn">clearSnackbarMessage</span>()
+        }
+    }
+
+    <span class="fn">Scaffold</span>(<span class="param">snackbarHost</span> <span class="op">=</span> { <span class="fn">SnackbarHost</span>(snackbarHostState) }) { padding <span class="op">-></span>
+        <span class="fn">Button</span>(
+            <span class="param">onClick</span> <span class="op">=</span> { viewModel.<span class="fn">deleteItem</span>() },
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(padding)
+        ) { <span class="fn">Text</span>(<span class="str">"删除项目"</span>) }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">别忘了 innerPadding</div>
+    <p>正如建筑师必须为穹顶和地基预留空间一样，<code>Scaffold</code> 的 content lambda 传入的 <code>PaddingValues</code> 包含了 topBar 和 bottomBar 占据的空间。必须将它应用到内容区域根组件上，否则你的画作会被画框遮挡——内容会隐藏在顶栏和底栏之下。</p>
+  </div>
+
+  <h3>本章小结</h3>
+
+  <p>如同完成一幅宏大的壁画，让我们回顾这一章中所掌握的全部技法：</p>
+
+  <ul>
+    <li><strong>值动画</strong>：<code>animate*AsState</code> 是你手中最柔软的画笔，让色彩、尺寸、透明度如晕涂法般自然过渡</li>
+    <li><strong>可见性动画</strong>：<code>AnimatedVisibility</code> 是你的舞台帷幕，让组件优雅地登场与谢幕</li>
+    <li><strong>内容切换</strong>：<code>Crossfade</code> 如晨昏交替般柔和，<code>AnimatedContent</code> 则赋予场景切换以透视与方向</li>
+    <li><strong>布局动画</strong>：<code>animateContentSize</code> 让画布自然伸缩，<code>Modifier.animateItem</code> 让列表项如舞者般优美走位</li>
+    <li><strong>副作用管理</strong>：<code>LaunchedEffect</code> 是你的信使，<code>DisposableEffect</code> 是你的画架管理员，<code>SideEffect</code> 是你完成后的签名</li>
+    <li><strong>Scaffold</strong>：如文艺复兴教堂的建筑骨架，为你的应用提供坚实而优雅的页面结构</li>
+  </ul>
+
+  <p>正如我常说的："学无止境，行者无疆。"掌握了这些赋予界面生命与呼吸的技法，你已经具备了创造令人惊叹的用户体验的能力。下一章，我们将学习如何使用依赖注入来管理应用中的复杂依赖关系——就像管理一间大型画室中所有工具与材料的供给一样。</p>
+
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：呼吸灯按钮 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建一个按钮，在空闲状态下持续显示"呼吸灯"效果——透明度在 0.3 到 1.0 之间无限循环渐变，如同画中人物胸口的微微起伏。点击按钮时，停止呼吸动画并显示一条 Snackbar 消息。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>使用 <code>rememberInfiniteTransition</code> 创建无限循环动画，通过 <code>animateFloat</code> 配合 <code>RepeatMode.Reverse</code> 实现呼吸效果。将动画值应用到 <code>Modifier.alpha()</code> 上。Snackbar 部分使用 <code>rememberCoroutineScope</code> 在点击回调中启动。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">BreathingButton</span>() {
+    <span class="kw">val</span> infiniteTransition <span class="op">=</span> <span class="fn">rememberInfiniteTransition</span>(<span class="param">label</span> <span class="op">=</span> <span class="str">"breathing"</span>)
+    <span class="kw">val</span> alpha <span class="kw">by</span> infiniteTransition.<span class="fn">animateFloat</span>(
+        <span class="param">initialValue</span> <span class="op">=</span> <span class="num">0.3f</span>,
+        <span class="param">targetValue</span> <span class="op">=</span> <span class="num">1.0f</span>,
+        <span class="param">animationSpec</span> <span class="op">=</span> <span class="fn">infiniteRepeatable</span>(
+            <span class="param">animation</span> <span class="op">=</span> <span class="fn">tween</span>(<span class="num">1200</span>, <span class="param">easing</span> <span class="op">=</span> <span class="type">FastOutSlowInEasing</span>),
+            <span class="param">repeatMode</span> <span class="op">=</span> <span class="type">RepeatMode</span>.Reverse
+        ),
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"alpha"</span>
+    )
+    <span class="kw">val</span> scope <span class="op">=</span> <span class="fn">rememberCoroutineScope</span>()
+    <span class="kw">val</span> snackbarHostState <span class="op">=</span> <span class="fn">remember</span> { <span class="type">SnackbarHostState</span>() }
+
+    <span class="fn">Scaffold</span>(<span class="param">snackbarHost</span> <span class="op">=</span> { <span class="fn">SnackbarHost</span>(snackbarHostState) }) { padding <span class="op">-></span>
+        <span class="fn">Box</span>(<span class="type">Modifier</span>.<span class="fn">padding</span>(padding).<span class="fn">fillMaxSize</span>(), <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center) {
+            <span class="fn">Button</span>(
+                <span class="param">onClick</span> <span class="op">=</span> { scope.<span class="fn">launch</span> { snackbarHostState.<span class="fn">showSnackbar</span>(<span class="str">"按钮被点击了"</span>) } },
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">alpha</span>(alpha)
+            ) { <span class="fn">Text</span>(<span class="str">"点击我"</span>) }
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：带动画的待办事项列表 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>创建一个待办事项列表，支持以下功能：（1）点击"添加"按钮在列表顶部插入新项目，新项目以 <code>fadeIn + expandVertically</code> 动画出现；（2）左滑删除项目，项目以 <code>fadeOut + shrinkVertically</code> 动画消失；（3）列表项的增删排序都带有流畅的 <code>animateItem</code> 动画。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>使用 <code>LazyColumn</code> 配合 <code>Modifier.animateItem()</code>，为每个项目设置唯一的 <code>key</code>（可以用一个递增的 ID 计数器）。添加和删除通过修改列表状态实现。可以用 <code>AnimatedVisibility</code> 包裹每个列表项来控制进出动画。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AnimatedTodoList</span>() {
+    <span class="kw">var</span> nextId <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableIntStateOf</span>(<span class="num">0</span>) }
+    <span class="kw">var</span> todos <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="fn">listOf</span>&lt;<span class="type">Pair</span>&lt;<span class="type">Int</span>, <span class="type">String</span>&gt;&gt;()) }
+
+    <span class="fn">Column</span>(<span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>)) {
+        <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> {
+            todos <span class="op">=</span> <span class="fn">listOf</span>(nextId <span class="kw">to</span> <span class="str">"待办 #$nextId"</span>) + todos
+            nextId++
+        }) { <span class="fn">Text</span>(<span class="str">"添加待办"</span>) }
+
+        <span class="fn">Spacer</span>(<span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">8.dp</span>))
+
+        <span class="fn">LazyColumn</span> {
+            <span class="fn">items</span>(<span class="param">items</span> <span class="op">=</span> todos, <span class="param">key</span> <span class="op">=</span> { it.first }) { todo <span class="op">-></span>
+                <span class="kw">var</span> visible <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="kw">true</span>) }
+
+                <span class="fn">AnimatedVisibility</span>(
+                    <span class="param">visible</span> <span class="op">=</span> visible,
+                    <span class="param">enter</span> <span class="op">=</span> <span class="fn">fadeIn</span>() + <span class="fn">expandVertically</span>(),
+                    <span class="param">exit</span> <span class="op">=</span> <span class="fn">fadeOut</span>() + <span class="fn">shrinkVertically</span>(),
+                    <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">animateItem</span>()
+                ) {
+                    <span class="fn">Card</span>(<span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>().<span class="fn">padding</span>(<span class="param">vertical</span> <span class="op">=</span> <span class="num">4.dp</span>)) {
+                        <span class="fn">Row</span>(
+                            <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>),
+                            <span class="param">horizontalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.SpaceBetween,
+                            <span class="param">verticalAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.CenterVertically
+                        ) {
+                            <span class="fn">Text</span>(todo.second, <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">weight</span>(<span class="num">1f</span>))
+                            <span class="fn">IconButton</span>(<span class="param">onClick</span> <span class="op">=</span> {
+                                visible <span class="op">=</span> <span class="kw">false</span>
+                            }) {
+                                <span class="fn">Icon</span>(<span class="type">Icons</span>.Default.Delete, <span class="str">"删除"</span>)
+                            }
+                        }
+                    }
+                }
+
+                <span class="fn">LaunchedEffect</span>(visible) {
+                    <span class="kw">if</span> (<span class="op">!</span>visible) {
+                        <span class="fn">delay</span>(<span class="num">300</span>)
+                        todos <span class="op">=</span> todos.<span class="fn">filter</span> { it.first <span class="op">!=</span> todo.first }
+                    }
+                }
+            }
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：副作用综合实战——自动保存草稿 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>实现一个文本编辑器组件，具备以下特性：（1）用户输入文字后，使用 <code>snapshotFlow</code> 配合 <code>debounce</code> 操作符，在用户停止输入 1.5 秒后自动"保存"（打印日志模拟）；（2）使用 <code>derivedStateOf</code> 实时显示字数统计；（3）组件离开时使用 <code>DisposableEffect</code> 进行最终保存。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>文本状态用 <code>mutableStateOf</code> 管理。在 <code>LaunchedEffect</code> 中使用 <code>snapshotFlow { text }</code> 将文本状态转为 Flow，然后用 <code>.debounce(1500)</code> 去抖后在 <code>.collect</code> 中执行保存。字数统计用 <code>derivedStateOf { text.length }</code>。<code>DisposableEffect(Unit)</code> 的 <code>onDispose</code> 中执行最终保存。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">AutoSaveDraftEditor</span>() {
+    <span class="kw">var</span> text <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+    <span class="kw">val</span> charCount <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">derivedStateOf</span> { text.length } }
+
+    <span class="cmt">// 自动保存：用户停止输入 1.5 秒后保存</span>
+    <span class="fn">LaunchedEffect</span>(<span class="type">Unit</span>) {
+        <span class="fn">snapshotFlow</span> { text }
+            .<span class="fn">debounce</span>(<span class="num">1500</span>)
+            .<span class="fn">collect</span> { draft <span class="op">-></span>
+                <span class="kw">if</span> (draft.<span class="fn">isNotEmpty</span>()) {
+                    <span class="fn">println</span>(<span class="str">"自动保存草稿: $draft"</span>)
+                }
+            }
+    }
+
+    <span class="cmt">// 离开时最终保存</span>
+    <span class="fn">DisposableEffect</span>(<span class="type">Unit</span>) {
+        <span class="fn">onDispose</span> {
+            <span class="kw">if</span> (text.<span class="fn">isNotEmpty</span>()) {
+                <span class="fn">println</span>(<span class="str">"组件销毁，最终保存: $text"</span>)
+            }
+        }
+    }
+
+    <span class="fn">Column</span>(<span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16.dp</span>)) {
+        <span class="fn">OutlinedTextField</span>(
+            <span class="param">value</span> <span class="op">=</span> text,
+            <span class="param">onValueChange</span> <span class="op">=</span> { text <span class="op">=</span> it },
+            <span class="param">label</span> <span class="op">=</span> { <span class="fn">Text</span>(<span class="str">"编辑草稿"</span>) },
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>().<span class="fn">height</span>(<span class="num">200.dp</span>)
+        )
+        <span class="fn">Text</span>(<span class="str">"字数: $charCount"</span>, <span class="param">style</span> <span class="op">=</span> <span class="type">MaterialTheme</span>.typography.bodySmall)
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：状态驱动的多属性协调动画 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>创建一个"心情卡片"组件，包含三种心情状态（开心、平静、难过）。每种状态对应不同的背景色、图标大小和圆角。使用 <code>updateTransition</code> 让所有属性在状态切换时协调动画——就像文艺复兴大师在画布上同时调和多种色彩，让整体和谐统一。要求切换动画时长为 600ms，使用 <code>FastOutSlowInEasing</code> 缓动。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>定义一个枚举类 <code>Mood</code>，用 <code>updateTransition</code> 驱动状态转换。通过 <code>transition.animateColor</code>、<code>transition.animateDp</code> 等 API 分别为背景色、图标大小、圆角大小创建协调动画。所有动画共享同一个 <code>transitionSpec</code>，确保它们步调一致。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">enum class</span> <span class="type">Mood</span> { Happy, Calm, Sad }
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">MoodCard</span>() {
+    <span class="kw">var</span> mood <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="type">Mood</span>.Calm) }
+    <span class="kw">val</span> transition <span class="op">=</span> <span class="fn">updateTransition</span>(mood, <span class="param">label</span> <span class="op">=</span> <span class="str">"moodTransition"</span>)
+
+    <span class="kw">val</span> bgColor <span class="kw">by</span> transition.<span class="fn">animateColor</span>(
+        <span class="param">transitionSpec</span> <span class="op">=</span> { <span class="fn">tween</span>(<span class="num">600</span>, <span class="param">easing</span> <span class="op">=</span> <span class="type">FastOutSlowInEasing</span>) },
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"bgColor"</span>
+    ) { state <span class="op">-></span>
+        <span class="kw">when</span> (state) {
+            <span class="type">Mood</span>.Happy <span class="op">-></span> <span class="type">Color</span>(<span class="num">0xFFFFF176</span>)
+            <span class="type">Mood</span>.Calm <span class="op">-></span> <span class="type">Color</span>(<span class="num">0xFF81D4FA</span>)
+            <span class="type">Mood</span>.Sad <span class="op">-></span> <span class="type">Color</span>(<span class="num">0xFFB0BEC5</span>)
+        }
+    }
+    <span class="kw">val</span> iconSize <span class="kw">by</span> transition.<span class="fn">animateDp</span>(
+        <span class="param">transitionSpec</span> <span class="op">=</span> { <span class="fn">tween</span>(<span class="num">600</span>, <span class="param">easing</span> <span class="op">=</span> <span class="type">FastOutSlowInEasing</span>) },
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"iconSize"</span>
+    ) { state <span class="op">-></span>
+        <span class="kw">when</span> (state) {
+            <span class="type">Mood</span>.Happy <span class="op">-></span> <span class="num">64.dp</span>
+            <span class="type">Mood</span>.Calm <span class="op">-></span> <span class="num">48.dp</span>
+            <span class="type">Mood</span>.Sad <span class="op">-></span> <span class="num">36.dp</span>
+        }
+    }
+    <span class="kw">val</span> cornerRadius <span class="kw">by</span> transition.<span class="fn">animateDp</span>(
+        <span class="param">transitionSpec</span> <span class="op">=</span> { <span class="fn">tween</span>(<span class="num">600</span>, <span class="param">easing</span> <span class="op">=</span> <span class="type">FastOutSlowInEasing</span>) },
+        <span class="param">label</span> <span class="op">=</span> <span class="str">"corner"</span>
+    ) { state <span class="op">-></span>
+        <span class="kw">when</span> (state) {
+            <span class="type">Mood</span>.Happy <span class="op">-></span> <span class="num">32.dp</span>
+            <span class="type">Mood</span>.Calm <span class="op">-></span> <span class="num">16.dp</span>
+            <span class="type">Mood</span>.Sad <span class="op">-></span> <span class="num">4.dp</span>
+        }
+    }
+
+    <span class="fn">Column</span>(<span class="param">horizontalAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.CenterHorizontally) {
+        <span class="fn">Row</span>(<span class="param">horizontalArrangement</span> <span class="op">=</span> <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">8.dp</span>)) {
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { mood <span class="op">=</span> <span class="type">Mood</span>.Happy }) { <span class="fn">Text</span>(<span class="str">"开心"</span>) }
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { mood <span class="op">=</span> <span class="type">Mood</span>.Calm }) { <span class="fn">Text</span>(<span class="str">"平静"</span>) }
+            <span class="fn">Button</span>(<span class="param">onClick</span> <span class="op">=</span> { mood <span class="op">=</span> <span class="type">Mood</span>.Sad }) { <span class="fn">Text</span>(<span class="str">"难过"</span>) }
+        }
+        <span class="fn">Spacer</span>(<span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16.dp</span>))
+        <span class="fn">Box</span>(
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">size</span>(<span class="num">200.dp</span>)
+                .<span class="fn">clip</span>(<span class="fn">RoundedCornerShape</span>(cornerRadius))
+                .<span class="fn">background</span>(bgColor),
+            <span class="param">contentAlignment</span> <span class="op">=</span> <span class="type">Alignment</span>.Center
+        ) {
+            <span class="fn">Icon</span>(
+                <span class="type">Icons</span>.Default.Favorite, <span class="kw">null</span>,
+                <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">size</span>(iconSize),
+                <span class="param">tint</span> <span class="op">=</span> <span class="type">Color</span>.White
+            )
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

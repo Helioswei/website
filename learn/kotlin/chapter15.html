@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第15章：测试入门 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="15" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：测试入门</h1>
+  <p class="chapter-subtitle">写出有信心的代码 —— 用自动化测试为你的应用保驾护航</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私，代码必须过堂</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「开封有个包青天，铁面无私辨忠奸。代码世界亦需如此——每一个函数都是嫌疑人，每一个断言都是呈堂证供，每一个测试用例都是一场公正的审判。不要相信任何代码的'自我辩护'，要用测试来验明正身。今日，本官便教你如何在代码的公堂上，明察秋毫、铁面无私。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 为什么要写测试 ========== -->
+  <h2>15.1 为什么要写测试</h2>
+
+  <p>堂下何人！本官见过太多开发者，写完代码便自以为万事大吉，从不审查、从不验证——这就好比衙门断案只听原告一面之词，便急匆匆下判决，岂非荒唐？写测试就是给你的代码开一场公正的审判：让每个函数上堂受审，拿出证据（断言）来证明自己清白无辜。觉得"写测试是浪费时间"的人，就好比说"审案是浪费时间"——等到冤假错案酿成大祸，悔之晚矣！</p>
+
+  <h3>Bug 的成本与重构的信心</h3>
+
+  <p>本官断案多年，深知一个道理：罪犯（Bug）被抓得越晚，造成的危害就越大。开发阶段发现问题，不过费几分钟功夫；若是放任它逃到生产环境，便可能要紧急发版、回滚数据，犹如罪犯流窜作案后才被通缉，追捕成本何止百倍！自动化测试的核心价值就是<strong>在案发之初便将嫌犯缉拿归案</strong>。同时，有了完善的测试套件，你便可以放心大胆地重构代码——跑一遍测试全部通过，便如同所有案件复审均无误判，可以安心签字画押。好的测试本身也是最好的案宗档案：它明明白白地记录着"当输入是 X 时，输出应该是 Y"。</p>
+
+  <h3>测试金字塔</h3>
+
+  <p>本官治理辖区，讲究层层把关。代码的测试体系亦当如此，遵循<strong>测试金字塔</strong>这一审判体系：</p>
+
+  <table>
+    <tr><th>测试层级</th><th>比例</th><th>速度</th><th>覆盖范围</th></tr>
+    <tr><td>单元测试</td><td>约 70%</td><td>毫秒级</td><td>单个函数/类</td></tr>
+    <tr><td>集成测试</td><td>约 20%</td><td>秒级</td><td>多个组件协作</td></tr>
+    <tr><td>UI 测试</td><td>约 10%</td><td>分钟级</td><td>完整用户流程</td></tr>
+  </table>
+
+  <p>本官将之比作三级司法体系：<strong>单元测试</strong>如同县衙地方官，数量最多、审案最快，处理单个函数的小案件；<strong>集成测试</strong>犹如省级按察使，审理多个组件之间的协作纠纷，速度稍慢但管辖更广；<strong>UI 测试</strong>则如同朝廷大理寺终审，模拟完整的用户流程，虽然耗时最长，但一旦通过便可保天下太平。三级审判缺一不可，方能确保代码江山社稷稳固。</p>
+
+  <div class="tip">
+    <div class="tip-title">包青天断案准则</div>
+    <p>不要妄图对天下所有事都管辖到——追求 100% 覆盖率并不现实。明智的做法是优先审理<strong>最容易出事</strong>和<strong>最关键</strong>的案件。将有限的精力用在刀刃上，方为上策。</p>
+  </div>
+
+  <!-- ========== 15.2 测试项目配置 ========== -->
+  <h2>15.2 测试项目配置</h2>
+
+  <p>工欲善其事，必先利其器。要在代码公堂上开庭审案，首先要把审判的场所和工具准备妥当。Android 项目为测试提供了两个"衙门"：</p>
+
+  <h3>测试源集</h3>
+
+  <table>
+    <tr><th>源集路径</th><th>类型</th><th>运行环境</th><th>用途</th></tr>
+    <tr><td><code>src/test/</code></td><td>本地单元测试</td><td>JVM（无需设备）</td><td>纯逻辑、ViewModel、Repository</td></tr>
+    <tr><td><code>src/androidTest/</code></td><td>仪器化测试</td><td>真机 / 模拟器</td><td>UI 测试、数据库测试</td></tr>
+  </table>
+
+  <p><code>src/test/</code> 好比本官在府衙内开设的简易公堂，不需要搬到大理寺（启动模拟器），审案速度极快。大部分案件应在此审理。只有涉及 UI 和设备相关的"大案要案"，才需要移交 <code>src/androidTest/</code> 这座正式大堂。</p>
+
+  <h3>关键依赖配置</h3>
+
+  <p>审案需要各种刑侦工具。以下是本官钦定的"办案装备"：</p>
+
+<pre><code><span class="cmt">// build.gradle.kts (Module :app)</span>
+dependencies {
+    <span class="fn">testImplementation</span>(<span class="str">"junit:junit:4.13.2"</span>)
+    <span class="fn">testImplementation</span>(<span class="str">"org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3"</span>)
+    <span class="fn">testImplementation</span>(<span class="str">"app.cash.turbine:turbine:1.0.0"</span>)
+    <span class="fn">testImplementation</span>(<span class="str">"io.mockk:mockk:1.13.8"</span>)
+
+    <span class="fn">androidTestImplementation</span>(<span class="str">"androidx.compose.ui:ui-test-junit4"</span>)
+    <span class="fn">debugImplementation</span>(<span class="str">"androidx.compose.ui:ui-test-manifest"</span>)
+    <span class="fn">androidTestImplementation</span>(<span class="str">"androidx.test.ext:junit:1.1.5"</span>)
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">办案工具说明</div>
+    <p><strong>JUnit</strong> 是公堂的基本框架，如同惊堂木和令牌，不可或缺；<strong>kotlinx-coroutines-test</strong> 提供审讯协程的专用刑具；<strong>Turbine</strong> 专门用来审问 Flow 这类"连环作案"的嫌疑人；<strong>MockK</strong> 则是 Kotlin 原生的替身术，可以伪造证人来辅助破案。</p>
+  </div>
+
+  <!-- ========== 15.3 单元测试基础 ========== -->
+  <h2>15.3 单元测试基础</h2>
+
+  <p>单元测试乃是本官审理的第一类案件——将代码中最小的嫌疑单元提堂审问，给定特定的"案情"（输入），看其是否给出正确的"供词"（输出）。若供词与事实不符，当即判定有罪！以下这个计算器类便是今日的第一个嫌疑人：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Calculator</span> {
+    <span class="kw">fun</span> <span class="fn">add</span>(<span class="param">a</span>: <span class="type">Int</span>, <span class="param">b</span>: <span class="type">Int</span>): <span class="type">Int</span> <span class="op">=</span> a <span class="op">+</span> b
+
+    <span class="kw">fun</span> <span class="fn">divide</span>(<span class="param">a</span>: <span class="type">Int</span>, <span class="param">b</span>: <span class="type">Int</span>): <span class="type">Int</span> {
+        <span class="kw">if</span> (b <span class="op">==</span> <span class="num">0</span>) <span class="kw">throw</span> <span class="type">IllegalArgumentException</span>(<span class="str">"除数不能为零"</span>)
+        <span class="kw">return</span> a / b
+    }
+
+    <span class="kw">fun</span> <span class="fn">isEven</span>(<span class="param">n</span>: <span class="type">Int</span>): <span class="type">Boolean</span> <span class="op">=</span> n % <span class="num">2</span> <span class="op">==</span> <span class="num">0</span>
+}</code></pre>
+
+  <p>以下便是对这个嫌疑人的正式审讯。注意 <code>@Before</code> 相当于每次开庭前的"净堂"——确保每场审判都有干净独立的环境，不受前案污染：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">CalculatorTest</span> {
+
+    <span class="kw">private lateinit var</span> calculator: <span class="type">Calculator</span>
+
+    <span class="ann">@Before</span>
+    <span class="kw">fun</span> <span class="fn">setUp</span>() { calculator <span class="op">=</span> <span class="type">Calculator</span>() }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">add_twoPositiveNumbers_returnsSum</span>() {
+        <span class="fn">assertEquals</span>(<span class="num">5</span>, calculator.<span class="fn">add</span>(<span class="num">2</span>, <span class="num">3</span>))
+    }
+
+    <span class="ann">@Test</span>(<span class="param">expected</span> <span class="op">=</span> <span class="type">IllegalArgumentException</span><span class="op">::</span><span class="kw">class</span>)
+    <span class="kw">fun</span> <span class="fn">divide_byZero_throwsException</span>() {
+        calculator.<span class="fn">divide</span>(<span class="num">10</span>, <span class="num">0</span>)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">isEven_evenNumber_returnsTrue</span>() {
+        <span class="fn">assertTrue</span>(calculator.<span class="fn">isEven</span>(<span class="num">4</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">isEven_oddNumber_returnsFalse</span>() {
+        <span class="fn">assertFalse</span>(calculator.<span class="fn">isEven</span>(<span class="num">7</span>))
+    }
+}</code></pre>
+
+  <h3>常用断言——呈堂证供的种类</h3>
+
+  <p>断言便是呈堂证供，用以证明嫌疑代码有罪或无罪。本官常用的证供类型如下：</p>
+
+  <table>
+    <tr><th>断言方法</th><th>用途</th></tr>
+    <tr><td><code>assertEquals(expected, actual)</code></td><td>验证两个值相等</td></tr>
+    <tr><td><code>assertTrue(condition)</code></td><td>验证条件为 true</td></tr>
+    <tr><td><code>assertFalse(condition)</code></td><td>验证条件为 false</td></tr>
+    <tr><td><code>assertNotNull(object)</code></td><td>验证对象不为 null</td></tr>
+    <tr><td><code>assertThrows&lt;E&gt; { block }</code></td><td>验证代码抛出指定异常</td></tr>
+  </table>
+
+  <h3>测试命名规范——案卷编号之法</h3>
+
+  <p>本官治下的案卷必须命名规范、条理分明。推荐格式：<code>方法名_条件_预期结果</code>，犹如案卷标注"嫌疑人_作案情节_判决结果"，一目了然：</p>
+
+<pre><code><span class="cmt">// 规范的案卷命名——一目了然</span>
+<span class="kw">fun</span> <span class="fn">login_emptyPassword_returnsValidationError</span>()
+<span class="kw">fun</span> <span class="fn">fetchUsers_networkError_returnsEmptyList</span>()
+
+<span class="cmt">// 混乱的命名——本官绝不允许！</span>
+<span class="kw">fun</span> <span class="fn">test1</span>()
+<span class="kw">fun</span> <span class="fn">testLogin</span>()</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">在 Android Studio 中开庭审案</div>
+    <p>右键点击测试类或方法，选择 "Run" 即可升堂。绿色表示嫌犯清白无罪——无罪释放；红色表示罪证确凿——当庭宣判有罪！</p>
+  </div>
+
+  <!-- ========== 15.4 测试 ViewModel ========== -->
+  <h2>15.4 测试 ViewModel</h2>
+
+  <p>ViewModel 包含核心业务逻辑，乃是整个应用的"主谋"——最值得提堂审问的对象。但此犯有一个特殊之处：<code>viewModelScope</code> 默认使用 <code>Dispatchers.Main</code>，在 JVM 测试公堂中没有 Android 主线程。因此，本官需要先设一道"换堂令"，将审判环境替换妥当：</p>
+
+<pre><code><span class="ann">@OptIn</span>(<span class="type">ExperimentalCoroutinesApi</span><span class="op">::</span><span class="kw">class</span>)
+<span class="kw">class</span> <span class="type">MainDispatcherRule</span>(
+    <span class="kw">private val</span> <span class="param">dispatcher</span> <span class="op">=</span> <span class="fn">UnconfinedTestDispatcher</span>()
+) : <span class="type">TestWatcher</span>() {
+    <span class="kw">override fun</span> <span class="fn">starting</span>(<span class="param">description</span>: <span class="type">Description</span>) { <span class="type">Dispatchers</span>.<span class="fn">setMain</span>(dispatcher) }
+    <span class="kw">override fun</span> <span class="fn">finished</span>(<span class="param">description</span>: <span class="type">Description</span>) { <span class="type">Dispatchers</span>.<span class="fn">resetMain</span>() }
+}</code></pre>
+
+  <h3>被告人：LoginViewModel</h3>
+
+  <p>今日提堂受审的是 <code>LoginViewModel</code>，它负责登录业务的核心逻辑。本官要审查它在各种情况下的表现——空邮箱、短密码、正常登录、网络异常，一个都不能放过：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">LoginViewModel</span>(
+    <span class="kw">private val</span> <span class="param">authRepository</span>: <span class="type">AuthRepository</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="kw">private val</span> _uiState <span class="op">=</span> <span class="fn">MutableStateFlow</span>(<span class="type">LoginUiState</span>())
+    <span class="kw">val</span> uiState: <span class="type">StateFlow</span>&lt;<span class="type">LoginUiState</span>&gt; <span class="op">=</span> _uiState.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">fun</span> <span class="fn">updateEmail</span>(<span class="param">email</span>: <span class="type">String</span>) { _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">email</span> <span class="op">=</span> email) } }
+    <span class="kw">fun</span> <span class="fn">updatePassword</span>(<span class="param">password</span>: <span class="type">String</span>) { _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">password</span> <span class="op">=</span> password) } }
+
+    <span class="kw">fun</span> <span class="fn">login</span>() {
+        <span class="kw">val</span> state <span class="op">=</span> _uiState.value
+        <span class="kw">if</span> (state.email.<span class="fn">isBlank</span>()) { _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">error</span> <span class="op">=</span> <span class="str">"请输入邮箱"</span>) }; <span class="kw">return</span> }
+        <span class="kw">if</span> (state.password.length <span class="op">&lt;</span> <span class="num">6</span>) { _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">error</span> <span class="op">=</span> <span class="str">"密码至少6位"</span>) }; <span class="kw">return</span> }
+
+        viewModelScope.<span class="fn">launch</span> {
+            _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">isLoading</span> <span class="op">=</span> <span class="kw">true</span>, <span class="param">error</span> <span class="op">=</span> <span class="kw">null</span>) }
+            authRepository.<span class="fn">login</span>(state.email, state.password)
+                .<span class="fn">onSuccess</span> { _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">isLoading</span> <span class="op">=</span> <span class="kw">false</span>, <span class="param">isLoggedIn</span> <span class="op">=</span> <span class="kw">true</span>) } }
+                .<span class="fn">onFailure</span> { e <span class="op">-></span> _uiState.<span class="fn">update</span> { it.<span class="fn">copy</span>(<span class="param">isLoading</span> <span class="op">=</span> <span class="kw">false</span>, <span class="param">error</span> <span class="op">=</span> e.message) } }
+        }
+    }
+}
+
+<span class="kw">data class</span> <span class="type">LoginUiState</span>(
+    <span class="kw">val</span> <span class="param">email</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>, <span class="kw">val</span> <span class="param">password</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>,
+    <span class="kw">val</span> <span class="param">isLoading</span>: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>, <span class="kw">val</span> <span class="param">isLoggedIn</span>: <span class="type">Boolean</span> <span class="op">=</span> <span class="kw">false</span>,
+    <span class="kw">val</span> <span class="param">error</span>: <span class="type">String?</span> <span class="op">=</span> <span class="kw">null</span>
+)</code></pre>
+
+  <h3>完整的审判记录——ViewModel 测试</h3>
+
+  <p>以下是对 <code>LoginViewModel</code> 的四项罪名逐一审查。空邮箱、短密码、登录成功、网络异常——每一条路径都不可遗漏，本官铁面无私，绝不容许任何侥幸：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">LoginViewModelTest</span> {
+
+    <span class="ann">@get:Rule</span> <span class="kw">val</span> mainDispatcherRule <span class="op">=</span> <span class="type">MainDispatcherRule</span>()
+    <span class="kw">private lateinit var</span> viewModel: <span class="type">LoginViewModel</span>
+    <span class="kw">private lateinit var</span> fakeAuth: <span class="type">FakeAuthRepository</span>
+
+    <span class="ann">@Before</span>
+    <span class="kw">fun</span> <span class="fn">setUp</span>() {
+        fakeAuth <span class="op">=</span> <span class="type">FakeAuthRepository</span>()
+        viewModel <span class="op">=</span> <span class="type">LoginViewModel</span>(fakeAuth)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">login_emptyEmail_showsError</span>() {
+        viewModel.<span class="fn">updatePassword</span>(<span class="str">"123456"</span>)
+        viewModel.<span class="fn">login</span>()
+        <span class="fn">assertEquals</span>(<span class="str">"请输入邮箱"</span>, viewModel.uiState.value.error)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">login_shortPassword_showsError</span>() {
+        viewModel.<span class="fn">updateEmail</span>(<span class="str">"user@test.com"</span>)
+        viewModel.<span class="fn">updatePassword</span>(<span class="str">"123"</span>)
+        viewModel.<span class="fn">login</span>()
+        <span class="fn">assertEquals</span>(<span class="str">"密码至少6位"</span>, viewModel.uiState.value.error)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">login_validCredentials_setsLoggedIn</span>() {
+        fakeAuth.shouldSucceed <span class="op">=</span> <span class="kw">true</span>
+        viewModel.<span class="fn">updateEmail</span>(<span class="str">"user@test.com"</span>)
+        viewModel.<span class="fn">updatePassword</span>(<span class="str">"password123"</span>)
+        viewModel.<span class="fn">login</span>()
+
+        <span class="fn">assertTrue</span>(viewModel.uiState.value.isLoggedIn)
+        <span class="fn">assertNull</span>(viewModel.uiState.value.error)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">login_networkError_showsError</span>() {
+        fakeAuth.shouldSucceed <span class="op">=</span> <span class="kw">false</span>
+        viewModel.<span class="fn">updateEmail</span>(<span class="str">"user@test.com"</span>)
+        viewModel.<span class="fn">updatePassword</span>(<span class="str">"password123"</span>)
+        viewModel.<span class="fn">login</span>()
+
+        <span class="fn">assertFalse</span>(viewModel.uiState.value.isLoggedIn)
+        <span class="fn">assertEquals</span>(<span class="str">"网络连接失败"</span>, viewModel.uiState.value.error)
+    }
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">本官严令：不得遗漏 MainDispatcherRule</div>
+    <p>若测试报错 <code>Module with the Main dispatcher had failed to initialize</code>，便是你忘了设置审判环境！每个涉及 <code>viewModelScope</code> 的测试类都必须声明 <code>MainDispatcherRule</code>。这就好比开庭审案却忘了挂"明镜高悬"的牌匾——程序不合法，审判无效！</p>
+  </div>
+
+  <!-- ========== 15.5 测试协程 ========== -->
+  <h2>15.5 测试协程</h2>
+
+  <p>协程是代码世界中的"潜逃犯"——它们会挂起、延迟、在不同线程之间逃窜。要审讯这类狡猾的嫌犯，需要特殊的刑侦手段。<code>kotlinx-coroutines-test</code> 提供的 <code>runTest</code> 便是本官的"追踪令"，可以自动跳过 <code>delay</code> 调用，让协程嫌犯无处遁形、瞬间归案：</p>
+
+<pre><code><span class="ann">@Test</span>
+<span class="kw">fun</span> <span class="fn">fetchUser_returnsUserData</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+    <span class="kw">val</span> repo <span class="op">=</span> <span class="type">UserRepository</span>(<span class="type">FakeApiService</span>())
+    <span class="kw">val</span> user <span class="op">=</span> repo.<span class="fn">fetchUser</span>(<span class="param">id</span> <span class="op">=</span> <span class="num">1</span>)
+    <span class="fn">assertEquals</span>(<span class="str">"张三"</span>, user.name)
+}</code></pre>
+
+  <h3>StandardTestDispatcher vs UnconfinedTestDispatcher</h3>
+
+  <p>审讯协程有两种策略，恰如两种不同的审讯风格：</p>
+
+  <table>
+    <tr><th>调度器</th><th>执行方式</th><th>适用场景</th></tr>
+    <tr><td><code>StandardTestDispatcher</code></td><td>需手动推进</td><td>测试加载状态、时序逻辑</td></tr>
+    <tr><td><code>UnconfinedTestDispatcher</code></td><td>立即执行</td><td>简单测试，不关心中间状态</td></tr>
+  </table>
+
+  <p><code>StandardTestDispatcher</code> 犹如审案时按部就班地推进时间线，每一秒都在本官掌控之中——适合审查"嫌犯在某个时间点做了什么"。<code>UnconfinedTestDispatcher</code> 则像快刀斩乱麻，立即出结果——适合不关心中间状态的简单案件。</p>
+
+<pre><code><span class="ann">@Test</span>
+<span class="kw">fun</span> <span class="fn">advanceTimeBy_controlsDelay</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+    <span class="kw">var</span> status <span class="op">=</span> <span class="str">"等待中"</span>
+    <span class="fn">launch</span> {
+        <span class="fn">delay</span>(<span class="num">3000</span>)
+        status <span class="op">=</span> <span class="str">"已完成"</span>
+    }
+
+    <span class="fn">advanceTimeBy</span>(<span class="num">2000</span>)
+    <span class="fn">assertEquals</span>(<span class="str">"等待中"</span>, status)  <span class="cmt">// 还没到 3 秒</span>
+
+    <span class="fn">advanceTimeBy</span>(<span class="num">1001</span>)
+    <span class="fn">assertEquals</span>(<span class="str">"已完成"</span>, status)  <span class="cmt">// 已超过 3 秒</span>
+}</code></pre>
+
+  <h3>审讯 Repository 中的挂起函数</h3>
+
+  <p>Repository 往往是网络和数据库的中间人——本官要审查它在网络通畅和网络中断两种情况下的行为。本官断案讲究正反两面都要审清楚，不能只审"好天气"下的表现：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">NewsRepository</span>(
+    <span class="kw">private val</span> <span class="param">api</span>: <span class="type">NewsApiService</span>,
+    <span class="kw">private val</span> <span class="param">dao</span>: <span class="type">NewsDao</span>
+) {
+    <span class="kw">suspend fun</span> <span class="fn">getLatestNews</span>(): <span class="type">Result</span>&lt;<span class="type">List</span>&lt;<span class="type">News</span>&gt;&gt; {
+        <span class="kw">return try</span> {
+            <span class="kw">val</span> news <span class="op">=</span> api.<span class="fn">fetchNews</span>()
+            dao.<span class="fn">insertAll</span>(news)
+            <span class="type">Result</span>.<span class="fn">success</span>(news)
+        } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+            <span class="kw">val</span> cached <span class="op">=</span> dao.<span class="fn">getAll</span>()
+            <span class="kw">if</span> (cached.<span class="fn">isNotEmpty</span>()) <span class="type">Result</span>.<span class="fn">success</span>(cached) <span class="kw">else</span> <span class="type">Result</span>.<span class="fn">failure</span>(e)
+        }
+    }
+}
+
+<span class="cmt">// 审讯网络成功和失败两条案情线</span>
+<span class="kw">class</span> <span class="type">NewsRepositoryTest</span> {
+    <span class="kw">private val</span> fakeApi <span class="op">=</span> <span class="type">FakeNewsApiService</span>()
+    <span class="kw">private val</span> fakeDao <span class="op">=</span> <span class="type">FakeNewsDao</span>()
+    <span class="kw">private val</span> repo <span class="op">=</span> <span class="type">NewsRepository</span>(fakeApi, fakeDao)
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">getLatestNews_success_returnsFreshData</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        fakeApi.news <span class="op">=</span> <span class="fn">listOf</span>(<span class="type">News</span>(<span class="num">1</span>, <span class="str">"Kotlin 2.0 发布"</span>))
+        <span class="kw">val</span> result <span class="op">=</span> repo.<span class="fn">getLatestNews</span>()
+        <span class="fn">assertTrue</span>(result.<span class="fn">isSuccess</span>)
+        <span class="fn">assertEquals</span>(<span class="str">"Kotlin 2.0 发布"</span>, result.<span class="fn">getOrNull</span>()?.first()?.title)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">getLatestNews_networkError_returnsCachedData</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        fakeDao.<span class="fn">insertAll</span>(<span class="fn">listOf</span>(<span class="type">News</span>(<span class="num">1</span>, <span class="str">"缓存的新闻"</span>)))
+        fakeApi.shouldThrow <span class="op">=</span> <span class="kw">true</span>
+        <span class="kw">val</span> result <span class="op">=</span> repo.<span class="fn">getLatestNews</span>()
+        <span class="fn">assertEquals</span>(<span class="str">"缓存的新闻"</span>, result.<span class="fn">getOrNull</span>()?.first()?.title)
+    }
+}</code></pre>
+
+  <!-- ========== 15.6 测试 Flow ========== -->
+  <h2>15.6 测试 Flow</h2>
+
+  <p>Flow 是一种"连环作案"的嫌疑人——它不是一次性给出供词，而是随着时间不断发射新的值。要审讯这种犯人，需要 <strong>Turbine</strong> 这柄特制的"录供笔"，它提供 <code>.test { }</code> API，让你逐条审查 Flow 吐出的每一个值，确保其供词前后一致、毫无破绽。</p>
+
+<pre><code><span class="cmt">// 被告人：搜索功能</span>
+<span class="kw">class</span> <span class="type">SearchRepository</span>(<span class="kw">private val</span> <span class="param">api</span>: <span class="type">SearchApiService</span>) {
+    <span class="kw">fun</span> <span class="fn">search</span>(<span class="param">query</span>: <span class="type">String</span>): <span class="type">Flow</span>&lt;<span class="type">SearchState</span>&gt; <span class="op">=</span> <span class="fn">flow</span> {
+        <span class="fn">emit</span>(<span class="type">SearchState</span>.Loading)
+        <span class="kw">try</span> {
+            <span class="fn">emit</span>(<span class="type">SearchState</span>.<span class="fn">Success</span>(api.<span class="fn">search</span>(query)))
+        } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+            <span class="fn">emit</span>(<span class="type">SearchState</span>.<span class="fn">Error</span>(e.message ?: <span class="str">"未知错误"</span>))
+        }
+    }
+}
+
+<span class="kw">sealed class</span> <span class="type">SearchState</span> {
+    <span class="kw">data object</span> <span class="type">Loading</span> : <span class="type">SearchState</span>()
+    <span class="kw">data class</span> <span class="type">Success</span>(<span class="kw">val</span> <span class="param">results</span>: <span class="type">List</span>&lt;<span class="type">String</span>&gt;) : <span class="type">SearchState</span>()
+    <span class="kw">data class</span> <span class="type">Error</span>(<span class="kw">val</span> <span class="param">message</span>: <span class="type">String</span>) : <span class="type">SearchState</span>()
+}</code></pre>
+
+  <h3>用 Turbine 开庭审讯</h3>
+
+  <p>每次 <code>awaitItem()</code> 就像问嫌犯"下一句供词是什么"，然后与预期对比。供词不符，当即判罪：</p>
+
+<pre><code><span class="ann">@Test</span>
+<span class="kw">fun</span> <span class="fn">search_success_emitsLoadingThenResults</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+    fakeApi.results <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"Kotlin"</span>, <span class="str">"Kotlin Compose"</span>)
+
+    repository.<span class="fn">search</span>(<span class="str">"Kotlin"</span>).<span class="fn">test</span> {
+        <span class="fn">assertEquals</span>(<span class="type">SearchState</span>.Loading, <span class="fn">awaitItem</span>())
+
+        <span class="kw">val</span> success <span class="op">=</span> <span class="fn">awaitItem</span>() <span class="kw">as</span> <span class="type">SearchState</span>.<span class="type">Success</span>
+        <span class="fn">assertEquals</span>(<span class="num">2</span>, success.results.size)
+
+        <span class="fn">awaitComplete</span>()
+    }
+}
+
+<span class="ann">@Test</span>
+<span class="kw">fun</span> <span class="fn">search_error_emitsLoadingThenError</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+    fakeApi.shouldThrow <span class="op">=</span> <span class="kw">true</span>
+
+    repository.<span class="fn">search</span>(<span class="str">"test"</span>).<span class="fn">test</span> {
+        <span class="fn">assertEquals</span>(<span class="type">SearchState</span>.Loading, <span class="fn">awaitItem</span>())
+        <span class="fn">assertTrue</span>(<span class="fn">awaitItem</span>() <span class="kw">is</span> <span class="type">SearchState</span>.<span class="type">Error</span>)
+        <span class="fn">awaitComplete</span>()
+    }
+}</code></pre>
+
+  <h3>Turbine 审讯工具箱</h3>
+
+  <table>
+    <tr><th>方法</th><th>用途</th></tr>
+    <tr><td><code>awaitItem()</code></td><td>等待并返回下一个发射值</td></tr>
+    <tr><td><code>awaitComplete()</code></td><td>断言 Flow 已正常完成</td></tr>
+    <tr><td><code>awaitError()</code></td><td>断言 Flow 以异常结束</td></tr>
+    <tr><td><code>expectNoEvents()</code></td><td>断言此刻没有新事件</td></tr>
+    <tr><td><code>cancelAndIgnoreRemainingEvents()</code></td><td>取消收集（用于 StateFlow 等无限流）</td></tr>
+  </table>
+
+  <p>审讯 <code>StateFlow</code> 时需格外留意：Turbine 会自动将其初始值作为第一条"供词"（第一个 <code>awaitItem()</code>），且由于 StateFlow 永不自行结案，必须用 <code>cancelAndIgnoreRemainingEvents()</code> 强制退堂。</p>
+
+  <!-- ========== 15.7 Compose UI 测试 ========== -->
+  <h2>15.7 Compose UI 测试</h2>
+
+  <p>如果说单元测试是县衙审案、集成测试是省级会审，那么 Compose UI 测试便是大理寺终审——在仪器化环境中模拟真实用户的操作，验证界面是否如实呈现。这是最高级别的审判，也是对应用的最终考验。首先，要给被审查的界面元素贴上"身份标签"（<code>testTag</code>），以便公堂上精准传唤：</p>
+
+<pre><code><span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">LoginScreen</span>(<span class="param">onLoginClick</span>: (<span class="type">String</span>, <span class="type">String</span>) <span class="op">-></span> <span class="type">Unit</span>) {
+    <span class="kw">var</span> email <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+    <span class="kw">var</span> password <span class="kw">by</span> <span class="fn">remember</span> { <span class="fn">mutableStateOf</span>(<span class="str">""</span>) }
+
+    <span class="type">Column</span>(<span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16</span>.dp)) {
+        <span class="type">TextField</span>(
+            <span class="param">value</span> <span class="op">=</span> email, <span class="param">onValueChange</span> <span class="op">=</span> { email <span class="op">=</span> it },
+            <span class="param">label</span> <span class="op">=</span> { <span class="type">Text</span>(<span class="str">"邮箱"</span>) },
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">testTag</span>(<span class="str">"email_input"</span>)
+        )
+        <span class="type">TextField</span>(
+            <span class="param">value</span> <span class="op">=</span> password, <span class="param">onValueChange</span> <span class="op">=</span> { password <span class="op">=</span> it },
+            <span class="param">label</span> <span class="op">=</span> { <span class="type">Text</span>(<span class="str">"密码"</span>) },
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">testTag</span>(<span class="str">"password_input"</span>)
+        )
+        <span class="type">Button</span>(
+            <span class="param">onClick</span> <span class="op">=</span> { <span class="fn">onLoginClick</span>(email, password) },
+            <span class="param">modifier</span> <span class="op">=</span> <span class="type">Modifier</span>.<span class="fn">testTag</span>(<span class="str">"login_button"</span>)
+        ) { <span class="type">Text</span>(<span class="str">"登录"</span>) }
+    }
+}</code></pre>
+
+  <h3>大理寺终审——完整的 UI 测试</h3>
+
+<pre><code><span class="kw">class</span> <span class="type">LoginScreenTest</span> {
+
+    <span class="ann">@get:Rule</span> <span class="kw">val</span> composeTestRule <span class="op">=</span> <span class="fn">createComposeRule</span>()
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">loginScreen_displaysAllElements</span>() {
+        composeTestRule.<span class="fn">setContent</span> { <span class="fn">LoginScreen</span>(<span class="param">onLoginClick</span> <span class="op">=</span> { _, _ <span class="op">-></span> }) }
+
+        composeTestRule.<span class="fn">onNodeWithTag</span>(<span class="str">"email_input"</span>).<span class="fn">assertIsDisplayed</span>()
+        composeTestRule.<span class="fn">onNodeWithTag</span>(<span class="str">"password_input"</span>).<span class="fn">assertIsDisplayed</span>()
+        composeTestRule.<span class="fn">onNodeWithText</span>(<span class="str">"登录"</span>).<span class="fn">assertIsDisplayed</span>()
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">loginScreen_enterCredentials_clickLogin</span>() {
+        <span class="kw">var</span> capturedEmail <span class="op">=</span> <span class="str">""</span>
+        composeTestRule.<span class="fn">setContent</span> {
+            <span class="fn">LoginScreen</span> { email, _ <span class="op">-></span> capturedEmail <span class="op">=</span> email }
+        }
+
+        composeTestRule.<span class="fn">onNodeWithTag</span>(<span class="str">"email_input"</span>).<span class="fn">performTextInput</span>(<span class="str">"user@test.com"</span>)
+        composeTestRule.<span class="fn">onNodeWithTag</span>(<span class="str">"password_input"</span>).<span class="fn">performTextInput</span>(<span class="str">"123456"</span>)
+        composeTestRule.<span class="fn">onNodeWithTag</span>(<span class="str">"login_button"</span>).<span class="fn">performClick</span>()
+
+        <span class="fn">assertEquals</span>(<span class="str">"user@test.com"</span>, capturedEmail)
+    }
+}</code></pre>
+
+  <h3>传唤证人与审查手段</h3>
+
+  <p>大理寺审案需要各种手段来查找嫌犯、模拟操作、核实证据：</p>
+
+  <table>
+    <tr><th>类别</th><th>方法</th><th>用途</th></tr>
+    <tr><td>查找</td><td><code>onNodeWithText("...")</code></td><td>按文本内容查找</td></tr>
+    <tr><td>查找</td><td><code>onNodeWithTag("...")</code></td><td>按 testTag 查找</td></tr>
+    <tr><td>查找</td><td><code>onNodeWithContentDescription("...")</code></td><td>按无障碍描述查找</td></tr>
+    <tr><td>操作</td><td><code>performClick()</code></td><td>模拟点击</td></tr>
+    <tr><td>操作</td><td><code>performTextInput("...")</code></td><td>模拟文本输入</td></tr>
+    <tr><td>操作</td><td><code>performScrollTo()</code></td><td>滚动到可见区域</td></tr>
+    <tr><td>断言</td><td><code>assertIsDisplayed()</code></td><td>验证节点可见</td></tr>
+    <tr><td>断言</td><td><code>assertTextEquals("...")</code></td><td>验证文本内容</td></tr>
+    <tr><td>断言</td><td><code>assertIsEnabled()</code></td><td>验证组件可交互</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">testTag 使用原则——身份标签不可滥用</div>
+    <p>本官告诫：传唤证人优先用其真名实姓（<code>onNodeWithText</code>、<code>onNodeWithContentDescription</code>），只在无法通过姓名辨认时才贴"嫌犯编号"（<code>testTag</code>）。满堂的编号标签会让生产代码变得杂乱不堪，如同案卷堆积如山却不分类归档。</p>
+  </div>
+
+  <!-- ========== 15.8 Mock 与 Fake ========== -->
+  <h2>15.8 Mock 与 Fake</h2>
+
+  <p>审案断狱，有时需要"替身证人"——用测试替身替代真实的网络、数据库等外部依赖。否则每次开庭都要联网、连数据库，审案效率何其低下！本官常用两类替身：<strong>Fake</strong>（假扮证人，有简化的真实行为）和 <strong>Mock</strong>（傀儡证人，只会背诵预设台词）。</p>
+
+  <table>
+    <tr><th>对比项</th><th>Fake</th><th>Mock</th></tr>
+    <tr><td>实现方式</td><td>手写的简化实现</td><td>框架自动生成</td></tr>
+    <tr><td>包含逻辑</td><td>有简化的业务逻辑</td><td>只返回预设值</td></tr>
+    <tr><td>适用场景</td><td>Repository 等核心依赖</td><td>边缘依赖、验证调用行为</td></tr>
+    <tr><td>可读性</td><td>更清晰直观</td><td>需配置桩（stub）</td></tr>
+  </table>
+
+  <h3>打造 Fake 替身证人</h3>
+
+  <p>Fake 是本官更信赖的替身——它虽然是假的，但行为逻辑与真人相似，供词可信度更高：</p>
+
+<pre><code><span class="kw">interface</span> <span class="type">AuthRepository</span> {
+    <span class="kw">suspend fun</span> <span class="fn">login</span>(<span class="param">email</span>: <span class="type">String</span>, <span class="param">password</span>: <span class="type">String</span>): <span class="type">Result</span>&lt;<span class="type">User</span>&gt;
+    <span class="kw">fun</span> <span class="fn">isLoggedIn</span>(): <span class="type">Boolean</span>
+}
+
+<span class="kw">class</span> <span class="type">FakeAuthRepository</span> : <span class="type">AuthRepository</span> {
+    <span class="kw">var</span> shouldSucceed <span class="op">=</span> <span class="kw">true</span>
+    <span class="kw">private var</span> loggedIn <span class="op">=</span> <span class="kw">false</span>
+
+    <span class="kw">override suspend fun</span> <span class="fn">login</span>(<span class="param">email</span>: <span class="type">String</span>, <span class="param">password</span>: <span class="type">String</span>): <span class="type">Result</span>&lt;<span class="type">User</span>&gt; {
+        <span class="kw">return if</span> (shouldSucceed) {
+            loggedIn <span class="op">=</span> <span class="kw">true</span>
+            <span class="type">Result</span>.<span class="fn">success</span>(<span class="type">User</span>(<span class="param">id</span> <span class="op">=</span> <span class="num">1</span>, <span class="param">name</span> <span class="op">=</span> <span class="str">"测试用户"</span>, <span class="param">email</span> <span class="op">=</span> email))
+        } <span class="kw">else</span> {
+            <span class="type">Result</span>.<span class="fn">failure</span>(<span class="type">Exception</span>(<span class="str">"网络连接失败"</span>))
+        }
+    }
+
+    <span class="kw">override fun</span> <span class="fn">isLoggedIn</span>(): <span class="type">Boolean</span> <span class="op">=</span> loggedIn
+}</code></pre>
+
+  <h3>MockK——傀儡证人术</h3>
+
+  <p>若不想亲自打造替身，可以用 <strong>MockK</strong> 框架自动生成"傀儡证人"——告诉它该说什么，它就说什么，还能记录下它被传唤了几次、问了什么问题：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">UserServiceTest</span> {
+    <span class="kw">private val</span> mockRepo <span class="op">=</span> <span class="fn">mockk</span>&lt;<span class="type">UserRepository</span>&gt;()
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">getUser_callsRepository</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        <span class="fn">coEvery</span> { mockRepo.<span class="fn">getUser</span>(<span class="num">1</span>) } <span class="fn">returns</span> <span class="type">User</span>(<span class="param">id</span> <span class="op">=</span> <span class="num">1</span>, <span class="param">name</span> <span class="op">=</span> <span class="str">"张三"</span>)
+
+        <span class="kw">val</span> user <span class="op">=</span> <span class="type">UserService</span>(mockRepo).<span class="fn">getUser</span>(<span class="num">1</span>)
+
+        <span class="fn">assertEquals</span>(<span class="str">"张三"</span>, user.name)
+        <span class="fn">coVerify</span>(<span class="param">exactly</span> <span class="op">=</span> <span class="num">1</span>) { mockRepo.<span class="fn">getUser</span>(<span class="num">1</span>) }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">本官断案原则：Fake 优先</div>
+    <p>本官与朝廷（Google 官方）一样推荐优先使用 Fake。Fake 的供词更可预测，案卷更易读。只有在接口方法太多（手写替身太累）或者需要核查"嫌犯是否确实被传唤过"时，才考虑请出 MockK 这等傀儡。</p>
+  </div>
+
+  <!-- ========== 15.9 测试最佳实践 ========== -->
+  <h2>15.9 测试最佳实践</h2>
+
+  <p>本官断案数十年，积累了一套"铁面无私"的审判准则。以下便是代码公堂上的最佳实践，望诸位谨记在心。</p>
+
+  <h3>Arrange-Act-Assert 模式——升堂三步曲</h3>
+
+  <p>每场审判都应遵循"升堂三步曲"：先布置案情（Arrange），再让嫌犯行动（Act），最后核验证据（Assert）。结构清晰、条理分明：</p>
+
+<pre><code><span class="ann">@Test</span>
+<span class="kw">fun</span> <span class="fn">formatPrice_withDiscount_showsDiscountedPrice</span>() {
+    <span class="cmt">// Arrange（布置案情）</span>
+    <span class="kw">val</span> formatter <span class="op">=</span> <span class="type">PriceFormatter</span>()
+
+    <span class="cmt">// Act（令嫌犯行动）</span>
+    <span class="kw">val</span> result <span class="op">=</span> formatter.<span class="fn">formatWithDiscount</span>(<span class="num">100.0</span>, <span class="num">0.2</span>)
+
+    <span class="cmt">// Assert（核验证据、宣判结果）</span>
+    <span class="fn">assertEquals</span>(<span class="str">"¥80.00"</span>, result)
+}</code></pre>
+
+  <h3>审判行为，而非审判心思</h3>
+
+  <p>本官审案看的是行为证据，不是嫌犯心里在想什么。好的测试只关注"做了什么"，不关心"怎么做的"。如此一来，即使嫌犯改头换面（重构代码），只要行为没变，判决就不会被推翻：</p>
+
+<pre><code><span class="cmt">// 不好：窥探嫌犯的内心（测试内部实现）</span>
+<span class="fn">coVerify</span> { api.<span class="fn">post</span>(<span class="str">"/auth/login"</span>, any()) }
+
+<span class="cmt">// 好：审查可观察的行为（测试外在结果）</span>
+<span class="fn">assertTrue</span>(viewModel.uiState.value.isLoggedIn)</code></pre>
+
+  <h3>包青天的断案铁律</h3>
+
+  <ul>
+    <li><strong>一案一审</strong> —— 每个测试只验证一个行为，测试失败时便能立刻知道是哪桩案件出了问题，无需翻阅整本案卷</li>
+    <li><strong>不审天条</strong> —— 不要测试框架本身的代码，只审你自己写的业务逻辑。天条（框架代码）自有天庭（框架开发者）把关</li>
+    <li><strong>快审独审</strong> —— 每场审判之间互不干扰、不共享可变状态，且必须在毫秒之间出结果。拖沓的审判是对正义的亵渎</li>
+  </ul>
+
+  <h3>常见冤假错案——审判中的典型错误</h3>
+
+  <table>
+    <tr><th>常见错误</th><th>正确做法</th></tr>
+    <tr><td>命名含糊（<code>test1</code>）</td><td>使用"方法_条件_预期结果"格式</td></tr>
+    <tr><td>使用 <code>Thread.sleep</code></td><td>使用 <code>runTest</code> + <code>advanceTimeBy</code></td></tr>
+    <tr><td>依赖真实网络/文件</td><td>使用 Fake/Mock 替代外部依赖</td></tr>
+    <tr><td>多个测试共享可变状态</td><td>在 <code>@Before</code> 中创建新实例</td></tr>
+    <tr><td>只测正常路径</td><td>同时覆盖边界条件和异常路径</td></tr>
+    <tr><td>忽略失败的测试</td><td>立即修复或删除过时的测试</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天的判案哲学</div>
+    <p>最有价值的审判针对的是核心业务逻辑和常见罪行场景。本官的经验法则：如果某段代码曾经犯过案（出过 Bug），就必须对它建立长期监控（补上测试）。有前科之人，更需严加看管！不要追求审遍天下所有案件，但绝不能放过任何惯犯。</p>
+  </div>
+
+  <!-- ========== 本章练习 ========== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：初审计算器 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>为以下 <code>StringUtils</code> 类编写完整的单元测试。要求覆盖正常情况和边界条件（空字符串、特殊字符等），每个测试方法都使用规范的"方法_条件_预期结果"命名。</p>
+<pre><code><span class="kw">class</span> <span class="type">StringUtils</span> {
+    <span class="kw">fun</span> <span class="fn">reverse</span>(<span class="param">s</span>: <span class="type">String</span>): <span class="type">String</span> <span class="op">=</span> s.<span class="fn">reversed</span>()
+    <span class="kw">fun</span> <span class="fn">isPalindrome</span>(<span class="param">s</span>: <span class="type">String</span>): <span class="type">Boolean</span> <span class="op">=</span> s <span class="op">==</span> s.<span class="fn">reversed</span>()
+    <span class="kw">fun</span> <span class="fn">wordCount</span>(<span class="param">s</span>: <span class="type">String</span>): <span class="type">Int</span> <span class="op">=</span> s.<span class="fn">trim</span>().<span class="fn">split</span>(<span class="str">"\\s+"</span>.<span class="fn">toRegex</span>()).<span class="fn">count</span> { it.<span class="fn">isNotEmpty</span>() }
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>记住包青天的教诲：不能只审"好天气"下的表现。对于 <code>isPalindrome</code>，要测试回文和非回文两种情况；对于 <code>wordCount</code>，要考虑空字符串、前后有空格、多个连续空格等边界案情。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">StringUtilsTest</span> {
+    <span class="kw">private val</span> utils <span class="op">=</span> <span class="type">StringUtils</span>()
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">reverse_normalString_returnsReversed</span>() {
+        <span class="fn">assertEquals</span>(<span class="str">"olleH"</span>, utils.<span class="fn">reverse</span>(<span class="str">"Hello"</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">reverse_emptyString_returnsEmpty</span>() {
+        <span class="fn">assertEquals</span>(<span class="str">""</span>, utils.<span class="fn">reverse</span>(<span class="str">""</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">isPalindrome_palindromeString_returnsTrue</span>() {
+        <span class="fn">assertTrue</span>(utils.<span class="fn">isPalindrome</span>(<span class="str">"abcba"</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">isPalindrome_nonPalindrome_returnsFalse</span>() {
+        <span class="fn">assertFalse</span>(utils.<span class="fn">isPalindrome</span>(<span class="str">"hello"</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">wordCount_normalSentence_returnsCorrectCount</span>() {
+        <span class="fn">assertEquals</span>(<span class="num">3</span>, utils.<span class="fn">wordCount</span>(<span class="str">"hello world kotlin"</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">wordCount_emptyString_returnsZero</span>() {
+        <span class="fn">assertEquals</span>(<span class="num">0</span>, utils.<span class="fn">wordCount</span>(<span class="str">""</span>))
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">wordCount_extraSpaces_ignoresSpaces</span>() {
+        <span class="fn">assertEquals</span>(<span class="num">2</span>, utils.<span class="fn">wordCount</span>(<span class="str">"  hello   world  "</span>))
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：审讯 ViewModel <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设有一个 <code>TodoViewModel</code>，它维护一个待办事项列表，支持添加和删除操作。请编写测试覆盖以下案情：添加一个待办事项后列表长度变为 1；添加空标题的待办事项时应显示错误信息；删除待办事项后列表恢复为空。</p>
+<pre><code><span class="kw">class</span> <span class="type">TodoViewModel</span> : <span class="type">ViewModel</span>() {
+    <span class="kw">private val</span> _todos <span class="op">=</span> <span class="fn">MutableStateFlow</span>&lt;<span class="type">List</span>&lt;<span class="type">String</span>&gt;&gt;(<span class="fn">emptyList</span>())
+    <span class="kw">val</span> todos: <span class="type">StateFlow</span>&lt;<span class="type">List</span>&lt;<span class="type">String</span>&gt;&gt; <span class="op">=</span> _todos.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">private val</span> _error <span class="op">=</span> <span class="fn">MutableStateFlow</span>&lt;<span class="type">String?</span>&gt;(<span class="kw">null</span>)
+    <span class="kw">val</span> error: <span class="type">StateFlow</span>&lt;<span class="type">String?</span>&gt; <span class="op">=</span> _error.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">fun</span> <span class="fn">addTodo</span>(<span class="param">title</span>: <span class="type">String</span>) {
+        <span class="kw">if</span> (title.<span class="fn">isBlank</span>()) { _error.value <span class="op">=</span> <span class="str">"标题不能为空"</span>; <span class="kw">return</span> }
+        _todos.value <span class="op">=</span> _todos.value <span class="op">+</span> title
+    }
+
+    <span class="kw">fun</span> <span class="fn">removeTodo</span>(<span class="param">title</span>: <span class="type">String</span>) {
+        _todos.value <span class="op">=</span> _todos.value <span class="op">-</span> title
+    }
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>此案不涉及 <code>viewModelScope</code>，所以不需要 <code>MainDispatcherRule</code>。直接创建 ViewModel 实例，调用方法后检查 <code>todos.value</code> 和 <code>error.value</code> 即可。记住"升堂三步曲"：Arrange-Act-Assert。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">TodoViewModelTest</span> {
+    <span class="kw">private lateinit var</span> viewModel: <span class="type">TodoViewModel</span>
+
+    <span class="ann">@Before</span>
+    <span class="kw">fun</span> <span class="fn">setUp</span>() { viewModel <span class="op">=</span> <span class="type">TodoViewModel</span>() }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">addTodo_validTitle_addedToList</span>() {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"买菜"</span>)
+        <span class="fn">assertEquals</span>(<span class="num">1</span>, viewModel.todos.value.size)
+        <span class="fn">assertEquals</span>(<span class="str">"买菜"</span>, viewModel.todos.value.first())
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">addTodo_blankTitle_showsError</span>() {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"  "</span>)
+        <span class="fn">assertEquals</span>(<span class="str">"标题不能为空"</span>, viewModel.error.value)
+        <span class="fn">assertTrue</span>(viewModel.todos.value.<span class="fn">isEmpty</span>())
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">removeTodo_existingItem_removedFromList</span>() {
+        viewModel.<span class="fn">addTodo</span>(<span class="str">"买菜"</span>)
+        viewModel.<span class="fn">removeTodo</span>(<span class="str">"买菜"</span>)
+        <span class="fn">assertTrue</span>(viewModel.todos.value.<span class="fn">isEmpty</span>())
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：用 Turbine 审讯 Flow <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为以下 <code>CountdownTimer</code> 编写 Turbine 测试。要求验证 Flow 依次发射 3、2、1、0，然后正常完成。</p>
+<pre><code><span class="kw">class</span> <span class="type">CountdownTimer</span> {
+    <span class="kw">fun</span> <span class="fn">countdown</span>(<span class="param">from</span>: <span class="type">Int</span>): <span class="type">Flow</span>&lt;<span class="type">Int</span>&gt; <span class="op">=</span> <span class="fn">flow</span> {
+        <span class="kw">for</span> (i <span class="kw">in</span> from <span class="fn">downTo</span> <span class="num">0</span>) {
+            <span class="fn">emit</span>(i)
+            <span class="fn">delay</span>(<span class="num">1000</span>)
+        }
+    }
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>使用 <code>runTest</code> 包裹整个测试（它会自动跳过 <code>delay</code>）。在 <code>.test { }</code> 块中依次用 <code>awaitItem()</code> 接收每个值，最后调用 <code>awaitComplete()</code> 确认 Flow 已结案。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">CountdownTimerTest</span> {
+    <span class="kw">private val</span> timer <span class="op">=</span> <span class="type">CountdownTimer</span>()
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">countdown_from3_emitsDescendingValues</span>() <span class="op">=</span> <span class="fn">runTest</span> {
+        timer.<span class="fn">countdown</span>(<span class="num">3</span>).<span class="fn">test</span> {
+            <span class="fn">assertEquals</span>(<span class="num">3</span>, <span class="fn">awaitItem</span>())
+            <span class="fn">assertEquals</span>(<span class="num">2</span>, <span class="fn">awaitItem</span>())
+            <span class="fn">assertEquals</span>(<span class="num">1</span>, <span class="fn">awaitItem</span>())
+            <span class="fn">assertEquals</span>(<span class="num">0</span>, <span class="fn">awaitItem</span>())
+            <span class="fn">awaitComplete</span>()
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：Fake vs Mock 对决 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>给定以下 <code>WeatherRepository</code> 接口，分别用 Fake 和 MockK 两种方式为 <code>WeatherViewModel</code> 编写测试。对比两种方式的代码量和可读性，体会包青天"Fake 优先"的判案哲学。</p>
+<pre><code><span class="kw">interface</span> <span class="type">WeatherRepository</span> {
+    <span class="kw">suspend fun</span> <span class="fn">getTemperature</span>(<span class="param">city</span>: <span class="type">String</span>): <span class="type">Result</span>&lt;<span class="type">Int</span>&gt;
+}
+
+<span class="kw">class</span> <span class="type">WeatherViewModel</span>(
+    <span class="kw">private val</span> <span class="param">repo</span>: <span class="type">WeatherRepository</span>
+) : <span class="type">ViewModel</span>() {
+    <span class="kw">private val</span> _temp <span class="op">=</span> <span class="fn">MutableStateFlow</span>(<span class="str">""</span>)
+    <span class="kw">val</span> temp: <span class="type">StateFlow</span>&lt;<span class="type">String</span>&gt; <span class="op">=</span> _temp.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">fun</span> <span class="fn">loadWeather</span>(<span class="param">city</span>: <span class="type">String</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            repo.<span class="fn">getTemperature</span>(city)
+                .<span class="fn">onSuccess</span> { _temp.value <span class="op">=</span> <span class="str">"${it}°C"</span> }
+                .<span class="fn">onFailure</span> { _temp.value <span class="op">=</span> <span class="str">"获取失败"</span> }
+        }
+    }
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>Fake 方式：创建一个 <code>FakeWeatherRepository</code> 类，实现接口，通过 <code>shouldSucceed</code> 标志控制返回成功或失败。MockK 方式：使用 <code>mockk&lt;WeatherRepository&gt;()</code> 创建 mock 对象，用 <code>coEvery</code> 配置返回值。两种方式都需要 <code>MainDispatcherRule</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// === Fake 方式（包青天推荐）===</span>
+<span class="kw">class</span> <span class="type">FakeWeatherRepository</span> : <span class="type">WeatherRepository</span> {
+    <span class="kw">var</span> shouldSucceed <span class="op">=</span> <span class="kw">true</span>
+    <span class="kw">var</span> temperature <span class="op">=</span> <span class="num">25</span>
+    <span class="kw">override suspend fun</span> <span class="fn">getTemperature</span>(<span class="param">city</span>: <span class="type">String</span>): <span class="type">Result</span>&lt;<span class="type">Int</span>&gt; <span class="op">=</span>
+        <span class="kw">if</span> (shouldSucceed) <span class="type">Result</span>.<span class="fn">success</span>(temperature)
+        <span class="kw">else</span> <span class="type">Result</span>.<span class="fn">failure</span>(<span class="type">Exception</span>(<span class="str">"网络错误"</span>))
+}
+
+<span class="kw">class</span> <span class="type">WeatherViewModelFakeTest</span> {
+    <span class="ann">@get:Rule</span> <span class="kw">val</span> rule <span class="op">=</span> <span class="type">MainDispatcherRule</span>()
+    <span class="kw">private val</span> fakeRepo <span class="op">=</span> <span class="type">FakeWeatherRepository</span>()
+    <span class="kw">private val</span> viewModel <span class="op">=</span> <span class="type">WeatherViewModel</span>(fakeRepo)
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">loadWeather_success_showsTemperature</span>() {
+        fakeRepo.temperature <span class="op">=</span> <span class="num">30</span>
+        viewModel.<span class="fn">loadWeather</span>(<span class="str">"北京"</span>)
+        <span class="fn">assertEquals</span>(<span class="str">"30°C"</span>, viewModel.temp.value)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">loadWeather_failure_showsError</span>() {
+        fakeRepo.shouldSucceed <span class="op">=</span> <span class="kw">false</span>
+        viewModel.<span class="fn">loadWeather</span>(<span class="str">"北京"</span>)
+        <span class="fn">assertEquals</span>(<span class="str">"获取失败"</span>, viewModel.temp.value)
+    }
+}
+
+<span class="cmt">// === MockK 方式 ===</span>
+<span class="kw">class</span> <span class="type">WeatherViewModelMockTest</span> {
+    <span class="ann">@get:Rule</span> <span class="kw">val</span> rule <span class="op">=</span> <span class="type">MainDispatcherRule</span>()
+    <span class="kw">private val</span> mockRepo <span class="op">=</span> <span class="fn">mockk</span>&lt;<span class="type">WeatherRepository</span>&gt;()
+    <span class="kw">private val</span> viewModel <span class="op">=</span> <span class="type">WeatherViewModel</span>(mockRepo)
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">loadWeather_success_showsTemperature</span>() {
+        <span class="fn">coEvery</span> { mockRepo.<span class="fn">getTemperature</span>(<span class="str">"北京"</span>) } <span class="fn">returns</span> <span class="type">Result</span>.<span class="fn">success</span>(<span class="num">30</span>)
+        viewModel.<span class="fn">loadWeather</span>(<span class="str">"北京"</span>)
+        <span class="fn">assertEquals</span>(<span class="str">"30°C"</span>, viewModel.temp.value)
+    }
+
+    <span class="ann">@Test</span>
+    <span class="kw">fun</span> <span class="fn">loadWeather_failure_showsError</span>() {
+        <span class="fn">coEvery</span> { mockRepo.<span class="fn">getTemperature</span>(<span class="str">"北京"</span>) } <span class="fn">returns</span>
+            <span class="type">Result</span>.<span class="fn">failure</span>(<span class="type">Exception</span>(<span class="str">"网络错误"</span>))
+        viewModel.<span class="fn">loadWeather</span>(<span class="str">"北京"</span>)
+        <span class="fn">assertEquals</span>(<span class="str">"获取失败"</span>, viewModel.temp.value)
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

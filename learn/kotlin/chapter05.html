@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章：Kotlin 的杀手级特性 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="05" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：Kotlin 的杀手级特性</h1>
+  <p class="chapter-subtitle">空安全、扩展函数、Lambda、集合操作、作用域函数 —— 这些让 Kotlin 从众多语言中脱颖而出</p>
+
+  <!-- ==================== 导师卡片 ==================== -->
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">&#127913;</span>
+      <div class="mentor-info">
+        <h3>&#31119;&#23572;&#25705;&#26031; (Sherlock Holmes)</h3>
+        <p class="mentor-method">&#25490;&#38500;&#19981;&#21487;&#33021;&#65292;&#21097;&#19979;&#30340;&#23601;&#26159;&#30495;&#30456;</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>欢迎来到本案的核心现场。前两章我们收集了 Kotlin 语言的基础证据，而本章，我们将深入调查那些真正令人着迷的"杀手级特性"。每一个特性都是一件精密的侦探工具 —— 空安全系统如同排除嫌疑人的严密逻辑，扩展函数是为既有证物附加新的分析能力，Lambda 和集合操作则是我们处理案件档案的高效分析术。让我们运用演绎法，逐一揭开这些特性背后的真相。</p>
+    </div>
+  </div>
+
+  <p>各位助手，如果说前两章是案件的背景调查，那么本章就是我们正式破案的关键环节。这些特性不仅让代码更简洁，更重要的是它们从根本上<strong>排除</strong>了一整类程序缺陷的可能性，让代码更<strong>安全</strong>、更具<strong>表达力</strong>。经过本章的演绎推理，你会发现 Kotlin 的设计之精妙，犹如一桩完美的推理案件。</p>
+
+  <!-- ==================== 5.1 空安全系统 ==================== -->
+  <h2>5.1 空安全系统</h2>
+
+  <h3>十亿美元的悬案</h3>
+  <p>2009 年，Tony Hoare（空引用的发明者）公开承认了一桩惊天"罪行"：</p>
+  <blockquote style="background:#f0f4ff; border-left:4px solid #7f5af0; padding:16px 20px; margin:16px 0; border-radius:0 8px 8px 0; font-style:italic; color:#4a5568;">
+    "我把它称为我的十亿美元错误。那就是在 1965 年发明了空引用……它导致了无数的错误、漏洞和系统崩溃。"
+  </blockquote>
+  <p>这是编程史上最大的悬案之一。在 Java、JavaScript、Python 等语言中，<code>NullPointerException</code>（NPE）就像一个潜伏在暗处的连环杀手，随时可能让你的程序崩溃。经过缜密的分析，我可以推断出 Kotlin 的破案策略：<strong>在编译期就将所有可疑的 null 值逐一排除</strong>，把空指针这个罪犯从运行时的暗处拉到编译时的聚光灯下。</p>
+
+  <h3>可空类型 vs 非空类型：嫌疑人甄别</h3>
+  <p>Kotlin 的类型系统就像一套严密的身份验证机制。默认情况下，所有类型都被推断为"清白"的非空类型。要允许一个变量携带 <code>null</code> 这个"嫌疑"，必须在类型后加上 <code>?</code> 标记：</p>
+<pre><code><span class="cmt">// 非空类型 —— 已被排除嫌疑，永远不会为 null</span>
+<span class="kw">var</span> <span class="param">name</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">"Kotlin"</span>
+name <span class="op">=</span> <span class="kw">null</span>  <span class="cmt">// 编译错误！嫌疑人无法混入清白名单</span>
+
+<span class="cmt">// 可空类型 —— 标记为嫌疑人，可能携带 null</span>
+<span class="kw">var</span> <span class="param">nickname</span>: <span class="type">String?</span> <span class="op">=</span> <span class="str">"K"</span>
+nickname <span class="op">=</span> <span class="kw">null</span>  <span class="cmt">// OK，嫌疑人可以是空的</span>
+
+<span class="cmt">// 清白者可以进入嫌疑人名单，反过来则不行</span>
+<span class="kw">val</span> <span class="param">a</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">"hello"</span>
+<span class="kw">val</span> <span class="param">b</span>: <span class="type">String?</span> <span class="op">=</span> a       <span class="cmt">// OK</span>
+<span class="kw">val</span> <span class="param">c</span>: <span class="type">String</span> <span class="op">=</span> b       <span class="cmt">// 编译错误！嫌疑人必须经过审讯才能洗脱嫌疑</span></code></pre>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：裸指针 vs 编译期空安全</p>
+    <p>在 C++ 中，裸指针 <code>int* ptr = nullptr;</code> 完全合法，解引用空指针是<strong>未定义行为</strong>（比 Java 的 NPE 更危险 —— 连崩溃都不保证）。C++17 引入了 <code>std::optional&lt;T&gt;</code>，但它只是一个库类型，编译器不会强制你检查。Kotlin 的 <code>?</code> 类型标记直接内建于类型系统，编译器会在每一处使用可空值的地方强制你处理 null —— 这是从语言层面彻底排除空指针嫌犯的做法。</p>
+  </div>
+
+  <h3>安全调用操作符 <code>?.</code>：谨慎搜查</h3>
+  <p>面对一个嫌疑对象，我们不能贸然行动。<code>?.</code> 操作符就是我们的安全搜查令：如果对象为 <code>null</code>，整个表达式安全地返回 <code>null</code>，而不是引发崩溃。</p>
+<pre><code><span class="kw">val</span> <span class="param">name</span>: <span class="type">String?</span> <span class="op">=</span> <span class="str">"Kotlin"</span>
+
+<span class="cmt">// 安全搜查：name 非空则调用 length，否则返回 null</span>
+<span class="kw">val</span> <span class="param">len</span>: <span class="type">Int?</span> <span class="op">=</span> name<span class="op">?.</span>length    <span class="cmt">// 6</span>
+
+<span class="kw">val</span> <span class="param">nullName</span>: <span class="type">String?</span> <span class="op">=</span> <span class="kw">null</span>
+<span class="kw">val</span> <span class="param">len2</span>: <span class="type">Int?</span> <span class="op">=</span> nullName<span class="op">?.</span>length  <span class="cmt">// null（安全撤退，不会崩溃）</span></code></pre>
+
+  <p><strong>链式安全调用</strong>堪称侦探的连环推理 —— 任何一环线索断裂就立即短路返回 <code>null</code>，而不是继续冒险：</p>
+<pre><code><span class="cmt">// 假设 company、address、city 都是待审的嫌疑对象</span>
+<span class="kw">val</span> <span class="param">city</span> <span class="op">=</span> user<span class="op">?.</span>company<span class="op">?.</span>address<span class="op">?.</span>city
+
+<span class="cmt">// 等价于 Java 中令人头疼的多层排查：</span>
+<span class="cmt">// String city = null;</span>
+<span class="cmt">// if (user != null) {</span>
+<span class="cmt">//     Company company = user.getCompany();</span>
+<span class="cmt">//     if (company != null) {</span>
+<span class="cmt">//         Address address = company.getAddress();</span>
+<span class="cmt">//         if (address != null) {</span>
+<span class="cmt">//             city = address.getCity();</span>
+<span class="cmt">//         }</span>
+<span class="cmt">//     }</span>
+<span class="cmt">// }</span></code></pre>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：<code>?.</code> vs <code>std::optional::value_or</code></p>
+    <p>Kotlin 的 <code>?.</code> 安全调用在概念上类似 C++ 的 <code>std::optional</code> 配合 <code>and_then</code>（C++23 的 monadic 操作），但语法远比 C++ 优雅。C++ 中要实现类似的链式安全访问需要大量模板元编程或嵌套 <code>if (opt.has_value())</code> 检查。Kotlin 的 <code>?.</code> 一个符号搞定，这就是语言级支持与库级方案的差距。</p>
+  </div>
+
+  <h3>Elvis 操作符 <code>?:</code>：备用方案</h3>
+  <p>一个优秀的侦探总会准备备用方案。当线索中断（值为 <code>null</code>）时，Elvis 操作符让我们立刻启用后备证据：</p>
+<pre><code><span class="kw">val</span> <span class="param">name</span>: <span class="type">String?</span> <span class="op">=</span> <span class="kw">null</span>
+
+<span class="cmt">// 如果主要线索有效就采用，否则启用备用方案</span>
+<span class="kw">val</span> <span class="param">displayName</span> <span class="op">=</span> name <span class="op">?:</span> <span class="str">"匿名用户"</span>   <span class="cmt">// "匿名用户"</span>
+
+<span class="cmt">// 经典组合：安全搜查 + 备用方案</span>
+<span class="kw">val</span> <span class="param">len</span> <span class="op">=</span> name<span class="op">?.</span>length <span class="op">?:</span> <span class="num">0</span>   <span class="cmt">// name 为 null 时返回 0</span>
+
+<span class="cmt">// Elvis 右侧也可以是 return 或 throw —— 终止调查或报告异常</span>
+<span class="kw">fun</span> <span class="fn">process</span>(<span class="param">input</span>: <span class="type">String?</span>) {
+    <span class="kw">val</span> <span class="param">value</span> <span class="op">=</span> input <span class="op">?:</span> <span class="kw">return</span>             <span class="cmt">// 线索断裂，撤退</span>
+    <span class="kw">val</span> <span class="param">data</span> <span class="op">=</span> input <span class="op">?:</span> <span class="kw">throw</span> <span class="type">IllegalArgumentException</span>(<span class="str">"证据不能为空"</span>)
+    <span class="fn">println</span>(value)
+}</code></pre>
+
+  <h3>非空断言 <code>!!</code>：孤注一掷的断案</h3>
+  <p>使用 <code>!!</code> 就像侦探对着陪审团拍桌子说"我以性命担保这不是 null"。如果你判断失误，后果就是 <code>NullPointerException</code> —— 案件当场崩盘：</p>
+<pre><code><span class="kw">val</span> <span class="param">name</span>: <span class="type">String?</span> <span class="op">=</span> <span class="str">"Kotlin"</span>
+<span class="kw">val</span> <span class="param">len</span> <span class="op">=</span> name<span class="op">!!</span>.length   <span class="cmt">// OK，因为 name 确实不是 null</span>
+
+<span class="kw">val</span> <span class="param">bad</span>: <span class="type">String?</span> <span class="op">=</span> <span class="kw">null</span>
+<span class="kw">val</span> <span class="param">crash</span> <span class="op">=</span> bad<span class="op">!!</span>.length   <span class="cmt">// 运行时崩溃！侦探的判断失误了</span></code></pre>
+
+  <div class="warning">
+    <p class="tip-title">慎用 <code>!!</code></p>
+    <p>每一个 <code>!!</code> 都是你对编译器开出的"空头支票"，本质上放弃了 Kotlin 空安全的保护。在代码审查中，<code>!!</code> 应当像犯罪现场的可疑物品一样被特别关注。绝大多数情况下，可以用 <code>?.</code>、<code>?:</code> 或 <code>let</code> 这些更安全的侦查手段替代。</p>
+  </div>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：<code>!!</code> vs <code>*ptr</code></p>
+    <p>Kotlin 的 <code>!!</code> 在行为上类似 C++ 对裸指针的直接解引用 <code>*ptr</code> —— 都不做空值检查。区别在于：Kotlin 的 <code>!!</code> 至少会抛出一个明确的 <code>NullPointerException</code>，而 C++ 解引用空指针是<strong>未定义行为</strong>，可能崩溃、可能返回垃圾数据、甚至可能"正常运行"但在三天后以完全无关的方式爆炸。C++ 中稍好一些的做法是用 <code>std::optional::value()</code>，它会抛 <code>std::bad_optional_access</code>。</p>
+  </div>
+
+  <h3>智能转换 (Smart Cast)：自动演绎</h3>
+  <p>编译器本身就是一位出色的助手侦探：一旦你通过 <code>if</code> 检查排除了某个变量为 <code>null</code> 的可能性，在对应的分支里它会自动将类型从 <code>String?</code> 推断为 <code>String</code> —— 无需你再手动声明：</p>
+<pre><code><span class="kw">fun</span> <span class="fn">printLength</span>(<span class="param">text</span>: <span class="type">String?</span>) {
+    <span class="kw">if</span> (text <span class="op">!=</span> <span class="kw">null</span>) {
+        <span class="cmt">// 嫌疑排除！text 自动演绎为 String（非空）</span>
+        <span class="fn">println</span>(<span class="str">"长度: </span>${text.length}<span class="str">"</span>)
+    }
+
+    <span class="cmt">// 也适用于 is 类型检查 —— 身份确认后自动转型</span>
+    <span class="kw">val</span> <span class="param">obj</span>: <span class="type">Any</span> <span class="op">=</span> <span class="str">"Hello"</span>
+    <span class="kw">if</span> (obj <span class="kw">is</span> <span class="type">String</span>) {
+        <span class="cmt">// obj 自动推断为 String 类型，无需强制转换</span>
+        <span class="fn">println</span>(obj.uppercase())
+    }
+}</code></pre>
+
+  <h3>let 配合安全调用：条件审讯</h3>
+  <p><code>?.let { }</code> 是处理嫌疑对象最优雅的方式：仅当嫌疑人"现身"（非空）时，才对其执行 Lambda 中的审讯代码。</p>
+<pre><code><span class="kw">val</span> <span class="param">email</span>: <span class="type">String?</span> <span class="op">=</span> <span class="fn">getUserEmail</span>()
+
+<span class="cmt">// 仅当证据存在时才展开分析</span>
+email<span class="op">?.</span><span class="fn">let</span> { <span class="param">e</span> <span class="op">-></span>
+    <span class="fn">println</span>(<span class="str">"发送邮件到: </span>$e<span class="str">"</span>)
+    <span class="fn">sendEmail</span>(e)
+}
+
+<span class="cmt">// 单参数可以用 it 替代命名参数</span>
+email<span class="op">?.</span><span class="fn">let</span> {
+    <span class="fn">println</span>(<span class="str">"邮箱长度: </span>${it.length}<span class="str">"</span>)
+}</code></pre>
+
+  <h3>实际场景：Android 中的空值排查</h3>
+  <p>在 Android 开发这座"案发大楼"中，很多 API 返回可空值。Kotlin 的空安全体系让我们能够系统性地排除每一个潜在的空值嫌疑：</p>
+<pre><code><span class="cmt">// 从 Intent 获取数据（嫌疑人可能不在场）</span>
+<span class="kw">class</span> <span class="type">DetailActivity</span> : <span class="type">AppCompatActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+
+        <span class="cmt">// 安全获取 Intent 中的 String 数据</span>
+        <span class="kw">val</span> <span class="param">userId</span> <span class="op">=</span> intent.<span class="fn">getStringExtra</span>(<span class="str">"USER_ID"</span>) <span class="op">?:</span> <span class="kw">run</span> {
+            <span class="fn">finish</span>()   <span class="cmt">// 关键证据缺失，终止调查</span>
+            <span class="kw">return</span>
+        }
+
+        <span class="cmt">// 安全恢复保存的状态</span>
+        savedInstanceState<span class="op">?.</span><span class="fn">let</span> { <span class="param">bundle</span> <span class="op">-></span>
+            <span class="kw">val</span> <span class="param">scrollPosition</span> <span class="op">=</span> bundle.<span class="fn">getInt</span>(<span class="str">"SCROLL_POS"</span>, <span class="num">0</span>)
+            <span class="fn">restoreScrollPosition</span>(scrollPosition)
+        }
+
+        <span class="cmt">// 链式安全调用：层层深入排查 Fragment 中的 View</span>
+        <span class="kw">val</span> <span class="param">text</span> <span class="op">=</span> supportFragmentManager
+            .<span class="fn">findFragmentByTag</span>(<span class="str">"detail"</span>)
+            <span class="op">?.</span>view
+            <span class="op">?.</span><span class="fn">findViewById</span><span class="op">&lt;</span><span class="type">TextView</span><span class="op">></span>(<span class="type">R</span>.id.title)
+            <span class="op">?.</span>text
+            <span class="op">?:</span> <span class="str">"无标题"</span>
+    }
+}</code></pre>
+
+  <!-- ==================== 5.2 扩展函数 ==================== -->
+  <h2>5.2 扩展函数与扩展属性</h2>
+
+  <h3>基本语法：为已有证物增添分析能力</h3>
+  <p>在侦探工作中，我们经常需要对已有的证物进行新的分析，但我们不能篡改原始证物。扩展函数正是如此 —— 它让你在不修改原始类的情况下，为已有类"附加"新的分析方法：</p>
+<pre><code><span class="cmt">// 为 String 附加一个新的分析方法</span>
+<span class="kw">fun</span> <span class="type">String</span>.<span class="fn">addExclamation</span>() <span class="op">=</span> <span class="kw">this</span> <span class="op">+</span> <span class="str">"!"</span>
+
+<span class="cmt">// 使用时就像是 String 与生俱来的能力</span>
+<span class="fn">println</span>(<span class="str">"Hello"</span>.<span class="fn">addExclamation</span>())  <span class="cmt">// "Hello!"</span>
+
+<span class="cmt">// 带参数的扩展函数</span>
+<span class="kw">fun</span> <span class="type">String</span>.<span class="fn">repeat</span>(<span class="param">times</span>: <span class="type">Int</span>, <span class="param">separator</span>: <span class="type">String</span> <span class="op">=</span> <span class="str">""</span>): <span class="type">String</span> {
+    <span class="kw">return</span> (<span class="num">1</span>..<span class="op">..</span>times).<span class="fn">joinToString</span>(separator) { <span class="kw">this</span> }
+}
+<span class="fn">println</span>(<span class="str">"Ha"</span>.<span class="fn">repeat</span>(<span class="num">3</span>, <span class="str">" "</span>))  <span class="cmt">// "Ha Ha Ha"</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">编译原理：真相揭秘</p>
+    <p>让我揭示这个把戏背后的真相：扩展函数<strong>并不会</strong>真正修改原始类。编译器会把它转换为一个静态方法，接收对象作为第一个参数。例如 <code>fun String.addExclamation()</code> 编译后等价于 <code>static String addExclamation(String $this)</code>。正因如此，扩展函数<strong>无法访问私有成员</strong> —— 就像我们可以分析证物的外表，但不能打开它的密封包装。</p>
+  </div>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：扩展函数 vs 自由函数</p>
+    <p>C++ 没有扩展函数的直接等价物。最接近的方式是定义一个以对象引用作为第一参数的自由函数：<code>std::string addExclamation(const std::string&amp; s)</code>。但调用形式完全不同 —— C++ 中你必须写 <code>addExclamation(str)</code>，而 Kotlin 可以写 <code>str.addExclamation()</code>，后者的链式调用体验更流畅。有趣的是，Kotlin 扩展函数编译后的字节码本质上就是 C++ 自由函数的这种形式 —— 只不过 Kotlin 在语法层面做了一层优雅的伪装。</p>
+  </div>
+
+  <h3>扩展属性</h3>
+  <p>除了扩展函数，我们也可以为证物附加扩展属性（但不能有 backing field，只能用 getter/setter —— 毕竟我们不能在原始证物上刻字）：</p>
+<pre><code><span class="cmt">// 为 String 附加扩展属性</span>
+<span class="kw">val</span> <span class="type">String</span>.<span class="param">firstChar</span>: <span class="type">Char</span>
+    <span class="kw">get</span>() <span class="op">=</span> <span class="kw">this</span>[<span class="num">0</span>]
+
+<span class="kw">val</span> <span class="type">String</span>.<span class="param">lastChar</span>: <span class="type">Char</span>
+    <span class="kw">get</span>() <span class="op">=</span> <span class="kw">this</span>[length <span class="op">-</span> <span class="num">1</span>]
+
+<span class="fn">println</span>(<span class="str">"Kotlin"</span>.firstChar)  <span class="cmt">// 'K'</span>
+<span class="fn">println</span>(<span class="str">"Kotlin"</span>.lastChar)   <span class="cmt">// 'n'</span></code></pre>
+
+  <h3>实用示例：侦探的工具箱</h3>
+<pre><code><span class="cmt">// 1. List 扩展：安全获取第二个元素（第二条线索）</span>
+<span class="kw">fun</span> <span class="op">&lt;</span><span class="type">T</span><span class="op">></span> <span class="type">List</span><span class="op">&lt;</span><span class="type">T</span><span class="op">></span>.<span class="fn">secondOrNull</span>(): <span class="type">T?</span> <span class="op">=</span> <span class="kw">if</span> (size <span class="op">>=</span> <span class="num">2</span>) <span class="kw">this</span>[<span class="num">1</span>] <span class="kw">else</span> <span class="kw">null</span>
+
+<span class="cmt">// 2. String 扩展：判断是否为有效邮箱（简化版身份验证）</span>
+<span class="kw">fun</span> <span class="type">String</span>.<span class="fn">isValidEmail</span>(): <span class="type">Boolean</span> <span class="op">=</span> <span class="fn">contains</span>(<span class="str">"@"</span>) <span class="op">&amp;&amp;</span> <span class="fn">contains</span>(<span class="str">"."</span>)
+
+<span class="cmt">// 3. Int 扩展：格式化为带千分位的字符串</span>
+<span class="kw">fun</span> <span class="type">Int</span>.<span class="fn">withCommas</span>(): <span class="type">String</span> <span class="op">=</span> <span class="str">"%,d"</span>.<span class="fn">format</span>(<span class="kw">this</span>)
+
+<span class="fn">println</span>(<span class="num">1234567</span>.<span class="fn">withCommas</span>())  <span class="cmt">// "1,234,567"</span></code></pre>
+
+  <h3>Android 中的实用扩展</h3>
+<pre><code><span class="cmt">// dp 转 px —— 度量转换工具</span>
+<span class="kw">val</span> <span class="type">Int</span>.<span class="param">dp</span>: <span class="type">Int</span>
+    <span class="kw">get</span>() <span class="op">=</span> (<span class="kw">this</span> <span class="op">*</span> <span class="type">Resources</span>.<span class="fn">getSystem</span>().displayMetrics.density).<span class="fn">toInt</span>()
+
+<span class="cmt">// 使用：设置 16dp 的边距</span>
+view.setPadding(<span class="num">16</span>.dp, <span class="num">8</span>.dp, <span class="num">16</span>.dp, <span class="num">8</span>.dp)
+
+<span class="cmt">// Toast 扩展 —— 快速发布调查通告</span>
+<span class="kw">fun</span> <span class="type">Context</span>.<span class="fn">toast</span>(<span class="param">message</span>: <span class="type">String</span>, <span class="param">duration</span>: <span class="type">Int</span> <span class="op">=</span> <span class="type">Toast</span>.LENGTH_SHORT) {
+    <span class="type">Toast</span>.<span class="fn">makeText</span>(<span class="kw">this</span>, message, duration).<span class="fn">show</span>()
+}
+
+<span class="cmt">// 使用：在 Activity 中一行搞定</span>
+<span class="fn">toast</span>(<span class="str">"保存成功"</span>)
+
+<span class="cmt">// View 可见性扩展 —— 证物的展示控制</span>
+<span class="kw">fun</span> <span class="type">View</span>.<span class="fn">show</span>() { visibility <span class="op">=</span> <span class="type">View</span>.VISIBLE }
+<span class="kw">fun</span> <span class="type">View</span>.<span class="fn">hide</span>() { visibility <span class="op">=</span> <span class="type">View</span>.GONE }
+<span class="kw">fun</span> <span class="type">View</span>.<span class="fn">invisible</span>() { visibility <span class="op">=</span> <span class="type">View</span>.INVISIBLE }
+
+<span class="cmt">// 使用</span>
+progressBar.<span class="fn">show</span>()
+errorText.<span class="fn">hide</span>()</code></pre>
+
+  <!-- ==================== 5.3 Lambda 与高阶函数 ==================== -->
+  <h2>5.3 Lambda 与高阶函数</h2>
+
+  <h3>Lambda 表达式语法：匿名情报员</h3>
+  <p>Lambda 就像侦探派出的匿名情报员 —— 不需要正式身份（函数名），直接执行任务。用花括号 <code>{ }</code> 包裹即可部署：</p>
+<pre><code><span class="cmt">// 完整写法 —— 明确身份的情报员</span>
+<span class="kw">val</span> <span class="param">sum</span>: (<span class="type">Int</span>, <span class="type">Int</span>) <span class="op">-></span> <span class="type">Int</span> <span class="op">=</span> { <span class="param">x</span>: <span class="type">Int</span>, <span class="param">y</span>: <span class="type">Int</span> <span class="op">-></span> x <span class="op">+</span> y }
+
+<span class="cmt">// 类型可推断时简写 —— 编译器自行演绎身份</span>
+<span class="kw">val</span> <span class="param">sum2</span> <span class="op">=</span> { <span class="param">x</span>: <span class="type">Int</span>, <span class="param">y</span>: <span class="type">Int</span> <span class="op">-></span> x <span class="op">+</span> y }
+
+<span class="cmt">// 调用 Lambda</span>
+<span class="fn">println</span>(<span class="fn">sum</span>(<span class="num">3</span>, <span class="num">5</span>))  <span class="cmt">// 8</span>
+
+<span class="cmt">// 无参数的 Lambda</span>
+<span class="kw">val</span> <span class="param">greet</span> <span class="op">=</span> { <span class="fn">println</span>(<span class="str">"你好！"</span>) }
+<span class="fn">greet</span>()  <span class="cmt">// "你好！"</span></code></pre>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：Lambda 捕获机制</p>
+    <p>Kotlin 的 Lambda 与 C++ Lambda 有一个关键的区别 —— <strong>捕获方式</strong>。C++ 要求你显式声明捕获列表：<code>[&amp;]</code> 按引用捕获、<code>[=]</code> 按值捕获、<code>[this]</code> 捕获 this 指针，甚至可以混合使用如 <code>[&amp;x, =y, this]</code>。而 Kotlin Lambda <strong>默认捕获外部作用域中的所有变量</strong>，且能直接修改它们（类似 C++ 的 <code>[&amp;]</code>），无需声明任何捕获列表。这让 Kotlin 的 Lambda 写起来更简洁，但也意味着你需要注意闭包对外部可变状态的副作用。</p>
+  </div>
+
+  <h3>高阶函数：指挥调度中心</h3>
+  <p>高阶函数是接受函数作为参数或返回函数的函数 —— 就像侦探总部可以接收不同的调查策略，也可以派发定制的调查方案：</p>
+<pre><code><span class="cmt">// 接受不同的调查策略（函数作为参数）</span>
+<span class="kw">fun</span> <span class="fn">calculate</span>(<span class="param">x</span>: <span class="type">Int</span>, <span class="param">y</span>: <span class="type">Int</span>, <span class="param">operation</span>: (<span class="type">Int</span>, <span class="type">Int</span>) <span class="op">-></span> <span class="type">Int</span>): <span class="type">Int</span> {
+    <span class="kw">return</span> <span class="fn">operation</span>(x, y)
+}
+
+<span class="cmt">// 传入不同的 Lambda 实现不同的分析</span>
+<span class="fn">println</span>(<span class="fn">calculate</span>(<span class="num">10</span>, <span class="num">3</span>) { a, b <span class="op">-></span> a <span class="op">+</span> b })  <span class="cmt">// 13</span>
+<span class="fn">println</span>(<span class="fn">calculate</span>(<span class="num">10</span>, <span class="num">3</span>) { a, b <span class="op">-></span> a <span class="op">*</span> b })  <span class="cmt">// 30</span>
+
+<span class="cmt">// 派发定制调查方案（返回函数）</span>
+<span class="kw">fun</span> <span class="fn">getMultiplier</span>(<span class="param">factor</span>: <span class="type">Int</span>): (<span class="type">Int</span>) <span class="op">-></span> <span class="type">Int</span> {
+    <span class="kw">return</span> { number <span class="op">-></span> number <span class="op">*</span> factor }
+}
+
+<span class="kw">val</span> <span class="param">triple</span> <span class="op">=</span> <span class="fn">getMultiplier</span>(<span class="num">3</span>)
+<span class="fn">println</span>(<span class="fn">triple</span>(<span class="num">5</span>))   <span class="cmt">// 15</span>
+<span class="fn">println</span>(<span class="fn">triple</span>(<span class="num">10</span>))  <span class="cmt">// 30</span></code></pre>
+
+  <h3>尾随 Lambda：简化部署</h3>
+  <p>当函数的最后一个参数是 Lambda 时，可以把它放到括号外面。这是 Kotlin 最常用的语法糖之一 —— 让部署指令更加简洁明了：</p>
+<pre><code><span class="cmt">// 标准写法</span>
+listOf(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>).<span class="fn">filter</span>({ it <span class="op">></span> <span class="num">1</span> })
+
+<span class="cmt">// 尾随 Lambda 写法（推荐）</span>
+listOf(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>).<span class="fn">filter</span> { it <span class="op">></span> <span class="num">1</span> }
+
+<span class="cmt">// 如果 Lambda 是唯一的参数，括号可以省略</span>
+<span class="fn">run</span> { <span class="fn">println</span>(<span class="str">"Hello"</span>) }</code></pre>
+
+  <h3><code>it</code>：隐式单参数名</h3>
+  <p>当 Lambda 只有一个参数时，可以用 <code>it</code> 代替 —— 就像我们说"那个嫌疑人"而不用每次都报出全名：</p>
+<pre><code><span class="cmt">// 显式参数名</span>
+listOf(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>).<span class="fn">map</span> { <span class="param">number</span> <span class="op">-></span> number <span class="op">*</span> <span class="num">2</span> }
+
+<span class="cmt">// 使用 it（推荐用于简短的 Lambda）</span>
+listOf(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>).<span class="fn">map</span> { it <span class="op">*</span> <span class="num">2</span> }   <span class="cmt">// [2, 4, 6]</span>
+
+<span class="cmt">// 嵌套 Lambda 时，建议使用显式参数名避免歧义</span>
+listOf(<span class="str">"hello"</span>, <span class="str">"world"</span>).<span class="fn">forEach</span> { <span class="param">word</span> <span class="op">-></span>
+    word.<span class="fn">toList</span>().<span class="fn">forEach</span> { <span class="param">char</span> <span class="op">-></span>
+        <span class="fn">print</span>(char)   <span class="cmt">// 嵌套时用 it 会导致混淆：是 word 还是 char？</span>
+    }
+}</code></pre>
+
+  <h3>Android 中的常见用法</h3>
+<pre><code><span class="cmt">// 点击事件（尾随 Lambda）</span>
+button.<span class="fn">setOnClickListener</span> {
+    <span class="fn">toast</span>(<span class="str">"按钮被点击了"</span>)
+}
+
+<span class="cmt">// RecyclerView 设置（对比 Java 的匿名内部类）</span>
+recyclerView.<span class="fn">apply</span> {
+    layoutManager <span class="op">=</span> <span class="type">LinearLayoutManager</span>(<span class="kw">this</span><span class="ann">@MainActivity</span>)
+    adapter <span class="op">=</span> <span class="type">MyAdapter</span>(items) { <span class="param">item</span> <span class="op">-></span>
+        <span class="fn">navigateToDetail</span>(item)
+    }
+}</code></pre>
+
+  <!-- ==================== 5.4 集合操作 ==================== -->
+  <h2>5.4 集合操作</h2>
+
+  <h3>不可变集合 vs 可变集合：证据保管规则</h3>
+  <p>任何称职的侦探都知道，原始证据必须妥善保管不得篡改。Kotlin 严格区分只读集合和可变集合，正如案件中区分"封存证据"和"工作副本"：</p>
+<pre><code><span class="cmt">// 只读集合 —— 封存的证据，不可篡改</span>
+<span class="kw">val</span> <span class="param">fruits</span> <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"苹果"</span>, <span class="str">"香蕉"</span>, <span class="str">"橙子"</span>)
+<span class="kw">val</span> <span class="param">numbers</span> <span class="op">=</span> <span class="fn">setOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>)
+<span class="kw">val</span> <span class="param">config</span> <span class="op">=</span> <span class="fn">mapOf</span>(<span class="str">"host"</span> <span class="kw">to</span> <span class="str">"localhost"</span>, <span class="str">"port"</span> <span class="kw">to</span> <span class="str">"8080"</span>)
+
+<span class="cmt">// 可变集合 —— 工作副本，允许修改</span>
+<span class="kw">val</span> <span class="param">mutableFruits</span> <span class="op">=</span> <span class="fn">mutableListOf</span>(<span class="str">"苹果"</span>, <span class="str">"香蕉"</span>)
+mutableFruits.<span class="fn">add</span>(<span class="str">"橙子"</span>)           <span class="cmt">// OK</span>
+mutableFruits.<span class="fn">removeAt</span>(<span class="num">0</span>)           <span class="cmt">// OK</span>
+
+<span class="cmt">// fruits.add("梨")  // 编译错误！封存证据不可篡改</span>
+
+<span class="cmt">// 封存与工作副本之间的转换</span>
+<span class="kw">val</span> <span class="param">readOnly</span> <span class="op">=</span> mutableFruits.<span class="fn">toList</span>()     <span class="cmt">// 工作副本 -> 封存</span>
+<span class="kw">val</span> <span class="param">editable</span> <span class="op">=</span> fruits.<span class="fn">toMutableList</span>()     <span class="cmt">// 封存 -> 新的工作副本</span></code></pre>
+
+  <h3>常用变换操作：案件档案处理术</h3>
+  <p>处理案件档案时，我们需要对数据进行各种变换和分析。Kotlin 的集合操作就是我们的分析工具集：</p>
+<pre><code><span class="kw">val</span> <span class="param">numbers</span> <span class="op">=</span> <span class="fn">listOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>, <span class="num">6</span>)
+
+<span class="cmt">// map: 对每条证据进行转换分析</span>
+numbers.<span class="fn">map</span> { it <span class="op">*</span> <span class="num">2</span> }          <span class="cmt">// [2, 4, 6, 8, 10, 12]</span>
+
+<span class="cmt">// filter: 筛选符合条件的嫌疑人</span>
+numbers.<span class="fn">filter</span> { it <span class="op">%</span> <span class="num">2</span> <span class="op">==</span> <span class="num">0</span> }   <span class="cmt">// [2, 4, 6]</span>
+
+<span class="cmt">// flatMap: 展开嵌套线索后展平</span>
+<span class="kw">val</span> <span class="param">words</span> <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"hello"</span>, <span class="str">"world"</span>)
+words.<span class="fn">flatMap</span> { it.<span class="fn">toList</span>() }    <span class="cmt">// [h, e, l, l, o, w, o, r, l, d]</span>
+
+<span class="cmt">// groupBy: 按类别归档</span>
+numbers.<span class="fn">groupBy</span> { <span class="kw">if</span> (it <span class="op">%</span> <span class="num">2</span> <span class="op">==</span> <span class="num">0</span>) <span class="str">"偶数"</span> <span class="kw">else</span> <span class="str">"奇数"</span> }
+<span class="cmt">// {奇数=[1, 3, 5], 偶数=[2, 4, 6]}</span>
+
+<span class="cmt">// associate: 建立索引档案</span>
+<span class="kw">val</span> <span class="param">names</span> <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"Alice"</span>, <span class="str">"Bob"</span>)
+names.<span class="fn">associateWith</span> { it.length }  <span class="cmt">// {Alice=5, Bob=3}</span></code></pre>
+
+  <div class="cpp-note">
+    <p class="tip-title">C++ 对比：集合操作 vs C++20 Ranges</p>
+    <p>Kotlin 的 <code>map</code> / <code>filter</code> 操作在概念上等价于 C++20 引入的 <code>std::ranges::views::transform</code> / <code>std::ranges::views::filter</code>。但 Kotlin 从语言诞生之初就内置了这些操作，而 C++ 直到 C++20 标准才引入 Ranges 库，且语法相对冗长。例如，Kotlin 的 <code>numbers.filter { it % 2 == 0 }.map { it * 2 }</code> 在 C++20 中需要写成 <code>numbers | views::filter([](int n){ return n%2==0; }) | views::transform([](int n){ return n*2; })</code>。功能相似，但 Kotlin 的表达显然更为凝练。</p>
+  </div>
+
+  <h3>查找与判断操作：锁定目标</h3>
+<pre><code><span class="kw">val</span> <span class="param">numbers</span> <span class="op">=</span> <span class="fn">listOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>)
+
+<span class="cmt">// find: 找第一个满足条件的嫌疑人（找不到返回 null）</span>
+numbers.<span class="fn">find</span> { it <span class="op">></span> <span class="num">3</span> }        <span class="cmt">// 4</span>
+
+<span class="cmt">// first / last: 第一个/最后一个符合条件的，找不到抛异常</span>
+numbers.<span class="fn">first</span> { it <span class="op">></span> <span class="num">3</span> }       <span class="cmt">// 4</span>
+numbers.<span class="fn">last</span> { it <span class="op">&lt;</span> <span class="num">3</span> }        <span class="cmt">// 2</span>
+
+<span class="cmt">// firstOrNull / lastOrNull: 更安全的搜查版本</span>
+numbers.<span class="fn">firstOrNull</span> { it <span class="op">></span> <span class="num">10</span> }  <span class="cmt">// null</span>
+
+<span class="cmt">// any: 是否存在符合特征的嫌疑人</span>
+numbers.<span class="fn">any</span> { it <span class="op">></span> <span class="num">3</span> }        <span class="cmt">// true</span>
+
+<span class="cmt">// all: 是否所有证据都符合预期</span>
+numbers.<span class="fn">all</span> { it <span class="op">></span> <span class="num">0</span> }        <span class="cmt">// true</span>
+
+<span class="cmt">// none: 是否没有任何反例</span>
+numbers.<span class="fn">none</span> { it <span class="op">&lt;</span> <span class="num">0</span> }       <span class="cmt">// true</span></code></pre>
+
+  <h3>链式操作实战：学生成绩案件分析</h3>
+  <p>让我们用链式操作来分析一组"案件档案" —— 学生成绩数据。请注意观察我是如何一步步排除不相关的数据，最终锁定目标的：</p>
+<pre><code><span class="kw">data class</span> <span class="type">Student</span>(
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">grade</span>: <span class="type">Int</span>,      <span class="cmt">// 年级</span>
+    <span class="kw">val</span> <span class="param">score</span>: <span class="type">Double</span>,   <span class="cmt">// 成绩</span>
+    <span class="kw">val</span> <span class="param">subject</span>: <span class="type">String</span>  <span class="cmt">// 科目</span>
+)
+
+<span class="kw">val</span> <span class="param">students</span> <span class="op">=</span> <span class="fn">listOf</span>(
+    <span class="type">Student</span>(<span class="str">"张三"</span>, <span class="num">3</span>, <span class="num">92.5</span>, <span class="str">"数学"</span>),
+    <span class="type">Student</span>(<span class="str">"李四"</span>, <span class="num">3</span>, <span class="num">85.0</span>, <span class="str">"数学"</span>),
+    <span class="type">Student</span>(<span class="str">"王五"</span>, <span class="num">2</span>, <span class="num">78.0</span>, <span class="str">"数学"</span>),
+    <span class="type">Student</span>(<span class="str">"赵六"</span>, <span class="num">3</span>, <span class="num">95.0</span>, <span class="str">"英语"</span>),
+    <span class="type">Student</span>(<span class="str">"钱七"</span>, <span class="num">2</span>, <span class="num">88.0</span>, <span class="str">"英语"</span>),
+)
+
+<span class="cmt">// 调查任务：锁定三年级数学成绩 >= 90 分的学生，按成绩降序排列</span>
+<span class="kw">val</span> <span class="param">topStudents</span> <span class="op">=</span> students
+    .<span class="fn">filter</span> { it.grade <span class="op">==</span> <span class="num">3</span> }              <span class="cmt">// 排除非三年级</span>
+    .<span class="fn">filter</span> { it.subject <span class="op">==</span> <span class="str">"数学"</span> }        <span class="cmt">// 排除非数学科目</span>
+    .<span class="fn">filter</span> { it.score <span class="op">>=</span> <span class="num">90</span> }              <span class="cmt">// 排除 90 分以下</span>
+    .<span class="fn">sortedByDescending</span> { it.score }       <span class="cmt">// 按证据强度排序</span>
+    .<span class="fn">map</span> { it.name }                       <span class="cmt">// 提取目标姓名</span>
+<span class="cmt">// 结果: ["张三"]</span>
+
+<span class="cmt">// 调查任务：按年级统计平均成绩</span>
+<span class="kw">val</span> <span class="param">avgByGrade</span> <span class="op">=</span> students
+    .<span class="fn">groupBy</span> { it.grade }
+    .<span class="fn">mapValues</span> { (<span class="param">_</span>, <span class="param">students</span>) <span class="op">-></span>
+        students.<span class="fn">map</span> { it.score }.<span class="fn">average</span>()
+    }
+<span class="cmt">// 结果: {3=90.83, 2=83.0}</span></code></pre>
+
+  <h3>Sequence：惰性推理法</h3>
+  <p>普通集合操作是<strong>立即求值</strong>的 —— 每一步推理都会生成完整的中间结论。但当案件档案浩如烟海时，我们应当使用 <code>Sequence</code> 进行<strong>惰性推理</strong>：只在真正需要答案时才动手分析。</p>
+<pre><code><span class="cmt">// 普通集合：每步推理都生成完整中间结论（大案件时浪费资源）</span>
+<span class="kw">val</span> <span class="param">result1</span> <span class="op">=</span> (<span class="num">1</span>..<span class="num">1_000_000</span>)
+    .<span class="fn">map</span> { it <span class="op">*</span> <span class="num">2</span> }        <span class="cmt">// 生成 100 万条中间记录</span>
+    .<span class="fn">filter</span> { it <span class="op">%</span> <span class="num">3</span> <span class="op">==</span> <span class="num">0</span> }  <span class="cmt">// 再筛选一遍</span>
+    .<span class="fn">first</span>()               <span class="cmt">// 只取第一条... 前面白忙了</span>
+
+<span class="cmt">// Sequence 版本：惰性推理，找到第一条就收工</span>
+<span class="kw">val</span> <span class="param">result2</span> <span class="op">=</span> (<span class="num">1</span>..<span class="num">1_000_000</span>).<span class="fn">asSequence</span>()
+    .<span class="fn">map</span> { it <span class="op">*</span> <span class="num">2</span> }        <span class="cmt">// 记录策略，暂不执行</span>
+    .<span class="fn">filter</span> { it <span class="op">%</span> <span class="num">3</span> <span class="op">==</span> <span class="num">0</span> }  <span class="cmt">// 记录策略，暂不执行</span>
+    .<span class="fn">first</span>()               <span class="cmt">// 终端指令，触发推理，处理极少元素就结案</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">何时使用 Sequence？</p>
+    <p>经验法则：如果案件档案庞大（上万条记录）且需要多步链式分析，使用 <code>asSequence()</code>。对于小型案件，普通 List 操作更直观且性能差异可忽略。</p>
+  </div>
+
+  <!-- ==================== 5.5 作用域函数 ==================== -->
+  <h2>5.5 作用域函数</h2>
+
+  <p>Kotlin 标准库提供了 5 个作用域函数：<code>let</code>、<code>run</code>、<code>with</code>、<code>apply</code>、<code>also</code>。它们就像侦探的五种审讯技巧，核心区别只有两点：<strong>引用对象的方式</strong>（<code>this</code> 还是 <code>it</code>）和<strong>返回值</strong>（Lambda 结果还是对象本身）。让我逐一演绎它们的用法。</p>
+
+  <h3>let</h3>
+  <p>引用对象为 <code>it</code>，返回 Lambda 结果。最常用于<strong>非空排查</strong>和<strong>证据转换</strong>。</p>
+<pre><code><span class="cmt">// 非空排查</span>
+<span class="kw">val</span> <span class="param">name</span>: <span class="type">String?</span> <span class="op">=</span> <span class="str">"Kotlin"</span>
+name<span class="op">?.</span><span class="fn">let</span> {
+    <span class="fn">println</span>(<span class="str">"名字是 </span>$it<span class="str">, 长度为 </span>${it.length}<span class="str">"</span>)
+}
+
+<span class="cmt">// 证据转换：将可空值推断为另一种形式</span>
+<span class="kw">val</span> <span class="param">length</span>: <span class="type">Int?</span> <span class="op">=</span> name<span class="op">?.</span><span class="fn">let</span> { it.length }  <span class="cmt">// 6</span></code></pre>
+
+  <h3>run</h3>
+  <p>引用对象为 <code>this</code>，返回 Lambda 结果。适合<strong>配置对象并分析出结论</strong>。</p>
+<pre><code><span class="cmt">// 组装证据并得出结论</span>
+<span class="kw">val</span> <span class="param">result</span> <span class="op">=</span> <span class="type">StringBuilder</span>().<span class="fn">run</span> {
+    <span class="fn">append</span>(<span class="str">"Hello"</span>)
+    <span class="fn">append</span>(<span class="str">" "</span>)
+    <span class="fn">append</span>(<span class="str">"World"</span>)
+    <span class="fn">toString</span>()   <span class="cmt">// 返回最终结论</span>
+}
+<span class="fn">println</span>(result)  <span class="cmt">// "Hello World"</span>
+
+<span class="cmt">// 也可以用于非空对象的连续操作</span>
+<span class="kw">val</span> <span class="param">service</span>: <span class="type">NetworkService?</span> <span class="op">=</span> <span class="fn">getService</span>()
+<span class="kw">val</span> <span class="param">data</span> <span class="op">=</span> service<span class="op">?.</span><span class="fn">run</span> {
+    <span class="fn">connect</span>()
+    <span class="fn">fetchData</span>()  <span class="cmt">// 返回调查数据</span>
+}</code></pre>
+
+  <h3>with</h3>
+  <p>引用对象为 <code>this</code>，返回 Lambda 结果。与 <code>run</code> 类似，但对象作为参数传入。适合对一个<strong>已确认的证物进行多角度分析</strong>。</p>
+<pre><code><span class="kw">val</span> <span class="param">person</span> <span class="op">=</span> <span class="type">Person</span>(<span class="str">"张三"</span>, <span class="num">25</span>)
+
+<span class="kw">val</span> <span class="param">info</span> <span class="op">=</span> <span class="fn">with</span>(person) {
+    <span class="cmt">// 这里的 this 就是 person，可以直接访问其属性</span>
+    <span class="fn">println</span>(<span class="str">"姓名: </span>$name<span class="str">"</span>)
+    <span class="fn">println</span>(<span class="str">"年龄: </span>$age<span class="str">"</span>)
+    <span class="str">"</span>$name<span class="str"> 今年 </span>$age<span class="str"> 岁"</span>   <span class="cmt">// 分析结论</span>
+}</code></pre>
+
+  <h3>apply</h3>
+  <p>引用对象为 <code>this</code>，<strong>返回对象本身</strong>。最适合<strong>对象初始化/配置</strong> —— 布置调查现场。</p>
+<pre><code><span class="cmt">// 最经典的用法：构建和配置调查工具</span>
+<span class="kw">val</span> <span class="param">textView</span> <span class="op">=</span> <span class="type">TextView</span>(context).<span class="fn">apply</span> {
+    text <span class="op">=</span> <span class="str">"Hello"</span>
+    textSize <span class="op">=</span> <span class="num">16f</span>
+    setTextColor(<span class="type">Color</span>.BLACK)
+    setPadding(<span class="num">16</span>.dp, <span class="num">8</span>.dp, <span class="num">16</span>.dp, <span class="num">8</span>.dp)
+}
+<span class="cmt">// textView 已经配置好了，随时可以投入使用</span>
+
+<span class="cmt">// 配置 Intent —— 准备调查指令</span>
+<span class="kw">val</span> <span class="param">intent</span> <span class="op">=</span> <span class="type">Intent</span>(<span class="kw">this</span>, <span class="type">DetailActivity</span>::<span class="kw">class</span>.java).<span class="fn">apply</span> {
+    <span class="fn">putExtra</span>(<span class="str">"USER_ID"</span>, userId)
+    <span class="fn">putExtra</span>(<span class="str">"FROM_PAGE"</span>, <span class="str">"home"</span>)
+    flags <span class="op">=</span> <span class="type">Intent</span>.FLAG_ACTIVITY_NEW_TASK
+}</code></pre>
+
+  <h3>also</h3>
+  <p>引用对象为 <code>it</code>，<strong>返回对象本身</strong>。适合<strong>附加操作</strong>（如记录日志、调试验证），不改变证物本身。</p>
+<pre><code><span class="cmt">// 在链式推理中插入调查日志</span>
+<span class="kw">val</span> <span class="param">numbers</span> <span class="op">=</span> <span class="fn">mutableListOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>)
+    .<span class="fn">also</span> { <span class="fn">println</span>(<span class="str">"初始证据: </span>$it<span class="str">"</span>) }
+    .<span class="fn">also</span> { it.<span class="fn">add</span>(<span class="num">4</span>) }
+    .<span class="fn">also</span> { <span class="fn">println</span>(<span class="str">"补充后: </span>$it<span class="str">"</span>) }
+
+<span class="cmt">// 调试时临时插入，不影响原有推理链</span>
+<span class="kw">fun</span> <span class="fn">getUser</span>(): <span class="type">User</span> {
+    <span class="kw">return</span> repository.<span class="fn">findUser</span>(id)
+        .<span class="fn">also</span> { <span class="fn">println</span>(<span class="str">"DEBUG: 查到嫌疑人 </span>${it.name}<span class="str">"</span>) }
+}</code></pre>
+
+  <h3>对比表：五种审讯技巧一览</h3>
+  <table>
+    <tr>
+      <th>函数</th>
+      <th>对象引用</th>
+      <th>返回值</th>
+      <th>典型场景</th>
+    </tr>
+    <tr>
+      <td><code>let</code></td>
+      <td><code>it</code></td>
+      <td>Lambda 结果</td>
+      <td>非空排查、证据转换</td>
+    </tr>
+    <tr>
+      <td><code>run</code></td>
+      <td><code>this</code></td>
+      <td>Lambda 结果</td>
+      <td>配置对象 + 得出结论</td>
+    </tr>
+    <tr>
+      <td><code>with</code></td>
+      <td><code>this</code></td>
+      <td>Lambda 结果</td>
+      <td>对已确认证物多角度分析</td>
+    </tr>
+    <tr>
+      <td><code>apply</code></td>
+      <td><code>this</code></td>
+      <td>对象本身</td>
+      <td>布置现场 / 对象初始化</td>
+    </tr>
+    <tr>
+      <td><code>also</code></td>
+      <td><code>it</code></td>
+      <td>对象本身</td>
+      <td>附加操作（日志、调试）</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <p class="tip-title">选择指南</p>
+    <p>
+      需要配置对象？用 <code>apply</code>。<br>
+      处理可空值？用 <code>let</code>。<br>
+      想在链式推理中加日志？用 <code>also</code>。<br>
+      需要对对象做操作并返回分析结论？用 <code>run</code> 或 <code>with</code>。<br>
+      不确定？先用 <code>let</code>，它最通用。
+    </p>
+  </div>
+
+  <!-- ==================== 5.6 解构声明 ==================== -->
+  <h2>5.6 解构声明</h2>
+
+  <h3>data class 解构：拆解证物</h3>
+  <p>data class 自动支持解构 —— 一次性将证物的各项属性拆分到独立的变量中进行分析，如同将一个密封信封拆开，逐一检视内部文件：</p>
+<pre><code><span class="kw">data class</span> <span class="type">User</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">age</span>: <span class="type">Int</span>, <span class="kw">val</span> <span class="param">email</span>: <span class="type">String</span>)
+
+<span class="kw">val</span> <span class="param">user</span> <span class="op">=</span> <span class="type">User</span>(<span class="str">"张三"</span>, <span class="num">25</span>, <span class="str">"zhangsan@mail.com"</span>)
+
+<span class="cmt">// 解构声明 —— 一次拆解</span>
+<span class="kw">val</span> (<span class="param">name</span>, <span class="param">age</span>, <span class="param">email</span>) <span class="op">=</span> user
+
+<span class="fn">println</span>(name)   <span class="cmt">// "张三"</span>
+<span class="fn">println</span>(age)    <span class="cmt">// 25</span>
+<span class="fn">println</span>(email)  <span class="cmt">// "zhangsan@mail.com"</span>
+
+<span class="cmt">// 在函数参数中解构</span>
+<span class="kw">fun</span> <span class="fn">greet</span>(<span class="param">user</span>: <span class="type">User</span>) {
+    <span class="kw">val</span> (<span class="param">name</span>, <span class="param">age</span>) <span class="op">=</span> user
+    <span class="fn">println</span>(<span class="str">"你好, </span>$name<span class="str">！你 </span>$age<span class="str"> 岁了"</span>)
+}</code></pre>
+
+  <h3>Map 遍历中的解构</h3>
+<pre><code><span class="kw">val</span> <span class="param">scores</span> <span class="op">=</span> <span class="fn">mapOf</span>(
+    <span class="str">"张三"</span> <span class="kw">to</span> <span class="num">92</span>,
+    <span class="str">"李四"</span> <span class="kw">to</span> <span class="num">85</span>,
+    <span class="str">"王五"</span> <span class="kw">to</span> <span class="num">78</span>
+)
+
+<span class="cmt">// 使用解构遍历案件索引</span>
+<span class="kw">for</span> ((<span class="param">name</span>, <span class="param">score</span>) <span class="kw">in</span> scores) {
+    <span class="fn">println</span>(<span class="str">"</span>$name<span class="str"> 的成绩: </span>$score<span class="str">"</span>)
+}
+
+<span class="cmt">// 在 Lambda 中使用解构</span>
+scores.<span class="fn">forEach</span> { (<span class="param">name</span>, <span class="param">score</span>) <span class="op">-></span>
+    <span class="fn">println</span>(<span class="str">"</span>$name<span class="str">: </span>$score<span class="str">"</span>)
+}</code></pre>
+
+  <h3>用 <code>_</code> 跳过不相关的线索</h3>
+<pre><code><span class="kw">val</span> <span class="param">user</span> <span class="op">=</span> <span class="type">User</span>(<span class="str">"张三"</span>, <span class="num">25</span>, <span class="str">"zhangsan@mail.com"</span>)
+
+<span class="cmt">// 只需要姓名和邮箱，年龄不是本案的关键线索</span>
+<span class="kw">val</span> (<span class="param">name</span>, <span class="param">_</span>, <span class="param">email</span>) <span class="op">=</span> user
+<span class="fn">println</span>(<span class="str">"</span>$name<span class="str"> - </span>$email<span class="str">"</span>)
+
+<span class="cmt">// Map 遍历时只关心 value</span>
+<span class="kw">for</span> ((<span class="param">_</span>, <span class="param">score</span>) <span class="kw">in</span> scores) {
+    <span class="fn">println</span>(score)
+}</code></pre>
+
+  <!-- ==================== 5.7 其他实用特性 ==================== -->
+  <h2>5.7 其他实用特性</h2>
+
+  <h3>类型别名 (typealias)：案件代号</h3>
+  <p>复杂的类型名称就像冗长的法律术语。类型别名让我们为复杂类型起一个简短的代号，提高推理时的可读性：</p>
+<pre><code><span class="cmt">// 为复杂的函数类型起代号</span>
+<span class="kw">typealias</span> <span class="type">UserClickHandler</span> <span class="op">=</span> (<span class="type">User</span>) <span class="op">-></span> <span class="type">Unit</span>
+<span class="kw">typealias</span> <span class="type">Predicate</span><span class="op">&lt;</span><span class="type">T</span><span class="op">></span> <span class="op">=</span> (<span class="type">T</span>) <span class="op">-></span> <span class="type">Boolean</span>
+
+<span class="cmt">// 使用代号让函数签名更清晰</span>
+<span class="kw">fun</span> <span class="fn">setOnUserClick</span>(<span class="param">handler</span>: <span class="type">UserClickHandler</span>) {
+    <span class="cmt">// ...</span>
+}
+
+<span class="cmt">// 为嵌套的泛型类型起代号</span>
+<span class="kw">typealias</span> <span class="type">UserScores</span> <span class="op">=</span> <span class="type">Map</span><span class="op">&lt;</span><span class="type">String</span>, <span class="type">List</span><span class="op">&lt;</span><span class="type">Int</span><span class="op">>></span>
+
+<span class="kw">fun</span> <span class="fn">processScores</span>(<span class="param">scores</span>: <span class="type">UserScores</span>) {
+    scores.<span class="fn">forEach</span> { (<span class="param">name</span>, <span class="param">scoreList</span>) <span class="op">-></span>
+        <span class="fn">println</span>(<span class="str">"</span>$name<span class="str">: </span>${scoreList.<span class="fn">average</span>()}<span class="str">"</span>)
+    }
+}</code></pre>
+
+  <h3>内联函数 (inline)：零开销分析</h3>
+  <p>高阶函数每次调用都会创建 Lambda 对象，就像每次分析都要复印一份档案。<code>inline</code> 关键字让编译器把函数体直接"嵌入"到调用处 —— 消除了额外的开销：</p>
+<pre><code><span class="cmt">// 内联函数：Lambda 体直接插入调用处，无额外对象创建</span>
+<span class="kw">inline fun</span> <span class="fn">measureTime</span>(<span class="param">block</span>: () <span class="op">-></span> <span class="type">Unit</span>): <span class="type">Long</span> {
+    <span class="kw">val</span> <span class="param">start</span> <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+    <span class="fn">block</span>()
+    <span class="kw">return</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>() <span class="op">-</span> start
+}
+
+<span class="cmt">// 使用</span>
+<span class="kw">val</span> <span class="param">elapsed</span> <span class="op">=</span> <span class="fn">measureTime</span> {
+    <span class="cmt">// 执行一些耗时的调查工作</span>
+    <span class="type">Thread</span>.<span class="fn">sleep</span>(<span class="num">100</span>)
+}
+<span class="fn">println</span>(<span class="str">"耗时: </span>${elapsed}<span class="str">ms"</span>)</code></pre>
+
+  <div class="tip">
+    <p class="tip-title">何时使用 inline？</p>
+    <p>Kotlin 标准库中的 <code>let</code>、<code>run</code>、<code>apply</code>、<code>also</code>、<code>filter</code>、<code>map</code> 等都是 inline 函数。自己写高阶函数时，如果 Lambda 参数很小且调用频繁，加上 <code>inline</code> 可以提升性能。但对于大型函数体，内联反而会增大生成代码的体积 —— 正如侦探不需要把整个案件档案馆搬到每个犯罪现场。</p>
+  </div>
+
+  <h3>中缀函数 (infix)：自然语言式推理</h3>
+  <p>中缀函数可以省略点号和括号，让代码读起来如同自然语言中的逻辑推理：</p>
+<pre><code><span class="cmt">// 定义中缀函数</span>
+<span class="kw">infix fun</span> <span class="type">Int</span>.<span class="fn">times</span>(<span class="param">str</span>: <span class="type">String</span>): <span class="type">String</span> <span class="op">=</span> str.<span class="fn">repeat</span>(<span class="kw">this</span>)
+
+<span class="cmt">// 使用中缀表示法（省略 . 和括号）</span>
+<span class="kw">val</span> <span class="param">result</span> <span class="op">=</span> <span class="num">3</span> <span class="fn">times</span> <span class="str">"Ha "</span>   <span class="cmt">// "Ha Ha Ha "</span>
+
+<span class="cmt">// Kotlin 内置的中缀函数</span>
+<span class="kw">val</span> <span class="param">pair</span> <span class="op">=</span> <span class="str">"name"</span> <span class="kw">to</span> <span class="str">"Kotlin"</span>     <span class="cmt">// to 就是中缀函数，创建 Pair</span>
+<span class="kw">val</span> <span class="param">range</span> <span class="op">=</span> <span class="num">1</span> <span class="fn">until</span> <span class="num">10</span>             <span class="cmt">// until 也是中缀函数</span>
+
+<span class="cmt">// 自定义 DSL 风格的断言 —— 验证推理结论</span>
+<span class="kw">infix fun</span> <span class="op">&lt;</span><span class="type">T</span><span class="op">></span> <span class="type">T</span>.<span class="fn">shouldBe</span>(<span class="param">expected</span>: <span class="type">T</span>) {
+    <span class="kw">if</span> (<span class="kw">this</span> <span class="op">!=</span> expected) <span class="kw">throw</span> <span class="type">AssertionError</span>(<span class="str">"期望 </span>$expected<span class="str">，实际 </span>$<span class="kw">this</span><span class="str">"</span>)
+}
+
+<span class="cmt">// 验证推理</span>
+<span class="num">5</span> <span class="fn">shouldBe</span> <span class="num">5</span>              <span class="cmt">// OK</span>
+<span class="str">"hello"</span>.length <span class="fn">shouldBe</span> <span class="num">5</span>  <span class="cmt">// OK</span></code></pre>
+
+  <div class="warning">
+    <p class="tip-title">中缀函数的三条规则</p>
+    <p>中缀函数必须满足三个条件：(1) 是成员函数或扩展函数；(2) 只有一个参数；(3) 参数不能有默认值，也不能是可变参数。违反任何一条，编译器都会立即排除其资格。</p>
+  </div>
+
+  <!-- ==================== 本章小结 ==================== -->
+  <h2>本章小结</h2>
+
+  <p>经过一整章的缜密调查，我们已经掌握了 Kotlin 最核心的语言特性。这些特性正是让 Kotlin 区别于 Java 和其他语言的关键证据：</p>
+  <ul>
+    <li><strong>空安全</strong>：通过类型系统在编译期排除空指针这个"惯犯"，<code>?.</code>、<code>?:</code>、<code>let</code> 是你的三大侦查利器</li>
+    <li><strong>扩展函数</strong>：不篡改原始证物就能附加新的分析能力，在 Android 开发中极其实用</li>
+    <li><strong>Lambda 与高阶函数</strong>：函数式编程的基础分析工具，尾随 Lambda 语法让 API 使用如行云流水</li>
+    <li><strong>集合操作</strong>：<code>map</code>、<code>filter</code>、<code>groupBy</code> 等链式操作是处理案件档案的高效手段</li>
+    <li><strong>作用域函数</strong>：<code>let</code>、<code>apply</code>、<code>also</code>、<code>run</code>、<code>with</code> 五种审讯技巧各有所长</li>
+    <li><strong>解构声明</strong>：一行代码拆解证物，提取多条线索</li>
+    <li><strong>类型别名、内联函数、中缀函数</strong>：进一步提升推理效率和代码可读性</li>
+  </ul>
+
+  <p>我的演绎到此告一段落。下一章我们将进入 Kotlin 另一个杀手级特性 —— <strong>协程</strong>，它将彻底改变你处理异步编程的方式。正如破案不能只靠单线推理，协程让你同时追踪多条线索，互不阻塞。</p>
+
+  <!-- ==================== 练习题 ==================== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：空值排查训练 <span class="difficulty difficulty-easy">基础</span></h3>
+      <p>给定以下数据结构，请编写一个函数 <code>getStreetName</code>，安全地获取用户的街道名称。如果任何一层为 null，则返回 <code>"地址不详"</code>。</p>
+<pre><code><span class="kw">data class</span> <span class="type">Address</span>(<span class="kw">val</span> <span class="param">street</span>: <span class="type">String?</span>, <span class="kw">val</span> <span class="param">city</span>: <span class="type">String?</span>)
+<span class="kw">data class</span> <span class="type">Company</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">address</span>: <span class="type">Address?</span>)
+<span class="kw">data class</span> <span class="type">User</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">company</span>: <span class="type">Company?</span>)</code></pre>
+      <details>
+        <summary>查看参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">fun</span> <span class="fn">getStreetName</span>(<span class="param">user</span>: <span class="type">User?</span>): <span class="type">String</span> {
+    <span class="kw">return</span> user<span class="op">?.</span>company<span class="op">?.</span>address<span class="op">?.</span>street <span class="op">?:</span> <span class="str">"地址不详"</span>
+}
+
+<span class="cmt">// 测试</span>
+<span class="kw">val</span> <span class="param">user1</span> <span class="op">=</span> <span class="type">User</span>(<span class="str">"张三"</span>, <span class="type">Company</span>(<span class="str">"侦探所"</span>, <span class="type">Address</span>(<span class="str">"贝克街221B"</span>, <span class="str">"伦敦"</span>)))
+<span class="kw">val</span> <span class="param">user2</span> <span class="op">=</span> <span class="type">User</span>(<span class="str">"李四"</span>, <span class="kw">null</span>)
+<span class="kw">val</span> <span class="param">user3</span>: <span class="type">User?</span> <span class="op">=</span> <span class="kw">null</span>
+
+<span class="fn">println</span>(<span class="fn">getStreetName</span>(user1))  <span class="cmt">// "贝克街221B"</span>
+<span class="fn">println</span>(<span class="fn">getStreetName</span>(user2))  <span class="cmt">// "地址不详"</span>
+<span class="fn">println</span>(<span class="fn">getStreetName</span>(user3))  <span class="cmt">// "地址不详"</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：扩展函数 —— 字符串分析工具 <span class="difficulty difficulty-easy">基础</span></h3>
+      <p>为 <code>String</code> 编写以下两个扩展函数：</p>
+      <ul>
+        <li><code>wordCount()</code>：返回字符串中的单词数量（以空格分隔）</li>
+        <li><code>maskEmail()</code>：将邮箱地址中 @ 之前的部分用 <code>***</code> 替代（例如 <code>"sherlock@baker.st"</code> 变为 <code>"***@baker.st"</code>）。如果不包含 @，返回原始字符串。</li>
+      </ul>
+      <details>
+        <summary>查看参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">fun</span> <span class="type">String</span>.<span class="fn">wordCount</span>(): <span class="type">Int</span> <span class="op">=</span> <span class="fn">trim</span>().<span class="fn">split</span>(<span class="str">"\\s+"</span>.<span class="fn">toRegex</span>()).<span class="fn">size</span>
+
+<span class="kw">fun</span> <span class="type">String</span>.<span class="fn">maskEmail</span>(): <span class="type">String</span> {
+    <span class="kw">val</span> <span class="param">atIndex</span> <span class="op">=</span> <span class="fn">indexOf</span>(<span class="str">'@'</span>)
+    <span class="kw">return if</span> (atIndex <span class="op">>=</span> <span class="num">0</span>) <span class="str">"***"</span> <span class="op">+</span> <span class="fn">substring</span>(atIndex) <span class="kw">else</span> <span class="kw">this</span>
+}
+
+<span class="cmt">// 测试</span>
+<span class="fn">println</span>(<span class="str">"The game is afoot"</span>.<span class="fn">wordCount</span>())    <span class="cmt">// 4</span>
+<span class="fn">println</span>(<span class="str">"sherlock@baker.st"</span>.<span class="fn">maskEmail</span>())    <span class="cmt">// "***@baker.st"</span>
+<span class="fn">println</span>(<span class="str">"no-email-here"</span>.<span class="fn">maskEmail</span>())       <span class="cmt">// "no-email-here"</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：Lambda 与高阶函数 —— 定制分析策略 <span class="difficulty difficulty-medium">中级</span></h3>
+      <p>编写一个高阶函数 <code>retry</code>，它接受最大重试次数和一个操作（Lambda），如果操作抛出异常就重试，直到成功或达到最大次数。如果全部失败，抛出最后一次的异常。</p>
+<pre><code><span class="cmt">// 函数签名</span>
+<span class="kw">fun</span> <span class="op">&lt;</span><span class="type">T</span><span class="op">></span> <span class="fn">retry</span>(<span class="param">maxAttempts</span>: <span class="type">Int</span>, <span class="param">action</span>: () <span class="op">-></span> <span class="type">T</span>): <span class="type">T</span></code></pre>
+      <details>
+        <summary>查看参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">fun</span> <span class="op">&lt;</span><span class="type">T</span><span class="op">></span> <span class="fn">retry</span>(<span class="param">maxAttempts</span>: <span class="type">Int</span>, <span class="param">action</span>: () <span class="op">-></span> <span class="type">T</span>): <span class="type">T</span> {
+    <span class="kw">var</span> <span class="param">lastException</span>: <span class="type">Exception?</span> <span class="op">=</span> <span class="kw">null</span>
+    <span class="kw">repeat</span>(maxAttempts) { <span class="param">attempt</span> <span class="op">-></span>
+        <span class="kw">try</span> {
+            <span class="kw">return</span> <span class="fn">action</span>()
+        } <span class="kw">catch</span> (<span class="param">e</span>: <span class="type">Exception</span>) {
+            lastException <span class="op">=</span> e
+            <span class="fn">println</span>(<span class="str">"第 </span>${attempt + <span class="num">1</span>}<span class="str"> 次尝试失败: </span>${e.message}<span class="str">"</span>)
+        }
+    }
+    <span class="kw">throw</span> lastException<span class="op">!!</span>
+}
+
+<span class="cmt">// 测试：模拟不稳定的网络请求</span>
+<span class="kw">var</span> <span class="param">callCount</span> <span class="op">=</span> <span class="num">0</span>
+<span class="kw">val</span> <span class="param">result</span> <span class="op">=</span> <span class="fn">retry</span>(<span class="num">3</span>) {
+    callCount<span class="op">++</span>
+    <span class="kw">if</span> (callCount <span class="op">&lt;</span> <span class="num">3</span>) <span class="kw">throw</span> <span class="type">RuntimeException</span>(<span class="str">"网络超时"</span>)
+    <span class="str">"调查成功"</span>
+}
+<span class="fn">println</span>(result)  <span class="cmt">// "调查成功"（第三次才成功）</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：集合操作 —— 案件档案分析 <span class="difficulty difficulty-medium">中级</span></h3>
+      <p>给定以下嫌疑人数据，完成两个分析任务：</p>
+<pre><code><span class="kw">data class</span> <span class="type">Suspect</span>(
+    <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">age</span>: <span class="type">Int</span>,
+    <span class="kw">val</span> <span class="param">city</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">hasAlibi</span>: <span class="type">Boolean</span>
+)
+
+<span class="kw">val</span> <span class="param">suspects</span> <span class="op">=</span> <span class="fn">listOf</span>(
+    <span class="type">Suspect</span>(<span class="str">"张三"</span>, <span class="num">35</span>, <span class="str">"北京"</span>, <span class="kw">false</span>),
+    <span class="type">Suspect</span>(<span class="str">"李四"</span>, <span class="num">28</span>, <span class="str">"上海"</span>, <span class="kw">true</span>),
+    <span class="type">Suspect</span>(<span class="str">"王五"</span>, <span class="num">42</span>, <span class="str">"北京"</span>, <span class="kw">false</span>),
+    <span class="type">Suspect</span>(<span class="str">"赵六"</span>, <span class="num">31</span>, <span class="str">"广州"</span>, <span class="kw">false</span>),
+    <span class="type">Suspect</span>(<span class="str">"钱七"</span>, <span class="num">38</span>, <span class="str">"北京"</span>, <span class="kw">true</span>),
+)</code></pre>
+      <ol>
+        <li>排除有不在场证明的嫌疑人，按年龄降序排列，输出姓名列表</li>
+        <li>按城市分组，统计每个城市没有不在场证明的嫌疑人数量</li>
+      </ol>
+      <details>
+        <summary>查看参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// 任务1：排除有不在场证明的人，按年龄降序</span>
+<span class="kw">val</span> <span class="param">primarySuspects</span> <span class="op">=</span> suspects
+    .<span class="fn">filter</span> { <span class="op">!</span>it.hasAlibi }              <span class="cmt">// 排除有不在场证明的</span>
+    .<span class="fn">sortedByDescending</span> { it.age }        <span class="cmt">// 按年龄降序</span>
+    .<span class="fn">map</span> { it.name }                      <span class="cmt">// 提取姓名</span>
+<span class="fn">println</span>(primarySuspects)  <span class="cmt">// [王五, 张三, 赵六]</span>
+
+<span class="cmt">// 任务2：按城市统计无不在场证明的嫌疑人数</span>
+<span class="kw">val</span> <span class="param">suspectsByCity</span> <span class="op">=</span> suspects
+    .<span class="fn">filter</span> { <span class="op">!</span>it.hasAlibi }
+    .<span class="fn">groupBy</span> { it.city }
+    .<span class="fn">mapValues</span> { (<span class="param">_</span>, <span class="param">list</span>) <span class="op">-></span> list.size }
+<span class="fn">println</span>(suspectsByCity)  <span class="cmt">// {北京=2, 广州=1}</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：综合运用 —— 安全的数据管道 <span class="difficulty difficulty-hard">进阶</span></h3>
+      <p>编写一个函数 <code>processUserData</code>，接收一个 <code>List&lt;Map&lt;String, String?&gt;&gt;</code>（模拟从 JSON 解析的原始数据），要求：</p>
+      <ol>
+        <li>过滤掉 <code>"name"</code> 字段为 null 或空字符串的记录</li>
+        <li>过滤掉 <code>"age"</code> 字段无法转为整数的记录</li>
+        <li>将剩余记录转为 <code>data class UserInfo(val name: String, val age: Int)</code></li>
+        <li>按年龄升序排列并返回</li>
+      </ol>
+      <p>要求全程使用空安全操作符，不允许使用 <code>!!</code>。</p>
+      <details>
+        <summary>查看参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">data class</span> <span class="type">UserInfo</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">age</span>: <span class="type">Int</span>)
+
+<span class="kw">fun</span> <span class="fn">processUserData</span>(<span class="param">rawData</span>: <span class="type">List</span><span class="op">&lt;</span><span class="type">Map</span><span class="op">&lt;</span><span class="type">String</span>, <span class="type">String?</span><span class="op">>></span>): <span class="type">List</span><span class="op">&lt;</span><span class="type">UserInfo</span><span class="op">></span> {
+    <span class="kw">return</span> rawData.<span class="fn">mapNotNull</span> { <span class="param">record</span> <span class="op">-></span>
+        <span class="kw">val</span> <span class="param">name</span> <span class="op">=</span> record[<span class="str">"name"</span>]<span class="op">?.</span><span class="fn">takeIf</span> { it.<span class="fn">isNotBlank</span>() } <span class="op">?:</span> <span class="kw">return</span><span class="ann">@mapNotNull</span> <span class="kw">null</span>
+        <span class="kw">val</span> <span class="param">age</span> <span class="op">=</span> record[<span class="str">"age"</span>]<span class="op">?.</span><span class="fn">toIntOrNull</span>() <span class="op">?:</span> <span class="kw">return</span><span class="ann">@mapNotNull</span> <span class="kw">null</span>
+        <span class="type">UserInfo</span>(name, age)
+    }.<span class="fn">sortedBy</span> { it.age }
+}
+
+<span class="cmt">// 测试</span>
+<span class="kw">val</span> <span class="param">rawData</span> <span class="op">=</span> <span class="fn">listOf</span>(
+    <span class="fn">mapOf</span>(<span class="str">"name"</span> <span class="kw">to</span> <span class="str">"福尔摩斯"</span>, <span class="str">"age"</span> <span class="kw">to</span> <span class="str">"34"</span>),
+    <span class="fn">mapOf</span>(<span class="str">"name"</span> <span class="kw">to</span> <span class="kw">null</span>, <span class="str">"age"</span> <span class="kw">to</span> <span class="str">"28"</span>),         <span class="cmt">// name 为 null，排除</span>
+    <span class="fn">mapOf</span>(<span class="str">"name"</span> <span class="kw">to</span> <span class="str">"华生"</span>, <span class="str">"age"</span> <span class="kw">to</span> <span class="str">"abc"</span>),       <span class="cmt">// age 无效，排除</span>
+    <span class="fn">mapOf</span>(<span class="str">"name"</span> <span class="kw">to</span> <span class="str">""</span>, <span class="str">"age"</span> <span class="kw">to</span> <span class="str">"45"</span>),            <span class="cmt">// name 为空，排除</span>
+    <span class="fn">mapOf</span>(<span class="str">"name"</span> <span class="kw">to</span> <span class="str">"莫里亚蒂"</span>, <span class="str">"age"</span> <span class="kw">to</span> <span class="str">"41"</span>),
+)
+
+<span class="kw">val</span> <span class="param">result</span> <span class="op">=</span> <span class="fn">processUserData</span>(rawData)
+<span class="fn">println</span>(result)
+<span class="cmt">// [UserInfo(name=福尔摩斯, age=34), UserInfo(name=莫里亚蒂, age=41)]</span></code></pre>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ==================== 底部导航 ==================== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

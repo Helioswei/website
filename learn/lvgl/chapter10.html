@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第10章：图像与字体 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="10" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：图像与字体</h1>
+  <p class="chapter-subtitle">一张图、一个字，MCU 如何把它们变成像素画上屏幕？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能，剩下的再离奇也是真相</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「在嵌入式世界里，'显示一张图片'这句话掩盖了大量工作：图片是压缩编码的，屏幕要的是裸像素，中间隔着一道解码的坎。排查图像、字体问题的正确姿势，不是瞎猜，而是逐条排除——先确认格式有没有被支持，再确认配置宏有没有打开，最后才轮到你的代码。把'不可能'逐条划掉，答案自然浮出来。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 图像解码器：从「格式」到「像素」 ========== -->
+  <h2>10.1 图像解码器：从「格式」到「像素」</h2>
+
+  <p>屏幕上显示一张图片，最终都要落成一片<strong>像素</strong>——每个像素一个颜色值。可图片在存储里几乎从不以裸像素存在：PNG 做了无损压缩，JPEG 做了有损压缩，WebP、GIF 各有各的编码。把"压缩格式"还原成"像素阵列"这件事，在 LVGL 里由<strong>图像解码器</strong>（image decoder）负责。打开 <code>lvgl-master/src/image/</code>，你看到的就是整套解码框架：<code>lv_image_decoder.c</code> 是核心调度，<code>lv_bin_decoder.c</code> 解码 LVGL 自定义的 BIN 格式，其余文件是各种格式的接入点，<code>svg/</code> 子目录则处理矢量图。</p>
+
+<pre><code><span class="cmt">/* src/image/ 图像解码框架（节选） */</span>
+lv_image_decoder.c        <span class="cmt">解码器核心：open / get_info / close 调度</span>
+lv_bin_decoder.c          <span class="cmt">LVGL 自定义 BIN 二进制格式解码器</span>
+lv_libpng.c  lv_tjpgd.c   <span class="cmt">PNG、JPEG 解码器的封装层</span>
+lv_lodepng.c  lv_bmp.c    <span class="cmt">lodepng（纯软件 PNG）、BMP 解码</span>
+lv_libwebp.c  lv_libjpeg_turbo.c  <span class="cmt">WebP、libjpeg-turbo 接入</span>
+svg/                      <span class="cmt">SVG 解析与渲染（lv_svg_decoder.c 等）</span></code></pre>
+
+  <p>真正干活的解码器，大部分被 LVGL"收编"进 <code>src/libs/</code>：这是第三方库的集成目录。PNG 有两条路——<code>libpng</code>（功能全）与 <code>lodepng</code>（纯软件、体积小）；JPEG 也有两条——<code>libjpeg_turbo</code>（快）与 <code>tjpgd</code>（极致轻量）；再加上 <code>libwebp</code>、<code>bmp</code>、<code>gif</code> 等。这些库默认<strong>全部关闭</strong>，使用前必须在 <code>lv_conf.h</code> 里打开对应开关。这正是一条福尔摩斯式的经验：图像显示不出来，八成不是你的代码错，而是格式根本没被编译进固件。</p>
+
+<pre><code><span class="cmt">/* lv_conf_template.h：图像库开关（默认全为 0） */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_LIBPNG</span>        <span class="num">0</span>   <span class="cmt">/* 打开后支持 PNG 文件解码 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_LIBJPEG_TURBO</span> <span class="num">0</span>   <span class="cmt">/* 打开后支持 JPEG 文件解码 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_TJPGD</span>         <span class="num">0</span>   <span class="cmt">/* 轻量 JPEG 解码器 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_LODEPNG</span>       <span class="num">0</span>   <span class="cmt">/* 纯软件 PNG 解码器 */</span>
+<span class="kw">#define</span> <span class="kw">LV_USE_LIBWEBP</span>       <span class="num">0</span>   <span class="cmt">/* WebP 支持 */</span></code></pre>
+
+  <p>对应用而言，解码器是"透明"的：你只管把源交给 LVGL，它会调用 <code>lv_image_decoder_open()</code> 沿内置解码器链逐个尝试，直到某个能打开这个源。这套底层 API 定义在 <code>include/lvgl/image/lv_image_decoder.h</code>：<code>lv_image_decoder_open()</code> 打开并产出像素，<code>lv_image_decoder_get_info()</code> 只取宽高与色彩格式，<code>lv_image_decoder_close()</code> 释放。绝大多数时候你不会直接碰它们——但读懂这张地图，排查问题才有据可依。</p>
+
+<pre><code><span class="type">lv_image_decoder_dsc_t</span> dsc;
+<span class="type">lv_result_t</span> res = <span class="fn">lv_image_decoder_open</span>(&amp;dsc, <span class="str">"S:/photo.png"</span>, <span class="kw">NULL</span>);
+<span class="kw">if</span>(res == <span class="kw">LV_RESULT_OK</span>) {
+    <span class="cmt">/* dsc.img_data 已指向解码出的像素阵列，可直接使用 */</span>
+}
+<span class="fn">lv_image_decoder_close</span>(&amp;dsc);</code></pre>
+
+  <!-- ========== 10.2 lv_image 控件与三种图片来源 ========== -->
+  <h2>10.2 lv_image 控件与三种图片来源</h2>
+
+  <p>上面整套解码框架，服务的目标控件只有一个：<code>lv_image</code>。创建它用 <code>lv_image_create(lv_screen_active())</code>，然后用 <code>lv_image_set_src()</code> 告诉它"显示哪张图"。这个 <code>src</code> 参数在 <code>lv_image.h</code> 的文档注释里写得很明白，合法取值有三种：<strong>① 文件路径</strong>，例如 <code>"S:/dir/img.bin"</code>，配合文件系统驱动（FS）从存储读图；<strong>② 编译期图像描述符</strong>，即转换工具生成的 <code>lv_image_dsc_t</code> 结构体指针，图像数据被烧进固件，无需文件系统；<strong>③ 内置符号</strong>，一个字符串宏如 <code>LV_SYMBOL_OK</code>——它本质上是字体里的一个字形，"图标"在 LVGL 里就是"图"。</p>
+
+<pre><code><span class="type">lv_obj_t</span> * img = <span class="fn">lv_image_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_image_set_src</span>(img, <span class="str">"S:/dir/img.bin"</span>);        <span class="cmt">/* ① 文件路径（需 FS 驱动） */</span>
+<span class="fn">lv_image_set_src</span>(img, &amp;img_example_lvgl_logo);    <span class="cmt">/* ② 编译期描述符 */</span>
+<span class="fn">lv_image_set_src</span>(img, <span class="kw">LV_SYMBOL_SETTINGS</span>);       <span class="cmt">/* ③ 内置符号图标 */</span></code></pre>
+
+  <p>第二种来源最常用，仓库里现成参考遍地都是：<code>examples/assets/</code> 下 <code>img_example_lvgl_logo.png</code> 旁边就躺着由它转换来的 <code>img_example_lvgl_logo.c</code>——里面就是一个 <code>const lv_image_dsc_t</code> 加上一大段像素数组。把这个 <code>.c</code> 加入工程，<code>#include</code> 之后用 <code>&amp;img_example_lvgl_logo</code> 就能显示。官方在 XML 工作流里复用它的名字（见第 12 章 <code>globals.xml</code>），因为这份描述符是预编译好的，不依赖任何转换管线。</p>
+
+  <p>图像还支持不重新转换资源的"后期处理"：<code>lv_image_set_scale()</code> 缩放（128 为 100%）、<code>lv_image_set_rotation()</code> 旋转（单位 0.1°，900 即 90°）、<code>lv_image_set_antialias()</code> 打开抗锯齿。这意味着同一张 1 倍图可以放大成 2 倍 UI，代价是渲染时多一点计算。</p>
+
+<pre><code><span class="fn">lv_image_set_scale</span>(img, <span class="num">200</span>);       <span class="cmt">/* 放大到 200% */</span>
+<span class="fn">lv_image_set_rotation</span>(img, <span class="num">900</span>);   <span class="cmt">/* 顺时针旋转 90° */</span>
+<span class="fn">lv_image_set_antialias</span>(img, <span class="kw">true</span>);  <span class="cmt">/* 缩放/旋转时抗锯齿 */</span></code></pre>
+
+  <table>
+    <tr><th>src 形式</th><th>数据从哪来</th><th>典型场景</th></tr>
+    <tr><td>① 文件路径 <code>"S:/a.png"</code></td><td>文件系统（<code>lv_fs</code>）实时解码</td><td>图片较大、可运行时更换</td></tr>
+    <tr><td>② 描述符 <code>&amp;my_img</code></td><td>编译进固件的 C 数组</td><td>图标、固定图片，无外部依赖</td></tr>
+    <tr><td>③ 符号 <code>LV_SYMBOL_OK</code></td><td>内置符号字体字形</td><td>按钮图标、状态提示</td></tr>
+  </table>
+
+  <!-- ========== 10.3 转换工具：LVGLImage.py 与 filetohex.py ========== -->
+  <h2>10.3 转换工具：LVGLImage.py 与 filetohex.py</h2>
+
+  <p>想把一张 PNG 变成"能编译进固件的 C 数组"或"LVGL 可直接解码的 .bin"，官方脚本 <code>scripts/LVGLImage.py</code> 就是干这个的。它把 PNG 转成 LVGL 的二进制图像格式，并通过 <code>--ofmt</code> 选择输出为 C 源文件（<code>C</code>）、二进制文件（<code>BIN</code>）或 PNG（<code>PNG</code>）。脚本需要 <code>pypng</code> 与 <code>lz4</code> 两个 Python 包（<code>pip3 install pypng lz4</code>）。</p>
+
+<pre><code><span class="cmt"># 转成 C 数组，I8 索引色格式（适合图标/小图）</span>
+python3 scripts/LVGLImage.py --ofmt C --cf I8 -o out/ logo.png
+
+<span class="cmt"># 转成二进制 .bin，ARGB8888 真彩色，RLE 压缩</span>
+python3 scripts/LVGLImage.py --ofmt BIN --cf ARGB8888 \
+       --compress RLE -o out/ photo.png</code></pre>
+
+  <p><code>--cf</code>（色彩格式）的选择直接决定内存占用，这是图像优化最重要的一步。同一张 100×100 的图：<code>ARGB8888</code> 需要 40 kB；<code>RGB565</code>（无透明通道）只要 20 kB；而 <code>I8</code> 索引色约 10 kB 加一张 256 色的小调色板。颜色种类少的 UI 图（图标、logo、边框）用 <code>AUTO</code> 让工具自动挑选 I1/I2/I4/I8，往往最省。转换产物是 <code>lv_image_dsc_t</code> 描述符，头部注释会写明它用的颜色格式。</p>
+
+<pre><code><span class="cmt">/* LVGLImage.py --ofmt C 生成的描述符（节选） */</span>
+<span class="kw">const</span> <span class="type">lv_image_dsc_t</span> logo = {
+    .header = { .cf = <span class="kw">LV_COLOR_FORMAT_I8</span>, .w = <span class="num">100</span>, .h = <span class="num">100</span> },
+    .data = logo_map,
+    .data_size = <span class="kw">sizeof</span>(logo_map),
+};</code></pre>
+
+  <p>另一个工具 <code>scripts/filetohex.py</code> 更朴素：把任意文件的内容逐字节转成一个 C 十六进制数组。它不在乎文件是图像还是字体、音频——原样搬进固件。常用参数有两个：<code>--filter-character</code> 过滤掉非 <code>0x00–0xFF</code> 的字符，<code>--null-terminate</code> 在末尾补一个 <code>\x00</code>（便于当 C 字符串用）。它输出的数组适合粘贴进源文件，或配合第 10.5 节的二进制字体加载。</p>
+
+<pre><code><span class="cmt"># 把二进制字体原样转成字节数组，末尾补 0 终止符</span>
+python3 scripts/filetohex.py --null-terminate font.bin &gt; font_bin.h
+<span class="cmt"># 输出形如 0x00, 0x01, ... 的数组，可直接 #include 使用</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>排查"图显示不出来"按三步排除：① 格式是否被支持（PNG/JPEG 等宏是否打开）；② 源路径对不对（文件系统有没有挂载、描述符符号有没有链接进来）；③ 再回头查自己的 <code>lv_image_set_src</code>。绝大多数问题卡在前两步——先用"排除不可能"缩小范围，别一上来就怀疑 API 用法。</p>
+  </div>
+
+  <!-- ========== 10.4 字体系统与内置字体 ========== -->
+  <h2>10.4 字体系统与内置字体</h2>
+
+  <p>字体决定文字怎么画。LVGL 里每个字体是一个 <code>lv_font_t</code>（<code>include/lvgl/font/lv_font.h</code>），但它不是"一个文件句柄"，而是一个带<strong>函数指针</strong>的结构体：通过 <code>get_glyph_dsc()</code> 查询某个字符（Unicode 码点）的度量信息，再取字形位图绘制。结构里还有 <code>fallback</code> 后备字体指针——当当前字体缺这个字时，会递归地到后备字体里找，这是"中英混排"能成立的结构基础。核心字段如下：</p>
+
+<pre><code><span class="kw">struct</span> _lv_font_t {
+    <span class="kw">const void</span> * dsc;                 <span class="cmt">/* 实现相关的运行数据或缓存 */</span>
+    <span class="kw">const</span> <span class="type">lv_font_t</span> * fallback;      <span class="cmt">/* 缺字时的后备字体，递归解析 */</span>
+    <span class="kw">void</span> * user_data;                 <span class="cmt">/* 自由使用的用户数据 */</span>
+    <span class="kw">bool</span> (*get_glyph_dsc)(<span class="kw">const</span> <span class="type">lv_font_t</span> * font,
+                          <span class="type">lv_font_glyph_dsc_t</span> * dsc_out,
+                          <span class="type">uint32_t</span> letter,
+                          <span class="type">uint32_t</span> letter_next);
+    <span class="cmt">/* ... 取字形绘制数据的函数指针 get_glyph_draw_data */</span>
+};</code></pre>
+
+  <p>内置字体在 <code>src/font/</code> 下一目了然：<code>lv_font_montserrat_*.c</code> 从 8 到 48 px 覆盖十几个字号（Montserrat 是 LVGL 的默认西文字体）；<code>lv_font_unscii_*.c</code> 是 8/16 px 的点阵风格；<code>lv_font_dejavu_16_persian_hebrew.c</code> 支持波斯文与希伯来文；<code>lv_font_source_han_sans_sc_*_cjk.c</code> 是思源黑体的简体中文（CJK）版。它们默认只开了 <code>LV_FONT_MONTSERRAT_14</code>（14 px），其余要在 <code>lv_conf.h</code> 打开对应宏——每个打开的字体会增加几 kB 到几十 kB 的 Flash 占用，中文整字集尤其贵。</p>
+
+<pre><code><span class="cmt">/* lv_conf_template.h：内置字体开关（节选） */</span>
+<span class="kw">#define</span> <span class="kw">LV_FONT_MONTSERRAT_14</span>            <span class="num">1</span>   <span class="cmt">/* 默认唯一开启的西文字体 */</span>
+<span class="kw">#define</span> <span class="kw">LV_FONT_MONTSERRAT_28</span>            <span class="num">0</span>
+<span class="kw">#define</span> <span class="kw">LV_FONT_SOURCE_HAN_SANS_SC_14_CJK</span> <span class="num">0</span>   <span class="cmt">/* 简体中文 14px */</span>
+<span class="kw">#define</span> <span class="kw">LV_FONT_SOURCE_HAN_SANS_SC_16_CJK</span> <span class="num">0</span>   <span class="cmt">/* 简体中文 16px */</span></code></pre>
+
+  <p>使用上，把字体指针塞进样式即可：<code>lv_obj_set_style_text_font(obj, &amp;lv_font_montserrat_14, 0)</code> 让该控件的文字用这个字体渲染（第三个参数 0 表示默认状态的选择器）。全局默认字体由 <code>LV_FONT_DEFAULT</code> 宏决定，可用 <code>lv_font_get_default()</code> 取回。注意 LVGL 9 里取默认字体的函数是 <code>lv_font_get_default()</code>，别按旧文档写成 <code>lv_font_default()</code>。</p>
+
+<pre><code><span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_style_text_font</span>(label, &amp;lv_font_montserrat_14, <span class="num">0</span>);
+<span class="fn">lv_label_set_text</span>(label, <span class="str">"Hello LVGL"</span>);
+
+<span class="cmt">/* 中文界面示例：给同一控件设置思源黑体 */</span>
+<span class="fn">lv_obj_set_style_text_font</span>(label, &amp;lv_font_source_han_sans_sc_14_cjk, <span class="num">0</span>);</code></pre>
+
+  <table>
+    <tr><th>内置字体</th><th>特点</th><th>默认开关</th></tr>
+    <tr><td><code>lv_font_montserrat_14</code></td><td>默认西文，拉丁字符 + FontAwesome 符号</td><td>开</td></tr>
+    <tr><td><code>lv_font_montserrat_28 … 48</code></td><td>更大字号（标题、大字）</td><td>关</td></tr>
+    <tr><td><code>lv_font_unscii_8 / 16</code></td><td>点阵风格，极省资源</td><td>关</td></tr>
+    <tr><td><code>lv_font_source_han_sans_sc_14_cjk</code></td><td>简体中文 CJK（思源黑体）</td><td>关</td></tr>
+    <tr><td><code>lv_font_dejavu_16_persian_hebrew</code></td><td>波斯文 / 希伯来文</td><td>关</td></tr>
+  </table>
+
+  <!-- ========== 10.5 字体转换与运行时加载 ========== -->
+  <h2>10.5 字体转换与运行时加载</h2>
+
+  <p>产品往往要用自己的字体——尤其是中文，内置的两个 CJK 字号常常不够。转换入口在 <code>scripts/built_in_font/</code>：<code>built_in_font_gen.py</code> 把 TTF/OTF/WOFF 转成 C 源文件，<code>generate_all.py</code> 一次性重新生成仓库里的全部内置字体。内置字体 <code>.c</code> 文件头部就留着一行"生成配方"（Opts），既记录了参数，也是学习命令行格式的最佳范本。</p>
+
+<pre><code><span class="cmt"># lv_font_montserrat_14.c 头部的"生成配方"，可改写成你自己的字体</span>
+python3 scripts/built_in_font/built_in_font_gen.py \
+  --no-compress --no-prefilter --bpp <span class="num">4</span> --size <span class="num">14</span> \
+  --font Montserrat-Medium.ttf -r <span class="num">0x20-0x7F</span>,<span class="num">0xB0</span>,<span class="num">0x2022</span> \
+  --font FontAwesome5-Solid+Brands+Regular.woff \
+  -r 61441,61448,61451 <span class="cmt">/* ...FontAwesome 的私有区码点 */</span> \
+  --format lvgl -o lv_font_montserrat_14.c --force-fast-kern-format</code></pre>
+
+  <p>关键参数：<code>-s/--size</code> 字号（px）、<code>--bpp</code> 每个像素的位深（1/2/4/8，越小越省但越糙）、<code>-r/--range</code> 要包含的字符范围、<code>--symbols</code> 直接列字符、<code>-o</code> 输出文件。对中文，把需要的字枚举进 <code>--range</code> 或 <code>--symbols</code>（"只收录用到的字"），就能把整字集的体积砍掉一个量级。</p>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>网上大量教程会写 <code>lv_font_load("S:/xx.bin")</code>——这是 LVGL 8 的 API，在 9.6.0-dev 里已经被移除，仓库里搜不到任何 <code>lv_font_load</code>。v9 的运行时加载改用 <code>src/font/binfont_loader/</code> 的 <code>lv_binfont_create()</code>，或字体管理器 <code>lv_font_manager_create()</code> + <code>lv_font_manager_create_font()</code>。遇到"API 不存在"时，先在源码里搜一下，别盲目套老例子的函数名。</p>
+  </div>
+
+  <p>二进制字体（.fnt）可以把"转字体"从编译期挪到运行时：文件存在存储里，启动时用 <code>lv_binfont_create(path)</code> 读入，得到 <code>lv_font_t*</code>，再塞进样式。官方 <code>examples/assets/font/</code> 目录就放着几份现成的 .fnt 可供试验（<code>montserrat-16.fnt</code>、<code>lv_font_simsun_16_cjk.fnt</code> 等）。用完后 <code>lv_binfont_destroy()</code> 释放。</p>
+
+<pre><code><span class="kw">const</span> <span class="type">lv_font_t</span> * f = <span class="fn">lv_binfont_create</span>(<span class="str">"S:/fonts/montserrat-16.fnt"</span>);
+<span class="kw">if</span>(f) {
+    <span class="fn">lv_obj_set_style_text_font</span>(label, f, <span class="num">0</span>);
+    <span class="fn">lv_label_set_text</span>(label, <span class="str">"runtime font"</span>);
+    <span class="cmt">/* 不再需要时：lv_binfont_destroy(f); */</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>判断一个字体问题，先问"这个字符在不在这个字体里"。内置 Montserrat 只覆盖拉丁字符与 FontAwesome 符号区，<code>LV_SYMBOL_*</code> 图标之所以能用，正是因为符号被并进了 Montserrat 的字形表。中文、emoji、特殊符号各自属于不同字体——这解释了为什么"英文正常、中文方块"是最常见的字体 bug：不是编码问题，是字体里根本没有那个字形。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：转一张图并在控件上显示 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用 <code>scripts/LVGLImage.py</code> 把 <code>examples/assets/img_cogwheel_rgb.png</code> 转成 C 数组（<code>--ofmt C</code>，色彩格式先用 <code>AUTO</code>），把生成的 <code>.c</code> 加入工程，用 <code>lv_image_create()</code> + <code>lv_image_set_src()</code> 显示出来。回答：生成的描述符头部里 <code>.cf</code> 被自动选成了哪个颜色格式？为什么它对这张图最合适？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>AUTO</code> 会在 I1/I2/I4/I8 里挑最省的一种；齿轮图颜色有限、是索引色友好的素材。对比同一命令用 <code>--cf ARGB8888</code> 生成的 <code>.data_size</code> 差异。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>命令大致为 <code>python3 scripts/LVGLImage.py --ofmt C --cf AUTO -o out/ img_cogwheel_rgb.png</code>。对这张调色板有限的图，AUTO 通常选中 I8 甚至更低的 I 系列格式，<code>.header.cf</code> 对应 <code>LV_COLOR_FORMAT_I8</code> 等；<code>.data_size</code> 明显小于 ARGB8888（每像素 1 字节 vs 4 字节）。启示：图标类资源默认交给 AUTO，别迷信真彩色。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：打开中文字体，并估算 Flash 代价 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 <code>lv_conf.h</code> 里把 <code>LV_FONT_SOURCE_HAN_SANS_SC_14_CJK</code> 设为 1，重编译后用 <code>lv_obj_set_style_text_font</code> 让一个 label 显示"你好，LVGL"。然后分别观察打开 <code>_14</code> 与 <code>_16</code> 两个中文字体后固件体积的变化。思考并回答：为什么内置中文比内置西文大这么多？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 <code>lv_font_source_han_sans_sc_14_cjk.c</code> 覆盖的码点范围；中文常用字至少 3 千个，而 Montserrat 只有约 200 个字符。每个字形都要存位图，量级差 10 倍以上。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>原因在于"覆盖的字符数"：Montserrat 14px 只含 ASCII（0x20–0x7F）+ 少数符号，约 200 个字形；思源黑体 CJK 要覆盖常用汉字数千个字形，每个字形的位图随字符数线性累积。所以 10.5 的做法（用 <code>--range</code>/<code>--symbols</code> 只收录实际用到的字）是嵌入式中文 UI 的标准优化——让生成的字体文件只含界面上出现的汉字。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：用 filetohex.py 打包并在运行时加载字体 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把 <code>examples/assets/font/montserrat-16.fnt</code> 用 <code>filetohex.py --null-terminate</code> 转成头文件数组（或直接放文件系统），再用 v9 的 <code>lv_binfont_create()</code> 从该二进制加载并设置到一个 label。写出完整代码，并说明：为什么 v8 的 <code>lv_font_load()</code> 在本仓库编译不过？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>lv_binfont_create(path)</code> 接受文件路径；从内存数组加载用 <code>lv_binfont_create_from_buffer()</code>（需 <code>LV_USE_FS_MEMFS</code>）。"为什么编译不过"可以用 10.5 的排除法在源码里搜一下。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>路径方式：<code>const lv_font_t * f = lv_binfont_create("S:/fonts/montserrat-16.fnt"); if(f) lv_obj_set_style_text_font(label, f, 0);</code>；用完 <code>lv_binfont_destroy(f)</code>。编译不过的原因：<code>lv_font_load</code> 是 v8 API，9.6.0-dev 已整体移除（在 <code>src/</code> 与 <code>include/</code> 全仓库搜索无任何定义），也不在 <code>lv_api_map_v8.h</code> 的映射清单里，因此链接期直接报未定义符号。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：福尔摩斯式排查"图像不显示" <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你在一台板子上显示一张 JPEG 照片：<code>lv_image_set_src(img, "S:/photo.jpg")</code>，但屏幕上空白。请按"排除不可能"列出排查清单，至少覆盖：解码器宏、文件系统挂载、源路径、描述符/符号区别，并说明每一项的验证方法。若最终查到是 <code>LV_USE_LIBJPEG_TURBO 0</code>，修复要改哪里？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>JPEG 在 v9 有 <code>LV_USE_TJPGD</code> 与 <code>LV_USE_LIBJPEG_TURBO</code> 两个解码入口；文件路径要求先初始化 FS 驱动（<code>lv_fs_drv_init</code> + <code>lv_fs_drv_register</code> 注册一个驱动器字母，如 <code>"S:"</code>）。可以对照 10.1 的配置块逐项核对。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>清单：① 解码器宏——确认 <code>LV_USE_TJPGD</code> 或 <code>LV_USE_LIBJPEG_TURBO</code> 至少一个为 1，改 <code>lv_conf.h</code> 后重编译；② FS 挂载——<code>"S:"</code> 前缀对应已注册的驱动器，<code>lv_fs_open</code> 能成功打开该文件；③ 源路径——文件确实存在且名字/大小写正确；④ src 语义——若传的是 C 数组符号名则必须带 <code>&amp;</code>（描述符指针），若传文件路径则必须是字符串。修复：把 <code>LV_USE_TJPGD</code> 或 <code>LV_USE_LIBJPEG_TURBO</code> 改成 1 并重编译。教训：先排除"不可能"，再怀疑自己的代码。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

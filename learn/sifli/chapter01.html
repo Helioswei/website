@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章：项目概览：从 ESP32 到 SiFli 的移植 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="1" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第1章：项目概览——从 ESP32 到 SiFli 的移植</h1>
+  <p class="chapter-subtitle">同一个 EPUB 阅读器，换一块芯片、换一套 SDK，究竟要改哪些东西？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理，从"为什么"出发</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一季我们用一块十几美元的 ESP32 把 EPUB 电子书"榨"上了墨水屏。这季换平台了：思澈科技的 SF32、RT-Thread、SCons……名字全是新的，但请记住，移植的第一步永远是问"为什么"——为什么书还是那本书，代码却不能直接搬过来？把平台的差异想清楚，后面每一章都是在给这个问题填空。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 1.1 零基础铺垫：SiFli / SF32 与「移植」是什么 ========== -->
+  <h2>1.1 零基础铺垫：SiFli / SF32 与「移植」是什么</h2>
+
+  <p>先回答一个很多人会问的问题：<strong>SiFli（思澈科技，官网 sifli.com）是谁？</strong>它是一家总部在南京的芯片设计公司，专注物联网与低功耗场景，产品主打"一颗芯片把 CPU、内存、蓝牙、各种外设全包了"。而 <strong>SF32</strong> 就是思澈的 <strong>MCU 平台</strong>（微控制器平台，即一套以低功耗 SoC 为核心的芯片家族）。这套平台旗下有 SF32LB52X、SF32LB55X、SF32LB56X、SF32LB57X、SF32LB58X 五条产品线——从 SDK 里内置的蓝牙、音频、DFU 升级等中间件能看出，它是面向蓝牙低功耗物联网应用的平台。本项目用到的芯片，在板级配置里写得很清楚：<code>CHIP = 'SF32LB52X'</code>。如果你完全没碰过思澈，只把它想成"一个国产的、类似乐鑫 ESP32 的 MCU 品牌"就够了——上季的乐鑫（Espressif）做 ESP32，这季的思澈（SiFli）做 SF32，两家都在做"小芯片、大生态"。</p>
+
+  <p>那么 <strong>"移植"（porting）是什么意思？</strong>一句话说人话：把跑在 A 平台上的项目，改造到 B 平台上去跑。注意关键词是"改造"——不是"重写"，也不是"照抄"。因为下面三样东西一旦换了平台，几乎必然跟着变：<strong>芯片不同</strong>（寄存器、内存布局、外设引脚都换了）、<strong>SDK 不同</strong>（SDK 是"软件开发工具包"，芯片厂商提供的驱动与函数库集合；ESP32 用乐鑫的 ESP-IDF，SF32 用思澈的 SiFli SDK）、<strong>构建方式不同</strong>（上季用 PlatformIO + CMake，这季用 SCons）。而<b>业务逻辑</b>——EPUB 怎么解析、文字怎么换行分页、翻页怎么渲染——这些跟芯片无关的代码，恰恰是移植时最希望能"原样搬走"的部分。</p>
+
+  <p>本教程的主角，就是这个问题的活样本：<code>EPD_Reader-main/</code> 仓库里的 <code>epdiy-epub/</code> 项目，就是 <strong>diy-esp32-epub-reader</strong>（上季那条「ESP32 电子墨水屏」技术线讲过）在 <strong>SF32-OED-EPD 系列开发板</strong>上的适配版。SF32-OED-EPD 是思澈配套的电子墨水屏（EPD）开发板系列，本仓库就带了 V1.1、V1.2 等多块板配置。它和你上一季用的 M5 Paper / LilyGo 一样，都是"单片机 + 墨水屏 + 电池"的阅读器硬件，只是大脑从 ESP32 换成了 SF32。</p>
+
+  <p>最后把两边的差异表列出来。这张表是全书的地基——后面每一章（构建、板级、显示、输入、电池……）都在处理这张表里的某一行。</p>
+
+  <table>
+    <tr><th>维度</th><th>上季：ESP32 平台</th><th>本季：SiFli SF32 平台</th></tr>
+    <tr><td>芯片厂商</td><td>乐鑫科技（Espressif）</td><td>思澈科技（SiFli）</td></tr>
+    <tr><td>芯片型号</td><td>ESP32（双核 Xtensa）</td><td>SF32LB52X（Cortex-M33 系）</td></tr>
+    <tr><td>开发框架</td><td>ESP-IDF</td><td>SiFli SDK（基于 RT-Thread 定制）</td></tr>
+    <tr><td>操作系统</td><td>FreeRTOS</td><td>RT-Thread（可选 FreeRTOS）</td></tr>
+    <tr><td>构建系统</td><td>PlatformIO / CMake</td><td>SCons（Python）</td></tr>
+    <tr><td>配置方式</td><td>sdkconfig / menuconfig</td><td>Kconfig + proj.conf / board.conf</td></tr>
+    <tr><td>目标板</td><td>M5 Paper / LilyGo T5 等</td><td>SF32-OED-EPD V1.1 / V1.2 系列</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># SiFli-SDK/…/version.txt（SDK 版本号，本仓库所用）</span>
+v2.5.0</code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/sf32-oed-epd_v11/hcpu/rtconfig.py（芯片 / 核 / 目标名，节选）</span>
+CHIP = <span class="str">'SF32LB52X'</span>
+CORE = <span class="str">"HCPU"</span>
+TARGET_NAME = <span class="str">'bf0_ap'</span>
+JLINK_DEVICE = <span class="str">'SF32LB52X_NOR'</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>给"移植"画一张最容易懂的图：把一套房子从北京搬到上海——户型（芯片）不同，得改水电（驱动）；物业（SDK）不同，得改缴费方式（API）；家具（业务逻辑）只要能塞进新户型，就尽量原样搬。所以移植的第一步不是动手改代码，而是先盘点：哪些是"家具"（能搬），哪些是"水电"（必须重排）。后面 1.3 的仓库解剖，本质上就是在做这份盘点。</p>
+  </div>
+
+  <!-- ========== 1.2 项目由来：diy-esp32-epub-reader 的 SiFli 适配版 ========== -->
+  <h2>1.2 项目由来：diy-esp32-epub-reader 的 SiFli 适配版</h2>
+
+  <p>这个项目不是从零开始写的。它的 README「项目简介」用一句话交代了身世：<strong>基于 atomic14 的 diy-esp32-epub-reader 进行适配，运行于 SiFli SF32-OED-EPD 系列开发板，用于 EPUB 电子书阅读与低功耗场景</strong>。也就是说，它是一位"移植者"（不是原项目作者）拿上季那个开源阅读器，在思澈平台上重新落地。为什么选它来移植？因为它的"家具"质量足够好：EPUB 解析、zip 解包、HTML 解析、换行分页、渲染抽象，这些核心模块都放在独立的 <code>lib/Epub/</code> 里，和硬件平台解耦得很干净——这正是适合移植的仓库长相。</p>
+
+  <p>那到底<strong>继承了什么、改了什么</strong>？先说继承的"家具"：<code>lib/Epub/</code> 四个子模块原样搬了过来——<code>EpubList</code>（书目 / 阅读器 / 目录，顺带内含 tinyxml2）、<code>RubbishHtmlParser</code>（XHTML 解析，产出 TextBlock / ImageBlock）、<code>Renderer</code>（渲染抽象与图像合成）、<code>ZipFile</code>（包内文件寻址）。配套的第三方库也基本沿用了：<code>miniz-2.2.0</code>（zip 解压）、<code>tjpgd3</code>（JPEG 解码）、<code>png/PNGdec</code>（PNG 解码）、<code>epdiy</code>（墨水屏驱动）。连示例书 <code>disk/pg43-images.epub</code> 都和上季仓库里的那本古登堡书同名同源。</p>
+
+  <p>再说"水电"级别的改动，这才是移植的精华。第一，<strong>操作系统换了</strong>：上季用 FreeRTOS + ESP-IDF 的消息队列，这季用 RT-Thread，主循环里从 <code>rt_mq_recv(ui_queue, …)</code> 接收按键/触控事件（消息队列是 RTOS 里任务间通信的通道，相当于"任务的邮箱"）。第二，<strong>渲染器重写了</strong>：新增 <code>src/boards/SF32PaperRenderer.h</code>，对接 SF32 的墨水屏控制器（EPIC/LCDC），而不是 epdiy 的并行驱动。第三，<strong>板级抽象整个换了血</strong>：<code>src/boards/</code> 下不再是 LilyGo / Epdiy / M5Paper，而是 battery（电池）、controls（按键/触控）、display_dbi、display_spi、touch（FT5446U / FT6336U / GT967 三款触控芯片）。第四，<strong>追加了大量上季没有的功能</strong>：中英文显示、动态字体加载（<code>font_manager.c</code>）、阅读设置页（<code>reading_settings.cpp</code>）、触控区域管理（<code>UIRegionsManager.cpp</code>）、电量/充电/低功耗状态机。</p>
+
+  <table>
+    <tr><th>类别</th><th>直接继承（能搬的家具）</th><th>重写 / 新增（必须重排的水电）</th></tr>
+    <tr><td>EPUB 解析</td><td><code>lib/Epub/</code> 全部四个子模块</td><td>—</td></tr>
+    <tr><td>第三方库</td><td>miniz、tjpgd3、PNGdec、epdiy</td><td>—</td></tr>
+    <tr><td>操作系统 / 框架</td><td>—</td><td>FreeRTOS → RT-Thread；ESP-IDF → SiFli SDK</td></tr>
+    <tr><td>渲染</td><td>Renderer 抽象接口</td><td>SF32PaperRenderer（对接 EPIC/LCDC）</td></tr>
+    <tr><td>板级 / 输入</td><td>—</td><td>boards/ 重写：电池、按键+触控、DBI/SPI 屏驱</td></tr>
+    <tr><td>新功能</td><td>—</td><td>中英文显示、动态字体、阅读设置、状态机</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># epdiy-epub/README.md · 项目简介</span>
+本项目基于 atomic14/diy-esp32-epub-reader 进行适配，
+运行于 SiFli SF32-OED-EPD 系列开发板，用于 EPUB 电子书阅读与低功耗场景。</code></pre>
+
+  <pre><code><span class="cmt"># lib/Epub/（继承自上游的核心解析库，四个子模块）</span>
+lib/Epub/
+  EpubList/          <span class="cmt">书目 / 阅读器 / 目录（内含 tinyxml2）</span>
+  Renderer/          <span class="cmt">渲染抽象与图像合成</span>
+  RubbishHtmlParser/ <span class="cmt">XHTML 解析（TextBlock / ImageBlock）</span>
+  ZipFile/           <span class="cmt">包内文件寻址（配合 miniz）</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>判断"一个移植算成功还是算重写"，只要数一件东西：<strong>上游的 <code>lib/Epub</code> 还在不在。</strong>它还在，说明 EPUB 解析这条主线被完整保住了，后续所有章节都在讲"新平台怎么喂数据给它、怎么把结果画出来"。它要是没了，那就不叫移植，叫借鉴思想重写——难度完全是两个量级。看到 <code>lib/Epub</code> 原样躺着，这本移植教程的地基就稳了。</p>
+  </div>
+
+  <!-- ========== 1.3 仓库解剖：epdiy-epub 与 SiFli-SDK ========== -->
+  <h2>1.3 仓库解剖：epdiy-epub 与 SiFli-SDK</h2>
+
+  <p>打开仓库根目录 <code>EPD_Reader-main/</code>，它只有两层，像一门"必修课 + 教科书"：<strong><code>epdiy-epub/</code> 是项目代码</strong>（12 个一级目录，固件、脚本、板级配置都在这），<strong><code>SiFli-SDK/</code> 是思澈平台的 SDK</strong>（官方提供的固件开发框架，内含一个带 40 字节哈希长名的子目录，是克隆下来的 SDK 本体）。搞不清"哪些是作者写的、哪些是厂商给的"，读这个仓库就会乱——记住口诀：<b>业务逻辑在 epdiy-epub，平台能力在 SiFli-SDK。</b></p>
+
+  <p>先看 <code>epdiy-epub/</code>。它按功能分成几摊：<code>src/</code> 是核心业务逻辑，<code>lib/</code> 是解析库与第三方依赖，<code>project/</code> 是构建脚本（SCons + Kconfig），<code>sf32-oed-epd_base/</code> 与 <code>sf32-oed-epd_v11/</code>、<code>sf32-oed-epd_v12/</code>、<code>sf32-oed-epd_v12_spi/</code> 是四套板级配置（后三套是不同硬件版本，base 是它们共用的公共配置），<code>disk/</code> 是内置 Flash 里打包的样书，<code>font/</code> 是内置中文字体（DroidSansFallback.ttf），<code>waveform/</code> 是墨水屏波形文件与解码库，<code>scripts/</code> 与 <code>tools/</code> 是开发期用的字体/图片/波形转换工具。</p>
+
+  <p>再聚焦到 <code>src/</code>，这是后面十几章的主战场，先认几个"门面"文件：<code>main.cpp</code> 是程序入口，跑一个 UI 状态机主循环；<code>epub_screen.cpp</code> 负责各页面（主页、书库、目录、阅读、设置…）的绘制与事件处理；<code>reading_settings.cpp</code> 是阅读设置页（字体/字号/字重/行距/边距 + 持久化到 <code>/settings.cfg</code>）；<code>font_manager.c</code> 是字体管理器，扫描 TF 卡 <code>/fonts</code> 目录动态加载外部字体；<code>UIRegionsManager.cpp</code> 管理触控区域（点击区域动态注册与命中检测）；<code>boards/</code> 是硬件抽象层，下面分 battery（电池）、controls（输入）、display_dbi（8-bit 并行墨水屏）、display_spi（SPI 墨水屏）、touch（触控芯片）五个子目录。</p>
+
+  <p>至于 <code>SiFli-SDK/</code> 顶层，你只要知道四大件就够了：<code>drivers/</code>（HAL 硬件抽象层与芯片寄存器定义，类似 ESP-IDF 的 soc/ 与 hal/）、<code>rtos/</code>（RT-Thread / FreeRTOS 与 OS 抽象层）、<code>middleware/</code>（思澈自研组件：蓝牙、音频、DFU 升级等）、<code>external/</code>（第三方组件，SDK 里甚至自带 LVGL、mbedTLS、FFmpeg 等）。普通应用开发基本碰不到它——构建时 SCons 会自动把需要的部分编进来。</p>
+
+  <table>
+    <tr><th>仓库 / 目录</th><th>职责</th><th>是谁写的</th></tr>
+    <tr><td><code>epdiy-epub/src/</code></td><td>核心业务逻辑（状态机、页面、字体、设置）</td><td>本项目作者</td></tr>
+    <tr><td><code>epdiy-epub/lib/</code></td><td>EPUB 解析库 + 第三方依赖（miniz/epdiy…）</td><td>上游 + 开源库</td></tr>
+    <tr><td><code>epdiy-epub/project/</code></td><td>SCons 构建脚本 + Kconfig.proj 配置</td><td>本项目作者</td></tr>
+    <tr><td><code>epdiy-epub/sf32-oed-epd_*/</code></td><td>四套板级配置（v11 / v12 / v12_spi / base）</td><td>本项目作者</td></tr>
+    <tr><td><code>epdiy-epub/disk/ font/ waveform/</code></td><td>样书、内置字体、波形文件等资源</td><td>素材 + 工具生成</td></tr>
+    <tr><td><code>SiFli-SDK/</code></td><td>思澈固件开发框架（HAL / RTOS / 中间件）</td><td>芯片厂商</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># epdiy-epub/ 目录结构（节选）</span>
+epdiy-epub/
+  disk/                   <span class="cmt">内置 Flash 样书（3 个 EPUB）</span>
+  font/                   <span class="cmt">内置字体 DroidSansFallback.ttf</span>
+  lib/                    <span class="cmt">EPUB 解析 + 图像解码 + epdiy</span>
+  project/                <span class="cmt">SCons 构建脚本 + Kconfig.proj</span>
+  sf32-oed-epd_base/      <span class="cmt">V1.1 / V1.2 公用板级配置</span>
+  sf32-oed-epd_v11/       <span class="cmt">V1.1 板级配置</span>
+  sf32-oed-epd_v12/       <span class="cmt">V1.2 板级配置</span>
+  sf32-oed-epd_v12_spi/   <span class="cmt">V1.2 + SPI 墨水屏配置</span>
+  scripts/                <span class="cmt">字体 / 图片生成工具</span>
+  src/                    <span class="cmt">核心业务逻辑</span>
+  tools/                  <span class="cmt">波形 xlsx → C 数组工具</span>
+  waveform/               <span class="cmt">墨水屏波形文件与解码库</span></code></pre>
+
+  <pre><code><span class="cmt"># epdiy-epub/src/ 关键文件一览</span>
+src/
+  main.cpp             <span class="cmt">程序入口：UI 状态机主循环</span>
+  epub_screen.cpp      <span class="cmt">各页面绘制与事件处理</span>
+  reading_settings.cpp <span class="cmt">阅读设置 + 持久化 /settings.cfg</span>
+  font_manager.c       <span class="cmt">字体管理器（扫描 TF 卡 /fonts）</span>
+  UIRegionsManager.cpp <span class="cmt">触控区域管理</span>
+  boards/              <span class="cmt">硬件抽象：battery/controls/display_dbi/display_spi/touch</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>读任何嵌入式仓库，先问三件事：<strong>入口在哪（main）、状态在哪（状态机）、硬件差异藏在哪（boards）。</strong>这个仓库分别对应 <code>src/main.cpp</code>、<code>src/type.h</code> 的 <code>AppUIState</code>、<code>src/boards/</code>。把这三个锚点钉进脑子里，剩下的目录都是它们的"补给"。</p>
+  </div>
+
+  <!-- ========== 1.4 功能亮点一瞥：中文、字体、设置与状态机 ========== -->
+  <h2>1.4 功能亮点一瞥：中文、字体、设置与状态机</h2>
+
+  <p>这个移植版相比上游最大的进步，是<strong>中文支持</strong>。上季的 ESP32 版本只内置英文字体，而这版用 FreeType 加载了内置的 <code>DroidSansFallback</code>（一款开源中文字体，存放在 Flash XIP 区），开箱就能显示中英文。为了控制资源占用，README 特意说明<strong>默认未启用粗体/斜体中文字库</strong>——中文全字库动辄几 MB，粗斜体再翻倍，对嵌入式存储是巨大负担，所以只保底、不铺张。配合 <code>font_manager.c</code>，它甚至支持<strong>动态字体加载</strong>：往 TF 卡 <code>/fonts</code> 目录丢任意 <code>.ttf</code> / <code>.otf</code> 字体文件（最多 64 个），开机就会出现在阅读设置的字体列表里，选中后由 FreeType 直接读文件渲染。</p>
+
+  <p><strong>阅读设置 UI</strong> 是另一大亮点。从"功能设置 → 阅读设置"或阅读页覆盖操作层进入，可以调字体、字号（24/28/32/36/40/44/48 px）、字重（正常/中粗/粗体）、行距（1.0x–2.0x）、边距（5–20 px），保存后以 <code>key=value</code> 文本格式持久化到 TF 卡 <code>/settings.cfg</code>，下次开机自动加载；指定字体不可用时自动回退内置字体。这在上季的三按键极简版里是完全不敢想的。</p>
+
+  <p><strong>输入也从"三个按键"升级成"按键 + 触控"双通道</strong>。按键保留了 UP / DOWN / SELECT 语义，并新增 UPGLIDE（上滑）呼出阅读页覆盖操作层；触控芯片支持 FT5446U / FT6336U / GT967 三款，采用"先选中再确认"机制降低误触。操作说明里主页面点击左右区域切换选项、点击中间确认，书库页点击书籍项再点击确认进入目录，阅读页左右区域翻页、上滑呼出覆盖层——一套完整的触控导航。</p>
+
+  <p>最值得先打个照面的是 <strong>UI 状态机与低功耗</strong>。<code>AppUIState</code> 枚举定义了从主页面、书库、目录、阅读、阅读设置、功能设置、欢迎页，到低电量页、充电页、关机页共 12 个状态（还有天气相关状态，1.5 会讲到）。主循环 5 小时无交互进入关机页（常量 <code>TIMEOUT_SHUTDOWN_TIME</code>）；无操作达到设置超时后进入欢迎页（类似熄屏）；电量低于阈值进低电量页并抑制普通操作；充电状态变化只在百分比或状态真正变化时才刷屏，避免无效刷新。</p>
+
+  <table>
+    <tr><th>设置项</th><th>可选值</th><th>说明</th></tr>
+    <tr><td>字体</td><td>Default（内置）及 TF 卡 <code>/fonts</code> 全部 <code>.ttf</code> / <code>.otf</code></td><td>最多 64 个外部字体，FreeType 动态加载</td></tr>
+    <tr><td>字号</td><td>24 / 28 / 32 / 36 / 40 / 44 / 48 px</td><td>像素单位</td></tr>
+    <tr><td>字重</td><td>正常 / 中粗 / 粗体</td><td>—</td></tr>
+    <tr><td>行距</td><td>1.0x / 1.2x / 1.4x / 1.6x / 1.8x / 2.0x</td><td>—</td></tr>
+    <tr><td>边距</td><td>5 / 8 / 11 / 14 / 17 / 20 px</td><td>页面边距</td></tr>
+    <tr><td>保存退出</td><td>确认后应用并持久化</td><td>写入 <code>/settings.cfg</code></td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/type.h：AppUIState 状态枚举（节选） */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span> {
+  MAIN_PAGE,               <span class="cmt">// 主页面</span>
+  SELECTING_EPUB,          <span class="cmt">// 书库</span>
+  SELECTING_TABLE_CONTENTS, <span class="cmt">// 目录</span>
+  READING_EPUB,            <span class="cmt">// 阅读</span>
+  READING_SETTINGS,        <span class="cmt">// 阅读设置</span>
+  SETTINGS_PAGE,           <span class="cmt">// 功能设置</span>
+  WELCOME_PAGE,            <span class="cmt">// 欢迎（超时熄屏）</span>
+  LOW_POWER_PAGE,          <span class="cmt">// 低电量</span>
+  CHARGING_PAGE,           <span class="cmt">// 充电</span>
+  SHUTDOWN_PAGE            <span class="cmt">// 关机</span>
+} AppUIState;</code></pre>
+
+  <pre><code><span class="cmt">/* src/epub_screen.cpp：超时与全刷周期选项（设置页可选值） */</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int</span> kTimeoutOptions[] = {<span class="num">5</span>, <span class="num">10</span>, <span class="num">30</span>, <span class="num">60</span>, <span class="num">0</span>}; <span class="cmt">// 单位：分钟，0 为不关机</span>
+<span class="kw">static</span> <span class="kw">const</span> <span class="type">int</span> kFullRefreshOptions[] = {<span class="num">5</span>, <span class="num">10</span>, <span class="num">20</span>, <span class="num">0</span>};  <span class="cmt">// 全刷周期（次）</span>
+<span class="kw">static</span> <span class="type">int</span> full_refresh_idx = <span class="num">1</span>;  <span class="cmt">// 默认 10 次全刷后做一次整屏刷新</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>电子墨水屏有个物理特性叫"残影"——同一块区域反复局部刷新会留灰影，所以读屏器行业有个惯例：隔几次局刷就整屏"洗"一次。这个项目把"隔几次"做成了设置项 <code>kFullRefreshOptions</code>（5/10/20 次或每次全刷）。理解"状态机 + 低功耗 + 刷新策略"这三件套，你就抓住了墨水屏设备的灵魂——它们在后半本（第 6、11 章）会反复登场。</p>
+  </div>
+
+  <!-- ========== 1.5 完成度与本文路线：一个「在途开发」的项目 ========== -->
+  <h2>1.5 完成度与本文路线：一个「在途开发」的项目</h2>
+
+  <p>这个项目最诚实的地方，是它<strong>没把自己包装成"已完成"</strong>。README 的「当前功能」清单，是<b>已经实现</b>的部分——中英文显示、双输入、阅读设置、动态字体、电量状态机，上面 1.4 讲的都在清单里。但仓库里同时躺着一批"未完成痕迹"，它们是这本书最珍贵的第一手教材：比如 <code>src/wheather.c</code> 的<strong>天气功能</strong>（拼写还是 wheather），代码里已经定义了天气页、城市选择页两个状态，甚至接了"心知天气"的 HTTP API，但 README 的「当前功能」里一个字都没提——因为这套功能还没有完整接入主流程。</p>
+
+  <p>证据不止一处。打开 <code>src/epub_screen.h</code>，主页面的选项枚举 <code>MainOption</code> 有 <strong>4 项</strong>（打开书库 / 进入设置 / <b>查看天气</b> / 继续阅读），而 README「主页面」一节只写了 <strong>3 个入口</strong>（打开书库 / 继续阅读 / 进入设置）——文档与代码出现了"漂移"，漂的恰恰是天气。再看 <code>src/boards/display_dbi/epd_display.c</code>，墨水屏驱动里有一段 <code>CopyToMixedGrayBuffer</code>，当数据格式是单色 <code>LCDC_PIXEL_FORMAT_MONO</code> 时直接 <code>RT_ASSERT(0); //Not implemented yet</code>——即"单色混合灰"这条路径还没写。源代码里的 <code>TODO</code> 注释也不止一处。这些都是"在途开发"的铁证。</p>
+
+  <p>这里引出一条贯穿全书的阅读原则：<strong>当 README 与代码冲突时，以代码为准。</strong>README 是作者"想让你看到的"，代码是"它现在真实的状态"；一个诚实作者写 README 也会漏掉半成品。所以本教程从第 3 章起，每讲完一块，都会做一次「<strong>已实现 / 未实现</strong>」盘点（第 14、15 章会集中清算），让你亲眼看到"一个开源移植项目到底完成到什么程度"。这不只是知识，更是一种读源码的职业习惯。</p>
+
+  <p>最后是<b>路线图</b>。全书 16 章分五个分部：本季前两章（第 1-2 章）讲认识项目与平台构建；接着「硬件平台」（第 3-6 章）讲板级配置、显示驱动、输入、电池低功耗；「解析与渲染」（第 7-10 章）讲 EPUB 继承与中文适配、动态字体、阅读设置、渲染绘制；「UI 与状态机」（第 11-13 章）讲状态机总览、书库目录阅读流程、覆盖操作层与触控区域；最后「现状与展望」（第 14-16 章）做已实现盘点、未实现清单、二次开发与新屏移植。每走完一段，你都会更接近"自己动手改这个项目"。</p>
+
+  <table>
+    <tr><th>类型</th><th>内容</th><th>证据 / 位置</th></tr>
+    <tr><td>已实现</td><td>中英文显示、双输入、阅读设置、动态字体、电量状态机</td><td>README「当前功能」</td></tr>
+    <tr><td>未完成（天气）</td><td>天气页 / 城市选择页状态、HTTP 获取已写，但未列入功能清单</td><td><code>src/wheather.c</code>、<code>epub_screen.h</code> 的 <code>WEATHER_PAGE</code></td></tr>
+    <tr><td>未完成（驱动）</td><td>单色数据格式的混合灰拷贝路径</td><td><code>epd_display.c</code> 中 <code>RT_ASSERT(0); //Not implemented yet</code></td></tr>
+    <tr><td>文档漂移</td><td>README 主页面写 3 入口，代码 MainOption 有 4 项（含查看天气）</td><td>README「主页面」 vs <code>epub_screen.h</code></td></tr>
+    <tr><td>其他痕迹</td><td>源码中多处 TODO / FIXME 注释</td><td><code>grep TODO src/</code></td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/epub_screen.h：主页面选项——代码 4 项 vs README 3 项 */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span> {
+  OPTION_OPEN_LIBRARY = <span class="num">0</span>,   <span class="cmt">// 打开书库</span>
+  OPTION_ENTER_SETTINGS,       <span class="cmt">// 进入设置</span>
+  OPTION_WEATHER,              <span class="cmt">// 查看天气（README 未列出）</span>
+  OPTION_CONTINUE_READING,     <span class="cmt">// 继续阅读</span>
+  OPTION_COUNT
+} MainOption;</code></pre>
+
+  <pre><code><span class="cmt">/* src/boards/display_dbi/epd_display.c：未实现分支 */</span>
+<span class="kw">if</span> (hlcdc-&gt;Layer[HAL_LCDC_LAYER_DEFAULT].data_format == LCDC_PIXEL_FORMAT_MONO)
+{
+    RT_ASSERT(<span class="num">0</span>); <span class="cmt">//Not implemented yet</span>
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>README 说主循环"默认 5 小时无交互进入关机页"，代码里 <code>TIMEOUT_SHUTDOWN_TIME 5</code> 同时被两处使用：关机循环用 <code>60 * 1000 * 60 * TIMEOUT_SHUTDOWN_TIME</code>（小时级），而欢迎页超时经 <code>screen_init(TIMEOUT_SHUTDOWN_TIME)</code> 走的是 <code>screen_get_timeout_shutdown_minutes()</code>（分钟级）——同一个常量身兼"5 小时关机"与"5 分钟熄屏"两个角色。这不一定是 bug，但足以说明：<strong>移植项目的常量语义要对着 <code>main.cpp</code> 逐行核实，别只信 README 一句话。</strong></p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：术语三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>SiFli</code>、<code>SF32</code>、<code>移植</code>、<code>SDK</code>。要求不看本页，先自己写，再对照 1.1 检查有没有把"芯片品牌 / 芯片平台 / 改造动作 / 厂商工具包"四个概念搞混。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>SiFli 是公司名，SF32 是产品线名，两者一个"人"一个"姓"；SDK 是工具，移植是动作。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>SiFli（思澈科技）是南京的芯片设计公司；SF32 是思澈的 MCU 平台，旗下有 SF32LB52X/55X/56X/57X/58X 五条产品线；SDK 是芯片厂商提供的软件开发工具包（驱动与函数库集合），ESP32 用 ESP-IDF，SF32 用 SiFli SDK；移植是把跑在 A 平台的代码改造到 B 平台——芯片、SDK、构建方式几乎必然要换，业务逻辑尽量原样搬。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：仓库解剖 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>EPD_Reader-main/</code>，指出以下五处的位置：(a) 固件程序入口在哪个文件？(b) UI 状态枚举定义在哪个文件、共几个状态？(c) 内置样书放在哪个目录？(d) 构建脚本在哪个目录？(e) 思澈平台 SDK 在哪个目录？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 1.3 的仓库地图：入口在 <code>src/</code>，状态枚举在 <code>src/type.h</code>，书在 <code>disk/</code>，构建在 <code>project/</code>，SDK 在顶层。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>src/main.cpp</code>（<code>int main()</code> → <code>main_task</code>，UI 状态机主循环）；(b) <code>src/type.h</code> 的 <code>AppUIState</code>，主流程 10 个状态 + 天气相关 2 个，共 12 个；(c) <code>disk/</code>（<code>no_oebps.epub</code>、<code>oebps.epub</code>、<code>pg43-images.epub</code>）；(d) <code>project/</code>（SConstruct / SConscript / Kconfig.proj）；(e) <code>SiFli-SDK/</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：找"在途开发"的证据 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>对照 1.5，到源码里亲自核验两件事：(1) 主页面选项 <code>MainOption</code> 到底有几项、在哪定义、第 2 项是什么？(2) 用 <code>grep -rn "Not implemented" src/ lib/</code> 找未实现注释，看它落在哪个函数、哪种数据格式的分支里。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>枚举在 <code>src/epub_screen.h</code>；未实现注释在 <code>src/boards/display_dbi/epd_display.c</code> 的 <code>CopyToMixedGrayBuffer</code> 里，分支条件是 <code>LCDC_PIXEL_FORMAT_MONO</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) <code>MainOption</code> 有 4 项：<code>OPTION_OPEN_LIBRARY</code>、<code>OPTION_ENTER_SETTINGS</code>、<code>OPTION_WEATHER</code>（查看天气，README 未列入）、<code>OPTION_CONTINUE_READING</code>，定义在 <code>src/epub_screen.h</code>。(2) 未实现注释位于 <code>epd_display.c</code> 的 <code>CopyToMixedGrayBuffer</code> 函数：当图层数据格式为 <code>LCDC_PIXEL_FORMAT_MONO</code>（单色）时 <code>RT_ASSERT(0)</code>，即"单色→混合灰"的拷贝路径尚未实现，只有 <code>LCDC_PIXEL_FORMAT_A4</code>（4-bit 灰）路径是通的。这正是"在途开发"的现场。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：第一性原理推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用第一性原理回答：为什么移植到 SF32 后，第一个被重点解决的是<strong>中文字体</strong>，而不是别的功能？提示从"目标市场 / 字体体积 / 渲染链路"三个角度各想一层，并给出你的推理链。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想三点：思澈的客户主要在哪、英文 95 个字符 vs 中文常用 6-7 千字的体积差、FreeType 在这种体积下还能不能塞进嵌入式存储与内存。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) 市场：思澈主打国内物联网与消费电子，中文是基本盘，一个不显示中文的阅读器在国内没有意义——所以这是"能用"的底线而非可选项。(2) 体积：英文只需 ASCII 的 95 个字符，而常用中文按 GB2312 一级字表就约 3755 字，全字库通常数 MB；粗体/斜体再翻倍，嵌入式 Flash 扛不住，所以 README 明确"默认未启用粗体/斜体中文字库"，只做单字重兜底。(3) 渲染链路：中文字形无法像英文字母那样简单拼宽，需要 FreeType 按字形描边，再叠加动态字体加载（TF 卡 <code>/fonts</code>）来缓解内置体积。结论：中文字体不是一个"加个功能"，而是把字体体积、存储、渲染性能三者重新做平衡的系统工程——这正是移植中"业务逻辑之外的平台难题"的典型代表。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

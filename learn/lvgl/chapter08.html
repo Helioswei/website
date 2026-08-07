@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第8章：事件系统 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="8" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：事件系统</h1>
+  <p class="chapter-subtitle">把"轮询"换成"回调"：每个动作背后，都藏着一个真相</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个——先问清楚 code、target、user_data</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「事件不会凭空发生，也不会无中生有。每一个回调背后都藏着'真相'：是谁发出的、作用在哪个对象上、附带什么数据。别急着写代码，先像侦探一样把这三件套问清楚。记住——按一下按钮不是一件事，而是一连串事件；真相只有一个，但它藏在链条里。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 事件模型：把"轮询"换成"回调" ========== -->
+  <h2>8.1 事件模型：把"轮询"换成"回调"</h2>
+
+  <p>前几章里，控件被创建、被排布、被赋予样式，但一个 UI 想要真正"活"起来，必须回应输入——点按钮、拖滑块、敲键盘。LVGL 的做法不是让你在主循环里逐个轮询"这个控件有没有被按？"，而是<strong>事件驱动</strong>：控件在状态变化时发出事件，你提前注册一个回调函数，库在正确的时刻替你调用它。这就是 <code>lv_obj_add_event_cb()</code> 的来历。</p>
+
+  <p>回调的签名是类型 <code>lv_event_cb_t</code>，即 <code>void (*)(lv_event_t * e)</code>——参数只有一个 <code>lv_event_t *</code>，里面装着"发生了什么、发生在谁身上、附带什么数据"。事件相关的类型与枚举定义在 <code>include/lvgl/core/lv_event.h</code>，而对象级事件的分发入口 <code>lv_obj_send_event()</code> 及其回调管理实现在 <code>src/core/lv_obj_event.c</code>。注册函数的完整原型是 <code>lv_event_dsc_t * lv_obj_add_event_cb(lv_obj_t * obj, lv_event_cb_t event_cb, lv_event_code_t filter, void * user_data)</code>——第三个参数 <code>filter</code> 用来声明"我只关心哪类事件"。</p>
+
+<pre><code><span class="cmt">/* 事件回调的签名：lv_event_cb_t = void (*)(lv_event_t *) */</span>
+<span class="kw">static</span> <span class="kw">void</span> btn_event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="fn">LV_LOG_USER</span>(<span class="str">"button event!"</span>);   <span class="cmt">/* 在日志里打一个点 */</span>
+}
+
+<span class="cmt">/* 注册：对象 + 回调 + 过滤的事件码 + 用户数据 */</span>
+<span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_add_event_cb</span>(btn, btn_event_cb, <span class="kw">LV_EVENT_CLICKED</span>, <span class="kw">NULL</span>);</code></pre>
+
+<pre><code><span class="cmt">/* 参考 examples/event/lv_example_event_click.c：点击一次，计数 +1 */</span>
+<span class="kw">static</span> <span class="kw">void</span> event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="kw">static</span> <span class="type">uint32_t</span> cnt = <span class="num">1</span>;
+    <span class="type">lv_obj_t</span> * btn = <span class="fn">lv_event_get_target_obj</span>(e);  <span class="cmt">/* 事件最初作用的对象 */</span>
+    <span class="type">lv_obj_t</span> * label = <span class="fn">lv_obj_get_child</span>(btn, <span class="num">0</span>); <span class="cmt">/* 按钮上的第 0 个子对象 */</span>
+    <span class="fn">lv_label_set_text_fmt</span>(label, <span class="str">"%"</span> <span class="kw">LV_PRIu32</span>, cnt); <span class="cmt">/* 把点击数写进标签 */</span>
+    cnt++;
+}</code></pre>
+
+  <table>
+    <tr><th>事件核心 API</th><th>作用</th></tr>
+    <tr><td><code>lv_obj_add_event_cb()</code></td><td>注册事件回调，返回描述符 <code>lv_event_dsc_t *</code></td></tr>
+    <tr><td><code>lv_event_get_code()</code></td><td>取事件码（<code>lv_event_code_t</code>）</td></tr>
+    <tr><td><code>lv_event_get_target()</code></td><td>取事件最初作用的对象（<code>void *</code>）</td></tr>
+    <tr><td><code>lv_event_get_current_target()</code></td><td>取当前正在回调的对象（冒泡时二者不同）</td></tr>
+    <tr><td><code>lv_event_get_param()</code></td><td>取事件发送时附带的参数</td></tr>
+    <tr><td><code>lv_event_get_user_data()</code></td><td>取注册时传入的用户数据</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>事件回调运行在 LVGL 的主循环与刷新上下文里。回调里一旦做长耗时或阻塞操作（延时、大块内存操作），整个界面的刷新就会被卡住。回调应该是"快速反应"，而不是"大动干戈"。</p>
+  </div>
+
+  <!-- ========== 8.2 事件类型：一次按压的前世今生 ========== -->
+  <h2>8.2 事件类型：一次按压的前世今生</h2>
+
+  <p>"点一下按钮"在 LVGL 里不是一件事，而是一连串事件。按下瞬间发 <code>LV_EVENT_PRESSED</code>；按住不松会持续发 <code>LV_EVENT_PRESSING</code>；按满一定时长（事件注释里的 <code>long_press_time</code>）发 <code>LV_EVENT_LONG_PRESSED</code>，之后每隔 <code>long_press_repeat_time</code> 再发一次 <code>LV_EVENT_LONG_PRESSED_REPEAT</code>；最后松手时，<code>LV_EVENT_RELEASED</code> 在每种情况下都会发，而 <code>LV_EVENT_CLICKED</code> 只在"整个过程没有滚动"时发——无论之前是否长按。至于 <code>LV_EVENT_VALUE_CHANGED</code>，是滑块、开关、下拉框这类"值型控件"专用的：值一变就触发。</p>
+
+  <p><code>examples/event/lv_example_event_button.c</code> 是"一个回调区分多种事件"的最佳样本：注册时 <code>filter</code> 传 <code>LV_EVENT_ALL</code>（值为 0，含义是"匹配所有事件"，而不是"什么都不匹配"），回调里用 <code>lv_event_get_code(e)</code> 拿到的枚举值做 <code>switch</code>，把"最近一次按钮事件"写进旁边的信息标签。这套"注册 ALL + switch code"的模式，是新手处理复杂交互的第一选择。</p>
+
+<pre><code><span class="cmt">/* 参考 examples/event/lv_example_event_button.c：一个回调区分多种事件 */</span>
+<span class="kw">static</span> <span class="kw">void</span> event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="type">lv_event_code_t</span> code = <span class="fn">lv_event_get_code</span>(e);
+    <span class="type">lv_obj_t</span> * label = (<span class="type">lv_obj_t</span> *) <span class="fn">lv_event_get_user_data</span>(e);
+
+    <span class="kw">switch</span>(code) {
+        <span class="kw">case</span> <span class="kw">LV_EVENT_PRESSED</span>:
+            <span class="fn">lv_label_set_text</span>(label, <span class="str">"最后一次事件：LV_EVENT_PRESSED"</span>);
+            <span class="kw">break</span>;
+        <span class="kw">case</span> <span class="kw">LV_EVENT_CLICKED</span>:
+            <span class="fn">lv_label_set_text</span>(label, <span class="str">"最后一次事件：LV_EVENT_CLICKED"</span>);
+            <span class="kw">break</span>;
+        <span class="kw">case</span> <span class="kw">LV_EVENT_LONG_PRESSED</span>:
+            <span class="fn">lv_label_set_text</span>(label, <span class="str">"最后一次事件：LV_EVENT_LONG_PRESSED"</span>);
+            <span class="kw">break</span>;
+        <span class="kw">default</span>:
+            <span class="kw">break</span>;
+    }
+}
+
+<span class="fn">lv_obj_add_event_cb</span>(btn, event_cb, <span class="kw">LV_EVENT_ALL</span>, info_label); <span class="cmt">/* ALL 匹配一切 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 值型控件：滑块一变就刷新标签（LV_EVENT_VALUE_CHANGED） */</span>
+<span class="kw">static</span> <span class="kw">void</span> slider_event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="type">lv_obj_t</span> * slider = <span class="fn">lv_event_get_target_obj</span>(e);
+    <span class="type">lv_obj_t</span> * label  = (<span class="type">lv_obj_t</span> *) <span class="fn">lv_event_get_user_data</span>(e);
+    <span class="fn">lv_label_set_text_fmt</span>(label, <span class="str">"%d"</span>, <span class="fn">lv_slider_get_value</span>(slider));
+}
+
+<span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="type">lv_obj_t</span> * label  = <span class="fn">lv_label_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_add_event_cb</span>(slider, slider_event_cb, <span class="kw">LV_EVENT_VALUE_CHANGED</span>, label);</code></pre>
+
+  <table>
+    <tr><th>事件码</th><th>触发时机</th></tr>
+    <tr><td><code>LV_EVENT_PRESSED</code></td><td>首次按下</td></tr>
+    <tr><td><code>LV_EVENT_PRESSING</code></td><td>按住期间持续触发</td></tr>
+    <tr><td><code>LV_EVENT_RELEASED</code></td><td>每次松手都触发</td></tr>
+    <tr><td><code>LV_EVENT_SHORT_CLICKED</code></td><td>短按后松开（未滚动）</td></tr>
+    <tr><td><code>LV_EVENT_CLICKED</code></td><td>松开且未滚动（无论是否长按）</td></tr>
+    <tr><td><code>LV_EVENT_LONG_PRESSED</code></td><td>按住超过长按时长</td></tr>
+    <tr><td><code>LV_EVENT_LONG_PRESSED_REPEAT</code></td><td>长按后按周期重复</td></tr>
+    <tr><td><code>LV_EVENT_VALUE_CHANGED</code></td><td>控件值变化（滑块 / 开关 / 下拉框）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>要区分"点击"与"长按"，记住一句话：<code>CLICKED</code> 不看时长，只看"松手时是否滚过"；<code>LONG_PRESSED</code> 不看滚没滚，只看"是否按够时长"。二者都可能紧接着 <code>RELEASED</code>——所以判断动作，永远以 <code>code</code> 为准，不要靠事件顺序去猜。</p>
+  </div>
+
+  <!-- ========== 8.3 事件信息四件套：code、target、param、user_data ========== -->
+  <h2>8.3 事件信息四件套：code、target、param、user_data</h2>
+
+  <p>回调拿到了 <code>lv_event_t * e</code>，里面到底能掏出什么？一共四样：<code>lv_event_get_code(e)</code> 拿事件码；<code>lv_event_get_target(e)</code> 拿事件最初作用的对象（返回 <code>void *</code>，实际开发更常用 <code>lv_event_get_target_obj(e)</code> 直接得 <code>lv_obj_t *</code>）；<code>lv_event_get_param(e)</code> 拿事件发送时附带的参数（例如 <code>LV_EVENT_KEY</code> 时的按键值、绘制事件的绘制区域）；<code>lv_event_get_user_data(e)</code> 拿注册回调时的第四参 <code>user_data</code>。</p>
+
+  <p><code>user_data</code> 是让"同一个回调服务多个控件"的关键：第四参可以是任何 <code>void *</code>——最常见的做法是传一个 <code>lv_obj_t *</code>（比如回调要改写的那个标签），更复杂的场景传一个自定义结构体指针。这正是"真相只有一个"的落点：回调不再需要猜测自己在服务谁，<code>user_data</code> 把上下文直接递到你手里。</p>
+
+<pre><code><span class="cmt">/* 把 info_label 作为 user_data 传给回调：同一个回调可被多个控件复用 */</span>
+<span class="kw">static</span> <span class="kw">void</span> event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="kw">if</span>(<span class="fn">lv_event_get_code</span>(e) == <span class="kw">LV_EVENT_CLICKED</span>) {
+        <span class="type">lv_obj_t</span> * label = (<span class="type">lv_obj_t</span> *) <span class="fn">lv_event_get_user_data</span>(e);
+        <span class="fn">lv_label_set_text</span>(label, <span class="str">"按钮被点击了！"</span>);
+    }
+}
+
+<span class="type">lv_obj_t</span> * info_label = <span class="fn">lv_label_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_add_event_cb</span>(btn, event_cb, <span class="kw">LV_EVENT_ALL</span>, info_label);</code></pre>
+
+<pre><code><span class="cmt">/* user_data 也可以是一个结构体指针：先取 target，再读写数据 */</span>
+<span class="kw">typedef</span> <span class="kw">struct</span> {
+    <span class="type">int32_t</span> click_count;
+    <span class="type">lv_obj_t</span> * label;
+} my_data_t;
+
+<span class="kw">static</span> <span class="kw">void</span> event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="type">my_data_t</span> * data = (<span class="type">my_data_t</span> *) <span class="fn">lv_event_get_user_data</span>(e);
+    <span class="type">lv_obj_t</span> * target = <span class="fn">lv_event_get_target_obj</span>(e); <span class="cmt">/* 谁发的这个事件 */</span>
+    data-&gt;click_count++;
+    <span class="fn">lv_label_set_text_fmt</span>(data-&gt;label, <span class="str">"count=%d"</span>, data-&gt;click_count);
+    <span class="fn">LV_UNUSED</span>(target);
+}</code></pre>
+
+  <table>
+    <tr><th>Getter</th><th>返回</th><th>含义</th></tr>
+    <tr><td><code>lv_event_get_code(e)</code></td><td><code>lv_event_code_t</code></td><td>事件码</td></tr>
+    <tr><td><code>lv_event_get_target(e)</code></td><td><code>void *</code></td><td>事件最初作用的对象</td></tr>
+    <tr><td><code>lv_event_get_current_target(e)</code></td><td><code>void *</code></td><td>当前正在处理回调的对象</td></tr>
+    <tr><td><code>lv_event_get_param(e)</code></td><td><code>void *</code></td><td>事件附带参数（如按键值）</td></tr>
+    <tr><td><code>lv_event_get_user_data(e)</code></td><td><code>void *</code></td><td>注册时传入的用户数据</td></tr>
+    <tr><td><code>lv_event_get_target_obj(e)</code></td><td><code>lv_obj_t *</code></td><td><code>target</code> 的 <code>lv_obj_t</code> 版本</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>回调可能在任意时刻触发，你传入 <code>user_data</code> 的指针必须在这段生命周期内保持有效。最常见的翻车现场是：传了某个栈上局部变量的地址，函数一返回指针就失效了。结构体用 <code>static</code> 或 <code>malloc</code> 持有，并在不需要时妥善释放。</p>
+  </div>
+
+  <!-- ========== 8.4 事件在对象树上的传播：冒泡与 Trickle ========== -->
+  <h2>8.4 事件在对象树上的传播：冒泡与 Trickle</h2>
+
+  <p>默认情况下，事件只发给目标对象自己。但对象有父子关系，很多场景希望父容器"统一处理"子控件的事件——比如一个网格里摆了 30 个按钮，难道每个都注册一个回调吗？不必。给子对象打上 <code>LV_OBJ_FLAG_EVENT_BUBBLE</code>（或直接调用 <code>lv_obj_set_event_bubble(obj, true)</code>），事件就会在目标对象处理完后<strong>向上冒泡</strong>，逐级传给父对象。<code>examples/event/lv_example_event_bubble.c</code> 正是这个模式：一个 290×200 的 flex 容器里塞了 30 个按钮，只在容器上注册一个 <code>LV_EVENT_CLICKED</code> 回调，点击任意按钮都会被它捕获。</p>
+
+  <p>冒泡时同一个回调会在多个对象上触发，于是"我正在处理谁"成了关键问题。分辨法就在两个 getter 的名字里：<code>lv_event_get_target_obj(e)</code> 永远是事件最初的对象（被点的那个按钮）；<code>lv_event_get_current_target_obj(e)</code> 是当前正在调用这个回调的对象（冒泡进行到哪一层就是哪一层）。若想在某一层叫停，调用 <code>lv_event_stop_bubbling(e)</code>。与冒泡方向相反的机制叫 <strong>trickle</strong>（下渗）：给父对象加 <code>LV_OBJ_FLAG_EVENT_TRICKLE</code>（<code>lv_obj_set_event_trickle(obj, true)</code>），输入事件会从父穿透到子对象——<code>lv_example_event_trickle.c</code> 就靠它让"按下整个容器"时整组子控件一起高亮。</p>
+
+<pre><code><span class="cmt">/* 参考 examples/event/lv_example_event_bubble.c：容器统一处理 30 个按钮 */</span>
+<span class="kw">static</span> <span class="kw">void</span> event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="type">lv_obj_t</span> * target = <span class="fn">lv_event_get_target_obj</span>(e);          <span class="cmt">/* 最初被点的按钮 */</span>
+    <span class="type">lv_obj_t</span> * cont   = <span class="fn">lv_event_get_current_target_obj</span>(e); <span class="cmt">/* 挂回调的容器 */</span>
+    <span class="kw">if</span>(target == cont) <span class="kw">return</span>;                              <span class="cmt">/* 点在容器上就忽略 */</span>
+
+    <span class="fn">lv_obj_set_style_bg_color</span>(target, <span class="fn">lv_palette_main</span>(<span class="kw">LV_PALETTE_RED</span>), <span class="num">0</span>);
+}
+
+<span class="type">lv_obj_t</span> * cont = <span class="fn">lv_obj_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_size</span>(cont, <span class="num">290</span>, <span class="num">200</span>);
+<span class="fn">lv_obj_set_flex_flow</span>(cont, <span class="kw">LV_FLEX_FLOW_ROW_WRAP</span>);
+
+<span class="kw">for</span>(<span class="kw">int</span> i = <span class="num">0</span>; i &lt; <span class="num">30</span>; i++) {
+    <span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(cont);
+    <span class="fn">lv_obj_set_size</span>(btn, <span class="num">70</span>, <span class="num">50</span>);
+    <span class="fn">lv_obj_set_event_bubble</span>(btn, <span class="kw">true</span>);  <span class="cmt">/* 关键：让点击冒泡给容器 */</span>
+}
+<span class="fn">lv_obj_add_event_cb</span>(cont, event_cb, <span class="kw">LV_EVENT_CLICKED</span>, <span class="kw">NULL</span>);</code></pre>
+
+<pre><code><span class="cmt">/* 在某一层叫停冒泡 */</span>
+<span class="kw">static</span> <span class="kw">void</span> event_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="kw">if</span>(<span class="fn">lv_event_get_code</span>(e) == <span class="kw">LV_EVENT_CLICKED</span>) {
+        <span class="fn">lv_event_stop_bubbling</span>(e);  <span class="cmt">/* 到此为止，不再上传给父对象 */</span>
+    }
+}
+
+<span class="cmt">/* Trickle：父对象的输入事件"渗"给所有子对象 */</span>
+<span class="fn">lv_obj_set_event_trickle</span>(cont, <span class="kw">true</span>);   <span class="cmt">/* 等价于 LV_OBJ_FLAG_EVENT_TRICKLE */</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>冒泡（BUBBLE）和 trickle（TRICKLE）是方向相反的两条路：BUBBLE 让子事件上传给父，适合"父容器统一处理一群子控件"；TRICKLE 让父的输入穿透到子，适合"按整组、整组联动"。判断当前回调执行到哪一层，永远看 <code>current_target</code>，别只看 <code>target</code>。</p>
+  </div>
+
+  <!-- ========== 8.5 事件的增删与自定义事件 ========== -->
+  <h2>8.5 事件的增删与自定义事件</h2>
+
+  <p>回调不是一锤子买卖。<code>lv_obj_remove_event_cb(obj, event_cb)</code> 按函数指针移除回调；<code>lv_obj_remove_event_cb_with_user_data(obj, event_cb, user_data)</code> 更进一步——同一个函数以不同 <code>user_data</code> 注册了多份时，用它精确删除某一份；<code>lv_obj_get_event_count(obj)</code> 则查询对象当前注册了多少回调。值得注意的是，对象被删除时其上所有回调会自动随之释放，你不需要手动逐条清理。</p>
+
+  <p>除了内置事件，你还能<strong>自造事件</strong>。<code>lv_event_register_id()</code> 返回一个新的、唯一的自定义事件码；之后用 <code>lv_obj_send_event(obj, my_code, param)</code> 主动向对象发送事件，对象上所有 <code>filter</code> 匹配的回调都会被调用。这一招常被用来做"业务层 → UI 层"的解耦通知：业务逻辑只发事件、界面只管订阅，二者通过事件码对话、互不 <code>include</code>。调试时若想看清某个事件码是什么，用 <code>lv_event_code_get_name(code)</code> 把它变成可读字符串。</p>
+
+<pre><code><span class="cmt">/* 注册一个自定义事件码，并主动发送 */</span>
+<span class="kw">static</span> <span class="type">uint32_t</span> LV_EVENT_UPDATE = <span class="num">0</span>;
+LV_EVENT_UPDATE = <span class="fn">lv_event_register_id</span>();   <span class="cmt">/* 返回唯一事件码 */</span>
+
+<span class="kw">static</span> <span class="kw">void</span> update_cb(<span class="type">lv_event_t</span> * e)
+{
+    <span class="cmt">/* LV_EVENT_UPDATE 时被调用，param 可携带数据 */</span>
+    <span class="type">lv_obj_t</span> * label = (<span class="type">lv_obj_t</span> *) <span class="fn">lv_event_get_user_data</span>(e);
+    <span class="fn">lv_label_set_text</span>(label, <span class="str">"已更新"</span>);
+}
+
+<span class="fn">lv_obj_add_event_cb</span>(panel, update_cb, LV_EVENT_UPDATE, label);
+<span class="fn">lv_obj_send_event</span>(panel, LV_EVENT_UPDATE, <span class="kw">NULL</span>);   <span class="cmt">/* 业务侧主动触发 */</span></code></pre>
+
+<pre><code><span class="cmt">/* 回调的移除与查询 */</span>
+<span class="fn">lv_obj_remove_event_cb</span>(btn, event_cb);                       <span class="cmt">/* 按函数指针移除 */</span>
+<span class="fn">lv_obj_remove_event_cb_with_user_data</span>(btn, event_cb, data); <span class="cmt">/* 连同 user_data 一起匹配 */</span>
+
+<span class="type">uint32_t</span> n = <span class="fn">lv_obj_get_event_count</span>(btn);   <span class="cmt">/* 已注册回调数量 */</span>
+
+<span class="cmt">/* 调试：把事件码转成可读字符串 */</span>
+<span class="kw">const</span> <span class="kw">char</span> * name = <span class="fn">lv_event_code_get_name</span>(<span class="kw">LV_EVENT_CLICKED</span>);
+<span class="fn">LV_LOG_USER</span>(<span class="str">"event: %s"</span>, name);</code></pre>
+
+  <table>
+    <tr><th>生命周期 API</th><th>作用</th></tr>
+    <tr><td><code>lv_obj_remove_event_cb()</code></td><td>按回调函数指针移除</td></tr>
+    <tr><td><code>lv_obj_remove_event_cb_with_user_data()</code></td><td>按回调 + <code>user_data</code> 精确移除</td></tr>
+    <tr><td><code>lv_obj_get_event_count()</code></td><td>查询已注册回调数量</td></tr>
+    <tr><td><code>lv_obj_send_event()</code></td><td>主动向对象发送事件</td></tr>
+    <tr><td><code>lv_event_register_id()</code></td><td>注册自定义事件码</td></tr>
+    <tr><td><code>lv_event_code_get_name()</code></td><td>事件码转字符串</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>自定义事件码 + <code>user_data</code> 是解耦的黄金组合：界面层只关心"收到了什么事件、带什么数据"，业务层只关心"发什么事件、传什么数据"。两边都不需要知道对方的实现细节——真相通过事件码传递，而非通过互相 include。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：给按钮加一个点击计数 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>创建 3 个按钮和一个标签。让同一个回调统计"总点击次数"并实时写入标签。要求：3 个按钮共用同一个回调函数，<code>user_data</code> 统一传入这个标签。写出完整代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 <code>static uint32_t cnt</code> 计数；<code>user_data</code> 传标签，回调里用 <code>lv_event_get_user_data(e)</code> 取出并 <code>lv_label_set_text_fmt</code> 更新；3 个按钮都 <code>lv_obj_add_event_cb(btn, event_cb, LV_EVENT_CLICKED, label)</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>回调：<code>static void event_cb(lv_event_t * e) { static uint32_t cnt = 0; if(lv_event_get_code(e) == LV_EVENT_CLICKED) { cnt++; lv_obj_t * label = (lv_obj_t *)lv_event_get_user_data(e); lv_label_set_text_fmt(label, "clicked: %u", cnt); } }</code>；3 个按钮分别 <code>lv_obj_add_event_cb(btn1/btn2/btn3, event_cb, LV_EVENT_CLICKED, label)</code>。所有按钮的点击都汇聚到一个计数、一个标签——回调、事件码、<code>user_data</code> 三者协同的典型用例。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：用标签区分按下 / 点击 / 长按 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>仿照 <code>lv_example_event_button.c</code>：一个按钮 + 一个信息标签。用<strong>单个</strong>回调分别显示 <code>LV_EVENT_PRESSED</code>、<code>LV_EVENT_RELEASED</code>、<code>LV_EVENT_CLICKED</code>、<code>LV_EVENT_LONG_PRESSED</code> 四种事件名。注册时的 <code>filter</code> 应该传什么？为什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>要收到多种事件，<code>filter</code> 传 <code>LV_EVENT_ALL</code>（值为 0，表示匹配所有）；回调里用 <code>lv_event_get_code(e)</code> 返回的 <code>lv_event_code_t</code> 做 <code>switch</code>，分别 <code>break</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_obj_add_event_cb(btn, event_cb, LV_EVENT_ALL, info_label)</code>。传 <code>LV_EVENT_ALL</code> 是因为你需要同时收到按下、松开、点击、长按四种事件，而单个 <code>filter</code> 一次只能声明一类；<code>LV_EVENT_ALL</code> 的值是 0，语义是"匹配所有事件"。回调内 <code>switch(lv_event_get_code(e))</code> 分四路更新标签文本。注意按住不动时会先 <code>PRESSED</code> 再 <code>LONG_PRESSED</code>，松开时依次是 <code>RELEASED</code> 与 <code>CLICKED</code>（未滚动时）。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：容器统一处理一组按钮 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>仿照 <code>lv_example_event_bubble.c</code>：一个 flex 容器里放 6 个按钮，只在容器上注册一个 <code>LV_EVENT_CLICKED</code> 回调。要求：(1) 点击任意按钮，该按钮被标记为红色；(2) 点击容器本身不改变任何东西；(3) 在回调里说明 <code>lv_event_get_target_obj(e)</code> 与 <code>lv_event_get_current_target_obj(e)</code> 各返回什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>每个按钮都要 <code>lv_obj_set_event_bubble(btn, true)</code>（或加 <code>LV_OBJ_FLAG_EVENT_BUBBLE</code>）；回调里先 <code>if(target == cont) return;</code> 忽略容器自身；把 <code>target</code> 染红。冒泡到容器这一层时 <code>target</code> 是按钮、<code>current_target</code> 是容器。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>代码要点：<code>lv_obj_t * cont = lv_obj_create(lv_screen_active());</code> 设置 <code>LV_FLEX_FLOW_ROW_WRAP</code>；<code>for(...)</code> 创建 6 个按钮并 <code>lv_obj_set_event_bubble(btn, true)</code>；<code>lv_obj_add_event_cb(cont, event_cb, LV_EVENT_CLICKED, NULL)</code>。回调内：<code>lv_obj_t * target = lv_event_get_target_obj(e); lv_obj_t * cont = lv_event_get_current_target_obj(e); if(target == cont) return; lv_obj_set_style_bg_color(target, lv_palette_main(LV_PALETTE_RED), 0);</code>。当容器回调被触发时，<code>target</code> = 最初被点的按钮，<code>current_target</code> = 容器（因为事件冒泡到了容器这一层）。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：自定义事件驱动 UI 刷新 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>做一个"状态面板"：一个按钮触发一次"更新"，一个滑块调整"数值"。要求：用 <code>lv_event_register_id()</code> 注册一个自定义事件 <code>LV_EVENT_UPDATE</code>，数值变化与按钮点击都通过 <code>lv_obj_send_event()</code> 发这个事件；面板上唯一一个回调收到事件后，把 <code>user_data</code> 结构体里的计数与数值一起显示出来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>定义 <code>static</code> 数据 <code>my_data_t { int32_t count; int32_t value; lv_obj_t * label; }</code>；两个"生产者"（按钮的 <code>LV_EVENT_CLICKED</code>、滑块的 <code>LV_EVENT_VALUE_CHANGED</code>）里更新字段后 <code>lv_obj_send_event(panel, LV_EVENT_UPDATE, NULL)</code>；面板上挂 <code>update_cb</code> 消费并刷新标签。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>核心结构：<code>LV_EVENT_UPDATE = lv_event_register_id();</code> 取得自定义事件码；按钮回调里 <code>data->count++; lv_obj_send_event(panel, LV_EVENT_UPDATE, NULL);</code>；滑块回调里 <code>data->value = lv_slider_get_value(slider); lv_obj_send_event(panel, LV_EVENT_UPDATE, NULL);</code>；<code>update_cb</code> 收到事件后 <code>lv_label_set_text_fmt(data->label, "count=%d value=%d", data->count, data->value)</code>。要点：多个生产者汇聚到同一个事件，消费方只有面板一个——这正是"事件解耦"优于"直接调用"的地方。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

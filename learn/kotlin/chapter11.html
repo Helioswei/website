@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第11章：泛型与异常处理 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="11" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：泛型与异常处理</h1>
+  <p class="chapter-subtitle">掌握 Kotlin 类型参数化与错误处理机制，编写更安全、更灵活的代码</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>福尔摩斯</h3>
+        <p class="mentor-method">类型推理，穷举所有可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>亲爱的华生，一桩好案件的关键在于：先圈定嫌疑范围，再依据铁证逐一排除，直到只剩下唯一的真相。泛型就是这门推理术——类型参数 <code>T</code> 是嫌疑人档案，约束条件是筛选的证据链，而异常处理则是为每一条可能的死胡同提前布下的应急预案。今天，让我们以侦探的眼光，穷举类型系统与错误处理的一切可能。</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2>11.1 泛型基础</h2>
+  <!-- ============================================================ -->
+
+  <p>华生，你是否注意到，调查案件时我们经常需要一套通用的推理框架——无论嫌疑人是商人、贵族还是仆从，推理的方法是相同的，变化的只是具体的人物。编程中也是如此：一段逻辑对多种类型都适用，如果为每种类型各写一份代码，不仅冗余而且难以维护。<strong>泛型</strong>（Generics）正是这套"通用推理框架"——它让我们在定义函数、类或接口时使用<strong>类型参数</strong>（即嫌疑人的"占位符"），在实际调用时再填入具体类型，从而同时获得<strong>类型安全</strong>和<strong>代码复用</strong>两大优势。</p>
+
+  <h3>泛型函数</h3>
+
+  <p>最基础的泛型用法，就像建立一份"万能嫌疑人档案"——在函数名前用尖括号声明类型参数 <code>T</code>，调用时再推理出具体类型：</p>
+
+<pre><code><span class="kw">fun</span> &lt;<span class="type">T</span>&gt; <span class="fn">printItem</span>(<span class="param">item</span>: <span class="type">T</span>) {
+    <span class="fn">println</span>(<span class="str">"项目: </span><span class="op">$</span>item<span class="str">"</span>)
+}
+
+<span class="cmt">// 调用时可以显式指定类型，也可以让编译器自动推断</span>
+<span class="fn">printItem</span>&lt;<span class="type">String</span>&gt;(<span class="str">"Hello"</span>)   <span class="cmt">// 显式指定</span>
+<span class="fn">printItem</span>(<span class="num">42</span>)                 <span class="cmt">// 编译器推断为 Int</span></code></pre>
+
+  <h3>泛型类</h3>
+
+  <p>泛型类是最常见的应用场景——想象一个"证物箱"，它能安全地保管任何类型的物品，但取出时你总能确切知道里面是什么：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Box</span>&lt;<span class="type">T</span>&gt;(<span class="kw">val</span> <span class="param">value</span>: <span class="type">T</span>) {
+    <span class="kw">fun</span> <span class="fn">getContent</span>(): <span class="type">T</span> <span class="op">=</span> value
+
+    <span class="kw">fun</span> <span class="fn">describe</span>(): <span class="type">String</span> <span class="op">=</span> <span class="str">"Box 中装的是: </span><span class="op">$</span>value<span class="str">"</span>
+}
+
+<span class="cmt">// 使用</span>
+<span class="kw">val</span> stringBox <span class="op">=</span> <span class="type">Box</span>(<span class="str">"Kotlin"</span>)      <span class="cmt">// Box&lt;String&gt;</span>
+<span class="kw">val</span> intBox <span class="op">=</span> <span class="type">Box</span>(<span class="num">2024</span>)              <span class="cmt">// Box&lt;Int&gt;</span>
+
+<span class="fn">println</span>(stringBox.<span class="fn">getContent</span>())     <span class="cmt">// "Kotlin"</span>
+<span class="fn">println</span>(intBox.<span class="fn">describe</span>())          <span class="cmt">// "Box 中装的是: 2024"</span></code></pre>
+
+  <h3>多类型参数</h3>
+
+  <p>一桩案件往往涉及多位嫌疑人——当我们需要多个类型参数时，用逗号分隔即可：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">Pair</span>&lt;<span class="type">A</span>, <span class="type">B</span>&gt;(
+    <span class="kw">val</span> <span class="param">first</span>: <span class="type">A</span>,
+    <span class="kw">val</span> <span class="param">second</span>: <span class="type">B</span>
+) {
+    <span class="kw">fun</span> <span class="fn">toFormattedString</span>(): <span class="type">String</span> <span class="op">=</span> <span class="str">"(</span><span class="op">$</span>first<span class="str">, </span><span class="op">$</span>second<span class="str">)"</span>
+}
+
+<span class="kw">val</span> nameAge <span class="op">=</span> <span class="type">Pair</span>(<span class="str">"张三"</span>, <span class="num">25</span>)
+<span class="fn">println</span>(nameAge.<span class="fn">toFormattedString</span>())  <span class="cmt">// "(张三, 25)"</span></code></pre>
+
+  <h3>泛型接口</h3>
+
+  <p>接口同样支持泛型。这就像制定一套标准调查流程——无论是调查人物、物品还是事件，操作步骤（查询、保存、删除）是统一的：</p>
+
+<pre><code><span class="kw">interface</span> <span class="type">Repository</span>&lt;<span class="type">T</span>&gt; {
+    <span class="kw">fun</span> <span class="fn">getById</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">T</span><span class="op">?</span>
+    <span class="kw">fun</span> <span class="fn">getAll</span>(): <span class="type">List</span>&lt;<span class="type">T</span>&gt;
+    <span class="kw">fun</span> <span class="fn">save</span>(<span class="param">item</span>: <span class="type">T</span>)
+    <span class="kw">fun</span> <span class="fn">delete</span>(<span class="param">item</span>: <span class="type">T</span>)
+}
+
+<span class="kw">data</span> <span class="kw">class</span> <span class="type">User</span>(<span class="kw">val</span> <span class="param">id</span>: <span class="type">Int</span>, <span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>)
+
+<span class="kw">class</span> <span class="type">UserRepository</span> : <span class="type">Repository</span>&lt;<span class="type">User</span>&gt; {
+    <span class="kw">private</span> <span class="kw">val</span> users <span class="op">=</span> <span class="fn">mutableListOf</span>&lt;<span class="type">User</span>&gt;()
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">getById</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">User</span><span class="op">?</span> <span class="op">=</span> users.<span class="fn">find</span> { it.id <span class="op">==</span> id }
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">getAll</span>(): <span class="type">List</span>&lt;<span class="type">User</span>&gt; <span class="op">=</span> users.<span class="fn">toList</span>()
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">save</span>(<span class="param">item</span>: <span class="type">User</span>) { users.<span class="fn">add</span>(item) }
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">delete</span>(<span class="param">item</span>: <span class="type">User</span>) { users.<span class="fn">remove</span>(item) }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">泛型命名约定</div>
+    <p>常用的类型参数名称：<code>T</code>（Type）、<code>E</code>（Element）、<code>K</code>（Key）、<code>V</code>（Value）、<code>R</code>（Result）。虽然可以使用任何名称，但遵循约定有助于代码可读性——正如侦探档案中的编号系统，统一命名才能高效检索。</p>
+  </div>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>Kotlin 泛型有<strong>类型擦除</strong>（运行时不知道 <code>T</code> 是什么），C++ 模板是编译期实例化（每个 <code>T</code> 生成独立代码）。Kotlin 的 <code>List&lt;String&gt;</code> 运行时只是 <code>List</code>，C++ 的 <code>vector&lt;string&gt;</code> 是完全独立的类型。换言之，Kotlin 在运行时"销毁了嫌疑人档案"，而 C++ 为每位嫌疑人都建立了独立的卷宗。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2>11.2 类型约束与型变</h2>
+  <!-- ============================================================ -->
+
+  <h3>上界约束</h3>
+
+  <p>华生，调查案件时我们不会漫无目的地排查全城居民——我们会根据证据缩小嫌疑范围。类型约束也是同理：通过<strong>上界约束</strong>（Upper Bound），我们限制类型参数必须是某个类型或其子类型，就像排除掉那些显然不可能的嫌疑人：</p>
+
+<pre><code><span class="kw">fun</span> &lt;<span class="type">T</span> : <span class="type">Comparable</span>&lt;<span class="type">T</span>&gt;&gt; <span class="fn">findMax</span>(<span class="param">a</span>: <span class="type">T</span>, <span class="param">b</span>: <span class="type">T</span>): <span class="type">T</span> {
+    <span class="kw">return</span> <span class="kw">if</span> (a <span class="op">&gt;</span> b) a <span class="kw">else</span> b
+}
+
+<span class="fn">println</span>(<span class="fn">findMax</span>(<span class="num">10</span>, <span class="num">20</span>))           <span class="cmt">// 20</span>
+<span class="fn">println</span>(<span class="fn">findMax</span>(<span class="str">"apple"</span>, <span class="str">"banana"</span>)) <span class="cmt">// "banana"</span></code></pre>
+
+  <p>由于约束了 <code>T : Comparable&lt;T&gt;</code>，编译器就掌握了一条铁证：传入的类型一定实现了比较接口。有了这条证据，使用 <code>&gt;</code> 运算符就是完全安全的——我们已经排除了所有不具备"可比较"能力的类型。</p>
+
+  <h3>多重约束（where 子句）</h3>
+
+  <p>有时一条线索不足以锁定嫌疑人，我们需要交叉比对多条证据。当类型参数需要同时满足多个约束时，使用 <code>where</code> 关键字——这就是联合多条证据链的推理：</p>
+
+<pre><code><span class="kw">fun</span> &lt;<span class="type">T</span>&gt; <span class="fn">copyIfValid</span>(<span class="param">item</span>: <span class="type">T</span>)
+    <span class="kw">where</span> <span class="type">T</span> : <span class="type">Comparable</span>&lt;<span class="type">T</span>&gt;,
+          <span class="type">T</span> : <span class="type">Cloneable</span> {
+    <span class="fn">println</span>(<span class="str">"该元素可比较且可克隆: </span><span class="op">$</span>item<span class="str">"</span>)
+}
+
+<span class="cmt">// 泛型类同样可以使用 where</span>
+<span class="kw">class</span> <span class="type">SortedStorage</span>&lt;<span class="type">T</span>&gt;
+    <span class="kw">where</span> <span class="type">T</span> : <span class="type">Comparable</span>&lt;<span class="type">T</span>&gt;,
+          <span class="type">T</span> : <span class="type">Any</span> {
+    <span class="kw">private</span> <span class="kw">val</span> items <span class="op">=</span> <span class="fn">mutableListOf</span>&lt;<span class="type">T</span>&gt;()
+
+    <span class="kw">fun</span> <span class="fn">add</span>(<span class="param">item</span>: <span class="type">T</span>) {
+        items.<span class="fn">add</span>(item)
+        items.<span class="fn">sort</span>()
+    }
+
+    <span class="kw">fun</span> <span class="fn">getAll</span>(): <span class="type">List</span>&lt;<span class="type">T</span>&gt; <span class="op">=</span> items.<span class="fn">toList</span>()
+}</code></pre>
+
+  <h3>协变（out）——生产者</h3>
+
+  <p>现在来谈谈型变（Variance），这是泛型推理中最精妙的一环。华生，请思考：如果 <code>Dog</code> 是 <code>Animal</code> 的子类，那么 <code>List&lt;Dog&gt;</code> 能当作 <code>List&lt;Animal&gt;</code> 使用吗？这就像问：一份只记录了警犬的名单，能否作为动物名单使用？</p>
+
+  <p>答案取决于<strong>证据的流向</strong>。使用 <code>out</code> 关键字可以声明<strong>协变</strong>——即泛型类只"输出"（生产）该类型的值，不"输入"（消费）它。证据只从内部流向外部，如同线人只提供情报、不接受指令：</p>
+
+<pre><code><span class="kw">open</span> <span class="kw">class</span> <span class="type">Animal</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>)
+<span class="kw">class</span> <span class="type">Dog</span>(<span class="param">name</span>: <span class="type">String</span>) : <span class="type">Animal</span>(name)
+<span class="kw">class</span> <span class="type">Cat</span>(<span class="param">name</span>: <span class="type">String</span>) : <span class="type">Animal</span>(name)
+
+<span class="cmt">// 使用 out 声明协变：只能读取 T，不能写入 T</span>
+<span class="kw">interface</span> <span class="type">Source</span>&lt;<span class="kw">out</span> <span class="type">T</span>&gt; {
+    <span class="kw">fun</span> <span class="fn">next</span>(): <span class="type">T</span>    <span class="cmt">// 可以：T 出现在返回值位置</span>
+    <span class="cmt">// fun add(item: T)  // 不可以：T 不能出现在参数位置</span>
+}
+
+<span class="kw">class</span> <span class="type">DogSource</span> : <span class="type">Source</span>&lt;<span class="type">Dog</span>&gt; {
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">next</span>(): <span class="type">Dog</span> <span class="op">=</span> <span class="type">Dog</span>(<span class="str">"旺财"</span>)
+}
+
+<span class="cmt">// 因为 Source 是协变的，所以 Source&lt;Dog&gt; 可以赋值给 Source&lt;Animal&gt;</span>
+<span class="kw">val</span> animalSource: <span class="type">Source</span>&lt;<span class="type">Animal</span>&gt; <span class="op">=</span> <span class="type">DogSource</span>()
+<span class="fn">println</span>(animalSource.<span class="fn">next</span>().name)  <span class="cmt">// "旺财"</span></code></pre>
+
+  <p>Kotlin 标准库中的 <code>List&lt;out E&gt;</code> 就是协变的——它是只读列表，只产出元素，因此 <code>List&lt;Dog&gt;</code> 可以安全地作为 <code>List&lt;Animal&gt;</code> 使用。推理至此，铁证如山。</p>
+
+  <h3>逆变（in）——消费者</h3>
+
+  <p>与协变相反，<code>in</code> 关键字声明<strong>逆变</strong>——泛型类只"消费"该类型的值。证据只从外部流入内部，如同法庭只接收证据、不对外发布：</p>
+
+<pre><code><span class="cmt">// 使用 in 声明逆变：只能写入 T，不能读取 T</span>
+<span class="kw">interface</span> <span class="type">Consumer</span>&lt;<span class="kw">in</span> <span class="type">T</span>&gt; {
+    <span class="kw">fun</span> <span class="fn">consume</span>(<span class="param">item</span>: <span class="type">T</span>)  <span class="cmt">// 可以：T 出现在参数位置</span>
+    <span class="cmt">// fun produce(): T     // 不可以：T 不能出现在返回值位置</span>
+}
+
+<span class="kw">class</span> <span class="type">AnimalHandler</span> : <span class="type">Consumer</span>&lt;<span class="type">Animal</span>&gt; {
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">consume</span>(<span class="param">item</span>: <span class="type">Animal</span>) {
+        <span class="fn">println</span>(<span class="str">"处理动物: </span><span class="op">$</span>{item.name}<span class="str">"</span>)
+    }
+}
+
+<span class="cmt">// 因为 Consumer 是逆变的，所以 Consumer&lt;Animal&gt; 可以赋值给 Consumer&lt;Dog&gt;</span>
+<span class="kw">val</span> dogHandler: <span class="type">Consumer</span>&lt;<span class="type">Dog</span>&gt; <span class="op">=</span> <span class="type">AnimalHandler</span>()
+dogHandler.<span class="fn">consume</span>(<span class="type">Dog</span>(<span class="str">"小白"</span>))  <span class="cmt">// "处理动物: 小白"</span></code></pre>
+
+  <p>推理一下便知：一个能处理所有 <code>Animal</code> 的处理器，当然也能处理 <code>Dog</code>——这就像苏格兰场的资深探长，既能办大案也能办小案。标准库中的 <code>Comparator&lt;in T&gt;</code> 就是逆变的典型例子。</p>
+
+  <h3>型变对照表</h3>
+
+  <table>
+    <tr>
+      <th>关键字</th>
+      <th>名称</th>
+      <th>T 的位置</th>
+      <th>子类型关系</th>
+      <th>类比</th>
+    </tr>
+    <tr>
+      <td><code>out</code></td>
+      <td>协变</td>
+      <td>只能作为返回值（输出）</td>
+      <td>Dog : Animal => C&lt;Dog&gt; : C&lt;Animal&gt;</td>
+      <td>生产者（Producer）</td>
+    </tr>
+    <tr>
+      <td><code>in</code></td>
+      <td>逆变</td>
+      <td>只能作为参数（输入）</td>
+      <td>Dog : Animal => C&lt;Animal&gt; : C&lt;Dog&gt;</td>
+      <td>消费者（Consumer）</td>
+    </tr>
+    <tr>
+      <td>无</td>
+      <td>不变</td>
+      <td>可作为参数和返回值</td>
+      <td>C&lt;Dog&gt; 与 C&lt;Animal&gt; 无关</td>
+      <td>MutableList&lt;T&gt;</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">PECS 原则</div>
+    <p>记忆口诀：<strong>Producer-Extends, Consumer-Super</strong>（对应 Kotlin 中的 <code>out</code> 和 <code>in</code>）。用侦探的话说：如果你只从线人那里<strong>获取</strong>情报，用 <code>out</code>；如果你只向档案室<strong>提交</strong>证据，用 <code>in</code>。</p>
+  </div>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>C++ 没有内建的型变标注（<code>out</code>/<code>in</code>），模板天然不支持协变和逆变。在 C++ 中如果需要类似效果，必须手动通过模板特化或 SFINAE 约束来处理。Kotlin 的声明处型变（declaration-site variance）比 Java 的使用处通配符（<code>? extends</code> / <code>? super</code>）更简洁，而 C++ 则完全没有这层自动推理。</p>
+  </div>
+
+  <h3>星投影（Star Projection）</h3>
+
+  <p>当你不关心具体的类型参数，或者不知道嫌疑人究竟是谁时——就像收到一个匿名线报，你只知道"有人"但不知道具体身份——可以使用<strong>星投影</strong> <code>*</code>：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">printListSize</span>(<span class="param">list</span>: <span class="type">List</span>&lt;<span class="op">*</span>&gt;) {
+    <span class="fn">println</span>(<span class="str">"列表大小: </span><span class="op">$</span>{list.size}<span class="str">"</span>)
+    <span class="cmt">// 可以安全读取为 Any?</span>
+    <span class="kw">for</span> (item <span class="kw">in</span> list) {
+        <span class="fn">println</span>(<span class="str">"  元素: </span><span class="op">$</span>item<span class="str">"</span>)
+    }
+}
+
+<span class="fn">printListSize</span>(<span class="fn">listOf</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>))
+<span class="fn">printListSize</span>(<span class="fn">listOf</span>(<span class="str">"a"</span>, <span class="str">"b"</span>))</code></pre>
+
+  <p><code>List&lt;*&gt;</code> 等价于 <code>List&lt;out Any?&gt;</code>，即你可以安全地读取元素（类型为 <code>Any?</code>），但不能向其中写入任何东西——就像你可以观察匿名线人提供的物品，但无法向他交付任务。</p>
+
+  <!-- ============================================================ -->
+  <h2>11.3 reified 类型参数</h2>
+  <!-- ============================================================ -->
+
+  <h3>类型擦除问题</h3>
+
+  <p>华生，这是一桩令人头疼的"证据消失案"。Kotlin 运行在 JVM 上，而 JVM 的泛型采用<strong>类型擦除</strong>（Type Erasure）机制——在编译后，泛型的类型信息被抹去了。这意味着在运行时，我们无法推理出 <code>T</code> 究竟是谁——嫌疑人档案在进入法庭前被人销毁了：</p>
+
+<pre><code><span class="cmt">// 以下代码无法编译！类型擦除导致运行时不知道 T 是什么</span>
+<span class="kw">fun</span> &lt;<span class="type">T</span>&gt; <span class="fn">isType</span>(<span class="param">value</span>: <span class="type">Any</span>): <span class="type">Boolean</span> {
+    <span class="kw">return</span> value <span class="kw">is</span> <span class="type">T</span>  <span class="cmt">// 编译错误：Cannot check for instance of erased type: T</span>
+}</code></pre>
+
+  <h3>inline + reified 的解决方案</h3>
+
+  <p>但一位出色的侦探绝不会被证据的消失所难倒。Kotlin 提供了 <code>inline</code> 函数配合 <code>reified</code> 类型参数来破解此案。<code>inline</code> 函数在调用处内联展开，编译器在展开时将具体的类型信息"嵌入"到代码中——相当于在每个调查现场都保留了一份嫌疑人档案的副本：</p>
+
+<pre><code><span class="kw">inline</span> <span class="kw">fun</span> &lt;<span class="kw">reified</span> <span class="type">T</span>&gt; <span class="fn">isType</span>(<span class="param">value</span>: <span class="type">Any</span>): <span class="type">Boolean</span> {
+    <span class="kw">return</span> value <span class="kw">is</span> <span class="type">T</span>  <span class="cmt">// 现在可以了！</span>
+}
+
+<span class="fn">println</span>(<span class="fn">isType</span>&lt;<span class="type">String</span>&gt;(<span class="str">"hello"</span>))  <span class="cmt">// true</span>
+<span class="fn">println</span>(<span class="fn">isType</span>&lt;<span class="type">Int</span>&gt;(<span class="str">"hello"</span>))     <span class="cmt">// false</span>
+<span class="fn">println</span>(<span class="fn">isType</span>&lt;<span class="type">Int</span>&gt;(<span class="num">42</span>))           <span class="cmt">// true</span></code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p><code>reified</code> 解决了类型擦除问题，效果类似 C++ 模板特化——在编译期为每个具体类型生成专用代码。但实现机制不同：C++ 模板在编译期实例化出完整的独立函数，Kotlin 的 <code>reified</code> 则通过 <code>inline</code> 内联展开来保留类型信息。C++ 天然没有类型擦除问题（<code>typeid</code> 和 <code>dynamic_cast</code> 始终可用），因此不需要类似的"补救"机制。</p>
+  </div>
+
+  <h3>实用示例：类型过滤</h3>
+
+  <p>下面模拟标准库 <code>filterIsInstance</code> 的功能——从一堆混杂的证据中，精准筛选出某一类别的物证：</p>
+
+<pre><code><span class="kw">inline</span> <span class="kw">fun</span> &lt;<span class="kw">reified</span> <span class="type">T</span>&gt; <span class="type">List</span>&lt;<span class="type">Any</span>&gt;.<span class="fn">filterByType</span>(): <span class="type">List</span>&lt;<span class="type">T</span>&gt; {
+    <span class="kw">val</span> result <span class="op">=</span> <span class="fn">mutableListOf</span>&lt;<span class="type">T</span>&gt;()
+    <span class="kw">for</span> (item <span class="kw">in</span> <span class="kw">this</span>) {
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="type">T</span>) {
+            result.<span class="fn">add</span>(item)
+        }
+    }
+    <span class="kw">return</span> result
+}
+
+<span class="kw">val</span> mixed <span class="op">=</span> <span class="fn">listOf</span>(<span class="num">1</span>, <span class="str">"hello"</span>, <span class="num">3.14</span>, <span class="str">"world"</span>, <span class="num">42</span>)
+<span class="kw">val</span> strings <span class="op">=</span> mixed.<span class="fn">filterByType</span>&lt;<span class="type">String</span>&gt;()  <span class="cmt">// ["hello", "world"]</span>
+<span class="kw">val</span> ints <span class="op">=</span> mixed.<span class="fn">filterByType</span>&lt;<span class="type">Int</span>&gt;()        <span class="cmt">// [1, 42]</span></code></pre>
+
+  <h3>实用示例：简化 JSON 解析</h3>
+
+  <p>在 Android 开发中，<code>reified</code> 经常用于简化 Gson/Moshi 等 JSON 库的调用——让编译器自动推理目标类型，省去手动传递 <code>Class</code> 参数的繁琐：</p>
+
+<pre><code><span class="kw">import</span> com.google.gson.Gson
+
+<span class="kw">inline</span> <span class="kw">fun</span> &lt;<span class="kw">reified</span> <span class="type">T</span>&gt; <span class="fn">fromJson</span>(<span class="param">json</span>: <span class="type">String</span>): <span class="type">T</span> {
+    <span class="kw">return</span> <span class="type">Gson</span>().<span class="fn">fromJson</span>(json, <span class="type">T</span>::<span class="kw">class</span>.java)
+}
+
+<span class="cmt">// 使用：无需手动传递 Class 参数</span>
+<span class="kw">data</span> <span class="kw">class</span> <span class="type">Product</span>(<span class="kw">val</span> <span class="param">name</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">price</span>: <span class="type">Double</span>)
+
+<span class="kw">val</span> json <span class="op">=</span> <span class="str">"""{"name":"手机","price":4999.0}"""</span>
+<span class="kw">val</span> product: <span class="type">Product</span> <span class="op">=</span> <span class="fn">fromJson</span>(json)
+<span class="fn">println</span>(product.name)  <span class="cmt">// "手机"</span></code></pre>
+
+  <div class="warning">
+    <div class="tip-title">reified 的限制</div>
+    <p><code>reified</code> 只能用在 <code>inline</code> 函数中，不能用在类的类型参数上。此外，由于内联会导致代码膨胀，不宜在过长的函数上使用——就像不能在每份案卷里都完整复印整个档案库。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2>11.4 泛型在 Android 中的应用</h2>
+  <!-- ============================================================ -->
+
+  <h3>密封类 + 泛型：统一的 API 响应封装</h3>
+
+  <p>华生，在真实的调查工作中，每次行动的结果无非三种：成功获取线索、遭遇失败、仍在进行中。Android 网络请求也是如此。用密封类配合泛型，我们可以穷举所有可能的结果，不遗漏任何一条分支——这正是侦探精神的体现：</p>
+
+<pre><code><span class="kw">sealed</span> <span class="kw">class</span> <span class="type">ApiResult</span>&lt;<span class="kw">out</span> <span class="type">T</span>&gt; {
+    <span class="kw">data</span> <span class="kw">class</span> <span class="type">Success</span>&lt;<span class="type">T</span>&gt;(<span class="kw">val</span> <span class="param">data</span>: <span class="type">T</span>) : <span class="type">ApiResult</span>&lt;<span class="type">T</span>&gt;()
+    <span class="kw">data</span> <span class="kw">class</span> <span class="type">Error</span>(<span class="kw">val</span> <span class="param">message</span>: <span class="type">String</span>, <span class="kw">val</span> <span class="param">code</span>: <span class="type">Int</span>) : <span class="type">ApiResult</span>&lt;<span class="type">Nothing</span>&gt;()
+    <span class="kw">object</span> <span class="type">Loading</span> : <span class="type">ApiResult</span>&lt;<span class="type">Nothing</span>&gt;()
+}
+
+<span class="cmt">// 在 ViewModel 中使用</span>
+<span class="kw">class</span> <span class="type">UserViewModel</span> {
+    <span class="kw">suspend</span> <span class="kw">fun</span> <span class="fn">fetchUser</span>(<span class="param">id</span>: <span class="type">Int</span>): <span class="type">ApiResult</span>&lt;<span class="type">User</span>&gt; {
+        <span class="kw">return</span> <span class="kw">try</span> {
+            <span class="kw">val</span> user <span class="op">=</span> <span class="type">User</span>(id, <span class="str">"用户</span><span class="op">$</span>id<span class="str">"</span>)
+            <span class="type">ApiResult</span>.<span class="type">Success</span>(user)
+        } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+            <span class="type">ApiResult</span>.<span class="type">Error</span>(e.message <span class="op">?:</span> <span class="str">"未知错误"</span>, <span class="num">500</span>)
+        }
+    }
+}
+
+<span class="cmt">// 调用处使用 when 进行模式匹配</span>
+<span class="kw">fun</span> <span class="fn">handleResult</span>(<span class="param">result</span>: <span class="type">ApiResult</span>&lt;<span class="type">User</span>&gt;) {
+    <span class="kw">when</span> (result) {
+        <span class="kw">is</span> <span class="type">ApiResult</span>.<span class="type">Success</span> <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"用户: </span><span class="op">$</span>{result.data.name}<span class="str">"</span>)
+        <span class="kw">is</span> <span class="type">ApiResult</span>.<span class="type">Error</span>   <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"错误: </span><span class="op">$</span>{result.message}<span class="str">"</span>)
+        <span class="kw">is</span> <span class="type">ApiResult</span>.<span class="type">Loading</span> <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"加载中..."</span>)
+    }
+}</code></pre>
+
+  <h3>泛型 RecyclerView Adapter 思路</h3>
+
+  <p>在 Android 中，我们经常需要为不同的数据类型编写相似的列表适配器。利用泛型抽取公共逻辑，就像建立一套标准化的调查程序——无论调查对象是谁，流程保持一致：</p>
+
+<pre><code><span class="kw">abstract</span> <span class="kw">class</span> <span class="type">BaseAdapter</span>&lt;<span class="type">T</span>, <span class="type">VH</span> : <span class="type">RecyclerView</span>.<span class="type">ViewHolder</span>&gt; :
+    <span class="type">RecyclerView</span>.<span class="type">Adapter</span>&lt;<span class="type">VH</span>&gt;() {
+
+    <span class="kw">protected</span> <span class="kw">val</span> items <span class="op">=</span> <span class="fn">mutableListOf</span>&lt;<span class="type">T</span>&gt;()
+
+    <span class="kw">fun</span> <span class="fn">submitList</span>(<span class="param">newItems</span>: <span class="type">List</span>&lt;<span class="type">T</span>&gt;) {
+        items.<span class="fn">clear</span>()
+        items.<span class="fn">addAll</span>(newItems)
+        <span class="fn">notifyDataSetChanged</span>()
+    }
+
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">getItemCount</span>(): <span class="type">Int</span> <span class="op">=</span> items.size
+
+    <span class="kw">fun</span> <span class="fn">getItem</span>(<span class="param">position</span>: <span class="type">Int</span>): <span class="type">T</span> <span class="op">=</span> items[position]
+}</code></pre>
+
+  <h3>泛型扩展函数</h3>
+
+  <p>泛型扩展函数是 Kotlin 的一大利器——可以为已有类型添加类型安全的通用方法。就像一位侦探可以随时为调查工具箱增添新工具，而不必改造工具箱本身：</p>
+
+<pre><code><span class="cmt">// 安全类型转换</span>
+<span class="kw">inline</span> <span class="kw">fun</span> &lt;<span class="kw">reified</span> <span class="type">T</span>&gt; <span class="type">Any</span>.<span class="fn">safeCast</span>(): <span class="type">T</span><span class="op">?</span> <span class="op">=</span> <span class="kw">this</span> <span class="kw">as</span><span class="op">?</span> <span class="type">T</span>
+
+<span class="cmt">// 非空时执行操作并返回结果</span>
+<span class="kw">fun</span> &lt;<span class="type">T</span>, <span class="type">R</span>&gt; <span class="type">T</span><span class="op">?</span>.<span class="fn">whenNotNull</span>(<span class="param">block</span>: (<span class="type">T</span>) <span class="op">-&gt;</span> <span class="type">R</span>): <span class="type">R</span><span class="op">?</span> {
+    <span class="kw">return</span> <span class="kw">if</span> (<span class="kw">this</span> <span class="op">!=</span> <span class="kw">null</span>) <span class="fn">block</span>(<span class="kw">this</span>) <span class="kw">else</span> <span class="kw">null</span>
+}
+
+<span class="cmt">// 列表安全获取</span>
+<span class="kw">fun</span> &lt;<span class="type">T</span>&gt; <span class="type">List</span>&lt;<span class="type">T</span>&gt;.<span class="fn">safeGet</span>(<span class="param">index</span>: <span class="type">Int</span>, <span class="param">default</span>: <span class="type">T</span>): <span class="type">T</span> {
+    <span class="kw">return</span> <span class="kw">if</span> (index <span class="kw">in</span> indices) <span class="kw">this</span>[index] <span class="kw">else</span> default
+}
+
+<span class="cmt">// 使用示例</span>
+<span class="kw">val</span> result <span class="op">=</span> <span class="str">"hello"</span>.<span class="fn">safeCast</span>&lt;<span class="type">String</span>&gt;()  <span class="cmt">// "hello"</span>
+<span class="kw">val</span> number <span class="op">=</span> <span class="str">"hello"</span>.<span class="fn">safeCast</span>&lt;<span class="type">Int</span>&gt;()     <span class="cmt">// null</span>
+
+<span class="kw">val</span> name: <span class="type">String</span><span class="op">?</span> <span class="op">=</span> <span class="str">"Kotlin"</span>
+name.<span class="fn">whenNotNull</span> { <span class="fn">println</span>(<span class="str">"名称: </span><span class="op">$</span>it<span class="str">"</span>) }  <span class="cmt">// "名称: Kotlin"</span>
+
+<span class="kw">val</span> list <span class="op">=</span> <span class="fn">listOf</span>(<span class="num">10</span>, <span class="num">20</span>, <span class="num">30</span>)
+<span class="fn">println</span>(list.<span class="fn">safeGet</span>(<span class="num">5</span>, <span class="num">0</span>))  <span class="cmt">// 0（越界时返回默认值）</span></code></pre>
+
+  <!-- ============================================================ -->
+  <h2>11.5 异常处理基础</h2>
+  <!-- ============================================================ -->
+
+  <p>华生，即便是最周密的调查计划，也无法预见所有突发状况：线人失联、证据被篡改、通讯中断……编程同理，运行时总会遇到不可预见的情况：网络断开、文件不存在、数据格式错误等。<strong>异常处理</strong>机制就是我们为每一桩案件预先制定的<strong>应急预案</strong>——确保即使遭遇意外，调查（程序）也不会彻底崩溃。</p>
+
+  <h3>try / catch / finally</h3>
+
+  <p>Kotlin 的异常处理使用 <code>try</code>、<code>catch</code> 和 <code>finally</code> 三个关键字——分别对应"尝试执行调查"、"遭遇意外时的应对"和"无论结果如何都要执行的收尾工作"：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">readNumber</span>(<span class="param">input</span>: <span class="type">String</span>): <span class="type">Int</span> {
+    <span class="kw">try</span> {
+        <span class="kw">return</span> input.<span class="fn">toInt</span>()
+    } <span class="kw">catch</span> (e: <span class="type">NumberFormatException</span>) {
+        <span class="fn">println</span>(<span class="str">"无法将 '</span><span class="op">$</span>input<span class="str">' 转换为数字: </span><span class="op">$</span>{e.message}<span class="str">"</span>)
+        <span class="kw">return</span> <span class="num">0</span>
+    } <span class="kw">finally</span> {
+        <span class="fn">println</span>(<span class="str">"转换操作完成"</span>)
+    }
+}
+
+<span class="fn">println</span>(<span class="fn">readNumber</span>(<span class="str">"42"</span>))    <span class="cmt">// 42</span>
+<span class="fn">println</span>(<span class="fn">readNumber</span>(<span class="str">"abc"</span>))   <span class="cmt">// 0</span></code></pre>
+
+  <p><code>finally</code> 块中的代码无论是否发生异常都会执行——这是案件收尾的铁律，无论调查成功与否，现场都必须恢复原状。</p>
+
+  <h3>try 作为表达式</h3>
+
+  <p>与 Java 不同，Kotlin 中的 <code>try</code> 是一个<strong>表达式</strong>，可以直接将其结果赋给变量。这意味着我们的调查结论可以直接写入案卷，无需迂回：</p>
+
+<pre><code><span class="kw">val</span> number <span class="op">=</span> <span class="kw">try</span> {
+    <span class="str">"123"</span>.<span class="fn">toInt</span>()
+} <span class="kw">catch</span> (e: <span class="type">NumberFormatException</span>) {
+    <span class="num">0</span>
+}
+<span class="fn">println</span>(number)  <span class="cmt">// 123</span>
+
+<span class="kw">val</span> fallback <span class="op">=</span> <span class="kw">try</span> {
+    <span class="str">"abc"</span>.<span class="fn">toInt</span>()
+} <span class="kw">catch</span> (e: <span class="type">NumberFormatException</span>) {
+    <span class="op">-</span><span class="num">1</span>
+}
+<span class="fn">println</span>(fallback) <span class="cmt">// -1</span></code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>Kotlin 无受检异常，所有异常都像 C++ 的运行时异常；C++ 有 <code>noexcept</code> 说明符来标注函数不抛异常，Kotlin 没有对应机制。关键区别：Kotlin 的 <code>try</code> 是<strong>表达式</strong>（有返回值，可以赋给变量），C++ 的 <code>try</code> 是语句（没有返回值）。这让 Kotlin 的错误处理可以写得更简洁。</p>
+  </div>
+
+  <h3>多重 catch 块</h3>
+
+  <p>一桩复杂案件可能面临多种不同类型的意外——我们需要针对每种情况分别制定应对策略。可以使用多个 <code>catch</code> 块来穷举各种异常类型：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">processData</span>(<span class="param">data</span>: <span class="type">String</span>, <span class="param">index</span>: <span class="type">Int</span>): <span class="type">Char</span> {
+    <span class="kw">return</span> <span class="kw">try</span> {
+        <span class="kw">val</span> number <span class="op">=</span> data.<span class="fn">toInt</span>()
+        <span class="kw">val</span> text <span class="op">=</span> <span class="str">"结果是 </span><span class="op">$</span>number<span class="str">"</span>
+        text[index]
+    } <span class="kw">catch</span> (e: <span class="type">NumberFormatException</span>) {
+        <span class="fn">println</span>(<span class="str">"格式错误: </span><span class="op">$</span>{e.message}<span class="str">"</span>)
+        <span class="str">'?'</span>
+    } <span class="kw">catch</span> (e: <span class="type">IndexOutOfBoundsException</span>) {
+        <span class="fn">println</span>(<span class="str">"索引越界: </span><span class="op">$</span>index<span class="str">"</span>)
+        <span class="str">'!'</span>
+    } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+        <span class="fn">println</span>(<span class="str">"其他异常: </span><span class="op">$</span>{e.message}<span class="str">"</span>)
+        <span class="str">'#'</span>
+    }
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">catch 块顺序很重要</div>
+    <p>多个 catch 块时，应将更具体的异常类型放在前面，更通用的放在后面。如果把 <code>Exception</code> 放在第一个，后面的 catch 块将永远不会被执行——这就像在排除嫌疑人时，如果一开始就说"所有人都有嫌疑"，那后续的精细筛查便毫无意义。</p>
+  </div>
+
+  <h3>Kotlin 没有受检异常</h3>
+
+  <p>与 Java 不同，Kotlin <strong>没有受检异常</strong>（Checked Exceptions）。Kotlin 的设计者经过审慎推理，认为受检异常在实践中弊大于利：</p>
+
+  <ul>
+    <li>开发者常常写空的 catch 块来"消除"编译器警告——相当于侦探对证据视而不见，反而隐藏了问题</li>
+    <li>大型项目中受检异常会导致接口签名频繁变化，增加维护成本</li>
+    <li>Lambda 表达式与受检异常配合不佳</li>
+  </ul>
+
+  <p>在 Kotlin 中，所有异常都是非受检的。如果需要与 Java 互操作并声明异常，可以使用 <code>@Throws</code> 注解：</p>
+
+<pre><code><span class="ann">@Throws</span>(<span class="type">IOException</span>::<span class="kw">class</span>)
+<span class="kw">fun</span> <span class="fn">readFile</span>(<span class="param">path</span>: <span class="type">String</span>): <span class="type">String</span> {
+    <span class="cmt">// Java 代码调用此函数时，编译器会强制处理 IOException</span>
+    <span class="kw">return</span> <span class="type">File</span>(path).<span class="fn">readText</span>()
+}</code></pre>
+
+  <!-- ============================================================ -->
+  <h2>11.6 自定义异常与最佳实践</h2>
+  <!-- ============================================================ -->
+
+  <h3>创建自定义异常</h3>
+
+  <p>华生，当标准的报案类型无法准确描述案情时，我们就需要创建专属的案件分类。同理，当标准异常类型不足以描述业务错误时，应创建自定义异常类——为每种"案件类型"建立独立的档案：</p>
+
+<pre><code><span class="cmt">// 业务异常基类</span>
+<span class="kw">open</span> <span class="kw">class</span> <span class="type">BusinessException</span>(
+    <span class="param">message</span>: <span class="type">String</span>,
+    <span class="kw">val</span> <span class="param">errorCode</span>: <span class="type">Int</span>
+) : <span class="type">Exception</span>(message)
+
+<span class="cmt">// 具体异常类</span>
+<span class="kw">class</span> <span class="type">UserNotFoundException</span>(
+    <span class="param">userId</span>: <span class="type">Int</span>
+) : <span class="type">BusinessException</span>(<span class="str">"用户 </span><span class="op">$</span>userId<span class="str"> 不存在"</span>, <span class="num">404</span>)
+
+<span class="kw">class</span> <span class="type">InsufficientBalanceException</span>(
+    <span class="param">required</span>: <span class="type">Double</span>,
+    <span class="param">available</span>: <span class="type">Double</span>
+) : <span class="type">BusinessException</span>(
+    <span class="str">"余额不足: 需要 </span><span class="op">$</span>required<span class="str">，当前 </span><span class="op">$</span>available<span class="str">"</span>, <span class="num">402</span>
+)
+
+<span class="cmt">// 使用示例</span>
+<span class="kw">fun</span> <span class="fn">withdraw</span>(<span class="param">amount</span>: <span class="type">Double</span>, <span class="param">balance</span>: <span class="type">Double</span>): <span class="type">Double</span> {
+    <span class="kw">if</span> (amount <span class="op">&gt;</span> balance) {
+        <span class="kw">throw</span> <span class="type">InsufficientBalanceException</span>(amount, balance)
+    }
+    <span class="kw">return</span> balance <span class="op">-</span> amount
+}
+
+<span class="kw">try</span> {
+    <span class="fn">withdraw</span>(<span class="num">1000.0</span>, <span class="num">500.0</span>)
+} <span class="kw">catch</span> (e: <span class="type">InsufficientBalanceException</span>) {
+    <span class="fn">println</span>(<span class="str">"[</span><span class="op">$</span>{e.errorCode}<span class="str">] </span><span class="op">$</span>{e.message}<span class="str">"</span>)
+    <span class="cmt">// [402] 余额不足: 需要 1000.0，当前 500.0</span>
+}</code></pre>
+
+  <h3>Nothing 类型</h3>
+
+  <p><code>Nothing</code> 是 Kotlin 中一个特殊的类型，表示"永远不会有返回值"——就像一条必然导致案件终结的线索：一旦走上这条路，就不可能再回头。当一个函数总是抛出异常或者是一个无限循环时，可以将其返回类型声明为 <code>Nothing</code>：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">fail</span>(<span class="param">message</span>: <span class="type">String</span>): <span class="type">Nothing</span> {
+    <span class="kw">throw</span> <span class="type">IllegalStateException</span>(message)
+}
+
+<span class="cmt">// Nothing 的好处：编译器知道此函数永远不会正常返回</span>
+<span class="kw">fun</span> <span class="fn">getUserName</span>(<span class="param">user</span>: <span class="type">User</span><span class="op">?</span>): <span class="type">String</span> {
+    <span class="kw">val</span> name <span class="op">=</span> user<span class="op">?.</span>name <span class="op">?:</span> <span class="fn">fail</span>(<span class="str">"用户不能为空"</span>)
+    <span class="cmt">// 编译器在此处确定 name 一定是 String（非空），</span>
+    <span class="cmt">// 因为如果 user?.name 为 null，fail() 会抛出异常</span>
+    <span class="kw">return</span> name
+}</code></pre>
+
+  <h3>前置条件函数</h3>
+
+  <p>Kotlin 标准库提供了一组前置条件函数，如同侦探出发前的安全检查清单——在不满足条件时快速抛出异常，将问题扼杀在萌芽阶段：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">createUser</span>(<span class="param">name</span>: <span class="type">String</span>, <span class="param">age</span>: <span class="type">Int</span>): <span class="type">User</span> {
+    <span class="cmt">// require —— 验证参数，不满足时抛出 IllegalArgumentException</span>
+    <span class="fn">require</span>(name.<span class="fn">isNotBlank</span>()) { <span class="str">"用户名不能为空"</span> }
+    <span class="fn">require</span>(age <span class="kw">in</span> <span class="num">0</span>..<span class="num">150</span>) { <span class="str">"年龄必须在 0 到 150 之间，当前: </span><span class="op">$</span>age<span class="str">"</span> }
+
+    <span class="kw">return</span> <span class="type">User</span>(<span class="num">0</span>, name)
+}
+
+<span class="kw">class</span> <span class="type">Connection</span> {
+    <span class="kw">var</span> isConnected <span class="op">=</span> <span class="kw">false</span>
+
+    <span class="kw">fun</span> <span class="fn">sendData</span>(<span class="param">data</span>: <span class="type">String</span>) {
+        <span class="cmt">// check —— 验证对象状态，不满足时抛出 IllegalStateException</span>
+        <span class="fn">check</span>(isConnected) { <span class="str">"连接未建立，无法发送数据"</span> }
+        <span class="fn">println</span>(<span class="str">"发送数据: </span><span class="op">$</span>data<span class="str">"</span>)
+    }
+}
+
+<span class="cmt">// error —— 直接抛出 IllegalStateException</span>
+<span class="kw">fun</span> <span class="fn">getStatus</span>(<span class="param">code</span>: <span class="type">Int</span>): <span class="type">String</span> <span class="op">=</span> <span class="kw">when</span> (code) {
+    <span class="num">200</span> <span class="op">-&gt;</span> <span class="str">"成功"</span>
+    <span class="num">404</span> <span class="op">-&gt;</span> <span class="str">"未找到"</span>
+    <span class="num">500</span> <span class="op">-&gt;</span> <span class="str">"服务器错误"</span>
+    <span class="kw">else</span> <span class="op">-&gt;</span> <span class="fn">error</span>(<span class="str">"未知状态码: </span><span class="op">$</span>code<span class="str">"</span>)
+}</code></pre>
+
+  <table>
+    <tr>
+      <th>函数</th>
+      <th>用途</th>
+      <th>抛出的异常</th>
+    </tr>
+    <tr>
+      <td><code>require(condition)</code></td>
+      <td>验证函数参数</td>
+      <td><code>IllegalArgumentException</code></td>
+    </tr>
+    <tr>
+      <td><code>requireNotNull(value)</code></td>
+      <td>验证参数非空</td>
+      <td><code>IllegalArgumentException</code></td>
+    </tr>
+    <tr>
+      <td><code>check(condition)</code></td>
+      <td>验证对象状态</td>
+      <td><code>IllegalStateException</code></td>
+    </tr>
+    <tr>
+      <td><code>checkNotNull(value)</code></td>
+      <td>验证状态值非空</td>
+      <td><code>IllegalStateException</code></td>
+    </tr>
+    <tr>
+      <td><code>error(message)</code></td>
+      <td>直接抛出异常并终止</td>
+      <td><code>IllegalStateException</code></td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">选择合适的前置条件函数</div>
+    <p>推理原则很简单：验证<strong>外部输入</strong>（函数参数，即"证人证词"）用 <code>require</code>，验证<strong>内部状态</strong>（对象自身状态，即"调查进度"）用 <code>check</code>，标记"不应该到达的代码"（即"推理中的不可能分支"）用 <code>error</code>。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2>11.7 runCatching 与 Result</h2>
+  <!-- ============================================================ -->
+
+  <p>华生，传统的 <code>try-catch</code> 就像在案件现场亲自处置每一个突发状况——有效但不够优雅。Kotlin 标准库提供了 <code>runCatching</code> 函数和 <code>Result&lt;T&gt;</code> 类型，这是一种更精密的方法——将每次调查的结论封装为一个<strong>案件裁决</strong>（Result），无论成功还是失败，都以统一的形式呈堂。这种函数式的处理方式更适合链式推理和证据传递。</p>
+
+  <h3>runCatching 基础</h3>
+
+  <p><code>runCatching</code> 会执行给定的代码块，如果成功则返回 <code>Result.success(value)</code>（案件告破），如果抛出异常则返回 <code>Result.failure(exception)</code>（调查受阻）：</p>
+
+<pre><code><span class="kw">val</span> result <span class="op">=</span> <span class="fn">runCatching</span> {
+    <span class="str">"42"</span>.<span class="fn">toInt</span>()
+}
+
+<span class="fn">println</span>(result.<span class="fn">isSuccess</span>)    <span class="cmt">// true</span>
+<span class="fn">println</span>(result.<span class="fn">getOrNull</span>())  <span class="cmt">// 42</span>
+
+<span class="kw">val</span> failed <span class="op">=</span> <span class="fn">runCatching</span> {
+    <span class="str">"abc"</span>.<span class="fn">toInt</span>()
+}
+
+<span class="fn">println</span>(failed.<span class="fn">isFailure</span>)    <span class="cmt">// true</span>
+<span class="fn">println</span>(failed.<span class="fn">getOrNull</span>())  <span class="cmt">// null</span></code></pre>
+
+  <h3>Result 的丰富 API</h3>
+
+  <p><code>Result&lt;T&gt;</code> 提供了多种处理成功和失败结果的方法——就像侦探针对不同的案件裁决，可以选择不同的后续行动方案：</p>
+
+<pre><code><span class="kw">val</span> result <span class="op">=</span> <span class="fn">runCatching</span> {
+    <span class="fn">fetchDataFromNetwork</span>()
+}
+
+<span class="cmt">// getOrDefault：失败时返回默认值</span>
+<span class="kw">val</span> data1 <span class="op">=</span> result.<span class="fn">getOrDefault</span>(<span class="str">"默认数据"</span>)
+
+<span class="cmt">// getOrElse：失败时通过 lambda 计算返回值</span>
+<span class="kw">val</span> data2 <span class="op">=</span> result.<span class="fn">getOrElse</span> { exception <span class="op">-&gt;</span>
+    <span class="fn">println</span>(<span class="str">"请求失败: </span><span class="op">$</span>{exception.message}<span class="str">"</span>)
+    <span class="str">"备用数据"</span>
+}
+
+<span class="cmt">// onSuccess / onFailure：分别在成功或失败时执行操作</span>
+result
+    .<span class="fn">onSuccess</span> { data <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"获取成功: </span><span class="op">$</span>data<span class="str">"</span>) }
+    .<span class="fn">onFailure</span> { error <span class="op">-&gt;</span> <span class="fn">println</span>(<span class="str">"获取失败: </span><span class="op">$</span>{error.message}<span class="str">"</span>) }</code></pre>
+
+  <div class="cpp-note">
+    <div class="tip-title">C++ 开发者对照</div>
+    <p>Kotlin 的 <code>Result&lt;T&gt;</code> 类似 C++23 的 <code>std::expected&lt;T, E&gt;</code>，两者都将成功值或错误封装在同一个对象中。但 Kotlin 的 <code>Result</code> 更函数式——内置 <code>map</code>、<code>fold</code>、<code>recover</code> 等链式操作，而 <code>std::expected</code> 的链式 API 相对有限（<code>and_then</code>、<code>transform</code>）。此外，Kotlin 的 <code>Result</code> 固定以 <code>Throwable</code> 作为错误类型，C++ 的 <code>std::expected</code> 则允许自定义错误类型 <code>E</code>。</p>
+  </div>
+
+  <h3>Result 的链式操作</h3>
+
+  <p><code>Result</code> 支持 <code>map</code>、<code>fold</code> 等链式操作，使得错误处理可以像推理链条一样层层递进——每一步的结论成为下一步推理的输入：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">parseAge</span>(<span class="param">input</span>: <span class="type">String</span>): <span class="type">String</span> {
+    <span class="kw">return</span> <span class="fn">runCatching</span> {
+        input.<span class="fn">trim</span>().<span class="fn">toInt</span>()
+    }.<span class="fn">map</span> { age <span class="op">-&gt;</span>
+        <span class="cmt">// 成功时转换结果</span>
+        <span class="kw">when</span> {
+            age <span class="op">&lt;</span> <span class="num">18</span> <span class="op">-&gt;</span> <span class="str">"未成年"</span>
+            age <span class="op">&lt;</span> <span class="num">60</span> <span class="op">-&gt;</span> <span class="str">"成年人"</span>
+            <span class="kw">else</span>     <span class="op">-&gt;</span> <span class="str">"老年人"</span>
+        }
+    }.<span class="fn">getOrDefault</span>(<span class="str">"输入无效"</span>)
+}
+
+<span class="fn">println</span>(<span class="fn">parseAge</span>(<span class="str">"25"</span>))   <span class="cmt">// "成年人"</span>
+<span class="fn">println</span>(<span class="fn">parseAge</span>(<span class="str">"abc"</span>))  <span class="cmt">// "输入无效"</span></code></pre>
+
+  <h3>fold：统一处理成功与失败</h3>
+
+  <p><code>fold</code> 方法接受两个 lambda，分别处理成功和失败的情况，并返回统一类型的结果——穷举了所有可能的案件走向，不留任何死角：</p>
+
+<pre><code><span class="kw">fun</span> <span class="fn">loadUserProfile</span>(<span class="param">userId</span>: <span class="type">Int</span>): <span class="type">String</span> {
+    <span class="kw">return</span> <span class="fn">runCatching</span> {
+        <span class="cmt">// 模拟可能失败的操作</span>
+        <span class="kw">if</span> (userId <span class="op">&lt;=</span> <span class="num">0</span>) <span class="kw">throw</span> <span class="type">IllegalArgumentException</span>(<span class="str">"无效 ID"</span>)
+        <span class="type">User</span>(userId, <span class="str">"用户</span><span class="op">$</span>userId<span class="str">"</span>)
+    }.<span class="fn">fold</span>(
+        onSuccess <span class="op">=</span> { user <span class="op">-&gt;</span> <span class="str">"欢迎, </span><span class="op">$</span>{user.name}<span class="str">!"</span> },
+        onFailure <span class="op">=</span> { error <span class="op">-&gt;</span> <span class="str">"加载失败: </span><span class="op">$</span>{error.message}<span class="str">"</span> }
+    )
+}
+
+<span class="fn">println</span>(<span class="fn">loadUserProfile</span>(<span class="num">1</span>))    <span class="cmt">// "欢迎, 用户1!"</span>
+<span class="fn">println</span>(<span class="fn">loadUserProfile</span>(<span class="op">-</span><span class="num">1</span>))   <span class="cmt">// "加载失败: 无效 ID"</span></code></pre>
+
+  <h3>对象上调用 runCatching</h3>
+
+  <p><code>runCatching</code> 也可以作为扩展函数在对象上调用，此时 lambda 内的 <code>this</code> 指向该对象——就像以某个特定嫌疑人为切入点展开调查：</p>
+
+<pre><code><span class="kw">val</span> input <span class="op">=</span> <span class="str">"  123  "</span>
+
+<span class="kw">val</span> result <span class="op">=</span> input.<span class="fn">runCatching</span> {
+    <span class="fn">trim</span>().<span class="fn">toInt</span>()  <span class="cmt">// this 就是 input 字符串</span>
+}
+
+<span class="fn">println</span>(result.<span class="fn">getOrNull</span>())  <span class="cmt">// 123</span></code></pre>
+
+  <h3>try-catch 与 runCatching 对照表</h3>
+
+  <table>
+    <tr>
+      <th>特性</th>
+      <th>try-catch</th>
+      <th>runCatching</th>
+    </tr>
+    <tr>
+      <td>代码风格</td>
+      <td>命令式</td>
+      <td>函数式</td>
+    </tr>
+    <tr>
+      <td>链式调用</td>
+      <td>不支持</td>
+      <td>支持（map, fold, onSuccess 等）</td>
+    </tr>
+    <tr>
+      <td>结果传递</td>
+      <td>通过变量或 return</td>
+      <td>通过 Result&lt;T&gt; 对象</td>
+    </tr>
+    <tr>
+      <td>多异常类型</td>
+      <td>多个 catch 块分别处理</td>
+      <td>在 onFailure/fold 中统一处理</td>
+    </tr>
+    <tr>
+      <td>finally 支持</td>
+      <td>原生支持</td>
+      <td>无直接支持，但可使用 also</td>
+    </tr>
+    <tr>
+      <td>适用场景</td>
+      <td>复杂的分类错误处理、需要 finally</td>
+      <td>结果转换、链式处理、传递错误</td>
+    </tr>
+  </table>
+
+  <h3>实际应用：组合使用</h3>
+
+  <p>在实际项目中，两种方式经常结合使用。下面是一个综合示例，展示如何用泛型和异常处理构建一个健壮的数据加载工具——穷举所有成功与失败的可能性，确保推理链条的每一环都无懈可击：</p>
+
+<pre><code><span class="kw">sealed</span> <span class="kw">class</span> <span class="type">LoadResult</span>&lt;<span class="kw">out</span> <span class="type">T</span>&gt; {
+    <span class="kw">data</span> <span class="kw">class</span> <span class="type">Success</span>&lt;<span class="type">T</span>&gt;(<span class="kw">val</span> <span class="param">data</span>: <span class="type">T</span>) : <span class="type">LoadResult</span>&lt;<span class="type">T</span>&gt;()
+    <span class="kw">data</span> <span class="kw">class</span> <span class="type">Failure</span>(<span class="kw">val</span> <span class="param">error</span>: <span class="type">Throwable</span>) : <span class="type">LoadResult</span>&lt;<span class="type">Nothing</span>&gt;()
+}
+
+<span class="cmt">// 通用的安全加载函数</span>
+<span class="kw">inline</span> <span class="kw">fun</span> &lt;<span class="type">T</span>&gt; <span class="fn">safeLoad</span>(<span class="param">block</span>: () <span class="op">-&gt;</span> <span class="type">T</span>): <span class="type">LoadResult</span>&lt;<span class="type">T</span>&gt; {
+    <span class="kw">return</span> <span class="fn">runCatching</span> { <span class="fn">block</span>() }
+        .<span class="fn">fold</span>(
+            onSuccess <span class="op">=</span> { <span class="type">LoadResult</span>.<span class="type">Success</span>(it) },
+            onFailure <span class="op">=</span> { <span class="type">LoadResult</span>.<span class="type">Failure</span>(it) }
+        )
+}
+
+<span class="cmt">// 使用</span>
+<span class="kw">fun</span> <span class="fn">main</span>() {
+    <span class="kw">val</span> userResult <span class="op">=</span> <span class="fn">safeLoad</span> {
+        <span class="cmt">// 模拟网络请求</span>
+        <span class="type">User</span>(<span class="num">1</span>, <span class="str">"张三"</span>)
+    }
+
+    <span class="kw">when</span> (userResult) {
+        <span class="kw">is</span> <span class="type">LoadResult</span>.<span class="type">Success</span> <span class="op">-&gt;</span> {
+            <span class="fn">println</span>(<span class="str">"加载成功: </span><span class="op">$</span>{userResult.data.name}<span class="str">"</span>)
+        }
+        <span class="kw">is</span> <span class="type">LoadResult</span>.<span class="type">Failure</span> <span class="op">-&gt;</span> {
+            <span class="fn">println</span>(<span class="str">"加载失败: </span><span class="op">$</span>{userResult.error.message}<span class="str">"</span>)
+        }
+    }
+
+    <span class="cmt">// 演示多步骤链式处理</span>
+    <span class="kw">val</span> displayName <span class="op">=</span> <span class="fn">runCatching</span> { <span class="fn">fetchUserFromApi</span>(<span class="num">1</span>) }
+        .<span class="fn">map</span> { user <span class="op">-&gt;</span> user.name.<span class="fn">uppercase</span>() }
+        .<span class="fn">recover</span> { <span class="str">"匿名用户"</span> }
+        .<span class="fn">getOrDefault</span>(<span class="str">"未知"</span>)
+
+    <span class="fn">println</span>(<span class="str">"显示名称: </span><span class="op">$</span>displayName<span class="str">"</span>)
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">选择建议</div>
+    <p>对于简单的局部错误处理，<code>try-catch</code> 如同现场即时决断，清晰直接；对于需要传递错误、链式转换或函数式风格的场景，<code>runCatching</code> + <code>Result</code> 如同将案件裁决书逐级上报，更为系统化。在 Android 的 Repository 层和 ViewModel 层，<code>runCatching</code> 配合密封类是当下最流行的推理模式。</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：泛型栈 <span class="difficulty difficulty-easy">简单</span></h3>
+      <p>实现一个泛型类 <code>Stack&lt;T&gt;</code>，支持 <code>push(item: T)</code>、<code>pop(): T?</code>、<code>peek(): T?</code> 和 <code>isEmpty(): Boolean</code> 四个操作。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">Stack</span>&lt;<span class="type">T</span>&gt; {
+    <span class="kw">private</span> <span class="kw">val</span> elements <span class="op">=</span> <span class="fn">mutableListOf</span>&lt;<span class="type">T</span>&gt;()
+
+    <span class="kw">fun</span> <span class="fn">push</span>(<span class="param">item</span>: <span class="type">T</span>) {
+        elements.<span class="fn">add</span>(item)
+    }
+
+    <span class="kw">fun</span> <span class="fn">pop</span>(): <span class="type">T</span><span class="op">?</span> <span class="op">=</span> <span class="kw">if</span> (elements.<span class="fn">isNotEmpty</span>()) {
+        elements.<span class="fn">removeAt</span>(elements.size <span class="op">-</span> <span class="num">1</span>)
+    } <span class="kw">else</span> <span class="kw">null</span>
+
+    <span class="kw">fun</span> <span class="fn">peek</span>(): <span class="type">T</span><span class="op">?</span> <span class="op">=</span> elements.<span class="fn">lastOrNull</span>()
+
+    <span class="kw">fun</span> <span class="fn">isEmpty</span>(): <span class="type">Boolean</span> <span class="op">=</span> elements.<span class="fn">isEmpty</span>()
+}
+
+<span class="cmt">// 测试</span>
+<span class="kw">val</span> stack <span class="op">=</span> <span class="type">Stack</span>&lt;<span class="type">Int</span>&gt;()
+stack.<span class="fn">push</span>(<span class="num">1</span>)
+stack.<span class="fn">push</span>(<span class="num">2</span>)
+stack.<span class="fn">push</span>(<span class="num">3</span>)
+<span class="fn">println</span>(stack.<span class="fn">peek</span>())  <span class="cmt">// 3</span>
+<span class="fn">println</span>(stack.<span class="fn">pop</span>())   <span class="cmt">// 3</span>
+<span class="fn">println</span>(stack.<span class="fn">pop</span>())   <span class="cmt">// 2</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：带约束的泛型排序 <span class="difficulty difficulty-medium">中等</span></h3>
+      <p>编写一个泛型函数 <code>sortedBetween</code>，接受一个 <code>List&lt;T&gt;</code> 和上下界 <code>min</code>、<code>max</code>，返回列表中值在 <code>[min, max]</code> 范围内的元素并排序。要求 <code>T</code> 必须实现 <code>Comparable&lt;T&gt;</code>。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">fun</span> &lt;<span class="type">T</span> : <span class="type">Comparable</span>&lt;<span class="type">T</span>&gt;&gt; <span class="fn">sortedBetween</span>(
+    <span class="param">list</span>: <span class="type">List</span>&lt;<span class="type">T</span>&gt;,
+    <span class="param">min</span>: <span class="type">T</span>,
+    <span class="param">max</span>: <span class="type">T</span>
+): <span class="type">List</span>&lt;<span class="type">T</span>&gt; {
+    <span class="fn">require</span>(min <span class="op">&lt;=</span> max) { <span class="str">"min 不能大于 max"</span> }
+    <span class="kw">return</span> list.<span class="fn">filter</span> { it <span class="kw">in</span> min..max }.<span class="fn">sorted</span>()
+}
+
+<span class="cmt">// 测试</span>
+<span class="kw">val</span> numbers <span class="op">=</span> <span class="fn">listOf</span>(<span class="num">5</span>, <span class="num">3</span>, <span class="num">8</span>, <span class="num">1</span>, <span class="num">9</span>, <span class="num">2</span>, <span class="num">7</span>)
+<span class="fn">println</span>(<span class="fn">sortedBetween</span>(numbers, <span class="num">3</span>, <span class="num">8</span>))  <span class="cmt">// [3, 5, 7, 8]</span>
+
+<span class="kw">val</span> words <span class="op">=</span> <span class="fn">listOf</span>(<span class="str">"dog"</span>, <span class="str">"cat"</span>, <span class="str">"bird"</span>, <span class="str">"elephant"</span>)
+<span class="fn">println</span>(<span class="fn">sortedBetween</span>(words, <span class="str">"c"</span>, <span class="str">"e"</span>))  <span class="cmt">// [cat, dog]</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：reified 类型安全转换 <span class="difficulty difficulty-medium">中等</span></h3>
+      <p>编写一个 <code>inline</code> + <code>reified</code> 的扩展函数 <code>castOrDefault</code>，将 <code>Any</code> 安全转换为目标类型 <code>T</code>，转换失败时返回给定的默认值。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">inline</span> <span class="kw">fun</span> &lt;<span class="kw">reified</span> <span class="type">T</span>&gt; <span class="type">Any</span>.<span class="fn">castOrDefault</span>(<span class="param">default</span>: <span class="type">T</span>): <span class="type">T</span> {
+    <span class="kw">return</span> <span class="kw">if</span> (<span class="kw">this</span> <span class="kw">is</span> <span class="type">T</span>) <span class="kw">this</span> <span class="kw">else</span> default
+}
+
+<span class="cmt">// 测试</span>
+<span class="kw">val</span> a: <span class="type">Any</span> <span class="op">=</span> <span class="str">"Hello"</span>
+<span class="fn">println</span>(a.<span class="fn">castOrDefault</span>&lt;<span class="type">String</span>&gt;(<span class="str">"默认"</span>))  <span class="cmt">// "Hello"</span>
+<span class="fn">println</span>(a.<span class="fn">castOrDefault</span>&lt;<span class="type">Int</span>&gt;(<span class="num">0</span>))          <span class="cmt">// 0</span>
+
+<span class="kw">val</span> b: <span class="type">Any</span> <span class="op">=</span> <span class="num">42</span>
+<span class="fn">println</span>(b.<span class="fn">castOrDefault</span>&lt;<span class="type">Int</span>&gt;(<span class="num">0</span>))          <span class="cmt">// 42</span>
+<span class="fn">println</span>(b.<span class="fn">castOrDefault</span>&lt;<span class="type">String</span>&gt;(<span class="str">"默认"</span>))  <span class="cmt">// "默认"</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：runCatching 链式处理 <span class="difficulty difficulty-medium">中等</span></h3>
+      <p>编写一个函数 <code>parseConfig</code>，接受一个 JSON 格式的字符串（如 <code>"port:8080"</code>），使用 <code>runCatching</code> 链式操作来：(1) 以 <code>:</code> 分割字符串，(2) 取第二部分转为 <code>Int</code>，(3) 验证端口范围在 1~65535 之间。任何一步失败都返回默认端口 <code>8080</code>。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">fun</span> <span class="fn">parseConfig</span>(<span class="param">config</span>: <span class="type">String</span>): <span class="type">Int</span> {
+    <span class="kw">return</span> <span class="fn">runCatching</span> {
+        <span class="kw">val</span> parts <span class="op">=</span> config.<span class="fn">split</span>(<span class="str">":"</span>)
+        <span class="fn">require</span>(parts.size <span class="op">==</span> <span class="num">2</span>) { <span class="str">"格式错误"</span> }
+        parts[<span class="num">1</span>].<span class="fn">trim</span>().<span class="fn">toInt</span>()
+    }.<span class="fn">map</span> { port <span class="op">-&gt;</span>
+        <span class="fn">require</span>(port <span class="kw">in</span> <span class="num">1</span>..<span class="num">65535</span>) { <span class="str">"端口越界"</span> }
+        port
+    }.<span class="fn">getOrDefault</span>(<span class="num">8080</span>)
+}
+
+<span class="cmt">// 测试</span>
+<span class="fn">println</span>(<span class="fn">parseConfig</span>(<span class="str">"port:3000"</span>))   <span class="cmt">// 3000</span>
+<span class="fn">println</span>(<span class="fn">parseConfig</span>(<span class="str">"port:abc"</span>))    <span class="cmt">// 8080</span>
+<span class="fn">println</span>(<span class="fn">parseConfig</span>(<span class="str">"port:99999"</span>))  <span class="cmt">// 8080</span>
+<span class="fn">println</span>(<span class="fn">parseConfig</span>(<span class="str">"invalid"</span>))     <span class="cmt">// 8080</span></code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 5：协变与逆变实战 <span class="difficulty difficulty-hard">困难</span></h3>
+      <p>设计一个事件系统：(1) 定义基类 <code>Event</code> 及其子类 <code>ClickEvent</code> 和 <code>KeyEvent</code>；(2) 定义协变接口 <code>EventProducer&lt;out T : Event&gt;</code> 和逆变接口 <code>EventConsumer&lt;in T : Event&gt;</code>；(3) 实现具体的 <code>ClickProducer</code> 和 <code>AnyEventLogger</code>（消费所有 Event）；(4) 演示协变赋值（<code>EventProducer&lt;ClickEvent&gt;</code> 赋给 <code>EventProducer&lt;Event&gt;</code>）和逆变赋值（<code>EventConsumer&lt;Event&gt;</code> 赋给 <code>EventConsumer&lt;ClickEvent&gt;</code>）。</p>
+      <details>
+        <summary>查看答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">open</span> <span class="kw">class</span> <span class="type">Event</span>(<span class="kw">val</span> <span class="param">timestamp</span>: <span class="type">Long</span> <span class="op">=</span> <span class="type">System</span>.<span class="fn">currentTimeMillis</span>())
+<span class="kw">class</span> <span class="type">ClickEvent</span>(<span class="kw">val</span> <span class="param">x</span>: <span class="type">Int</span>, <span class="kw">val</span> <span class="param">y</span>: <span class="type">Int</span>) : <span class="type">Event</span>()
+<span class="kw">class</span> <span class="type">KeyEvent</span>(<span class="kw">val</span> <span class="param">keyCode</span>: <span class="type">Int</span>) : <span class="type">Event</span>()
+
+<span class="cmt">// 协变：只产出事件</span>
+<span class="kw">interface</span> <span class="type">EventProducer</span>&lt;<span class="kw">out</span> <span class="type">T</span> : <span class="type">Event</span>&gt; {
+    <span class="kw">fun</span> <span class="fn">produce</span>(): <span class="type">T</span>
+}
+
+<span class="cmt">// 逆变：只消费事件</span>
+<span class="kw">interface</span> <span class="type">EventConsumer</span>&lt;<span class="kw">in</span> <span class="type">T</span> : <span class="type">Event</span>&gt; {
+    <span class="kw">fun</span> <span class="fn">consume</span>(<span class="param">event</span>: <span class="type">T</span>)
+}
+
+<span class="kw">class</span> <span class="type">ClickProducer</span> : <span class="type">EventProducer</span>&lt;<span class="type">ClickEvent</span>&gt; {
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">produce</span>(): <span class="type">ClickEvent</span> <span class="op">=</span> <span class="type">ClickEvent</span>(<span class="num">100</span>, <span class="num">200</span>)
+}
+
+<span class="kw">class</span> <span class="type">AnyEventLogger</span> : <span class="type">EventConsumer</span>&lt;<span class="type">Event</span>&gt; {
+    <span class="kw">override</span> <span class="kw">fun</span> <span class="fn">consume</span>(<span class="param">event</span>: <span class="type">Event</span>) {
+        <span class="fn">println</span>(<span class="str">"事件记录 @ </span><span class="op">$</span>{event.timestamp}<span class="str">"</span>)
+    }
+}
+
+<span class="cmt">// 协变演示：ClickEvent 是 Event 的子类，</span>
+<span class="cmt">// 所以 EventProducer&lt;ClickEvent&gt; 可以赋给 EventProducer&lt;Event&gt;</span>
+<span class="kw">val</span> producer: <span class="type">EventProducer</span>&lt;<span class="type">Event</span>&gt; <span class="op">=</span> <span class="type">ClickProducer</span>()
+<span class="kw">val</span> event <span class="op">=</span> producer.<span class="fn">produce</span>()
+
+<span class="cmt">// 逆变演示：EventConsumer&lt;Event&gt; 可以赋给 EventConsumer&lt;ClickEvent&gt;</span>
+<span class="kw">val</span> clickConsumer: <span class="type">EventConsumer</span>&lt;<span class="type">ClickEvent</span>&gt; <span class="op">=</span> <span class="type">AnyEventLogger</span>()
+clickConsumer.<span class="fn">consume</span>(<span class="type">ClickEvent</span>(<span class="num">50</span>, <span class="num">75</span>))</code></pre>
+        </div>
+      </details>
+    </div>
+  </div>
+  <!-- ============================================================ -->
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

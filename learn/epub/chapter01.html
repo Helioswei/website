@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章：项目概览：DIY ESP32 电子书阅读器 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="1" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第1章：项目概览——DIY ESP32 电子书阅读器</h1>
+  <p class="chapter-subtitle">一个十几美元的单片机，凭什么能读完一整本电子书？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理，从"为什么"出发</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「你手上这台手机能看视频、能打游戏，但论"沉浸地读完一本书"，它未必比得上一块电纸屏。这章我们不急着写代码，先把"电子书阅读器"这个盒子拆开：为什么是电子墨水屏？为什么是 ESP32？为什么 EPUB 是个 zip 压缩包？把每个"为什么"问透，这个项目的地图就自己画出来了。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 1.1 嵌入式基础：RAM 与 Flash 为什么宝贵 ========== -->
+  <h2>1.1 嵌入式基础：RAM 与 Flash 为什么宝贵</h2>
+
+  <p>先补一张最小地图：<strong>嵌入式系统</strong>是什么？一句话说，它就是<strong>专门做某一件事的微型电脑</strong>——没有显示器、键盘、风扇，只有几个芯片藏在电路板里，默默控制着家电、穿戴设备，以及<strong>电子墨水屏（<code>EPD</code>，靠反射环境光成像、断电后画面也不消失的省电屏幕）</strong>阅读器这类"单一用途"的设备。它和手机、电脑的区别不在"会不会算"，而在"只为一件事优化"：洗衣机是嵌入式系统，智能手表是嵌入式系统，本项目要做的电子书阅读器，同样是嵌入式系统。</p>
+
+  <p>本项目的大脑是 <strong>ESP32</strong>——乐鑫科技出品的<strong>低成本、自带 WiFi 与蓝牙的 <code>MCU</code></strong>（微控制器，中文俗称"单片机"，可理解为把 CPU、内存、存储整合进一颗芯片的"完整小电脑"）。我们写的 C++ 代码，最终会编译成<strong>固件（firmware）</strong>——也就是"固化进硬件的程序"——烧进芯片的 <strong>Flash</strong> 存储区，掉电也不丢。真正让嵌入式与众不同、也让初学者最先卡住的，是它只有两种"记忆"，而且都少得可怜：<strong>RAM</strong>（内存，运行时放变量和暂存数据的区域，断电即失）以 KB 计，<strong>Flash</strong>（存储区，装程序和静态数据，掉电保留）以 MB 计——而你手机、电脑上的内存和硬盘，动辄就是 GB 级，差了上千倍。所以<strong>"资源受限"是嵌入式设计的默认前提</strong>：每个字节都要精打细算。这句话，后面每一章都会反复出现。</p>
+
+  <p>RAM 不够用怎么办？ESP32 的部分型号支持 <strong>PSRAM</strong>——外挂在主芯片旁边、可选的<strong>扩展内存</strong>，能把可用 RAM 从几百 KB 抬到几 MB。为什么本项目把它列为第一条硬性要求？因为 <strong>EPUB</strong>（电子书打包格式，本质是个 zip 压缩包）在解压、解析 XML 时，会把整本书的内容一次性读进内存：一本带插图的古登堡书轻轻松松吃掉几 MB，而 ESP32 芯片内部只有约 520 kB 的 SRAM，没有 PSRAM 根本装不下。至于书存在哪？一般放在一张 <strong>SD 卡</strong>（可插拔的微型存储卡，本质也是 Flash）上——具体取舍到 1.3 再展开。</p>
+
+  <p>把"资源宝贵"记在心里，你就能看懂后面所有取舍了：解析器敢自称"Rubbish"（垃圾）HTML 解析器，是因为它<strong>不做 CSS、只认标准标签</strong>，把样式省了个干净；字体只生成黑白两色、还要压缩，是为了<strong>省内存、让翻页更快</strong>；页面得先在内存里排版完毕、再一次性刷上墨水屏，是为了少刷几次、省点功耗。每一条看似"偷懒"的设计，背后都是同一条铁律：<strong>内存和存储就那么点，得省着用。</strong></p>
+
+  <table>
+    <tr><th>存储</th><th>作用</th><th>断电是否保留</th><th>量级</th><th>在本项目里的用途</th></tr>
+    <tr><td><code>RAM</code></td><td>运行时暂存区：变量、解析结果、页面缓冲</td><td>断电即失</td><td>KB 级（ESP32 内部约 520 kB）</td><td>放解析出的文本块与帧缓冲</td></tr>
+    <tr><td><code>Flash</code></td><td>存储区：固件程序与静态数据</td><td>掉电保留</td><td>MB 级</td><td>装固件本体与字体</td></tr>
+    <tr><td><code>PSRAM</code></td><td>外挂的扩展 RAM</td><td>断电即失</td><td>MB 级（通常 4–8 MB）</td><td>装下一整本 EPUB 解压后的内容</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>用一张书桌来记：RAM 是"桌面"——摆着正在干活的东西，断电（人离开）就清空；Flash 是"书架"——东西放上去能长久保存，断电也不丢；PSRAM 等于又加了一张折叠桌。后面每次听到"内存紧张"，先想想：是桌面不够大（RAM），还是书架放不下（Flash / 存储）？</p>
+  </div>
+
+  <!-- ========== 1.2 为什么需要自制电子书阅读器 ========== -->
+  <h2>1.2 为什么需要自制电子书阅读器</h2>
+
+  <p>从第一性原理出发：<strong>阅读这个场景，本质是"长时间、近距离、看静态文字"</strong>。电子墨水屏（E-ink）几乎是为这个场景量身定做的。它有两个杀手级特性：一是<strong>反射式显示</strong>，屏幕本身不发光，靠反射环境光成像，和纸张一样柔和；二是<strong>双稳态</strong>（bistable），像素在断电后依然保持显示状态——也就是说，画面定格后屏幕不再消耗任何电能，只有翻页那一下才需要供电。加上没有背光、没有频闪，长时间看书也不容易疲劳。</p>
+
+  <p>对比手机或平板，差距就更明显了。无论是 LCD 还是 OLED，屏幕都主动发光，还要靠 PWM 调光控制亮度，长时间盯着屏幕眼睛容易酸胀；而且只要画面亮着，电池就在持续放电——哪怕你只是停在一页上发呆。而电子墨水屏"渲染一帧、定格显示、需要时再刷新"的工作方式，让一本书可以在一节电池上读几周。这个差异，正是自制阅读器存在的第一性理由。</p>
+
+  <p>当然，选择从来都是取舍。电子墨水屏的代价同样明确：刷新很慢（全屏刷新需要数百毫秒）、常见的单色方案只有黑白两色、完全无法播放视频或流畅滚动。它的编程模型因此和普通屏幕完全不同——不是"每一帧重绘画面"，而是"把整页画进缓冲 → 一次性刷到屏上 → 定格"。理解了这一点，你就理解了为什么这个项目里到处都是"先把整页内容算好、最后才 flush 一次"的代码结构。</p>
+
+  <table>
+    <tr><th>维度</th><th>电子墨水屏</th><th>手机 / 平板（LCD/OLED）</th></tr>
+    <tr><td>发光方式</td><td>反射式，借环境光</td><td>背光主动发光</td></tr>
+    <tr><td>功耗</td><td>静态零功耗，仅翻页耗电</td><td>常亮持续耗电</td></tr>
+    <tr><td>刷新率</td><td>低，全刷数百毫秒级</td><td>高，60–120 Hz</td></tr>
+    <tr><td>护眼</td><td>无背光、无频闪，接近纸张</td><td>长时间阅读易疲劳</td></tr>
+    <tr><td>适合场景</td><td>静态文字阅读</td><td>视频、游戏、高频交互</td></tr>
+  </table>
+
+  <!-- ========== 1.3 项目是什么 ========== -->
+  <h2>1.3 项目是什么</h2>
+
+  <p>这个项目叫 <code>diy-esp32-epub-reader</code>（作者 <code>atomic14</code>），是一个跑在 ESP32 上的 DIY EPUB 阅读器。它能解析从 <strong>Project Gutenberg（古登堡计划）</strong>等免费资源下载的 EPUB 文件，在电子墨水屏上分页渲染，并用三个按键完成所有翻阅操作。作者在 README 里直白地解释了动机："It seemed like a nice challenge - ePub files are not the most friendly format to process on an embedded device."——把最不适合嵌入式设备的格式之一，塞进一个资源极其有限的单片机里，本身就是一件很好玩的事。</p>
+
+  <p>硬件上它"挑食"，但底线说得清清楚楚。README 的 <strong>"What boards does it work on"</strong> 一节指出：M5 Paper，以及基于 <strong>EPDiy</strong> 的并行电子墨水屏（比如 <strong>LilyGo EPD47 / T5 4.7"</strong>）都能跑。而对板子的硬性要求有四条：<strong>PSRAM</strong>（解析 EPUB 需要相当多的内存）、<strong>三个按键</strong>（UP / DOWN / SELECT，支持高电平或低电平有效）、<strong>一张 SD 卡</strong>（也可以用 SPIFFS 顶替，但装不下几本书）、以及<strong>可选的电池</strong>。仓库内置的三套构建环境，正是分别面向 LilyGo T5 4.7"、EPDiy V6、M5 Paper 这三块板。</p>
+
+  <p>三个按键就是这套交互的全部：<strong>UP</strong> 在书目列表里上移、阅读时翻上一页；<strong>DOWN</strong> 下移、翻下一页；<strong>SELECT</strong> 打开选中的书，或在阅读模式下返回书目。换句话说，这个"操作系统"就是一本书单、一个阅读器、三个按钮——极简到只剩骨架，却足以完成"找书、打开、翻页"的完整闭环。</p>
+
+<pre><code><span class="cmt"># README · "What boards does it work on"（需求清单）</span>
+<span class="cmt">- PSRAM - parsing the ePub files needs a fair amount of memory</span>
+<span class="cmt">- 3 Buttons - these buttons can be active high or low</span>
+<span class="cmt">  - UP - moves up in the list of ePubs or to the previous page when reading</span>
+<span class="cmt">  - DOWN - moves down in the list of ePubs or to the next page when reading</span>
+<span class="cmt">  - SELECT - opens the currently selected ePub file or goes back to the list</span>
+<span class="cmt">- An SD Card - or use SPIFFS, but you won't fit many books on it</span>
+<span class="cmt">- [Optional] A battery if you want it to be portable</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>为什么 EPUB 离不开 PSRAM？EPUB 整本书是一个 zip 压缩包，解压和 XML 解析都会把内容一次性读进堆内存；一本带插图的古登堡书很容易达到数 MB。而 ESP32 内部 SRAM 只有约 <code>520 kB</code>，没有外挂 PSRAM（通常 4–8 MB）根本装不下。所以 README 把 PSRAM 列为第一条硬性要求——这不是可选优化，是能跑与不能跑的分界线。</p>
+  </div>
+
+  <!-- ========== 1.4 解剖仓库 ========== -->
+  <h2>1.4 解剖仓库</h2>
+
+  <p>打开仓库根目录，先别被文件数量吓到——真正的"应用"集中在两处：<code>src/</code> 是固件本体，<code>lib/</code> 是自带依赖。<code>src/main.cpp</code> 是程序入口，它定义了一个<strong>三态状态机</strong>（<code>SELECTING_EPUB</code> → <code>SELECTING_TABLE_CONTENTS</code> → <code>READING_EPUB</code>），用一个 FreeRTOS 消息队列接收按键事件，把"书目列表 → 目录 → 阅读"串成一个循环。同目录的 <code>boards/</code> 是板级抽象层：<code>Board.h</code> 定义接口与 <code>factory()</code> 工厂方法，编译期根据宏实例化 <code>Lilygo_t5_47</code>、<code>Epdiy</code>、<code>M5Paper</code> 三块板中的一块。</p>
+
+  <p><code>lib/</code> 是重头戏。作者自己写的核心在 <code>Epub/</code>，内部又分四个子模块：<code>EpubList</code>（书目、阅读器、目录）、<code>ZipFile</code>（zip 解压封装）、<code>RubbishHtmlParser</code>（HTML 解析、换行与分页）、<code>Renderer</code>（渲染抽象：<code>EpdiyRenderer</code>、<code>M5PaperRenderer</code>、<code>ConsoleRenderer</code> 等）。其余全是第三方库：<code>epdiy</code>（电子墨水屏驱动）、<code>miniz-2.2.0</code>（zip）、<code>tjpgd3</code>（JPEG 解码）、<code>png/PNGdec</code>（PNG 解码）、<code>sd_card</code>、<code>spiffs</code>、<code>Fonts</code>、<code>Images</code>、<code>touch</code>（FT6X36 触摸）。</p>
+
+  <p>剩下的文件是"配置与资产"。<code>platformio.ini</code> 定义 4 套构建环境；<code>sdkconfig.epdiy</code>、<code>sdkconfig.lilygo_t5_47</code>、<code>sdkconfig.m5_paper</code> 是随仓库提交的三份 ESP-IDF 配置；<code>partitions.csv</code> 划分 Flash 分区；<code>data/</code> 放着两本示例书（<code>pg43-images.epub</code>、<code>pg14838-images.epub</code>，都来自古登堡）；<code>scripts/</code> 是字体与图片生成脚本（<code>generate_fonts.sh</code>）；<code>test/</code> 搭配 <code>fixtures/</code> 是能在本机跑的单元测试。</p>
+
+<pre><code><span class="cmt">/* diy-esp32-epub-reader 仓库结构（节选） */</span>
+src/
+  main.cpp                 <span class="cmt">状态机 + 主任务 + 深睡眠</span>
+  boards/                  <span class="cmt">Board 抽象与三块板实现</span>
+lib/
+  Epub/                    <span class="cmt">解析 / 布局 / 渲染（本项目核心）</span>
+  epdiy/                   <span class="cmt">电子墨水屏驱动（git 子模块）</span>
+  miniz-2.2.0/             <span class="cmt">zip 解压</span>
+  Fonts/                   <span class="cmt">4 种字体（regular/bold/italic/bold-italic）</span>
+platformio.ini             <span class="cmt">4 套构建环境</span>
+sdkconfig.epdiy / sdkconfig.lilygo_t5_47 / sdkconfig.m5_paper
+partitions.csv             <span class="cmt">Flash 分区表</span>
+scripts/                   <span class="cmt">字体 / 图片生成</span>
+data/                      <span class="cmt">两本古登堡示例 EPUB</span>
+test/ + fixtures/          <span class="cmt">本机单元测试</span></code></pre>
+
+  <table>
+    <tr><th>目录 / 文件</th><th>职责</th></tr>
+    <tr><td><code>src/</code></td><td>固件本体：<code>main.cpp</code> 状态机、<code>boards/</code> 板级抽象与工厂</td></tr>
+    <tr><td><code>lib/Epub/</code></td><td>项目核心：书目、zip 封装、HTML 解析、渲染抽象</td></tr>
+    <tr><td><code>lib/</code>（其余）</td><td>第三方库：epdiy、miniz、tjpgd3、png、sd_card、spiffs、Fonts…</td></tr>
+    <tr><td><code>platformio.ini</code></td><td>构建环境：lilygo_t5_47 / epdiy / m5_paper / native</td></tr>
+    <tr><td><code>sdkconfig.*</code></td><td>三块板各自的 ESP-IDF 配置</td></tr>
+    <tr><td><code>data/</code></td><td>示例书：<code>pg43-images.epub</code>、<code>pg14838-images.epub</code></td></tr>
+    <tr><td><code>scripts/</code></td><td><code>generate_fonts.sh</code>、<code>fontconvert.py</code>、<code>imgconvert.py</code> 等</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>这个仓库用到了 <strong>git 子模块</strong>（<code>lib/epdiy</code>、<code>lib/touch</code>、<code>lib/png/PNGdec</code>）。README 特别强调必须 <code>git clone --recursive</code> 克隆；如果漏了 <code>--recursive</code>，<code>lib/epdiy</code> 与 <code>lib/touch</code> 就是空目录，编译会在 include 第一步就失败。</p>
+  </div>
+
+  <!-- ========== 1.5 工作流程一瞥 ========== -->
+  <h2>1.5 工作流程一瞥</h2>
+
+  <p>把整条流水线串起来看，就是全书的主线：<strong>EPUB 文件本质上是一个 zip 压缩包</strong>，里面装着若干 XML/XHTML 文件。第一步用 miniz 解包；在压缩包里找到 <code>OEBPS/content.opf</code>（一份 XML），用 TinyXML2 解析出三样东西——<code>metadata</code>（书名、作者、封面）、<code>manifest</code>（所有文件清单）、<code>spine</code>（阅读顺序）。随后按 spine 顺序读取每一章的 XHTML。</p>
+
+  <p>每个章节 XHTML 由 <code>RubbishHtmlParser</code> 解析成一串 <strong>blocks</strong>（文本块或图片块）；文本块在 <code>TextBlock::layout</code> 里先测量每个单词的宽度，再用<strong>动态规划</strong>把单词切成行（支持两端对齐 <code>JUSTIFIED</code> 与居中 <code>CENTER_ALIGN</code>）；接着 <code>RubbishHtmlParser::layout</code> 把行和图片分配到页面上——页高放不下就新建一页。渲染时逐词画进帧缓冲，最后一次性 <code>flush_display()</code> 刷上屏幕。整个过程对用户来说，就是"按一下键、翻过一页"。</p>
+
+  <p>用户空闲后，系统进入<strong>深睡眠</strong>：<code>main.cpp</code> 里 <code>120 * 1000 * 1000</code> 微秒（也就是 120 秒）没有交互，就调用 <code>renderer->dehydrate()</code> 把渲染状态存进文件系统、停掉文件系统、配置唤醒方式（低电平按键用 ULP、高电平按键用 EXT1），最后 <code>esp_deep_sleep_start()</code>。醒来后从 RTC 内存恢复"在读哪本书、第几页"，继续阅读。</p>
+
+<pre><code><span class="cmt">/* 一条 EPUB 的完整旅程 */</span>
+EPUB (zip)
+  │  ① miniz 解包
+  ▼
+OEBPS/content.opf ──TinyXML2──► metadata / manifest / spine
+  │  ② 按 spine 顺序取章节
+  ▼
+chapter.xhtml ──RubbishHtmlParser──► blocks (TextBlock / ImageBlock)
+  │  ③ TextBlock::layout 动态规划换行
+  ▼
+lines / images ──layout() 分配页面──► pages[]
+  │  ④ render_page 逐词绘制
+  ▼
+frame buffer ──flush_display──► 墨水屏定格
+  │  ⑤ 120 秒无交互
+  ▼
+dehydrate ──► deep_sleep_start</code></pre>
+
+<pre><code><span class="cmt">/* main.cpp：三态状态机 + RTC 内存中的持久状态 */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span> {
+  SELECTING_EPUB,          <span class="cmt">// 书目列表</span>
+  SELECTING_TABLE_CONTENTS, <span class="cmt">// 章节目录</span>
+  READING_EPUB             <span class="cmt">// 阅读</span>
+} UIState;
+
+<span class="ann">RTC_NOINIT_ATTR</span> UIState ui_state = SELECTING_EPUB;
+<span class="ann">RTC_DATA_ATTR</span> EpubListState epub_list_state;
+<span class="ann">RTC_DATA_ATTR</span> EpubTocState epub_index_state;
+
+<span class="cmt">// 120 秒无交互后进入深睡眠（120 * 1000 * 1000 微秒）</span>
+<span class="kw">while</span> (esp_timer_get_time() - last_user_interaction &lt; <span class="num">120</span> * <span class="num">1000</span> * <span class="num">1000</span>) { <span class="cmt">/* 等消息 */</span> }
+renderer-&gt;dehydrate();          <span class="cmt">// 保存渲染状态到 SD/SPIFFS</span>
+board-&gt;stop_filesystem();
+board-&gt;prepare_to_sleep();
+esp_sleep_enable_ulp_wakeup();  <span class="cmt">// 低电平按键：ULP 唤醒</span>
+button_controls-&gt;setup_deep_sleep();
+esp_deep_sleep_start();</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>README 写的是"30 秒无操作后深睡眠"，但 <code>main.cpp</code> 里实际是 <code>120 * 1000 * 1000</code> 微秒 = <strong>120 秒</strong>。这就是嵌入式项目里文档与代码漂移的活例子——永远以源码为准。遇到这种出入，请把"读代码"当作习惯，而不是抱怨文档。</p>
+  </div>
+
+  <!-- ========== 1.6 关键技术栈 ========== -->
+  <h2>1.6 关键技术栈</h2>
+
+  <p>把 1.5 流水线里的每一环"是谁实现的"列出来，就是完整技术栈。构建层是 <strong>PlatformIO + ESP-IDF</strong>（<code>platform = espressif32</code>、<code>framework = espidf</code>）；屏幕驱动是 <strong>EPDiy</strong>；zip 解包用 <strong>miniz</strong>（一个针对 ESP32 改造、支持 PSRAM 与多文件归档的版本）；XML/XHTML 解析用 <strong>TinyXML2</strong>；图像解码是 <strong>tjpgd3</strong>（JPEG）+ <strong>PNGdec</strong>（PNG）；字体由 <code>scripts/generate_fonts.sh</code> 基于 <code>freetype-py</code> 生成，只输出两色、经过压缩，让翻页更快。</p>
+
+  <p>整套栈里最值得单独讲的是<strong>动态规划换行</strong>——全书第 10 章的主角。<code>TextBlock::layout</code> 把"怎么把单词排成行"建模成最小代价问题：<code>dp[i]</code> 表示从单词 i 开始那一行的最小代价，代价定义为每行右侧空白的平方（最后一行除外）。它从最后一个单词向前递推，把最优的行尾下标记进 <code>ans[]</code>。README 还贴心地引用了 MIT 公开课（"Dynamic Programming II: Text Justification, Blackjack"）作为入门参考。</p>
+
+  <p>为什么选这套栈？本质是<strong>约束匹配</strong>：EPUB 需要 zip + XML 处理，就选体积小巧的 miniz 与 TinyXML2；屏幕是 EPDiy 并行墨水屏，就直接复用 EPDiy 驱动；需要在极窄内存里排版，就自己手写动态规划而非引入重量级排版引擎。每一环都是对"嵌入式资源约束"的一次取舍——理解了这个取舍逻辑，你就能从无数开源库里挑出对的那几个。</p>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：动态规划换行的核心（节选） */</span>
+<span class="type">int</span> n = word_widths.size();  <span class="cmt">// 单词个数</span>
+<span class="type">int</span> dp[n];                   <span class="cmt">// dp[i] = 从单词 i 开始那一行的最小代价</span>
+<span class="type">size_t</span> ans[n];               <span class="cmt">// ans[i] = 该行最后一个单词的下标</span>
+
+dp[n - <span class="num">1</span>] = <span class="num">0</span>; ans[n - <span class="num">1</span>] = n - <span class="num">1</span>;
+<span class="kw">for</span> (<span class="type">int</span> i = n - <span class="num">2</span>; i &gt;= <span class="num">0</span>; i--) {
+  <span class="type">int</span> currlen = -<span class="num">1</span>; dp[i] = INT_MAX;
+  <span class="kw">for</span> (<span class="type">int</span> j = i; j &lt; n; j++) {
+    currlen += word_widths[j] + space_width;   <span class="cmt">// 当前行宽（含单词间空格）</span>
+    <span class="kw">if</span> (currlen &gt; page_width) <span class="kw">break</span>;
+    <span class="type">int</span> cost = (j == n - <span class="num">1</span>) ? <span class="num">0</span>
+              : (page_width - currlen) * (page_width - currlen) + dp[j + <span class="num">1</span>];
+    <span class="kw">if</span> (cost &lt; dp[i]) { dp[i] = cost; ans[i] = j; }  <span class="cmt">// 记下最优方案</span>
+  }
+}</code></pre>
+
+  <table>
+    <tr><th>环节</th><th>技术</th><th>说明</th></tr>
+    <tr><td>构建 / 框架</td><td>PlatformIO + ESP-IDF</td><td><code>espressif32 @ 3.3.2</code>，<code>framework = espidf</code></td></tr>
+    <tr><td>屏幕驱动</td><td>EPDiy</td><td>并行电子墨水屏驱动（本仓库用 <code>epdiy-rotation</code> fork）</td></tr>
+    <tr><td>zip 解包</td><td>miniz</td><td>ESP32 版，支持 PSRAM 与多文件归档</td></tr>
+    <tr><td>XML / XHTML</td><td>TinyXML2</td><td>解析 <code>content.opf</code> 与章节 XHTML</td></tr>
+    <tr><td>图像解码</td><td>tjpgd3 / PNGdec</td><td>JPEG / PNG 解码与缩放</td></tr>
+    <tr><td>字体</td><td>scripts/generate_fonts.sh</td><td>freetype-py，两色压缩，翻页更快</td></tr>
+    <tr><td>换行布局</td><td>动态规划</td><td><code>TextBlock::layout</code>，最小代价换行</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>学习这套技术栈最好的姿势，是分清"库替你解决的"和"作者自己写的"：EPDiy、TinyXML2、miniz 都是成熟开源库，去看它们的 API 与文档即可；而换行、分页、状态机是作者亲手啃下来的，值得逐行读源码。前者是"会用"，后者是"会造"——这本书的重心在后半部分。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：电子墨水屏 vs 屏幕 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>结合 1.2，列出电子墨水屏适合阅读的三个理由，以及两个它明显不适合的场景。尽量用"特性→后果"的句式（例如"反射式显示 → 长时间阅读不疲劳"）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从发光方式、功耗、刷新率三个维度想；反面例子可以找"需要连续刷新"的用途。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>适合：反射式显示无背光、接近纸张，长时间阅读不易疲劳；双稳态断电后画面保持，静态零功耗，一页能停几周；仅翻页耗电，配合深睡眠可做成便携低功耗设备。不适合：播放视频与流畅滚动（刷新率太低、全刷数百毫秒）；需要彩色的高频交互界面（单色方案只有黑白）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：仓库解剖 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>diy-esp32-epub-reader</code> 仓库，指出以下四处的位置：(a) 固件程序入口在哪个文件？(b) 三块板的实现在哪个目录？(c) 两本示例书放在哪？(d) 4 套构建环境定义在哪个文件？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 1.4 的仓库地图：入口在 <code>src/</code>，板子在 <code>src/boards/</code>，书在 <code>data/</code>，环境在 <code>platformio.ini</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>src/main.cpp</code>（<code>app_main</code> → <code>main_task</code>）；(b) <code>src/boards/</code>（<code>Lilygo_t5_47</code>、<code>Epdiy</code>、<code>M5Paper</code>）；(c) <code>data/</code>（<code>pg43-images.epub</code>、<code>pg14838-images.epub</code>）；(d) <code>platformio.ini</code>（<code>lilygo_t5_47</code> / <code>epdiy</code> / <code>m5_paper</code> / <code>native</code> 四个 env）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：读状态机 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>src/main.cpp</code> 里的 <code>UIState</code> 状态机，回答：三个状态之间由哪个按键动作触发切换？状态为什么放在 <code>RTC_NOINIT_ATTR</code> / <code>RTC_DATA_ATTR</code> 内存里？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>SELECT 是"前进"：书目 → 目录 → 阅读；阅读中 SELECT 返回书目。RTC 内存在深睡眠期间不掉电。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>SELECTING_EPUB（书目）按下 SELECT → SELECTING_TABLE_CONTENTS（目录）；再按 SELECT → READING_EPUB（阅读）；阅读中按 SELECT 回到 SELECTING_EPUB。状态放在 RTC 内存里，是因为系统会进入深睡眠——RTC 域在睡眠时保持供电，醒来后仍能读到"在读哪本书、第几页"，实现无缝续读。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：第一性原理推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用第一性原理解释两件事：(1) 为什么 README 把 PSRAM 列为硬性要求？(2) 换行问题为什么用动态规划而不是更简单的贪心（每行塞到放不下为止）？请给出你的推理链。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从"EPUB 是 zip + XML"推出解析时的峰值内存需求；贪心是"局部最优"，DP 追求"全局最优"——想想两种做法各自的代价函数长什么样。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) EPUB 整本是一个 zip，解包与 XML 解析都要把内容读进堆内存，带插图的古登堡书可达数 MB；ESP32 内部 SRAM 仅约 520 kB，没有外挂 PSRAM 根本无法容纳——所以这是"能跑与不能跑"的分界。(2) 贪心每次把行塞到放不下为止，结果是右缘参差不齐、空白分布不均匀；DP 把代价定义为"每行右侧空白的平方和"（最后一行除外），从全局寻找让代价最小的断行方案，排版更均匀美观。代价是 O(n²)，但一行里的单词数有限，实际可以接受。这正体现了"在约束下求全局最优"的工程权衡。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

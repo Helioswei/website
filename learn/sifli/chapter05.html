@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章：输入控制：按键 + 触控 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="5" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：输入控制——按键 + 触控</h1>
+  <p class="chapter-subtitle">为什么电子墨水屏设备要同时保留"物理按键"和"电容触控"两套输入？它们如何各司其职，最终汇成一套操作体系？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析，把每个输入当作一条线索</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「破案要先理清每一条线索从哪来、到哪里去。这台阅读器的'输入'也是两条线：一条走物理按键，一条走电容触控。它们各自带着什么样的证据（事件）、中间经过哪些转译，最后又汇到哪个'办案人'（状态机）手里？顺着这两条线把每一步追清楚，'设备怎么知道我想干什么'就不再是黑盒。这一章，我们逐条取证。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 双输入设计：为什么需要两套输入 ========== -->
+  <h2>5.1 双输入设计：为什么墨水屏设备要"按键 + 触控"两套输入</h2>
+
+  <p>上季的 ESP32 版是纯三按键，这季 README「当前功能」的第一条就写着"支持按键与触控双输入"。为什么一个以"省电、专注阅读"为使命的设备，要同时保留两套输入？先给结论：<strong>按键负责"兜底与盲操作"，触控负责"直达与富交互"，两者互为备份、各有主用。</strong>墨水屏设备的特殊性在于——屏幕刷新慢、静态不耗电，但"手指在屏幕上"恰恰是最自然、也最容易误触的操作方式；而阅读是个长时间、重复性极强的场景（一整晚就在翻页），单靠哪一套输入都撑不满整个使用链路。</p>
+
+  <p>物理按键的不可替代性至少有三条：一是<strong>不依赖屏幕与触控状态</strong>——功能设置里有一个"触控开关"，关闭时会同步 <code>powerOffTouch()</code> 给触控芯片硬件下电，此时触控整个失效，但按键照常能用；二是<strong>支持盲操作</strong>——手不离开按键、眼睛不离开文字就能翻页，这在长时间阅读里非常宝贵；三是<strong>功耗极低</strong>——一次 GPIO 中断就能响应，不需要一直给触控芯片供电。而触控的价值在于"直达"：书库点哪本开哪本、目录点哪章跳哪章、左右区域翻页、上滑呼出覆盖层——这些动作用三个按键要按好几下，用触控一两次就完成。</p>
+
+  <p>落到真实硬件上要补一句：<strong>V1.1 / V1.2 开发板上，物理按键其实只有一个</strong>——<code>EPD_KEY1</code>（GPIO 34，兼电源键）。三键语义（UP / DOWN / SELECT）在这个平台上大部分由触控承担，物理按键只保留"短按 = UP"和"长按 = UPGLIDE"两个角色（构造函数里只有 <code>#if defined(BSP_USING_BOARD_SF32_OED_EPD_V11)…</code> 分支才会注册 KEY2 / KEY3，5.2 会展开）。所以"按键 + 触控"准确说是：<strong>一套以触控为主、以按键兜底的输入体系</strong>。两条输入通道最终都归一为同一个 <code>UIAction</code> 动作枚举，再交给 UI 状态机处理——这是本章最重要的一张"地图"。</p>
+
+  <table>
+    <tr><th>维度</th><th>物理按键</th><th>电容触控</th></tr>
+    <tr><td>是否依赖屏幕点亮</td><td>否，完全盲操作</td><td>需看屏幕对准位置</td></tr>
+    <tr><td>触控被关闭时</td><td>照常可用（兜底）</td><td>失效（<code>powerOffTouch</code> 下电）</td></tr>
+    <tr><td>误触概率</td><td>低（物理行程明确）</td><td>较高，需"先选中再确认"等机制</td></tr>
+    <tr><td>表达力</td><td>少：点击 / 长按</td><td>多：点击、区域、滑动手势</td></tr>
+    <tr><td>典型用途</td><td>翻页、长按呼出覆盖层、电源键</td><td>列表点选、区域翻页、上滑手势</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># epdiy-epub/README.md · 「操作说明：按键动作语义」</span>
+UP      上移 / 上一项 / 向前翻页
+DOWN    下移 / 下一项 / 向后翻页
+SELECT  确认 / 进入 / 循环切换值
+UPGLIDE 阅读页呼出覆盖操作层</code></pre>
+
+  <pre><code><span class="cmt">/* src/boards/controls/Actions.h：UIAction——两套输入的统一"出口"（节选） */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span> {
+  NONE,                <span class="cmt">// 无动作</span>
+  UP,                  <span class="cmt">// 上移 / 上一项 / 向前翻页</span>
+  DOWN,                <span class="cmt">// 下移 / 下一项 / 向后翻页</span>
+  SELECT,              <span class="cmt">// 确认 / 进入 / 循环切换值</span>
+  UPGLIDE,             <span class="cmt">// 长按触发的上滑操作，用于阅读页半屏操作覆盖</span>
+  PREV_OPTION,         <span class="cmt">// 上一选项（用于列表选择）</span>
+  NEXT_OPTION,         <span class="cmt">// 下一选项（用于列表选择）</span>
+  SELECT_BOX,          <span class="cmt">// 选择框（用于触控选择）</span>
+  ENTER_READING_SETTINGS,
+  LAST_INTERACTION,
+  MSG_DRAW_LOW_POWER_PAGE,
+  MSG_DRAW_CHARGE_PAGE,
+  MSG_DRAW_WELCOME_PAGE,
+  MSG_UPDATE_CHARGE_STATUS,
+  MSG_BATTERY_CHECK
+} UIAction;</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>用办案的思路记这张地图：<strong>物理按键和触控是两条"线索源"，<code>UIAction</code> 是"案情通报"，UI 状态机是"办案人"。</strong>不管线索从哪条线进来，只要它被翻译成统一的 <code>UIAction</code>（UP / DOWN / SELECT / UPGLIDE…），办案人就能用同一套逻辑处理。后面 5.2–5.4 讲的，就是"线索怎么一步步变成案情通报"的过程。</p>
+  </div>
+
+  <!-- ========== 5.2 按键：从引脚事件到动作语义 ========== -->
+  <h2>5.2 按键：从引脚事件到动作语义</h2>
+
+  <p><code>SF32_ButtonControls.cpp</code> 是整个输入体系里最短的"翻译官"：它把"引脚电平变化"翻译成 <code>UIAction</code>。先看注册（构造函数）：用 SDK 的 button 库（<code>middleware/include/button.h</code>）配置一个 <code>button_cfg_t</code>，填上引脚、有效电平、输入模式和回调，再 <code>button_init</code> + <code>button_enable</code>。其中 <code>active_state = BUTTON_ACTIVE_HIGH</code> 表示<strong>高电平有效</strong>——即"按下时引脚读到高电平"（对应的还有 <code>BUTTON_ACTIVE_LOW</code> 低电平有效）。把"哪个电平算按下"交给配置而非写死在代码里，是让同一份固件兼容不同硬件接线的关键。</p>
+
+  <p>button 库还替我们做了一件重要的事——<strong>去抖</strong>。什么是去抖？机械按键按下/松开的瞬间，金属触点会"弹跳"几十毫秒，导致一次按下在引脚上表现为一连串高低电平抖动；去抖就是"等电平稳定了再算一次按下"，否则一次点击会被当成 N 次。button 库的 <code>button_cfg_t</code> 里有一个 <code>debounce_time</code> 字段（毫秒）就是去抖时长。有意思的是，本项目并没有显式设置这个字段——它取库默认值。这提醒我们：<strong>移植代码里经常藏着"看起来不重要、实际会改变行为"的默认参数</strong>，读代码时值得逐个字段过一遍。</p>
+
+  <p>事件到动作的映射在 <code>button_event_handler</code>。V1.1 / V1.2 / V1.2-SPI 三个分支里，KEY1 点击 → <code>UP</code>，KEY1 长按 → <code>UPGLIDE</code>；而 <code>#else</code> 分支（接了 KEY2 / KEY3 的板型）里是 KEY1 → <code>DOWN</code>、KEY2 → <code>SELECT</code>（长按 → <code>UPGLIDE</code>）、KEY3 → <code>UP</code>。注意 <code>UPGLIDE</code> 是个<strong>映射动作</strong>：物理世界本没有"上滑"这回事，是作者把"长按"这个原始事件，映射成语义动作"阅读页呼出覆盖操作层"——<code>Actions.h</code> 里 <code>UIAction::UPGLIDE</code> 的注释写得很直白："长按触发的上滑操作，用于阅读页半屏操作覆盖"。把原始事件和语义动作解耦，是这套设计里最值得学的思路。</p>
+
+  <table>
+    <tr><th>板型分支</th><th>物理按键</th><th>点击</th><th>长按</th></tr>
+    <tr><td rowspan="1"><code>BSP_USING_BOARD_SF32_OED_EPD_V11 / V12 / V12_SPI</code></td><td><code>EPD_KEY1</code>（GPIO 34）</td><td><code>UP</code></td><td><code>UPGLIDE</code></td></tr>
+    <tr><td rowspan="3">其它板型（<code>#else</code> 分支）</td><td><code>EPD_KEY1</code></td><td><code>DOWN</code></td><td>—</td></tr>
+    <tr><td><code>EPD_KEY2</code></td><td><code>SELECT</code></td><td><code>UPGLIDE</code></td></tr>
+    <tr><td><code>EPD_KEY3</code></td><td><code>UP</code></td><td>—</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/boards/controls/SF32_ButtonControls.cpp：按键事件 → 动作映射 */</span>
+<span class="kw">void</span> button_event_handler(<span class="type">int32_t</span> pin, button_action_t action)
+{
+<span class="kw">#if</span> defined(BSP_USING_BOARD_SF32_OED_EPD_V11) || defined(BSP_USING_BOARD_SF32_OED_EPD_V12_SPI) || defined(BSP_USING_BOARD_SF32_OED_EPD_V12)
+  <span class="kw">if</span> (action == BUTTON_CLICKED) {
+      action_cbk(UIAction::UP);            <span class="cmt">// 短按 → UP</span>
+  } <span class="kw">else if</span> (action == BUTTON_LONG_PRESSED) {
+      action_cbk(UIAction::UPGLIDE);       <span class="cmt">// 长按 → UPGLIDE（映射上滑）</span>
+  }
+<span class="kw">#else</span>
+  <span class="kw">if</span> (pin == EPD_KEY1) {
+      <span class="kw">if</span> (action == BUTTON_CLICKED) action_cbk(UIAction::DOWN);
+  } <span class="kw">else if</span> (pin == EPD_KEY2) {
+      <span class="kw">if</span> (action == BUTTON_CLICKED)      action_cbk(UIAction::SELECT);
+      <span class="kw">else if</span> (action == BUTTON_LONG_PRESSED) action_cbk(UIAction::UPGLIDE);
+  } <span class="kw">else if</span> (pin == EPD_KEY3) {
+      <span class="kw">if</span> (action == BUTTON_CLICKED) action_cbk(UIAction::UP);
+  }
+<span class="kw">#endif</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">/* src/boards/controls/SF32_ButtonControls.cpp：用 button 库注册按键（节选） */</span>
+button_cfg_t cfg;
+cfg.pin = EPD_KEY1;                  <span class="cmt">// GPIO 34，兼电源键</span>
+cfg.active_state = BUTTON_ACTIVE_HIGH; <span class="cmt">// 高电平有效：按下 → 读到高电平</span>
+cfg.mode = PIN_MODE_INPUT;           <span class="cmt">// 浮空输入</span>
+cfg.button_handler = button_event_handler;
+id = button_init(&amp;cfg);             <span class="cmt">// 注册到 button 库（含去抖）</span>
+RT_ASSERT(id &gt;= <span class="num">0</span>);
+button_enable(id);                   <span class="cmt">// 开始监听</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>记两个词就够：<strong>有效电平</strong>（<code>BUTTON_ACTIVE_HIGH</code> = 按下读到高电平，配置说了算，硬件接反也能软件救回来）和<strong>去抖</strong>（物理弹跳 → 过滤成一次按下）。再看一眼上面的表：V1.1 / V1.2 板上只有 KEY1，其余语义全靠触控——所以下一节讲触控芯片，它才是这个平台的"主力输入"。</p>
+  </div>
+
+  <!-- ========== 5.3 触控芯片：FT5446U / FT6336U / GT967 ========== -->
+  <h2>5.3 触控芯片：FT5446U / FT6336U / GT967</h2>
+
+  <p>先解释术语：<strong>触控芯片</strong>（电容触控控制器）是一颗专门检测"手指按在哪"的芯片——它通过测量触摸屏上电容的变化定位手指坐标，再通过 <strong>I2C</strong>（芯片间用两根线"串行"传数据的总线协议）把坐标报给主控。本项目适配了市面上常见的三颗：<strong>FT5446U</strong>、<strong>FT6336U</strong>（都是 FocalTech 的电容触控方案）与<strong>GT967</strong>（Goodix）。真实驱动在 <code>src/boards/touch/</code> 下各自一个目录（<code>ft5446u/</code>、<code>ft6336u/</code>、<code>gt967/</code>），靠 Kconfig 宏条件编译——每个 <code>SConscript</code> 的 <code>depend</code> 分别是 <code>TSC_USING_FT5446U_V01</code> / <code>TSC_USING_FT6336U</code> / <code>TSC_USING_GT967</code>，哪个宏被选中，哪个驱动才编进去。</p>
+
+  <p>一颗芯片不是万能的，硬件平台的原则是"<strong>跟着屏走</strong>"。看 <code>project/Kconfig.proj</code> 的 <code>Custom LCD driver</code> 选项：YZC085（V1.1 板）→ 选 <code>TSC_USING_FT5446U_V01</code>；YZC085（V1.2 板）→ 选 <code>TSC_USING_GT967</code>；R7D005（1448×1072）→ 也配 FT5446U；OPM037A3（3.7" SPI 小屏）→ 配 FT6336U。为什么换？因为触控屏的排线走线、分辨率、扫描方式不同，主控侧的 I2C 引脚和复位时序也不一样——所以"换屏就可能换触控芯片"。这一行的配置关系，在第 3 章板级配置里就定下来了，到驱动里体现为条件编译。</p>
+
+  <p>三颗芯片的<strong>读取模型高度一致</strong>：触控芯片拉低中断引脚（中断配置为下降沿 <code>PIN_IRQ_MODE_FALLING</code>）→ 驱动在中断回调里释放一个信号量 → 主控线程被唤醒后走 I2C 读寄存器。差异在寄存器细节：FT 系从机地址 <code>0x38</code>，先读 <code>FT_TD_STATUS</code>（0x02）看有没有手指，再读坐标寄存器高低字节拼出 x / y；GT967 从机地址 <code>0x14</code>（7-bit），寄存器是 <strong>16 位地址</strong>（<code>0x814E</code> 触点状态、<code>0x8150</code> 坐标），初始化时还读 <code>0x8144</code> 拿固件版本、写 <code>0x8040</code> 做软复位。坐标还要"校正"：FT5446U 驱动内置镜像矫正（量程 240×240），GT967 内置旋转（<code>x = y; y = 屏高 - x - 1</code>），FT6336U 则直接透传原生坐标（1032×758）。</p>
+
+  <p>驱动层坐标拿到后，<code>SF32_TouchControls::tp_rx_indicate</code> 还会再转一次："Rotate anti-clockwise 90 degree"，<code>x = LCD_VER_RES_MAX - touch_data.y - 1; y = touch_data.x;</code>——把芯片坐标系转成屏幕坐标系。两层坐标变换一叠加，才是真正能对齐到 UI 的坐标。最后是<strong>误触治理</strong>。README「操作说明」的答案叫<strong>"先选中再确认"</strong>：书库页第一次点击某本书，只是把光标移过去（动作 <code>SELECT_BOX</code>，同时记下 <code>last_clicked_book_index</code>、置 <code>waiting_for_confirmation = true</code>）；<strong>同一本书再点第二下</strong>才真正确认（<code>SELECT</code>，进入目录页）。目录页同理。两次点击必须落在同一项上才生效——专治"手指一滑就点错"。这套机制，我们在后面书库/目录一章（第 12 章）会看它怎么配合页面重绘。</p>
+
+  <table>
+    <tr><th>触控芯片</th><th>I2C 地址</th><th>寄存器宽度</th><th>坐标量程 / 校正</th><th>配哪块屏（Kconfig.proj）</th></tr>
+    <tr><td><code>FT5446U</code></td><td><code>0x38</code></td><td>8-bit 寄存器</td><td>240×240，镜像矫正</td><td>YZC085（V1.1）、R7D005</td></tr>
+    <tr><td><code>FT6336U</code></td><td><code>0x38</code></td><td>8-bit 寄存器</td><td>1032×758，原生直通</td><td>OPM037A3（SPI 小屏）</td></tr>
+    <tr><td><code>GT967</code></td><td><code>0x14</code></td><td>16-bit 寄存器</td><td>旋转矫正（x↔y）</td><td>YZC085（V1.2）</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/boards/touch/ft5446u/ft5446u.c：读触点数量 → 拼坐标（节选） */</span>
+err = read_regs(FT_TD_STATUS, <span class="num">1</span>, &amp;tp_num);   <span class="cmt">// 0x02：当前触点数量</span>
+<span class="kw">if</span> (tp_num &gt; <span class="num">0</span>)
+{
+    read_regs(FT_P1_XL, <span class="num">1</span>, &amp;out_val[<span class="num">0</span>]);   <span class="cmt">// 0x06：X 低字节</span>
+    read_regs(FT_P1_XH, <span class="num">1</span>, &amp;out_val[<span class="num">1</span>]);   <span class="cmt">// 0x05：X 高字节</span>
+    p_msg-&gt;y = ((out_val[<span class="num">1</span>] &amp; <span class="num">0x7</span>) &lt;&lt; <span class="num">8</span>) | out_val[<span class="num">0</span>];
+
+    read_regs(FT_P1_YL, <span class="num">1</span>, &amp;out_val[<span class="num">0</span>]);   <span class="cmt">// 0x04：Y 低字节</span>
+    read_regs(FT_P1_YH, <span class="num">1</span>, &amp;out_val[<span class="num">1</span>]);   <span class="cmt">// 0x03：Y 高字节</span>
+    p_msg-&gt;x = ((out_val[<span class="num">1</span>] &amp; <span class="num">0x7</span>) &lt;&lt; <span class="num">8</span>) | out_val[<span class="num">0</span>];
+    p_msg-&gt;event = TOUCH_EVENT_DOWN;         <span class="cmt">// 有手指 → 按下事件</span>
+}
+<span class="kw">else</span>
+{
+    p_msg-&gt;event = TOUCH_EVENT_UP;           <span class="cmt">// 没有手指 → 抬起事件</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">/* src/boards/touch/gt967/gt967.c：复位时序 + 固件版本 + 软复位（节选） */</span>
+rt_touch_irq_pin_attach(PIN_IRQ_MODE_FALLING, irq_handler, <span class="type">NULL</span>);  <span class="cmt">// 下降沿中断</span>
+rt_touch_irq_pin_enable(<span class="num">1</span>);
+
+read_regs(<span class="num">0x8144</span>, <span class="num">4</span>, buf);                       <span class="cmt">// 读固件版本</span>
+firmware_version = buf[<span class="num">0</span>] + ((<span class="type">uint16_t</span>)(buf[<span class="num">1</span>] &amp; <span class="num">0xff</span>) &lt;&lt; <span class="num">8</span>);
+LOG_I(<span class="str">"Firmware version = 0x%x(%d)"</span>, firmware_version, firmware_version);
+
+write_reg(TP_ID_CONTROL, <span class="num">2</span>);                     <span class="cmt">// 0x8040：软复位</span>
+write_reg(TP_ID_CONTROL, <span class="num">0</span>);</code></pre>
+
+  <pre><code><span class="cmt">/* src/boards/controls/SF32_TouchControls.cpp：书库页"先选中再确认"（节选） */</span>
+<span class="kw">if</span> (clicked_book_index != -<span class="num">1</span>)
+{
+    <span class="kw">if</span> (waiting_for_confirmation &amp;&amp; last_clicked_book_index == clicked_book_index)
+    {
+        book_index = clicked_book_index;
+        action = SELECT;                 <span class="cmt">// 第二次点同一本 → 真正确认</span>
+        waiting_for_confirmation = <span class="kw">false</span>;
+    }
+    <span class="kw">else</span>
+    {
+        book_index = clicked_book_index;
+        last_clicked_book_index = clicked_book_index;
+        waiting_for_confirmation = <span class="kw">true</span>;  <span class="cmt">// 第一次点 → 只选中，等确认</span>
+        action = SELECT_BOX;
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>把"中断 → 信号量 → I2C 读坐标"这条链背下来，就能读懂市面上九成电容触控驱动：<strong>芯片用中断引脚喊"有人摸了"，主控再去 I2C 把坐标"取回来"。</strong>三颗芯片的差别只在"寄存器长什么样、地址怎么拼"，骨架几乎一样。所以移植新触控芯片，就是照着现有驱动换寄存器宏——第 16 章"移植新屏"会再见到这个套路。</p>
+  </div>
+
+  <!-- ========== 5.4 触控区域管理：UIRegionsManager 与覆盖操作层 ========== -->
+  <h2>5.4 触控区域管理：UIRegionsManager 与覆盖操作层</h2>
+
+  <p>坐标有了，下一个问题是"<strong>点在这个位置是什么意思</strong>"。答案是把屏幕切成若干"可点击矩形"（区域），每个区域绑定一个动作——这就是 <code>UIRegionsManager</code>（<code>src/UIRegionsManager.cpp/h</code>）干的事。它的核心是一个全局数组 <code>g_area_array[MAX_AREAS]</code>（上限 <code>MAX_AREAS = 30</code>）加一个计数器 <code>g_area_count</code>，区域结构 <code>AreaRect</code> 就四个坐标加一个动作：<code>{start_x, start_y, end_x, end_y, action}</code>。接口有两套：<code>add_area(x, y, w, h)</code> <strong>动态追加</strong>（数组满了返回 <code>false</code>），<code>static_add_area(x, y, w, h, index)</code> <strong>静态写入指定槽位</strong>。</p>
+
+  <p>两种用法各有场景。书库页每页 4 本书 + 底部 3 个按钮，位置基本固定，所以用 <code>static_add_area</code> 写死索引：0–3 是四本书、4 / 5 / 6 是"上一页 / 主页面 / 下一页"；目录页同理（0–5 是六个目录项，6 / 7 / 8 是底部三键）。而阅读页覆盖层的 12 个按钮每次打开都要按当前屏宽重新布局，所以 <code>render_overlay()</code> 每次都先 <code>clear_areas()</code> 清空、再逐个 <code>add_area()</code> 动态注册。<strong>"重绘即重注册"是这套机制能动态命中的关键</strong>——区域不是写死的常量表，而是"画到哪、点哪就有效"。</p>
+
+  <p>命中检测在 <code>SF32_TouchControls::tp_rx_indicate</code>：按下事件（<code>TOUCH_EVENT_DOWN</code>）进入 <code>switch (ui_state)</code>，逐区域判断点击坐标是否落在矩形内，命中就把对应动作通过 <code>on_action</code> 回调塞进 <code>ui_queue</code>，主循环收到后交给 <code>handleUserInteraction</code> 执行；松开事件（<code>TOUCH_EVENT_UP</code>）直接忽略（注释："只处理按下事件，忽略释放事件"）。主页面三块区域：<code>g_area_array[0]</code> = 左（<code>UP</code>）、<code>[1]</code> = 右（<code>DOWN</code>）、<code>[2]</code> = 中（<code>SELECT</code>）；阅读页未开覆盖层时左右翻页用两个硬编码矩形（<code>x∈[10,200]</code> → <code>UP</code>、<code>[550,750]</code> → <code>DOWN</code>），开了覆盖层则改查 12 个按钮区域。</p>
+
+  <p>最后把覆盖操作层的完整闭环串起来：<strong>UPGLIDE</strong>（按键长按或触控上滑手势，上滑阈值 <code>SWIPE_THRESHOLD = 100</code> 像素）→ <code>reader-&gt;start_overlay()</code> → <code>render_overlay()</code> 画三行按钮（第一行 3 个：<code>&lt;</code>、触摸开关 / 全刷周期、<code>&gt;</code>；第二行 5 个：<code>-5 / -1 / 页码 / +1 / +5</code>；第三行 4 个：确认 / 目录 / 书库 / 设置），每画一个就 <code>add_area</code> 注册一个 → 触控点中任意按钮命中后发 <code>SELECT</code> → <code>main.cpp</code> 的 <code>handleEpub</code> 按 <code>touch_sel</code> 分发：跳页、进目录、返回书库、进阅读设置。"动态注册 + 命中检测 + 动作分发"三件套，就是本章输入体系的完整闭环。</p>
+
+  <table>
+    <tr><th>页面（ui_state）</th><th>触控区域布局</th><th>注册方式</th><th>命中 → 动作</th></tr>
+    <tr><td><code>MAIN_PAGE</code></td><td>左 / 右 / 中三块</td><td><code>static_add_area</code>（0–2）</td><td><code>UP / DOWN / SELECT</code></td></tr>
+    <tr><td><code>SELECTING_EPUB</code></td><td>4 本书 + 底部 3 键</td><td><code>static_add_area</code>（0–6）</td><td>选中/确认 / 上翻页 / 主页面 / 下翻页</td></tr>
+    <tr><td><code>READING_EPUB</code></td><td>左右翻页（硬编码矩形）</td><td>内联判断</td><td><code>UP / DOWN</code></td></tr>
+    <tr><td>阅读覆盖层（overlay）</td><td>12 个按钮（3+5+4）</td><td><code>clear_areas</code> + <code>add_area</code></td><td>跳页 / 确认 / 目录 / 书库 / 设置</td></tr>
+    <tr><td><code>SETTINGS_PAGE</code></td><td>每行 3 块（左箭头/右箭头/值）</td><td><code>static_add_area</code>（行 × 3）</td><td><code>PREV_OPTION / NEXT_OPTION / SELECT</code></td></tr>
+  </table>
+
+  <pre><code><span class="cmt">/* src/UIRegionsManager.h：可点击区域的结构与注册接口 */</span>
+<span class="kw">typedef</span> <span class="kw">struct</span> {
+    <span class="type">int</span> start_x;
+    <span class="type">int</span> start_y;
+    <span class="type">int</span> end_x;
+    <span class="type">int</span> end_y;
+    UIAction action;      <span class="cmt">// 点击该区域时触发的动作</span>
+} AreaRect;
+
+<span class="kw">#define</span> MAX_AREAS <span class="num">30</span>     <span class="cmt">// 最大区域数量</span>
+<span class="kw">extern</span> AreaRect g_area_array[MAX_AREAS];
+<span class="kw">extern</span> <span class="type">int</span> g_area_count;
+
+<span class="kw">void</span> clear_areas();
+<span class="type">bool</span> add_area(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height);                       <span class="cmt">// 动态添加</span>
+<span class="type">bool</span> static_add_area(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height, <span class="type">int</span> index);  <span class="cmt">// 静态添加</span></code></pre>
+
+  <pre><code><span class="cmt">/* src/UIRegionsManager.cpp：清空与动态注册的实现（节选） */</span>
+<span class="kw">void</span> clear_areas()
+{
+    g_area_count = <span class="num">0</span>;
+    memset(g_area_array, <span class="num">0</span>, <span class="kw">sizeof</span>(g_area_array));
+}
+
+<span class="type">bool</span> add_area(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height)
+{
+    <span class="kw">if</span> (g_area_count &gt;= MAX_AREAS) {
+        <span class="kw">return</span> <span class="kw">false</span>;   <span class="cmt">// 数组已满</span>
+    }
+    g_area_array[g_area_count].start_x = x;
+    g_area_array[g_area_count].start_y = y;
+    g_area_array[g_area_count].end_x = x + width;
+    g_area_array[g_area_count].end_y = y + height;
+    g_area_count++;
+    <span class="kw">return</span> <span class="kw">true</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">/* lib/Epub/EpubList/EpubReader.cpp：覆盖层按钮动态注册（节选） */</span>
+clear_areas();   <span class="cmt">// 清除旧的触控区域，重新注册 overlay 按钮区域</span>
+...
+<span class="cmt">// 第一行（3 列）：< / 触摸开关 / ></span>
+<span class="kw">for</span> (<span class="type">int</span> i = <span class="num">0</span>; i &lt; c; ++i) {
+    add_area(x, y, w, row_h);      <span class="cmt">// 每画一个按钮就注册一块区域</span>
+    ...
+}
+<span class="cmt">// 第二、三行（5、4 列）同样逐个 add_area(x, y, btn_w, row_h)</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>UIRegionsManager 的精髓是"<strong>区域跟着画面走</strong>"：画面画到哪，命中区域就注册到哪，清掉重画就重注册。这样页面代码不用维护两份"几何数据"（一份画、一份点），也天然规避了"按钮移动了但热区没跟着动"这类 bug。等你读第 13 章覆盖层与触控区域时，这套机制还会被反复调用。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：为什么需要双输入 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>结合 5.1，列出电子墨水屏阅读器需要保留物理按键的至少三条理由，并说明触控相比按键的优势在哪里。尽量用"特性 → 后果"的句式（例如"按键支持盲操作 → 眼睛不离开文字也能翻页"）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从"不依赖屏幕状态 / 盲操作 / 功耗 / 表达力"四个维度分别想物理按键和触控的强项与弱项。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>物理按键：不依赖屏幕与触控状态（触控可被"触控开关"硬件下电，按键仍可用）→ 任何时刻都能操作；支持盲操作 → 眼睛不离开文字即可翻页；功耗极低（GPIO 中断即可响应）→ 不增加待机负担。触控优势：直达（点哪本开哪本）与富交互（上滑手势呼出覆盖层、区域翻页），用一两次操作完成按键需要按好几下的动作。结论：按键兜底、触控直达，互为备份。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：按键映射与 UPGLIDE <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>打开 <code>src/boards/controls/SF32_ButtonControls.cpp</code>：(1) V1.1 / V1.2 板上 <code>EPD_KEY1</code> 的短按和长按各映射成哪个 <code>UIAction</code>？(2) "其它板型"分支里三个键各映射什么？(3) 为什么叫 <code>UPGLIDE</code> 而不是直接叫"长按"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 5.2 的映射表；UPGLIDE 是"映射动作"，注释在 <code>Actions.h</code> 里写着"长按触发的上滑操作，用于阅读页半屏操作覆盖"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) V1.1 / V1.2 / V1.2-SPI 分支：KEY1 点击 → <code>UP</code>，长按 → <code>UPGLIDE</code>。(2) 其它板型分支：KEY1 → <code>DOWN</code>，KEY2 → <code>SELECT</code>（长按 → <code>UPGLIDE</code>），KEY3 → <code>UP</code>。(3) <code>UPGLIDE</code> 是把"长按"这个原始事件映射成语义动作"上滑呼出阅读页覆盖操作层"——物理世界没有上滑，语义动作与原始事件解耦，让按键和触控上滑两种来源都能触发同一个 <code>UIAction::UPGLIDE</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：三颗触控芯片对一对 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>对照 5.3，回答：(1) FT5446U / FT6336U / GT967 的 I2C 从机地址各是多少？(2) 谁的寄存器是 16 位地址？它初始化时还读 / 写了哪些寄存器、各有什么用途？(3) 在 <code>project/Kconfig.proj</code> 里，V1.1 板与 V1.2 板各选了哪颗芯片？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>FT 系 <code>0x38</code>、GT967 <code>0x14</code>；GT967 的寄存器地址是 16 位（0x814E / 0x8150…），读 0x8144 拿固件版本、写 0x8040 软复位；配屏关系见 <code>Custom LCD driver</code> 选项的 <code>select TSC_USING_*</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) FT5446U / FT6336U 都是 <code>0x38</code>，GT967 是 <code>0x14</code>（7-bit）。(2) GT967 用 16 位寄存器地址：<code>0x814E</code> 触点状态、<code>0x8150</code> 起是坐标；初始化读 <code>0x8144</code> 拿固件版本，写 <code>0x8040</code> 触发软复位（2 → 0）。(3) V1.1 板 → <code>TSC_USING_FT5446U_V01</code>，V1.2 板 → <code>TSC_USING_GT967</code>；R7D005 也配 FT5446U，OPM037A3（SPI 小屏）配 FT6336U。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：区域管理的两种注册方式 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p><code>add_area</code> 和 <code>static_add_area</code> 有什么区别？为什么阅读页覆盖层的 12 个按钮每次打开都要 <code>clear_areas()</code> 后重新 <code>add_area()</code>？如果某个页面忘了注册区域，触控点上去会发生什么？请从 <code>SF32_TouchControls::tp_rx_indicate</code> 的命中逻辑推演。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>add_area</code> 按 <code>g_area_count</code> 追加，<code>static_add_area</code> 写指定槽位；命中检测只查 <code>g_area_array</code> 里已注册的矩形。想一想覆盖层按钮宽高是"动态计算"的，而书库页位置是"固定"的。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>add_area</code> 动态追加到 <code>g_area_array[g_area_count]</code> 并自增（满了返回 false）；<code>static_add_area</code> 直接写指定索引槽位。覆盖层按钮的宽高是每次 <code>render_overlay()</code> 按屏宽动态算的（row_h、btn_w 都会变），所以不能写死，必须先 <code>clear_areas()</code> 清空旧区域、再逐个 <code>add_area()</code> 保证"画哪点哪"。而书库 / 设置页位置固定，用 <code>static_add_area</code> 即可。若页面忘了注册区域，命中检测的 <code>if (x &gt;= start_x &amp;&amp; …)</code> 全部不命中，<code>action</code> 保持 <code>NONE</code>，最终不会发出任何有效动作——屏幕上表现为"点了没反应"，而且通常很难排查，所以"先 clear 再注册"要成为习惯。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

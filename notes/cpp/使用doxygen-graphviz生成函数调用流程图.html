@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cpp-使用doxygen+graphviz生成函数调用流程图 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="使用函数调用图可以清晰的帮助自己分析源码。这里介绍一下cpp的函数调用图的生成方式。 工具准备 graphviz GraphViz是什么？GraphViz是一个开源的图片可视化的软件。它使用一个特定的DSL(领域特定语言)dot作为脚本语言">
+  <meta name="keywords" content="">
+  <link rel="canonical" href="https://aigcwei.cn/notes/cpp/使用doxygen-graphviz生成函数调用流程图.html">
+  <meta property="og:title" content="cpp-使用doxygen+graphviz生成函数调用流程图">
+  <meta property="og:description" content="使用函数调用图可以清晰的帮助自己分析源码。这里介绍一下cpp的函数调用图的生成方式。 工具准备 graphviz GraphViz是什么？GraphViz是一个开源的图片可视化的软件。它使用一个特定的DSL(领域特定语言)dot作为脚本语言">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/cpp/使用doxygen-graphviz生成函数调用流程图.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>cpp-使用doxygen+graphviz生成函数调用流程图</h1>
+          <div class="article-meta"><span>2021-05-07</span></div>
+        </header>
+        <div class="article-body">
+<p> 使用函数调用图可以清晰的帮助自己分析源码。这里介绍一下cpp的函数调用图的生成方式。</p>
+<h2>工具准备</h2>
+<h3>graphviz</h3>
+<p>GraphViz是什么？GraphViz是一个开源的图片可视化的软件。它使用一个特定的DSL(领域特定语言)dot作为脚本语言，然后使用布局引擎来解析此脚本，并完成自动布局。GraphViz提供丰富的导出格式，如常用的图片格式，SVG，PDF格式等。</p>
+<h4>下载</h4>
+<p><a href="http://www.graphviz.org/download/">graphviz的下载地址</a></p>
+<h3>doxygen</h3>
+<p>Doxygen是一款文档生成工具，它可以从代码中提取出相应的文档，并组织，输出成各种漂亮的文档（如HTML，PDF，RTF等）</p>
+<p>有了Doxygen工具，程序员便可以在写代码的时候，直接内嵌文档，再也不需要为某个功能代码单独写文档，从而最大程度的保持了文档和代码的统一性</p>
+<p>另外，Doxygen 1.8.x版本中增加对markdown的支持，也支持内嵌部分HTML标签，从而极大的简化了文档编写难度，甚至，您可以用Doxygen生成一个静态的网站。</p>
+<p>目前Doxygen支持C/C++，Objective-C, C#，PHP等语言，支持多平台(Mac OS, Linux, Windows)，更多信息，请参考<a href="http://www.stack.nl/~dimitri/doxygen/index.html">Doxygen官方介绍</a></p>
+<h4>下载</h4>
+<p><a href="https://www.doxygen.nl/download.html">doxygen下载地址</a></p>
+<h4>使用</h4>
+<p><a href="https://cedar-renjun.github.io/2014/03/21/learn-doxygen-in-10-minutes/">这篇文章</a>介绍一些doxygen为代码生成文档的方法，可以学习。</p>
+<h2>函数调用图</h2>
+<h3>安装</h3>
+<p>将上面的两个工具安装在电脑上，直接下载windows平台的exe文件进行安装既可。</p>
+<h3>使用</h3>
+<h4>运行DoxyWizard，弹出Doxygen配置界面</h4>
+<h4>配置Wizard页面</h4>
+<h5>配置Wizard-&gt;Project</h5>
+<p><img src="../../images/doxygen/project.png" alt="project.png"></p>
+<p><strong>选择Scan recursively则递归分析源代码目录中的子目录内的源代码。</strong></p>
+<h5>配置Wizard-&gt;Mode</h5>
+<p><img src="../../images/doxygen/model.png" alt="model.png"></p>
+<h5>配置Wizard-&gt;Output</h5>
+<p><img src="../../images/doxygen/output.png" alt="output.png"></p>
+<h5>配置Wizard-&gt;Diagrams</h5>
+<p><img src="../../images/doxygen/dia.png" alt="dia.png"></p>
+<h4>配置Expert页面</h4>
+<h5>配置Expert-&gt;Project</h5>
+<p><img src="../../images/doxygen/lang.png" alt="lang.png"></p>
+<h5>配置Expert-&gt;Build</h5>
+<p><img src="../../images/doxygen/build.png" alt="build.png"></p>
+<h5>配置Expert-&gt;Dot</h5>
+<p><img src="../../images/doxygen/gra.png" alt="gra.png"></p>
+<p>由于使用了Graphviz,所以要设置Dot的选项，勾选HAVE_DOT，并设置DOT_PATH为Graphviz的bin目录</p>
+<h4>开始使用</h4>
+<h5>进行Run页面</h5>
+<p>点击Run doxygen按钮</p>
+<p><img src="../../images/doxygen/run.png" alt="run.png"></p>
+<h5>展示生成文档</h5>
+<p><img src="../../images/doxygen/out.png" alt="out.png"></p>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

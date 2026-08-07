@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章：EPUB 解析：继承与中文适配 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="7" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：EPUB 解析：继承与中文适配</h1>
+  <p class="chapter-subtitle">同一份解析库从 ESP32 搬到了 SF32，为什么中文书第一次真正"读"得舒服了？断行、内存、全角空格——每一处"继承"背后都藏着一次"适配"。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个——不轻信表象，逐行验证源码</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「柯南办案有个习惯：先到现场，再听证词。移植项目也一样——README 说'解析库原样搬了过来'，这算不算数，得打开源码自己核对。继承了什么、改了什么、为什么中文能断行了、内存堆放在哪，每一条都要有真凭实据。这一章，我们沿着 EPUB 从 zip 到屏幕的链路，把'继承'和'中文适配'两件事查个水落石出。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 继承自上游：lib/Epub 的模块划分 ========== -->
+  <h2>7.1 继承自上游：lib/Epub 的模块划分</h2>
+
+  <p>先回到第 1 章说过的那句判断：移植成功与否，看上游的 <code>lib/Epub</code> 还在不在。现在把这句话"立案"验证——打开仓库，<code>lib/Epub/</code> 下依然是四个子模块，和 atomic14 上游几乎一一对应：<strong>EpubList</strong>（EPUB 文件管理，内含 tinyxml2）、<strong>Renderer</strong>（渲染器模块：帧缓冲、字体、图片合成）、<strong>RubbishHtmlParser</strong>（XHTML 解析，产出 TextBlock / ImageBlock）、<strong>ZipFile</strong>（包内文件寻址，配合 miniz 解压）。README「目录结构」写得明明白白，这四个模块连同 <code>lib/miniz-2.2.0</code>（zip 解压）、<code>lib/tjpgd3</code> 与 <code>lib/png/PNGdec</code>（JPEG / PNG 解码）一起构成了完整的解析栈。第 1 章只给了"骨架"，这一节我们把每个模块的职责和改动量落到文件上。</p>
+
+  <p>为什么这套"家具"能原样搬？因为 EPUB 解析这段逻辑几乎不碰硬件：zip 解包、XML 解析、HTML 标签遍历、断行排版，都是纯数据运算。它只依赖三样东西——标准 C++ 容器（<code>std::vector</code> / <code>std::string</code>）、tinyxml2、以及极少量 RTOS 接入点。真正的差异都集中在"接入点"上：内存从哪来（7.3 的 PSRAM 内存堆）、线程安全怎么保证（解析器里新增的页面互斥锁）、以及渲染器怎么把结果画出来（第 10 章的主角）。换句话说，<strong>"继承"的是模块划分与算法，"适配"的是运行环境</strong>。</p>
+
+  <p>具体到每个模块的改动量，可以精确到文件。先看 <code>RubbishHtmlParser.cpp</code> 的构造函数——它开头声明了 <code>m_pages_mutex = rt_mutex_create("pg_mtx", RT_IPC_FLAG_PRIO)</code>，为"页面数组"加了一把互斥锁。这是移植版新增的一行（上游没有），原因是移植版引入了后台字形预热量线（第 8 章细讲），解析 / 排版可能和渲染并发，页面数组必须锁起来。再对比 <code>Renderer/</code>：上游抽象还在，实现全换，<code>EpdiyRenderer</code> 变成了对接 SF32 墨水屏控制器的 <code>SF32PaperRenderer</code>（第 4 章、第 10 章讲）。而 <code>EpubList/</code> 里的 tinyxml2 是第三方库，一字未动；<code>Epub.cpp</code> 的 content.opf 解析逻辑也和上游逐字一致。</p>
+
+<pre><code><span class="cmt"># README「目录结构」节选：lib/ 的解析栈</span>
+lib/
+├── epdiy/                  <span class="cmt">EPD 驱动核心库</span>
+├── Epub/                   <span class="cmt">EPUB 解析专用库</span>
+│   ├── EpubList/           <span class="cmt">EPUB 文件管理模块（含 tinyxml2）</span>
+│   ├── Renderer/           <span class="cmt">渲染器模块（帧缓冲、字体、图片合成）</span>
+│   ├── RubbishHtmlParser/  <span class="cmt">XHTML 解析模块（TextBlock / ImageBlock）</span>
+│   └── ZipFile/            <span class="cmt">包内文件寻址（配合 miniz）</span>
+├── Images/                 <span class="cmt">内置图片数据（欢迎/低电量/充电/关机页）</span>
+├── miniz-2.2.0/            <span class="cmt">轻量级 ZIP 解压库</span>
+├── png/PNGdec/             <span class="cmt">PNG 解码库</span>
+└── tjpgd3/                 <span class="cmt">JPEG 解码库</span></code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/RubbishHtmlParser/RubbishHtmlParser.cpp：移植新增的页面互斥锁 */</span>
+RubbishHtmlParser::RubbishHtmlParser(<span class="kw">const</span> <span class="type">char</span> *html, <span class="type">int</span> length,
+                                     <span class="kw">const</span> std::string &amp;base_path)
+{
+  m_base_path = base_path;
+  m_layout_done = <span class="kw">false</span>;
+  m_blocks_layout_done = <span class="kw">false</span>;
+  m_layout_y = <span class="num">0</span>;
+  <span class="cmt">/* ... */</span>
+  m_pages_mutex = rt_mutex_create(<span class="str">"pg_mtx"</span>, RT_IPC_FLAG_PRIO);  <span class="cmt">// 保护 pages[]</span>
+  parse(html, length);
+}</code></pre>
+
+  <table>
+    <tr><th>模块</th><th>上游职责</th><th>移植改动</th></tr>
+    <tr><td><code>EpubList/</code>（含 tinyxml2）</td><td>书目 / 阅读器 / 目录；content.opf 解析</td><td>原样继承，第三方 tinyxml2 一字未动</td></tr>
+    <tr><td><code>ZipFile/</code></td><td>包内文件寻址（配合 miniz）</td><td>原样继承</td></tr>
+    <tr><td><code>RubbishHtmlParser/</code></td><td>XHTML 解析 → TextBlock / ImageBlock</td><td>少量改动：新增页面互斥锁 <code>pg_mtx</code></td></tr>
+    <tr><td><code>Renderer/</code></td><td>渲染抽象（帧缓冲 / 字体 / 图片合成）</td><td>抽象保留，实现重写（SF32 版）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>检验"继承"用 diff，别用感觉。移植前后对比，真正的分界线就藏在"依赖 RTOS 的那几行"里：互斥锁、内存、日志。凡是纯算法代码，上游是什么样，这里就该是什么样——看到 <code>lib/Epub</code> 原样躺着，这本移植教程的地基才算稳。</p>
+  </div>
+
+  <!-- ========== 7.2 解析流程回顾：从 zip 到 XHTML 块 ========== -->
+  <h2>7.2 解析流程回顾：从 zip 到 XHTML 块</h2>
+
+  <p>EPUB 本质是一个 zip 压缩包，里面装着一堆 XML / XHTML 文件。完整链路是：先用 miniz 解包，在 <code>META-INF/container.xml</code>（一份描述"书的主文件在哪"的小 XML）里找到 <code>OEBPS/content.opf</code> 的位置；再用 tinyxml2 解析 <code>content.opf</code>，取出三样东西——<strong>metadata</strong>（书名、作者、封面）、<strong>manifest</strong>（所有文件清单）、<strong>spine</strong>（阅读顺序）；最后按 spine 顺序，把每个章节的 XHTML 交给 RubbishHtmlParser 解析成一串 blocks（<code>TextBlock</code> 或 <code>ImageBlock</code>）。这段流程在「ESP32 电子墨水屏」线已经详讲，这里不再展开，只聚焦一个问题：<strong>移植后，链路哪里不一样了？</strong></p>
+
+  <p>看真实代码能发现三处实质差异。第一，<strong>内存来源变了</strong>——上游把整本书解压到 ESP32 的堆内存里，移植版把它收敛进 <code>epub_mem.c</code> 定义的专属 PSRAM 内存堆（7.3 讲）。第二，<strong>断行算法变了</strong>——<code>TextBlock::layout</code> 不再假设"单词以空格分隔"，对含中文的段落走了"逐字断行 + 两端对齐 + 首行缩进"的新分支（7.4 讲）。第三，<strong>解析器的运行环境从单线程变成多线程</strong>——<code>VisitEnter</code> 照旧用 tinyxml2 的 SAX 式回调遍历标签，但页面数组加了互斥锁，允许后台预热量线并行干活。其余环节，包括 content.opf 的 metadata / manifest / spine 解析，都和上游一致。</p>
+
+  <p>顺带看一个容易被忽略的细节：<code>RubbishHtmlParser.cpp</code> 顶部维护了一批"标签清单"——<code>HEADER_TAGS</code>（h1–h6）、<code>BLOCK_TAGS</code>（p / li / div / br）、<code>BOLD_TAGS</code>（b）、<code>ITALIC_TAGS</code>（i）、<code>IMAGE_TAGS</code>（img）、<code>SKIP_TAGS</code>（head / table）。<code>VisitEnter</code> 就靠 <code>matches()</code> 查表决定每种标签怎么处理：<code>img</code> 生成 <code>ImageBlock</code> 并留出图片位置；<code>head</code>、<code>table</code> 直接跳过（这是它敢自称 "Rubbish"（垃圾）解析器的原因——不做 CSS、只认标准标签）；标题标签生成居中样式的 <code>TextBlock</code>。移植版没有扩充这张表，中英文书都够用——因为真正的差异根本不在标签层面，而在字符层面（下一节见分晓）。</p>
+
+<pre><code><span class="cmt">/* lib/Epub/EpubList/Epub.cpp：解析 content.opf（metadata / manifest / spine） */</span>
+<span class="kw">bool</span> Epub::parse_content_opf(ZipFile &amp;zip, std::string &amp;content_opf_file)
+{
+  <span class="type">char</span> *contents = (<span class="type">char</span> *)zip.read_file_to_memory(content_opf_file.c_str());
+  tinyxml2::XMLDocument doc;
+  doc.Parse(contents);
+  <span class="cmt">/* ... */</span>
+  <span class="kw">auto</span> metadata = package-&gt;FirstChildElement(<span class="str">"metadata"</span>);  <span class="cmt">// 书名 / 作者 / 封面</span>
+  <span class="kw">auto</span> manifest = package-&gt;FirstChildElement(<span class="str">"manifest"</span>);  <span class="cmt">// 文件清单</span>
+  <span class="kw">auto</span> spine    = package-&gt;FirstChildElement(<span class="str">"spine"</span>);     <span class="cmt">// 阅读顺序</span>
+  <span class="cmt">/* ... */</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/RubbishHtmlParser/RubbishHtmlParser.cpp：标签清单（节选） */</span>
+<span class="kw">const char</span> *HEADER_TAGS[] = {<span class="str">"h1"</span>, <span class="str">"h2"</span>, <span class="str">"h3"</span>, <span class="str">"h4"</span>, <span class="str">"h5"</span>, <span class="str">"h6"</span>};
+<span class="kw">const char</span> *BLOCK_TAGS[]  = {<span class="str">"p"</span>, <span class="str">"li"</span>, <span class="str">"div"</span>, <span class="str">"br"</span>};
+<span class="kw">const char</span> *IMAGE_TAGS[]  = {<span class="str">"img"</span>};
+<span class="kw">const char</span> *SKIP_TAGS[]   = {<span class="str">"head"</span>, <span class="str">"table"</span>};   <span class="cmt">// 跳过：不做 CSS</span>
+
+<span class="kw">bool</span> RubbishHtmlParser::VisitEnter(<span class="kw">const</span> tinyxml2::XMLElement &amp;element, <span class="cmt">/* ... */</span>)
+{
+  <span class="kw">if</span> (matches(tag_name, IMAGE_TAGS, NUM_IMAGE_TAGS)) {
+    blocks.push_back(<span class="kw">new</span> ImageBlock(m_base_path + src));   <span class="cmt">// 图片块</span>
+  } <span class="kw">else if</span> (matches(tag_name, SKIP_TAGS, NUM_SKIP_TAGS)) {
+    <span class="kw">return</span> <span class="kw">false</span>;                                          <span class="cmt">// 跳过 head / table</span>
+  } <span class="kw">else if</span> (matches(tag_name, HEADER_TAGS, NUM_HEADER_TAGS)) {
+    currentTextBlock = <span class="kw">new</span> TextBlock(CENTER_ALIGN);        <span class="cmt">// 标题居中</span>
+  }
+  <span class="cmt">/* ... */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>环节</th><th>组件</th><th>移植后</th></tr>
+    <tr><td>解包</td><td>miniz</td><td>原样</td></tr>
+    <tr><td>content.opf 解析</td><td>tinyxml2（Epub.cpp）</td><td>原样</td></tr>
+    <tr><td>XHTML → blocks</td><td>RubbishHtmlParser::VisitEnter</td><td>标签逻辑原样；页面数组加锁</td></tr>
+    <tr><td>换行分页</td><td>TextBlock::layout</td><td>中文走新分支（7.4）</td></tr>
+    <tr><td>渲染</td><td>Renderer</td><td>实现重写（第 10 章）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>链路回顾别贪多。上季已经把"zip → content.opf → XHTML → blocks → pages → 帧缓冲"讲透了，这一季你只需要记住"哪里变了"：内存、断行、线程。三处都能在上面那张表里对号入座——对上号，这章就抓住了。</p>
+  </div>
+
+  <!-- ========== 7.3 中文适配（一）：UTF-8 与内存管理 ========== -->
+  <h2>7.3 中文适配（一）：UTF-8 与内存管理</h2>
+
+  <p>先说一个基础但致命的背景：<strong>EPUB 里的文本是 UTF-8 编码的</strong>。UTF-8 是一种把 Unicode 码点编码成 1–4 字节的可变长字符编码——ASCII 字符占 1 字节，而绝大多数汉字占 3 字节（码点范围 U+0800–U+FFFF）。这意味着"字符串"不能按字节数切：切在字节中间，就得到一个半截汉字（乱码）。所以解析器第一件事是<strong>按 UTF-8 解码字符</strong>。看 <code>TextBlock.cpp</code>，它维护一张 <code>utf[]</code> 解码表（首字节 + 掩码决定字符长度），<code>utf8_len()</code> 看首字节判断这个字符占几个字节；<code>has_chinese_char()</code> 则用一条捷径判断段落里有没有中文——常用汉字在 UTF-8 里以 <code>0xE4–0xE9</code> 开头（3 字节），只要扫到首字节落在这个区间就返回 true。这是"真相"式的取证：不看语义，只看字节分布。</p>
+
+  <p>与字符编码同样关键的是内存从哪来。上游 <code>atomic14</code> 依赖 ESP32 的 PSRAM；移植版把这个需求做成了显式管理。<code>src/epub_mem.c</code> 定义了 6 MiB（<code>EPUB_MEMHEAP_POOL_SIZE</code>，即 <code>6*1024*1024</code> 字节）的静态缓冲池，用 <code>L2_NON_RET_BSS_SECT</code> 宏把它放进 PSRAM 所在的 <code>l2_non_ret_bss</code> 段（"L2" 是 SF32 对 PSRAM 内存域的称呼，"non_ret" 表示这部分断电不保留，正好适合装书）。然后调用 RT-Thread 的 <code>rt_memheap_init</code> 把这段缓冲注册成一个<strong>内存堆</strong>（memheap，RT-Thread 里可独立管理的一块内存区域，自带分配 / 释放与剩余量统计），名字就叫 <code>"epub_psram_memheap"</code>，用 <code>INIT_PREV_EXPORT</code> 让它在系统启动早期就初始化好。</p>
+
+  <p>光有堆还不够，关键是让所有解析代码真的用它。<code>epub_mem.c</code> 暴露了四个接口：<code>epub_mem_malloc / free / realloc / calloc</code>，全部转发到 <code>rt_memheap_*</code> 系列。更妙的是它还"接管"了 C++ 的 <code>new</code>：SDK 的 <code>cxx_crt.cpp</code> 里，全局 <code>operator new</code> 调用一个 <code>RT_WEAK</code> 弱符号 <code>cxx_mem_allocate</code>（默认走 <code>rt_malloc</code>）；<code>epub_mem.c</code> 给出同名强定义，把 <code>cxx_mem_allocate</code> / <code>cxx_mem_free</code> 改指向 PSRAM 内存堆——于是 <code>lib/Epub/</code> 里所有 <code>new TextBlock</code>、<code>new char[]</code> 都自动落进 6 MiB 池子，一行不改就完成了"换堆"。最后，<code>#ifdef PKG_FREETYPE</code> 段里还提供 <code>ft_smalloc</code> / <code>ft_sfree</code> / <code>ft_srealloc</code> / <code>ft_scalloc</code>：FreeType 的内存系统（<code>ftsystem.c</code>）正是靠这四个名字申请内存的，于是<strong>字形的位图也分配在这同一个 PSRAM 堆里</strong>。解析、C++ 对象、字形，三条内存管线殊途同归。</p>
+
+<pre><code><span class="cmt">/* src/epub_mem.c：6 MiB PSRAM 内存堆（节选） */</span>
+<span class="kw">#define</span> EPUB_MEMHEAP_POOL_SIZE (<span class="num">6</span>*<span class="num">1024</span>*<span class="num">1024</span>)
+
+<span class="kw">struct</span> rt_memheap epub_psram_memheap;
+
+<span class="ann">L2_NON_RET_BSS_SECT_BEGIN</span>(epub_memheap)
+<span class="ann">L2_NON_RET_BSS_SECT</span>(epub_memheap,
+  <span class="ann">ALIGN</span>(<span class="num">4</span>) <span class="kw">static</span> <span class="type">uint8_t</span> epub_psram_memheap_pool[EPUB_MEMHEAP_POOL_SIZE]);
+<span class="ann">L2_NON_RET_BSS_SECT_END</span>
+
+<span class="kw">static int</span> app_cahe_memheap_init(<span class="type">void</span>)
+{
+    rt_memheap_init(&amp;epub_psram_memheap, <span class="str">"epub_psram_memheap"</span>,
+                    (<span class="type">void</span> *)epub_psram_memheap_pool, EPUB_MEMHEAP_POOL_SIZE);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="ann">INIT_PREV_EXPORT</span>(app_cahe_memheap_init);
+
+<span class="type">void</span> *epub_mem_malloc(<span class="type">size_t</span> size)
+{
+    <span class="type">uint8_t</span> *p = (<span class="type">uint8_t</span> *)rt_memheap_alloc(&amp;epub_psram_memheap, size);
+    <span class="kw">if</span> (!p) { rt_kprintf(<span class="str">"epub_mem_alloc: size %d failed!"</span>, size); <span class="kw">return</span> <span class="num">0</span>; }
+    <span class="kw">return</span> p;
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/epub_mem.c：接管 C++ new 与 FreeType 的内存分配 */</span>
+<span class="type">void</span> *cxx_mem_allocate(<span class="type">size_t</span> size) { <span class="kw">return</span> epub_mem_malloc(size); }
+<span class="type">void</span>  cxx_mem_free(<span class="type">void</span> *ptr)        { epub_mem_free(ptr); }
+
+<span class="kw">#ifdef</span> PKG_FREETYPE
+<span class="type">void</span> *ft_smalloc(<span class="type">size_t</span> nbytes) { <span class="kw">return</span> epub_mem_malloc(nbytes); }
+<span class="type">void</span>  ft_sfree(<span class="type">void</span> *ptr)      { epub_mem_free(ptr); }
+<span class="type">void</span> *ft_srealloc(<span class="type">void</span> *ptr, <span class="type">size_t</span> nbytes) { <span class="kw">return</span> epub_mem_realloc(ptr, nbytes); }
+<span class="kw">#endif</span> <span class="cmt">/* PKG_FREETYPE */</span></code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/RubbishHtmlParser/blocks/TextBlock.cpp：UTF-8 解码（节选） */</span>
+<span class="kw">static int</span> utf8_len(<span class="kw">const</span> <span class="type">char</span> ch)
+{
+  <span class="type">int</span> len = <span class="num">0</span>;
+  <span class="kw">for</span> (<span class="type">int</span> i = <span class="num">0</span>; i &lt; <span class="kw">sizeof</span>(utf); ++i) {
+    <span class="kw">if</span> ((ch &amp; ~utf[i].mask) == utf[i].lead) <span class="kw">break</span>;
+    ++len;
+  }
+  <span class="kw">if</span> (len &gt; <span class="num">4</span>) <span class="fn">assert</span>(<span class="str">"invalid unicode."</span>);
+  <span class="kw">return</span> len;
+}
+
+<span class="kw">static bool</span> has_chinese_char(<span class="kw">const</span> std::vector&lt;<span class="kw">const char</span>*&gt;&amp; spans)
+{
+  <span class="cmt">/* ... */</span>
+  <span class="kw">while</span> (*p != <span class="str">'\0'</span>) {
+    <span class="type">int</span> char_len = utf8_len(*p);
+    <span class="kw">if</span> (char_len == <span class="num">3</span>) {
+      <span class="kw">if</span> (*p &gt;= <span class="num">0xE4</span> &amp;&amp; *p &lt;= <span class="num">0xE9</span>) <span class="kw">return</span> <span class="kw">true</span>;  <span class="cmt">// 汉字首字节区间</span>
+    }
+    p += (char_len &gt; <span class="num">0</span>) ? char_len : <span class="num">1</span>;
+  }
+  <span class="kw">return</span> <span class="kw">false</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>内存接口</th><th>作用</th><th>谁在用</th></tr>
+    <tr><td><code>epub_mem_malloc / free / realloc / calloc</code></td><td>PSRAM 内存堆的分配与释放</td><td>解析器代码显式调用</td></tr>
+    <tr><td><code>cxx_mem_allocate / cxx_mem_free</code></td><td>覆盖 SDK 弱符号，重定向 C++ new / delete</td><td><code>lib/Epub/</code> 里的 new / delete</td></tr>
+    <tr><td><code>ft_smalloc / ft_sfree / ft_srealloc / ft_scalloc</code></td><td>FreeType 的内存系统接口</td><td>字形位图、FT_Face 等</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>"内存从哪来"是移植的第一考题。上游只说"PSRAM 必须够"，移植版把它落成一句可验证的代码：一个 6 MiB 静态池、一句 <code>L2_NON_RET_BSS_SECT</code>、一个 <code>rt_memheap_init</code>。以后再有人问你"解析要多少内存"，答"6 MiB，在 <code>epub_mem.c</code>"，就是真相。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>has_chinese_char()</code> 用首字节区间 <code>0xE4–0xE9</code> 判断汉字是个<strong>启发式</strong>：它覆盖了常用汉字区（U+4E00–U+9FA5）的三字节 UTF-8 首字节，但生僻字、扩展区汉字、以及部分日韩汉字并不完全落在这个区间。真要全量检测，得完整解码再查 Unicode 表。这里"够用就好"的取舍，正是嵌入式开发对精确性的常见妥协——知道它不完美，比不知道强得多。</p>
+  </div>
+
+  <!-- ========== 7.4 中文适配（二）：中文 vs 拉丁排版差异 ========== -->
+  <h2>7.4 中文适配（二）：中文 vs 拉丁排版差异</h2>
+
+  <p>拉丁文本（英文、法语……）的排版基础是<strong>单词</strong>：单词之间用空格分隔，断行只能断在空格处。而中文完全不同：<strong>汉字基本等宽</strong>（每个字占一个近乎正方形的格），字与字之间没有空格，断行原则上是"能断在任意相邻两个字之间"。这套差异直接决定了换行算法该往哪边走——上游按"空格分词 + 动态规划最小代价断行"写的 <code>TextBlock::layout</code> 对纯英文很漂亮，但遇到没有空格的中文，会把它当成一个长得没边的"单词"，一行根本放不下。所以移植版必须为中文单开一条路。</p>
+
+  <p>关键实现在 <code>lib/epdiy/font_ft.c</code> 的 <code>is_delimiter()</code>：它把三类字符定义为"断点"。一是空格 / 换行；二是<strong>常用汉字区 U+4E00–U+9FA5</strong>（判断条件 <code>c &gt;= 0x4e00 &amp;&amp; c &lt;= 0x9fa5</code>）；三是一串全角标点——全角逗号（U+FF0C）、句号（U+FF0E）、问号（U+FF1F）、顿号（U+3001）、书名号（U+300A / U+300B）、省略号（U+2026）、破折号（U+2014）等。而 <code>epd_get_fixed_width_words()</code> 在限宽内逐字符前进，每遇到一个断点就记下"上一次可断位置"；一旦超宽，就从最近的可断位置切开。因为每个汉字都是断点，<strong>中文天然支持逐字断行</strong>；英文单词内的字母不是断点，仍按词断开——同一套函数同时服务两种语言。</p>
+
+  <p>排版细节在 <code>TextBlock::layout</code> 里收尾。对含中文的段落，<code>has_chinese_char(spans)</code> 为真时算出 <code>is_chinese_justified</code>（中文 + 两端对齐 + 无前导缩进），此时它先量一个"字"的宽度 <code>single_char_width</code>，把<strong>首行缩进设为两个字宽加 16 像素</strong>（<code>indent_width = single_char_width * 2 + extra_spacing</code>）——这正是中文排版的惯例"段首空两格"。另外 <code>has_leading_indent()</code> 专门处理<strong>全角空格 U+3000</strong>（UTF-8 编码 <code>0xE3 0x80 0x80</code>）：它数段首的半角空格与全角空格，满两个全角空格或四个半角空格就认定是"前导缩进"，此时放弃两端对齐的缩进补偿，避免首行被"原始缩进 + 自动缩进"双重叠加。这些"中文专属"逻辑，在英文版上游里一行都没有。</p>
+
+<pre><code><span class="cmt">/* lib/epdiy/font_ft.c：断点判定——空格 / 汉字区 / 全角标点 */</span>
+<span class="kw">static bool</span> is_delimiter(<span class="type">uint32_t</span> c)
+{
+    <span class="kw">bool</span> sp = (c==<span class="str">' '</span>||c==<span class="str">'\r'</span>||c==<span class="str">'\n'</span>)||(c&gt;=<span class="num">0x4e00</span>&amp;&amp;c&lt;=<span class="num">0x9fa5</span>);
+    <span class="kw">bool</span> pu = (c==<span class="num">0xFF0C</span>)||(c==<span class="num">0xFF1F</span>)||(c==<span class="num">0xFF1A</span>)||(c==<span class="num">0xFF01</span>)||
+              (c==<span class="num">0x3001</span>)||(c==<span class="num">0xFF0E</span>)||(c==<span class="num">0xFF1B</span>)||(c==<span class="num">0x201C</span>)||
+              (c==<span class="num">0x201D</span>)||(c==<span class="num">0x300A</span>)||(c==<span class="num">0x300B</span>)||(c==<span class="num">0x2026</span>)||
+              (c==<span class="num">0x2014</span>);
+    <span class="kw">return</span> sp||pu;
+}</code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/RubbishHtmlParser/blocks/TextBlock.cpp：中文首行缩进（节选） */</span>
+<span class="kw">bool</span> has_chinese = has_chinese_char(spans);
+<span class="kw">bool</span> has_leading = has_leading_indent(spans);
+<span class="kw">bool</span> is_chinese_justified = (style == JUSTIFIED) &amp;&amp; has_chinese &amp;&amp; !has_leading;
+
+<span class="kw">const int</span> extra_spacing = <span class="num">16</span>;
+<span class="kw">if</span> (is_chinese_justified)
+{
+    <span class="kw">const char</span>* chinese_char = <span class="str">"字"</span>;
+    <span class="kw">const char</span>* temp_end;
+    <span class="type">int</span> single_char_width = renderer-&gt;get_fixed_width_words(
+        chinese_char, &amp;temp_end, page_width, <span class="kw">false</span>, <span class="kw">false</span>);
+    <span class="kw">if</span> (temp_end == chinese_char + strlen(chinese_char) &amp;&amp; single_char_width &gt; <span class="num">0</span>)
+    {
+        indent_width = single_char_width * <span class="num">2</span> + extra_spacing;  <span class="cmt">// 段首空两格</span>
+    }
+}</code></pre>
+
+<pre><code><span class="cmt">/* lib/Epub/RubbishHtmlParser/blocks/TextBlock.cpp：全角空格识别（节选） */</span>
+<span class="cmt">// 全角空格 UTF-8 编码：0xE3 0x80 0x80（U+3000）</span>
+<span class="kw">while</span> (*p != <span class="str">'\0'</span>) {
+    <span class="kw">if</span> (*p == <span class="str">' '</span>) { space_count++; p++; }
+    <span class="kw">else if</span> ((<span class="type">unsigned char</span>)*p == <span class="num">0xE3</span> &amp;&amp;
+             (<span class="type">unsigned char</span>)*(p+<span class="num">1</span>) == <span class="num">0x80</span> &amp;&amp;
+             (<span class="type">unsigned char</span>)*(p+<span class="num">2</span>) == <span class="num">0x80</span>) {
+        full_space_count++; p += <span class="num">3</span>;
+    } <span class="kw">else</span> { <span class="kw">break</span>; }
+}
+<span class="kw">if</span> (full_space_count &gt;= <span class="num">2</span> || space_count &gt;= <span class="num">4</span>) <span class="kw">return</span> <span class="kw">true</span>;</code></pre>
+
+  <table>
+    <tr><th>维度</th><th>中文</th><th>拉丁</th></tr>
+    <tr><td>字符宽度</td><td>基本等宽（每字一格）</td><td>不等宽（i 比 W 窄）</td></tr>
+    <tr><td>词间分隔</td><td>无空格，逐字</td><td>空格分词</td></tr>
+    <tr><td>断行位置</td><td>任意相邻两字之间（每字一个断点）</td><td>仅空格处</td></tr>
+    <tr><td>两端对齐</td><td>可逐字均匀撑开</td><td>单词间加空隙</td></tr>
+    <tr><td>段首</td><td>惯例空两格（2×字宽 + 16 px）</td><td>无强制缩进</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>判断"这段代码是不是为中文写的"，就看三个词：<code>has_chinese</code>、<code>0xE3 0x80 0x80</code>、<code>0x4e00..0x9fa5</code>。在移植版里它们成对出现的地方，就是英文版没有、中文书必须的"适配"。</p>
+  </div>
+
+  <!-- ========== 7.5 移植变化盘点：继承 vs 适配 ========== -->
+  <h2>7.5 移植变化盘点：继承 vs 适配</h2>
+
+  <p>把 7.1–7.4 的发现汇总成一句话：<strong>解析的主干是继承，解析的血肉是适配。</strong>主干——四个子模块的划分、content.opf 解析、标签遍历、miniz / tinyxml2 依赖——和上游一致，这部分可以放心地说"从 ESP32 项目带过来了"。血肉——UTF-8 解码的显式处理、6 MiB PSRAM 内存堆、C++ new 与 FreeType 的内存重定向、中文断行与缩进、页面数组的互斥锁——是移植版为了"在 SF32 上把中文书读顺"而补上的适配。盘点成清单，就是一张"继承 vs 适配"的分工表。</p>
+
+  <p>这五处适配并非各管各的，而是层层咬合：内存堆给了解析和字形一个家（7.3）；UTF-8 解码让"汉字是 3 字节"这件事不再出错（7.3）；中文断行让换行算法不再把整段中文当成一个超长单词（7.4）；互斥锁让解析与后台预热量线能安全并行（7.2）——而预热量线（第 8 章）和渲染器（第 10 章）正是接下来两章的主角。换句话说，第 7 章埋下的每一处适配，都会在后面"翻页快不快、换字体卡不卡、排版美不美"里兑现。顺带一提：<code>epub_mem.c</code> 里的 <code>heap_free_size()</code> 把"主 RAM 剩余 + PSRAM 内存堆剩余"加在一起上报，<code>main.cpp</code> 开机就打两行日志 <code>PSRAM free before font init / after font init</code>——用这个函数，你能亲眼看到字体初始化吃掉了多少内存，这是柯南最爱的"实证"。</p>
+
+  <p>最后是总结陈词：验证继承，永远用 diff 和 grep，而不是 README。把"到底改了什么"的答案落到文件、函数、宏三个粒度——<code>epub_mem.c</code> 里改了内存、<code>TextBlock.cpp</code> 里改了断行、<code>RubbishHtmlParser.cpp</code> 里改了锁——你对这个项目的理解就从"听说的"变成了"查过的"。下一章，我们顺着内存管线的下游，看同样由 FreeType 驱动的字体系统。</p>
+
+<pre><code><span class="cmt"># 第 7 章变化盘点（epdiy-epub 相对上游 atomic14）</span>
+<span class="cmt">继承（原样搬来）：</span>
+  lib/Epub/EpubList/        content.opf 解析（metadata / manifest / spine）
+  lib/Epub/ZipFile/         包内文件寻址，配合 miniz
+  lib/Epub/RubbishHtmlParser/  标签遍历逻辑（VisitEnter）
+<span class="cmt">适配（移植新增）：</span>
+  TextBlock.cpp             UTF-8 解码、has_chinese、首行缩进、全角空格
+  font_ft.c                 is_delimiter 断点、中文逐字断行
+  RubbishHtmlParser.cpp     页面互斥锁（后台预热量线并发）
+  epub_mem.c                6 MiB PSRAM 内存堆 + new / FreeType 内存重定向</code></pre>
+
+<pre><code><span class="cmt">/* src/epub_mem.c：剩余内存统计（主 RAM + PSRAM 堆之和） */</span>
+<span class="type">rt_uint32_t</span> heap_free_size(<span class="type">void</span>)
+{
+    <span class="type">rt_uint32_t</span> heap_free_size = max_sram_size() - used_sram_size();
+    <span class="type">rt_uint32_t</span> psram_heap_free_size = epub_psram_memheap.available_size;
+    <span class="kw">return</span> heap_free_size + psram_heap_free_size;
+}</code></pre>
+
+  <table>
+    <tr><th>变化点</th><th>文件</th><th>原因</th></tr>
+    <tr><td>6 MiB PSRAM 内存堆</td><td><code>epub_mem.c</code></td><td>解析 + 字形集中管理内存</td></tr>
+    <tr><td>C++ new 重定向</td><td><code>epub_mem.c</code></td><td><code>lib/Epub/</code> 用 new 无需改代码</td></tr>
+    <tr><td>FreeType 内存重定向</td><td><code>epub_mem.c</code>（PKG_FREETYPE）</td><td>字形位图也进 PSRAM</td></tr>
+    <tr><td>页面互斥锁</td><td><code>RubbishHtmlParser.cpp</code></td><td>解析 / 渲染并发安全</td></tr>
+    <tr><td>中文断行 + 缩进</td><td><code>TextBlock.cpp</code> / <code>font_ft.c</code></td><td>中文无空格、需逐字断行</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>给自己留一个"验证闭环"：读完这章，去 <code>epub_mem.c</code> 里数一数 <code>rt_memheap_</code> 开头的调用有几个、<code>epub_mem_</code> 开头的接口有几个；再去 <code>font_ft.c</code> 里找到 <code>0x4e00</code>。能对上，这一章就真的装进脑子里了——真相比记忆可靠。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：继承 vs 适配 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>lib/Epub/</code>，指出四个子模块各自是什么；再各举一个"原样继承"和"移植新增"的例子（对照 7.1 的表与 7.5 的盘点清单）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个子模块是 EpubList / Renderer / RubbishHtmlParser / ZipFile；继承的例子可看 content.opf 解析、标签遍历；新增的例子可看 epub_mem.c、页面互斥锁、中文断行。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>EpubList（书目 / 阅读器 / 目录，含 tinyxml2）、Renderer（渲染抽象）、RubbishHtmlParser（XHTML 解析，产出 TextBlock / ImageBlock）、ZipFile（包内文件寻址，配合 miniz）。原样继承：content.opf 的 metadata / manifest / spine 解析、VisitEnter 的标签遍历。移植新增：epub_mem.c 的 6 MiB PSRAM 内存堆、RubbishHtmlParser 的页面互斥锁、TextBlock 的中文断行与首行缩进。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：UTF-8 与内存 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>为什么 EPUB 里的汉字不能按字节数切字符串？epub_mem.c 用哪三个手段让"解析、C++ new、FreeType"都吃同一个 PSRAM 内存堆？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>汉字在 UTF-8 中占 3 字节，切在中间得乱码；三个手段分别是 epub_mem_malloc 等显式接口、覆盖 cxx_mem_allocate 弱符号、提供 ft_smalloc 等 FreeType 内存接口。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>汉字在 UTF-8 中占 3 字节，按字节切字符串会切出半截字符（乱码），所以必须先按 UTF-8 首字节解码出完整字符。三个手段：(1) <code>epub_mem_malloc / free / realloc / calloc</code> 显式指向 6 MiB memheap；(2) <code>cxx_mem_allocate / cxx_mem_free</code> 覆盖 SDK 的 <code>RT_WEAK</code> 弱符号，让 C++ 的 operator new / delete 走同一堆；(3) <code>ft_smalloc / ft_sfree / ft_srealloc / ft_scalloc</code> 四个 FreeType 内存接口（<code>PKG_FREETYPE</code> 段）也指向它。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：中文断行 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为什么上游"空格分词 + 动态规划"的换行对中文失效？<code>is_delimiter()</code> 把哪几类字符定义为断点？<code>epd_get_fixed_width_words()</code> 超宽时从哪个位置切开？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>中文没有空格，会被当成一个超长单词；断点是空格/换行、常用汉字区 U+4E00–U+9FA5、全角标点；超宽回退到"上一次可断位置"，一直没断点则硬切。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>中文字间无空格，按"空格分词"会把整段中文当成一个单词，放不下一行。is_delimiter 把空格/换行、常用汉字区（<code>0x4e00–0x9fa5</code>）、一串全角标点（逗号、句号、问号、顿号、书名号、省略号、破折号等）定义为断点。get_fixed_width_words 逐字符累加宽度，每遇到断点记录"上一次可断位置"；一旦超宽，从最近的可断位置切开；若始终没有断点，则硬切到下一个字符。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：全角空格与缩进 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>has_leading_indent() 数到什么程度判定"有前导缩进"？为什么判定有前导缩进后，is_chinese_justified 会变成 false？两个全角空格与四个半角空格为什么在视觉上等价？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>全角空格 U+3000 的编码是 0xE3 0x80 0x80，设计宽度等于一个汉字；缩进判定是为了避免"原始缩进 + 自动空两格"双重叠加。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>满两个全角空格或四个半角空格即判定"有前导缩进"。一旦判定有前导缩进，is_chinese_justified 为 false，TextBlock::layout 就不会再叠加"两个字宽 + 16 px"的自动缩进，避免原始排版里的缩进与自动缩进重复，首行不至于被双重推走。全角空格 U+3000 的宽度恰好等于一个汉字，即约两个半角空格宽度，所以"2 个全角空格 ≈ 4 个半角空格"在视觉上等价。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章：显示驱动：DBI 与 SPI 墨水屏 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="4" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：显示驱动——DBI 与 SPI 墨水屏</h1>
+  <p class="chapter-subtitle">屏幕不识字，它只认电压——把"字"变成"帧"，是艺术与工程的合奏。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「别人画画用笔刷，我们画画用『电压、帧、查找表』。电子墨水把白纸和墨揉进同一个像素——你写下的每个字，都要由屏驱用几十帧的序列『一笔一笔』描上去。别嫌那些寄存器琐碎：波形表是画家的调色盘，时序是落笔的节奏，VCOM 是画面的底色。懂它们，你才真正『会画』。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 两种接口：DBI 与 SPI 墨水屏 ========== -->
+  <h2>4.1 两种接口：DBI 与 SPI 墨水屏</h2>
+
+  <p>电子墨水屏和主控之间靠什么"说话"？本项目给出了两种答案，对应第 3 章里的两套板级配置。第一种叫 <strong>DBI</strong>（Display Bus Interface，显示总线接口）：一种把数据通过多根并行信号线同时送出的接口；这里用的是 8-bit DBI，一次并行送出 8 位数据，速度快、吞吐高，适合 1032×758、1448×1072 这种大分辨率墨水屏。第二种叫 <strong>SPI</strong>（Serial Peripheral Interface，串行外设接口）：一种用一根数据线按位逐位传的通用串行接口，引脚少（SDA / SCK / DC / CS / RES / BUSY），但速度低，适合 240×416 这种小屏。</p>
+
+  <p>这两种接口在代码里用一"行"字就能区分——<code>LCDC_InitTypeDef</code> 里的 <code>.lcd_itf</code> 字段。8-bit 并行屏写 <code>LCDC_INTF_DBI_8BIT_B</code>（B 代表 8 位总线），SPI 屏写 <code>LCDC_INTF_SPI_DCX_1DATA</code>（DCX 表示数据/命令由 DC 引脚区分、1 根数据线）。剩下的差距全在驱动里：并行屏要把像素数据打包成"每帧的 8-bit 波形查找表"喂给 EPIC 图像加速引擎；SPI 屏则把数据通过寄存器写进屏幕自带的波形引擎。先记下这个总纲，后面两节分别展开。</p>
+
+  <table>
+    <tr><th>对比项</th><th>DBI（8-bit 并行）</th><th>SPI（串行）</th></tr>
+    <tr><td>数据线</td><td>8 根（D0-D7）</td><td>1 根（SDA）</td></tr>
+    <tr><td>其它信号</td><td>CLK / LE / OE / SPH / STV / CPV / GMODE</td><td>SCK / DC / CS / RES / BUSY</td></tr>
+    <tr><td>接口宏</td><td><code>LCDC_INTF_DBI_8BIT_B</code></td><td><code>LCDC_INTF_SPI_DCX_1DATA</code></td></tr>
+    <tr><td>典型时钟</td><td><code>sclk_freq=24MHz</code>（并行一次 8bit）</td><td><code>freq=5000000</code>（5MHz 串行）</td></tr>
+    <tr><td>驱动目录</td><td><code>src/boards/display_dbi/</code></td><td><code>src/boards/display_spi/</code></td></tr>
+    <tr><td>适用屏</td><td>YZC085 / R7D005</td><td>OPM037A3 240×416</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// src/boards/display_dbi/epd_display.c —— 8-bit 并行 DBI 接口</span>
+<span class="type">static LCDC_InitTypeDef</span> lcdc_int_cfg =
+{
+    .lcd_itf = <span class="type">LCDC_INTF_DBI_8BIT_B</span>,
+    .freq = <span class="num">0</span>, <span class="cmt">/* 由 epd_get_timing_config 返回的 sclk_freq 覆盖 */</span>
+    .color_mode = <span class="type">LCDC_PIXEL_FORMAT_RGB332</span>,
+};</code></pre>
+
+  <pre><code><span class="cmt">// src/boards/display_spi/epd_display.c —— SPI 串行接口</span>
+<span class="type">static LCDC_InitTypeDef</span> lcdc_int_cfg = {
+    .lcd_itf = <span class="type">LCDC_INTF_SPI_DCX_1DATA</span>,
+    .freq = <span class="num">5000000</span>,
+    .color_mode = <span class="type">LCDC_PIXEL_FORMAT_RGB332</span>,
+};</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>判断"这块屏走哪种接口"，最快的方法是看板级配置的引脚：出现 <code>EPD_D0-D7</code>、<code>EPD_LE/OE/SPH</code> 是 8-bit 并行；出现 <code>EPD_SDA/SCK/DC/CS/RES/BUSY</code> 是 SPI。接口决定了数据怎么送、时钟多快，也决定了后面波形引擎谁来干活——一个靠外部 EPIC 加速引擎，一个靠屏幕内置寄存器。</p>
+  </div>
+
+  <!-- ========== 4.2 波形与帧：全刷 32 帧、局刷 12 帧 ========== -->
+  <h2>4.2 波形与帧：全刷 32 帧、局刷 12 帧</h2>
+
+  <p>先把 <strong>波形</strong>（waveform）说人话：它是电子墨水"翻面"的完整剧本——屏幕上每一个点，从"旧颜色"变到"新颜色"，需要按一定顺序施加一串电压，这串"每帧给哪个点加什么电压"的序列就叫波形。墨水屏不是像 LCD 那样一亮即显，而是靠电压把黑、白墨粒推来推去，一个画面要分很多次（帧）刷完才稳定。刷整个屏幕叫<strong>全刷</strong>（full refresh），只刷局部区域叫<strong>局刷</strong>（partial refresh）。</p>
+
+  <p>波形由屏幕厂商提供，做成查表数据：本项目在 <code>epd_configs_opm060d.c</code> 里按"温区 × 刷新模式"组织了两张表——<code>yzc085_wave_full_0_100</code>（<strong>0~100℃ 温区、全刷，32 帧</strong>）和 <code>yzc085_wave_partial_0_100</code>（<strong>0~100℃ 温区、局刷，12 帧</strong>）。每张表是 <code>[帧数][256]</code> 的二维数组：256 对应 16×16 种"旧像素×新像素"组合（旧色占高 4 位、新色占低 4 位），每一帧为每种组合查出一个 0~3 的灰阶值。用一张 <code>WaveTableEntry</code> 把"温区范围 + 帧数 + 表地址"打包成一条记录：全刷 32 帧、局刷 12 帧，越刷越多越清晰，代价是时间。</p>
+
+  <table>
+    <tr><th>波形表</th><th>温区</th><th>帧数</th><th>用途</th></tr>
+    <tr><td><code>yzc085_wave_full_0_100</code></td><td>0~100℃</td><td>32</td><td>全刷：整屏推倒重画，残影少、清晰</td></tr>
+    <tr><td><code>yzc085_wave_partial_0_100</code></td><td>0~100℃</td><td>12</td><td>局刷：只动变化区域，快但有残影</td></tr>
+    <tr><td>二进制波形 <code>epd_waveform.bin</code></td><td>多温区</td><td>由库查表</td><td>厂商成品波形（38216 字节，见 4.3）</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// src/boards/display_dbi/epd_configs_opm060d.c —— 波形表条目结构</span>
+<span class="kw">typedef struct</span> {
+    <span class="type">int</span> min_temp;
+    <span class="type">int</span> max_temp;
+    <span class="type">uint32_t</span> frame_count;
+    <span class="kw">const</span> <span class="type">uint8_t</span> (*wave_table)[<span class="num">256</span>];
+} <span class="type">WaveTableEntry</span>;
+
+<span class="kw">static const</span> <span class="type">WaveTableEntry</span> full_wave_table =
+    {<span class="num">0</span>, <span class="num">100</span>, <span class="num">32</span>, &amp;yzc085_wave_full_0_100[<span class="num">0</span>]};
+
+<span class="kw">static const</span> <span class="type">WaveTableEntry</span> partial_wave_table =
+    {<span class="num">0</span>, <span class="num">100</span>, <span class="num">12</span>, &amp;yzc085_wave_partial_0_100[<span class="num">0</span>]};</code></pre>
+
+  <pre><code><span class="cmt">// 按"温度 + 刷新模式"挑选波形表，并返回本次刷新的帧数</span>
+<span class="type">uint32_t</span> <span class="fn">epd_wave_table_get_frames</span>(<span class="type">int</span> temperature, <span class="type">EpdDrawMode</span> mode)
+{
+    <span class="kw">const</span> <span class="type">WaveTableEntry</span> *wave_table = <span class="type">NULL</span>;
+    <span class="kw">if</span> (<span class="type">EPD_DRAW_MODE_FULL</span> == mode) {
+        wave_table = &amp;full_wave_table;
+    } <span class="kw">else</span> {
+        wave_table = &amp;partial_wave_table;
+    }
+    <span class="kw">if</span> (temperature &lt; wave_table-&gt;min_temp || temperature &gt;= wave_table-&gt;max_temp) {
+        wave_table = &amp;full_wave_table; <span class="cmt">// 温区不匹配就退回全刷，稳妥</span>
+    }
+    <span class="fn">p_current_wave_from</span> = (<span class="kw">const</span> <span class="type">uint8_t</span> *)&amp;wave_table-&gt;wave_table[<span class="num">0</span>][<span class="num">0</span>];
+    <span class="kw">return</span> wave_table-&gt;frame_count;
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>温度为什么重要？墨粒子的"脾气"随温度变：低温墨粒懒、要更多帧才推得动，高温墨粒活、帧多了反而过冲。所以波形表按温区分档，<code>epd_wave_table_get_frames</code> 里温度超了范围就<strong>保险地退回全刷</strong>。这也是"调试屏发虚先查温度"的由来——把 <code>temperature</code> 传成恒定的 26℃ 固然能用，但真实量产要考虑冬夏温差。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>全刷 vs 局刷不是"好看"与"难看"的单选题，而是"清晰"与"速度"的取舍：局刷只更新变化的像素行，快很多，但新墨粒没被彻底推到位，会留下淡淡的上一页影子（残影）。所以驱动用"<strong>刷 N 次局刷、然后强制一次全刷</strong>"的策略来清残影——DBI 驱动里 <code>reflesh_times % g_part_disp_times == 0</code> 就切全刷（默认每 10 次），SPI 驱动里 <code>epd_get_refresh_mode()</code> 也是同一套逻辑（默认 <code>PART_DISP_TIMES</code> 为 10）。</p>
+  </div>
+
+  <!-- ========== 4.3 把波形喂给屏：LUT 与 EPIC ========== -->
+  <h2>4.3 把波形喂给屏：LUT 与 EPIC</h2>
+
+  <p>有了波形表，还要把它"翻译"成屏能用的样子。这里的 <strong>LUT</strong>（Lookup Table，查找表）就是一张查表：给定"旧色×新色"，查出这一帧该输出的灰阶。代码注释说得很直白——"8bit lookup table for the current frame (high 4 bits: old data, low 4 bits: new data). The output is 2-bit data"：输入是 8 位（旧 4 位 + 新 4 位），输出是 2 位灰阶。8-bit 并行屏走的是 <code>EPIC</code>（电子纸图像加速引擎，一个专门做墨水屏像素变换的硬件加速器），驱动把每一帧的 256 项 LUT 填进 EPIC 的 LUT 寄存器，EPIC 再逐行把混合灰度帧缓冲转成屏上波形。</p>
+
+  <p><code>epd_wave_table_fill_lut</code> 干的就是"逐帧填 LUT"这件小事：先取出当前帧的 256 字节波形（<code>p_current_wave_from + frame_num * 256</code>），再把每个字节左移 3 位塞进 32 位 LUT（<code>p_epic_lut[i] = p_frame_wave[i] << 3</code>）。为什么是左移 3 位？因为 EPIC 的 LUT 里每个输入组合要占一个 32 位字的低 3 位通道，8 位输入正好是 256 个 32 位字。与此同时，<code>CopyToMixedGrayBuffer</code> 在 PSRAM 上维护一块"混合灰度帧缓冲"（每字节高 4 位是旧像素、低 4 位是新像素），把新旧两层合起来供 LUT 查询——这就在第 3 章那个 <code>psram1</code> 分区上。它里面有一段真实的未实现代码，正适合当教学点：当图层格式是 <code>LCDC_PIXEL_FORMAT_MONO</code> 时，直接 <code>RT_ASSERT(0)//Not implemented yet</code>。</p>
+
+  <p>第 3 章提过 <code>Kconfig.proj</code> 里有个 <code>EPD_WAVEFORM_USE_BIN</code> 开关：不开时，波形是上面这种编译进固件的 C 数组（我们刚看的 <code>opm060d.c</code> 前半段）；开了时，波形从 <code>waveform/</code> 目录的 <code>epd_waveform.bin</code>（38216 字节）读取——这是一份厂商给的二进制波形文件，通过 <code>waveform/</code> 下的 <code>epd_waveform_bin_reader.h</code> 接口（配好的 <code>libepd_waveform_bin_reader_gcc.a</code> / <code>.rvds.lib</code> 库）按温区、模式查帧。它烧在 <code>ptab.json</code> 的 <code>wave_table</code> 分区（<code>CUSTOM_EPD_WAVE_TABLE</code>），由 <code>SConstruct</code> 用 <code>AddCustomImg</code> 打包进固件。两种波形来源各有利弊，对比如下。</p>
+
+  <table>
+    <tr><th>对比项</th><th>C 数组波形（默认）</th><th>二进制波形（EPD_WAVEFORM_USE_BIN）</th></tr>
+    <tr><td>波形数据</td><td>编译进固件的 <code>yzc085_wave_full/partial_0_100</code></td><td>独立文件 <code>epd_waveform.bin</code>（38216 字节）</td></tr>
+    <tr><td>存放位置</td><td>固件代码段（只读数据）</td><td>烧录到 <code>wave_table</code> 分区（<code>CUSTOM_EPD_WAVE_TABLE</code>）</td></tr>
+    <tr><td>读取方式</td><td>直接引用数组指针</td><td><code>waveform_bin_reader_*</code> 库 + <code>rt_flash_read</code> / <code>rt_nand_read</code></td></tr>
+    <tr><td>切换开关</td><td>不定义 <code>EPD_WAVEFORM_USE_BIN</code></td><td><code>EPD_WAVEFORM_USE_BIN=y</code></td></tr>
+    <tr><td>适用场景</td><td>波形随代码一起发布、要改表需重编译</td><td>厂商单独交付波形、想按 Flash 分区热替换</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// src/boards/display_dbi/epd_configs_opm060d.c —— 逐帧填 EPIC 的 32 位 LUT</span>
+<span class="kw">void</span> <span class="fn">epd_wave_table_fill_lut</span>(<span class="type">uint32_t</span> *p_epic_lut, <span class="type">uint32_t</span> frame_num)
+{
+    <span class="kw">const</span> <span class="type">uint8_t</span> *p_frame_wave = <span class="fn">p_current_wave_from</span> + (frame_num * <span class="num">256</span>);
+    <span class="cmt">// Convert the 8-bit waveforms to 32-bit epic LUT values</span>
+    <span class="kw">for</span> (<span class="type">uint16_t</span> i = <span class="num">0</span>; i &lt; <span class="num">256</span>; i++)
+        p_epic_lut[i] = p_frame_wave[i] &lt;&lt; <span class="num">3</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// PSRAM 上的混合灰度帧缓冲 + 一个真实的"未实现"占位</span>
+L2_NON_RET_BSS_SECT(frambuf, ALIGN(<span class="num">4</span>) <span class="kw">static</span> <span class="type">uint8_t</span>
+    mixed_framebuffer[LCD_HOR_RES_MAX * LCD_VER_RES_MAX]);
+
+<span class="kw">if</span> (hlcdc-&gt;Layer[HAL_LCDC_LAYER_DEFAULT].data_format == <span class="type">LCDC_PIXEL_FORMAT_MONO</span>)
+{
+    RT_ASSERT(<span class="num">0</span>);<span class="cmt">//Not implemented yet</span>
+}</code></pre>
+
+  <pre><code><span class="cmt"># 使用二进制波形的分支（epd_configs_opm060d.c · EPD_WAVEFORM_USE_BIN）</span>
+<span class="fn">waveform_bin_reader_init</span>(<span class="type">CUSTOM_EPD_WAVE_TABLE_SIZE</span>);
+frames = <span class="fn">waveform_bin_reader_get_frames</span>(temperature, WAVE_MODE_FULL);
+<span class="fn">waveform_bin_reader_fill_lut</span>(p_epic_lut, frame_num);
+<span class="cmt"># waveform/ 目录（配好的库，SConscript 按需选用）</span>
+epd_waveform.bin                    <span class="cmt"># 38216 字节二进制波形</span>
+epd_waveform_bin_reader.h
+libepd_waveform_bin_reader_gcc.a    <span class="cmt"># GCC 工具链静态库</span>
+epd_waveform_bin_reader_rvds.lib    <span class="cmt"># RVDS 工具链静态库</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>左移 3 位这个细节别忽略——它是"查表翻译"的落点：波形文件里每个点存的是 0~3 的灰阶，EPIC 的 LUT 把灰阶放进 32 位字的低 3 位。看懂这行 <code>&lt;&lt; 3</code>，你就明白"波形表是数据、LUT 是通道、EPIC 是执行者"三层关系，后面移植新屏时也只需照抄这套翻译。</p>
+  </div>
+
+  <!-- ========== 4.4 时序与 VCOM：把帧"送"给屏幕 ========== -->
+  <h2>4.4 时序与 VCOM：把帧"送"给屏幕</h2>
+
+  <p>波形表定好了"每帧画什么"，接下来要定"每帧怎么扫过去"——这就是时序。驱动用 <code>EPD_TimingConfig</code> 一次性描述整屏扫描节奏：<code>sclk_freq</code>（像素时钟，单位 MHz）、<code>fclk_freq</code>（行/帧时钟，单位 KHz）、以及一堆 L/F 开头的前后沿长度。最值得记的是两个"按分辨率算"的字段：<code>LDL = LCD_HOR_RES_MAX/4</code>（每行有效数据时钟数，注释说得很清楚——"2bit+8数据线，需除以4"）和 <code>FDL = LCD_VER_RES_MAX</code>（每帧有效行数）。这印证了第 3 章"分辨率宏驱动一切"：改分辨率，时序自动跟着变，驱动主体不用动。</p>
+
+  <p>再说 <strong>VCOM</strong>（common voltage，公共电极电压）：墨水屏所有像素共享的一个参考电压，像素电极相对它产生的压差决定墨粒往哪边翻。它必须和屏幕面板匹配，调高了残影重、调低了对比度差。本项目里 <code>epd_get_vcom_voltage()</code> 是个很典型的"按屏编译"写法：编译目标是 R7D005 时返回 2100（mV），否则统一 1050。8-bit 并行屏的 VCOM 由电源管理芯片 <code>TPS65185</code> 通过 I2C 设置（<code>oedtps_init(epd_get_vcom_voltage())</code>、<code>oedtps_vcom_enable()</code>），而 SPI 小屏没有独立电源芯片，VCOM 相关参数直接写在寄存器配置里。</p>
+
+  <table>
+    <tr><th>字段</th><th>含义</th><th>本项目的值</th></tr>
+    <tr><td><code>sclk_freq</code></td><td>像素时钟（MHz）</td><td>24</td></tr>
+    <tr><td><code>LDL</code></td><td>每行有效数据时钟数</td><td><code>LCD_HOR_RES_MAX/4</code></td></tr>
+    <tr><td><code>fclk_freq</code></td><td>行/帧时钟（KHz）</td><td>83</td></tr>
+    <tr><td><code>FDL</code></td><td>每帧有效行数</td><td><code>LCD_VER_RES_MAX</code></td></tr>
+    <tr><td><code>FSL/FBL/FEL</code></td><td>帧同步/起始/结束长度</td><td>1 / 3 / 5</td></tr>
+    <tr><td><code>SDMODE</code></td><td>源驱动模式（R7D005=1）</td><td>0（其余屏）</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// src/boards/display_dbi/epd_configs_opm060d.c —— 整屏时序</span>
+<span class="kw">const</span> <span class="type">EPD_TimingConfig</span> *<span class="fn">epd_get_timing_config</span>(<span class="kw">void</span>)
+{
+    <span class="kw">static const</span> <span class="type">EPD_TimingConfig</span> timing_config = {
+        .sclk_freq = <span class="num">24</span>,
+<span class="kw">#ifdef</span> LCD_USING_EPD_R7D005
+        .SDMODE = <span class="num">1</span>,
+<span class="kw">#else</span>
+        .SDMODE = <span class="num">0</span>,
+<span class="kw">#endif</span>
+        .LSL = <span class="num">0</span>, .LBL = <span class="num">0</span>,
+        .LDL = <span class="type">LCD_HOR_RES_MAX</span>/<span class="num">4</span>,
+        .LEL = <span class="num">1</span>,
+        .fclk_freq = <span class="num">83</span>,
+        .FSL = <span class="num">1</span>, .FBL = <span class="num">3</span>,
+        .FDL = <span class="type">LCD_VER_RES_MAX</span>,
+        .FEL = <span class="num">5</span>,
+    };
+    <span class="kw">return</span> &amp;timing_config;
+}</code></pre>
+
+  <pre><code><span class="cmt">// VCOM 电压：按屏编译的经典写法</span>
+<span class="type">uint16_t</span> <span class="fn">epd_get_vcom_voltage</span>(<span class="kw">void</span>)
+{
+<span class="kw">#if defined</span>(LCD_USING_EPD_R7D005)
+    <span class="kw">return</span> <span class="num">2100</span>;
+<span class="kw">#else</span>
+    <span class="kw">return</span> <span class="num">1050</span>;
+<span class="kw">#endif</span>
+}
+
+<span class="cmt">// epd_display.c · LCD_Init：把时钟和 VCOM 接进初始化流程</span>
+lcdc_int_cfg.freq = <span class="fn">epd_get_timing_config</span>()-&gt;sclk_freq * <span class="num">1000</span>*<span class="num">1000</span>;
+<span class="fn">oedtps_init</span>(<span class="fn">epd_get_vcom_voltage</span>());</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>改时序的排查思路：屏"花"了先看 <code>LDL/FDL</code> 对不对（行/帧数据量）；整屏"慢"了再看 <code>fclk_freq</code>；对比度差、残影浓先动 <code>VCOM</code>。这三个旋钮是画电子水墨画最常用的调色板，其它字段（<code>LSL/LBL/LEL/FSL/FBL/FEL</code>）一般保持厂商默认即可。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>读 README 的「3.4 设置VCOM电压」时会看到，它举的例子是 R7D005 返回 2100、其它 1050——和代码里 <code>epd_get_vcom_voltage()</code> 完全一致。但也要留个心眼：README 里「3.3 调整时序与频率参数」给的参数表与 <code>epd_get_timing_config()</code> 字段一一对应，可一旦换成新屏，<strong>必须以屏幕数据手册为准</strong>——VCOM 是面板级的，抄错了同一块屏的电压是会物理上"压"坏的。</p>
+  </div>
+
+  <!-- ========== 4.5 SPI 屏的寄存器世界 ========== -->
+  <h2>4.5 SPI 屏的寄存器世界</h2>
+
+  <p>没有 EPIC 和 TPS 电源芯片的 SPI 小屏，把"波形"这件事全部收进屏幕自己的寄存器里。它内置了 5 组波形 LUT 寄存器：<code>REG_LUT_VCOM(0x20)</code>、<code>REG_LUT_W2W(0x21)</code>、<code>REG_LUT_K2W(0x22)</code>、<code>REG_LUT_W2K(0x23)</code>、<code>REG_LUT_K2K(0x24)</code>——分别描述"公共极"和"白→白 / 黑→白 / 白→黑 / 黑→黑"的过渡波形。驱动里的 <code>EPD_LoadLUT</code> 按当前刷新模式从 <code>waveinit.h</code> 的三套常量数组里挑一组写进寄存器：<code>0=5S</code>（清屏）、<code>1=GC</code>（全刷无残影）、<code>2=DU</code>（局刷有残影）。</p>
+
+  <p>这套"写寄存器"的流程还有个标志位细节：<code>LUT_Flag</code> 在 <code>K2W</code> 与 <code>W2K</code> 两组寄存器之间轮流切换（R22/R23 对调），用来抵消某些面板上反复刷带来的极性偏置。而"屏幕忙不忙"靠 <code>EPD_BUSY</code> 引脚的中断信号——驱动把 <code>EPD_BUSY</code> 挂成高电平中断，忙碌结束触发回调释放信号量 <code>epd_busy_sem</code>，写命令前 <code>EPD_ReadBusy()</code> 等信号量（2 秒超时兜底）。这与 8-bit 并行屏"等 LCDC 的 STATUS 寄存器"是两种不同的同步哲学：一个是硬件中断驱动的信号量，一个是轮询状态位。</p>
+
+  <table>
+    <tr><th>LUT 模式</th><th>含义</th><th>说明</th></tr>
+    <tr><td><code>0</code></td><td>5S</td><td>清屏：全屏刷成黑或白</td></tr>
+    <tr><td><code>1</code></td><td>GC</td><td>全刷无残影：清晰但慢</td></tr>
+    <tr><td><code>2</code></td><td>DU</td><td>局刷有残影：快，翻页首选</td></tr>
+    <tr><td>寄存器</td><td><code>0x20~0x24</code></td><td>VCOM / W2W / K2W / W2K / K2K</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// src/boards/display_spi/epd_display.c —— 按模式加载 LUT（节选）</span>
+<span class="kw">static void</span> <span class="fn">EPD_LoadLUT</span>(<span class="type">LCDC_HandleTypeDef</span> *hlcdc, <span class="type">uint8_t</span> lut_mode)
+{
+    <span class="kw">switch</span> (lut_mode)
+    {
+        <span class="kw">case</span> <span class="num">0</span>: <span class="cmt">// 5S模式（清屏）</span>
+            <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_VCOM</span>, lut_R20_5S, <span class="num">56</span>);
+            <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_W2W</span>, lut_R21_5S, <span class="num">42</span>);
+            <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_K2K</span>, lut_R24_5S, <span class="num">42</span>);
+            <span class="kw">if</span> (LUT_Flag == <span class="num">0</span>) {
+                <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_K2W</span>, lut_R22_5S, <span class="num">56</span>);
+                <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_W2K</span>, lut_R23_5S, <span class="num">42</span>);
+                LUT_Flag = <span class="num">1</span>;
+            } <span class="kw">else</span> {
+                <span class="cmt">// R22/R23 对调，抵消极性偏置</span>
+                <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_K2W</span>, lut_R23_5S, <span class="num">56</span>);
+                <span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_LUT_W2K</span>, lut_R22_5S, <span class="num">42</span>);
+                LUT_Flag = <span class="num">0</span>;
+            }
+            <span class="kw">break</span>;
+        <span class="kw">case</span> <span class="num">1</span>: <span class="cmt">// GC模式（全刷无残影）</span>
+        <span class="kw">case</span> <span class="num">2</span>: <span class="cmt">// DU模式（局刷有残影）</span>
+            <span class="cmt">// ...同一套结构，换成 lut_Rxx_GC / lut_Rxx_DU</span>
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">// 忙信号：EPD_BUSY 中断 → 信号量，写寄存器前等待</span>
+<span class="kw">static void</span> <span class="fn">epd_busy_callback</span>(<span class="kw">void</span> *args)
+{
+    rt_sem_release(epd_busy_sem);
+    rt_pin_irq_enable(EPD_BUSY, PIN_IRQ_DISABLE);
+}
+
+<span class="kw">static void</span> <span class="fn">EPD_ReadBusy</span>(<span class="kw">void</span>)
+{
+    rt_pin_irq_enable(EPD_BUSY, PIN_IRQ_ENABLE);
+    rt_err_t result = rt_sem_take(epd_busy_sem, RT_TICK_PER_SECOND * <span class="num">2</span>);
+    <span class="kw">if</span> (result != RT_EOK) {
+        rt_kprintf(<span class="str">"EPD busy wait timeout! (may cause display error)\n"</span>);
+    }
+    rt_sem_control(epd_busy_sem, RT_IPC_CMD_RESET, RT_NULL);
+}</code></pre>
+
+  <pre><code><span class="cmt">// 送一帧：写新数据寄存器 + 触发自动刷新</span>
+<span class="type">uint8_t</span> lut_mode = <span class="fn">epd_get_refresh_mode</span>();  <span class="cmt">// 1=全刷 2=局刷</span>
+<span class="fn">EPD_LoadLUT</span>(hlcdc, lut_mode);
+HAL_LCDC_LayerSetData(hlcdc, HAL_LCDC_LAYER_DEFAULT, (<span class="type">uint8_t</span> *)RGBCode,
+                      <span class="num">0</span>, <span class="num">0</span>, LCD_HOR_RES_MAX_8 - <span class="num">1</span>, LCD_VER_RES_MAX - <span class="num">1</span>);
+<span class="kw">if</span> (HAL_LCDC_SendLayerData2Reg_IT(hlcdc, <span class="type">REG_WRITE_NEW_DATA</span>, <span class="num">1</span>) != HAL_OK) <span class="kw">return</span>;
+parameter[<span class="num">0</span>] = <span class="num">0xA5</span>;
+<span class="fn">LCD_WriteReg</span>(hlcdc, <span class="type">REG_AUTO_REFRESH</span>, parameter, <span class="num">1</span>); <span class="cmt">// 触发屏幕自刷</span>
+reflesh_times++;</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>两套驱动放一起看，会发现同一个"全刷/局刷"节奏被实现了两遍：8-bit 并行屏在软件侧数帧数（<code>reflesh_times % g_part_disp_times</code>），SPI 屏在硬件侧分模式（5S/GC/DU）。这就是移植的妙处——上层应用只需要调用标准的 <code>LCD_WriteMultiplePixels</code>，底下选并行还是串行、用 EPIC 还是用寄存器，对应用完全透明。看驱动，先看它实现的是哪套 <code>LCD_DrvOpsDef</code> 回调，再看它各自调了哪些"屏的私货"。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：接口认亲 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>给下列"线索"匹配接口：<code>LCDC_INTF_DBI_8BIT_B</code>、<code>LCDC_INTF_SPI_DCX_1DATA</code>、引脚 EPD_D0-D7、引脚 EPD_SCK/EPD_DC、<code>freq=5000000</code>、分辨率 240×416。分别对应 DBI 还是 SPI？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 4.1 的对比表：数据线根数、接口宏、时钟、适用屏。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>LCDC_INTF_DBI_8BIT_B</code>、EPD_D0-D7、高分辨率都是 DBI（8-bit 并行）的特征；<code>LCDC_INTF_SPI_DCX_1DATA</code>、EPD_SCK/EPD_DC、<code>freq=5000000</code>、240×416 是 SPI（串行）的特征。一句话记：并行走 8 根线、线多块快；串行走 1 根线、线少省引脚。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：全刷还是局刷 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>结合 4.2 和 4.5，解释为什么翻书页通常用局刷，但每翻若干页就要强制一次全刷；代码里这个"若干"是由哪个变量/宏控制的？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>找 <code>g_part_disp_times</code> 和 <code>PART_DISP_TIMES</code>，以及 <code>reflesh_times % g_part_disp_times == 0</code> 这句判断。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>局刷只更新变化的像素，速度快，适合翻页这种高频小变化；但局刷帧数少、墨粒没被彻底推到位，连续多次会积累残影。所以每刷满 <code>g_part_disp_times</code> 次局刷，下一次就切全刷把整屏推倒重画一遍（两套驱动默认都是 10 次，宏 <code>PART_DISP_TIMES</code> 也是 10）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：读懂 <code>&lt;&lt; 3</code> <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>对照 4.3，说明 <code>epd_wave_table_fill_lut</code> 里 <code>p_epic_lut[i] = p_frame_wave[i] &lt;&lt; 3</code> 的输入、输出各是什么；为什么说它是一张 LUT 的"填充"，而不是直接发像素？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>输入是 8 位（旧 4 位+新 4 位），输出是 2 位灰阶，放进 32 位字的低 3 位；回忆"高 4 位旧、低 4 位新"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>每帧取 256 字节波形（<code>p_current_wave_from + frame_num*256</code>），字节下标就是"旧×新"组合，值是灰阶。左移 3 位把灰阶放进 32 位 EPIC LUT 字的低 3 位——所以它是在"按组合建表"，供 EPIC 在扫描每一行时用它把混合灰度帧转成屏上电压波形，属于波形翻译阶段，不是最终的像素发送。这也解释了为什么帧缓冲是"旧+新"两层：没有旧像素，就查不了"怎么从旧变到新"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：给新屏"建档" <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>假设厂商给你一块新的 8-bit 并行墨水屏（1032×758）和它的波形文件。参考 4.2-4.4 与 README「3.x 添加新的屏幕驱动」，列出要新建/修改的文件，并指出哪几个数值必须来自数据手册而不是照抄旧屏。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>Kconfig.proj 加屏宏 + 分辨率/DPI；新建 <code>epd_configs_你的屏.c</code> 放波形表、时序、VCOM；波形可用二进制文件走 <code>EPD_WAVEFORM_USE_BIN</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) <code>project/Kconfig.proj</code>：新增 <code>LCD_USING_EPD_你的屏</code> 选项并 <code>select BSP_LCDC_USING_EPD_8BIT</code>，给 <code>LCD_HOR_RES_MAX/LCD_VER_RES_MAX/LCD_DPI</code> 加 <code>default</code>；(2) 新建 <code>src/boards/display_dbi/epd_configs_你的屏.c</code>：把厂商波形转成 <code>[帧数][256]</code> 表（或复制 <code>epd_waveform.bin</code> 走 <code>EPD_WAVEFORM_USE_BIN</code> 路径），实现 <code>epd_wave_table_get_frames / epd_wave_table_fill_lut / epd_get_timing_config / epd_get_vcom_voltage</code>；(3) 若复用 <code>epd_display.c</code>，它已按 <code>LCD_HOR_RES_MAX</code> 等宏自适应。必须来自数据手册的数值：<code>sclk_freq/fclk_freq</code>、<code>LDL/FDL</code>、<strong>VCOM 电压</strong>、全刷/局刷帧数——这些是面板物理参数，照抄 R7D005 的 2100mV 到别的屏上是有风险的。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

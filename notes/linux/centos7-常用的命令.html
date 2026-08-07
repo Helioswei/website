@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>centos7-常用的命令 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="记录一下自己常用的centos7上的命令行 mount挂载 nohup常驻服务 查看系统的状态的命令 查看内存 查看磁盘使用 查看文件大小 查看进程的线程数 查看centos7的物理核数 查看centos7的逻辑核数 测试系统的io速度 复">
+  <meta name="keywords" content="">
+  <link rel="canonical" href="https://aigcwei.cn/notes/linux/centos7-常用的命令.html">
+  <meta property="og:title" content="centos7-常用的命令">
+  <meta property="og:description" content="记录一下自己常用的centos7上的命令行 mount挂载 nohup常驻服务 查看系统的状态的命令 查看内存 查看磁盘使用 查看文件大小 查看进程的线程数 查看centos7的物理核数 查看centos7的逻辑核数 测试系统的io速度 复">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/linux/centos7-常用的命令.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>centos7-常用的命令</h1>
+          <div class="article-meta"><span>2020-05-06</span></div>
+        </header>
+        <div class="article-body">
+<p>记录一下自己常用的centos7上的命令行</p>
+<h3>mount挂载</h3>
+<pre><code>
+虚拟机和主机共享目录
+mount -t cifs //192.168.30.97/code /mnt -o username=Administrator,password=Helios
+
+/code 是主机上的目录，需要设置为共享的
+username 为主机的用户名
+password 是主机的密码
+/mnt 是虚拟机上的目录
+
+卸载：
+umount /mnt
+卸载失败可以重启服务器
+</code></pre>
+<h3>nohup常驻服务</h3>
+<pre><code>
+linux平台上，要在后台运行脚本的话，一般是在命令之后加上&amp;即可。
+常驻服务的运行，退出终端也可以的命令行
+nohup
+具体方法
+nohup ./videotool &amp;
+
+</code></pre>
+<h3>查看系统的状态的命令</h3>
+<h5>查看内存</h5>
+<pre><code>
+free -h
+</code></pre>
+<h5>查看磁盘使用</h5>
+<pre><code>
+df -h
+</code></pre>
+<h5>查看文件大小</h5>
+<pre><code>
+du -sh 11.mkv
+</code></pre>
+<h5>查看进程的线程数</h5>
+<pre><code>
+ps -T -p pid
+</code></pre>
+<h5>查看centos7的物理核数</h5>
+<pre><code>
+cat /proc/cpuinfo| grep &quot;physical id&quot;| sort| uniq| wc -l
+</code></pre>
+<h5>查看centos7的逻辑核数</h5>
+<pre><code>
+cat /proc/cpuinfo| grep &quot;processor&quot;| wc -l
+</code></pre>
+<h5>测试系统的io速度</h5>
+<pre><code>
+time dd bs=4M count=1024 if=/dev/zero of=test_02 conv=fdatasync
+</code></pre>
+<h3>复制</h3>
+<pre><code>
+cp  -rfd   ./oldname  ./newname
+-r 复制目录
+-f 强制复制
+-d 复制软连接
+
+忽略冲突复制
+\cp  -rfd   ./oldname  ./newname
+</code></pre>
+<h3>定时任务</h3>
+<pre><code>
+基本格式：
+* * * * * command
+含义：
+分 时 天 月 周
+使用*/n 表示此字段上每隔n执行一次，同时注意如果低时间使用了，会覆盖高时间的*/n,不要同时使用某一天与一周的某一天，如果这个两个相等，则会执行两次
+</code></pre>
+<h5>添加</h5>
+<pre><code>
+crontab -e
+</code></pre>
+<h5>查看</h5>
+<pre><code>
+crontab -l
+</code></pre>
+<h5>删除</h5>
+<pre><code>
+crontab -r  这个表示删除所有的定时任务，如果需要删除单个，则使用crontab -e 进行编辑，然后删除某一行
+</code></pre>
+<h3>获取服务运行时使用的内存</h3>
+<p><img src="../../images/linux/cache.png" alt="cache.png"></p>
+<h3>控制进程使用cpu数目</h3>
+<h5>获取进程id</h5>
+<pre><code>
+pgrep  -f   servername
+
+pidof   servername
+</code></pre>
+<h5>设置CPU使用</h5>
+<pre><code>
+注意： 默认情况下，taskset不会影响进程的所有线程（LWP）。使用任务集的“-a”选项来影响流程中的所有线程
+
+一般可以这样设置：   taskset   -apc  0   8991     (这个目前最有效）
+</code></pre>
+<h3>脚本中生成随机数</h3>
+<pre><code>
+UUID=`echo $RANDOM`
+</code></pre>
+<h3>记录程序运行的资源到文件中</h3>
+<pre><code>
+yum install -y time
+</code></pre>
+<pre><code>
+/usr/bin/time -v -o video.log ffmpeg -i xxx.mp4
+</code></pre>
+<h3>查看机器是物理机还是虚拟机</h3>
+<pre><code>
+dmidecode -s system-product-name
+</code></pre>
+<p>结果如图：</p>
+<p><img src="../../images/linux/syss.png" alt="syss.png"></p>
+<p><img src="../../images/linux/sysv.png" alt="sysv.png"></p>
+<h3>搜索</h3>
+<h5>grep</h5>
+<p>搜索文件中包含某个单词</p>
+<pre><code>
+grep -rn  weiyang *
+</code></pre>
+<h5>过滤本身</h5>
+<pre><code>
+ps -ef | grep vim |grep -v grep
+</code></pre>
+<h3>编码问题</h3>
+<p>centos7常常会遇到一些编码问题，我们可以通过命令行来进行一些编码的转码</p>
+<h5><a href="https://www.2cto.com/os/201404/295528.html">enca</a></h5>
+<p>支持的编码比较少，一些无法转换，如UTF16,UCS-2就无法通过这个转换</p>
+<p>直接识别字符集</p>
+<pre><code>
+enca -L zh_CN test.cpp
+</code></pre>
+<p> 转换命令简单</p>
+<pre><code>
+enca -L zh_CN -x UTF-8 test.cpp or enca -L zh_CN -x GB2312 test.cpp
+</code></pre>
+<h5>iconv</h5>
+<p>可以支持多种编码，有一个缺点，必须知道原来文件的编码</p>
+<pre><code>
+iconv  -f UTF-16 -t UTF-8 b.txt -o uni3.txt
+</code></pre>
+<h5>任意转换</h5>
+<p>所有可以通过enca和iconv两者结合来使用</p>
+<pre><code>
+iconv -f $(enca -L zh_CN b.txt |head -n 1|cut -d &quot;;&quot; -f 2) -t UTF-8 b.txt -o b.txt
+</code></pre>
+<p>leopard修改<code>/opt/dana/leopard/python/fileConv.py </code></p>
+<pre><code>
+codecmd= &#x27;iconv -f $(enca -L zh_CN %s |head -n 1|cut -d &quot;;&quot; -f 2) -t UTF-8 %s -o %s&#x27;% (input_name, input_name, input_name)
+</code></pre>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

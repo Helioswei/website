@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章：电子墨水屏与 EPDiy - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="3" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：电子墨水屏与 EPDiy</h1>
+  <p class="chapter-subtitle">先把这块"会定格的屏幕"摸透——原理、配置与刷新机制</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一块料子值不值得雕，老木匠上手一摸、掂一掂就知道——密度、纹理、脾气全在手里。这一章我们就来'摸'那块电子墨水屏和它背后的驱动库 EPDiy：它为什么能断电定格，为什么刷新这么慢，什么时候该全刷、什么时候该局部刷。脾气摸透了，后面动起刀来才顺手。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 电子墨水屏原理与特性 ========== -->
+  <h2>3.1 电子墨水屏原理与特性</h2>
+
+  <p>电子墨水屏的像素，本质是一粒粒<strong>微胶囊</strong>（microcapsule）：胶囊里悬浮着带负电的黑色微粒和带正电的白色微粒，浸泡在透明液体里。对每个像素施加一个电场，就把对应颜色的粒子"推"到胶囊朝上的一面，从而呈现黑、白或中间灰。关键在电场撤掉之后：粒子并不会乱跑，而是被静电与介质黏住，稳稳停在原处——这就是<strong>双稳态</strong>（bistable）。只要不重新施加电场，画面就永远保持，连维持供电都不需要。</p>
+
+  <p>由此可以推出三个工程特性。第一，<strong>反射式显示</strong>：屏幕本身不发光，靠环境光成像，无背光、无频闪，长时间看也接近纸张的观感。第二，<strong>静态零功耗</strong>：画面定格后不再耗电，只有重新刷新那一下才消耗能量——这正是 1.1 里"一页能停几个星期"的物理根源。第三，<strong>刷新慢</strong>：要重新驱动胶囊里的粒子运动，全屏刷新需要数百毫秒，切换的瞬间画面还会闪一下。刷新并非瞬间完成——屏幕的<strong>显示控制器</strong>要按一套精确的<strong>时序</strong>（也就是波形），把一串串电压脉冲依次加在墨粒上，才能把它们翻到目标灰度。把这三个特性对照"阅读"这个场景，结论很清晰：反射式与零功耗被放大成巨大优势，刷新慢的缺点则被"翻页才刷新"的使用方式完全掩盖。</p>
+
+  <p>正因为"刷新慢 + 双稳态"，电子墨水屏的编程模型和 LCD 完全不同——不是"每一帧重绘画面"，而是<strong>"把整页画进帧缓冲 → 一次性刷上屏 → 定格"</strong>。所谓<strong>帧缓冲</strong>（framebuffer），说白了就是一块内存：先把整页内容画好，再一次整屏送显。这也是全书反复出现的代码结构：绘制可以调用很多次，但"上屏"只在需要的时候调用一次。项目自己的 <code>Renderer</code> 抽象把这两件事拆开了——<code>Renderer.h</code> 里 <code>flush_display()</code> / <code>flush_area()</code> 就是那道"上屏"的闸门，默认空实现，由各屏幕驱动覆写。</p>
+
+<pre><code><span class="cmt">/* 电子墨水屏的工作节奏：绘制可以很多次，上屏只此一回 */</span>
+应用代码
+  │  逐词、逐图地调用 draw_text / show_img / fill_rect ……（画进 m_frame_buffer）
+  ▼
+帧缓冲 m_frame_buffer（EPD_WIDTH × EPD_HEIGHT / 2 字节，每像素 4 位）
+  │  需要让用户看到时，才调用一次
+  ▼
+flush_display() ／ flush_area()   ──►  墨水流向屏面
+                                        │
+                                  画面定格，断电也保持</code></pre>
+
+<pre><code><span class="cmt">/* Renderer.h（节选）：绘制与上屏是两个动作 */</span>
+<span class="kw">virtual</span> <span class="type">void</span> <span class="fn">clear_screen</span>() = <span class="num">0</span>;
+<span class="kw">virtual</span> <span class="type">void</span> <span class="fn">flush_display</span>(){};    <span class="cmt">// 全屏刷新（默认空实现，由驱动覆写）</span>
+<span class="kw">virtual</span> <span class="type">void</span> <span class="fn">flush_area</span>(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height){};  <span class="cmt">// 局部刷新</span>
+<span class="type">uint8_t</span> temperature = <span class="num">20</span>;     <span class="cmt">// 温度（℃）——墨水响应随温度变化，刷新波形要补偿</span></code></pre>
+
+  <table>
+    <tr><th>特性</th><th>原理</th><th>对阅读器的影响</th></tr>
+    <tr><td>反射式显示</td><td>屏幕不发光，借环境光成像</td><td>无背光、无频闪，接近纸张</td></tr>
+    <tr><td>双稳态</td><td>断电后像素保持原状</td><td>静态零功耗，一页可停几周</td></tr>
+    <tr><td>刷新慢</td><td>全刷需数百毫秒</td><td>翻页有等待；无法播放视频或流畅滚动</td></tr>
+    <tr><td>部分刷新</td><td>可只刷新一个矩形区域</td><td>小区域更新快；但会积累残影</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>双稳态省的是"定格"的能耗，不是"刷新"的能耗——刷新那一瞬间反而要短暂大电流去驱动所有胶囊。所以电子墨水屏的低功耗策略永远围绕一件事：<strong>尽量减少刷新次数</strong>。深睡眠、局部刷新、只在必要时报电量，都是这个原则的体现。</p>
+  </div>
+
+  <!-- ========== 3.2 EPDiy 库是什么 ========== -->
+  <h2>3.2 EPDiy 库是什么</h2>
+
+  <p><strong>EPDiy</strong> 是 <code>vroland/epdiy</code>（GitHub）上的开源电子墨水屏驱动库，专门面向 ESP32。它最与众不同的点是<strong>并行驱动</strong>：普通 SPI 屏一次只推 1 bit 串行位流，而 EPDiy 把 e-paper 的数据总线接到 8 个甚至更多 GPIO 上，一次并行写入一个完整的字节，配合 DMA 与精心调校的波形，刷新速度比串行方案快得多——这正是 README 点名"EPDiy based parallel e-Papers"的原因。</p>
+
+  <p>这个仓库实际用的，是 EPDiy 的一个 <strong>fork</strong>。<code>lib/epdiy</code> 是一个 git 子模块，<code>.gitmodules</code> 里指向 <code>martinberlin/epdiy-rotation</code>（上游是 <code>vroland/epdiy</code>）。2.4 节强调过：克隆必须加 <code>--recursive</code>，否则 <code>lib/epdiy</code> 就是个空目录，编译在 include 第一步就失败。</p>
+
+  <p>重要的是，应用代码<strong>不直接调 epd_* 函数</strong>。项目在 <code>lib/Epub/Renderer/</code> 里封装了一层：<code>EpdiyRenderer</code> 和 <code>M5PaperRenderer</code> 都继承自 <code>EpdiyFrameBufferRenderer</code>（再往上继承项目自己的 <code>Renderer</code> 抽象），把 <code>epd_init</code>、<code>epd_hl_update_screen</code> 这些底层调用包装成 <code>draw_text</code>、<code>flush_display</code> 之类的接口。也就是说：<strong>画文字、画图的逻辑是共享的，只有"把缓冲刷到屏上"这一步因驱动而异</strong>。这个分层在第 4 章会被抽象成板级接口，这里先记住它的存在。</p>
+
+<pre><code><span class="cmt">; .gitmodules：lib/epdiy 是 EPDiy 的一个 fork</span>
+[submodule "lib/epdiy"]
+	path = lib/epdiy
+	url = https://github.com/martinberlin/epdiy-rotation.git   <span class="cmt">; 上游为 vroland/epdiy</span></code></pre>
+
+<pre><code><span class="cmt">/* EpdiyRenderer.h（节选）：构造函数里把屏幕初始化好、拿到帧缓冲 */</span>
+<span class="fn">epd_init</span>(EPD_OPTIONS_DEFAULT);              <span class="cmt">// 初始化 EPDiy 驱动与 GPIO</span>
+m_hl = <span class="fn">epd_hl_init</span>(EPD_BUILTIN_WAVEFORM);   <span class="cmt">// 高层接口：使用内置波形</span>
+<span class="fn">epd_hl_set_all_white</span>(&amp;m_hl);                <span class="cmt">// 先把整屏清成白色</span>
+m_frame_buffer = <span class="fn">epd_hl_get_framebuffer</span>(&amp;m_hl);  <span class="cmt">// 拿到底层帧缓冲指针</span>
+
+<span class="cmt">// 注意：LilyGo T5 4.7" 的电源由 Board 层 epd_poweron() 打开，</span>
+<span class="cmt">// 这里要跳过，避免重复上电（详见第 4 章）</span>
+<span class="kw">#ifndef</span> CONFIG_EPD_BOARD_REVISION_LILYGO_T5_47
+  <span class="fn">epd_poweron</span>();
+<span class="kw">#endif</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>区分"串行 SPI"与"并行总线"是读懂 EPDiy 的关键。串行方案省引脚（4~6 根），并行方案费引脚（十几根 GPIO 全被屏幕占用），但吞吐量不是一个量级。这也是为什么 4.7" 全屏带灰度刷新能压到几百毫秒级别——数据总线宽，一次能倒进去一整个字节。</p>
+  </div>
+
+  <!-- ========== 3.3 显示配置：宏而不是 sdkconfig ========== -->
+  <h2>3.3 显示配置：宏而不是 sdkconfig</h2>
+
+  <p>先纠正一个容易先入为主的直觉：屏幕型号与板卡修订的配置<strong>不在 <code>sdkconfig</code> 里</strong>。用 <code>grep</code> 在 <code>sdkconfig.epdiy</code> 里找 <code>CONFIG_EPD</code>，只会得到空结果——那份文件是 ESP-IDF 自己的配置（LwIP、WiFi、Flash 分区等）。EPDiy 的屏幕配置全部由 <code>platformio.ini</code> 的 <code>-D</code> 编译宏喂进去：这些 <code>CONFIG_EPD_*</code> 名字长得像 Kconfig 生成的宏，但在本项目里就是普通的预处理宏，供 EPDiy 源码里的 <code>#ifdef</code> 条件编译判断该用哪套波形与像素参数。</p>
+
+  <p>三套 env 的具体取值（以代码为准）：<code>[env:lilygo_t5_47]</code> 与 <code>[env:m5_paper]</code> 都用 <code>CONFIG_EPD_DISPLAY_TYPE_ED047TC2</code>（4.7 英寸）+ <code>CONFIG_EPD_BOARD_REVISION_LILYGO_T5_47</code>；<code>[env:epdiy]</code> 用 <code>CONFIG_EPD_DISPLAY_TYPE_ED060XC3</code>（6 英寸）+ <code>CONFIG_EPD_BOARD_REVISION_V6</code>，还多一个 <code>CONFIG_EPD_DRIVER_V6_VCOM=1580</code>（VCOM 电压，毫伏）。型号命名有规律：<code>ED</code> 后面三位数字是英寸数（<code>047</code>=4.7"，<code>060</code>=6"），后缀字母是具体模组；<code>BOARD_REVISION</code> 则决定 GPIO 布局、电源时序等板级参数。</p>
+
+  <p>这里藏着一个教科书级的<strong>文档与代码漂移</strong>案例：README 的 "Porting to other boards" 示例写的是 <code>-DCONFIG_EPD_DISPLAY_TYPE_ED047TC1</code>，但 <code>platformio.ini</code> 里实际是 <strong>ED047TC2</strong>。TC1 与 TC2 不是同一款模组，波形与像素参数有差异——若照 README 移植一块新板，很可能"屏幕显示错乱"却在代码里找不到任何原因。这就是全书反复强调"以代码为准"的现实意义。顺带一个彩蛋：宏名 <code>BOARD_TYPE_LILIGO_T5_47</code>（<code>LILIGO</code>，少了一个 Y）也是照抄源码的拼写，<code>#ifdef BOARD_TYPE_LILIGO_T5_47</code> 照样匹配得上——只要 define 与使用处拼写一致，编译器才不会管你名字对不对。</p>
+
+<pre><code><span class="cmt">; platformio.ini：屏幕型号与板卡修订，全部用 -D 编译宏传入</span>
+<span class="cmt">; [env:lilygo_t5_47] 与 [env:m5_paper]（4.7" 屏）</span>
+-DCONFIG_EPD_DISPLAY_TYPE_ED047TC2
+-DCONFIG_EPD_BOARD_REVISION_LILYGO_T5_47
+
+<span class="cmt">; [env:epdiy]（6" 屏 + V6 板卡）</span>
+-DCONFIG_EPD_DISPLAY_TYPE_ED060XC3
+-DCONFIG_EPD_BOARD_REVISION_V6
+-DCONFIG_EPD_DRIVER_V6_VCOM=1580   <span class="cmt">; VCOM 电压，单位 mV</span></code></pre>
+
+<pre><code><span class="cmt"># README "Porting to other boards" 里的示例（注意型号）</span>
+-DCONFIG_EPD_DISPLAY_TYPE_ED047TC1      <span class="cmt">; ← README 写的</span>
+
+<span class="cmt"># platformio.ini 里实际生效的是 ED047TC2 —— 永远以代码为准</span>
+-DCONFIG_EPD_DISPLAY_TYPE_ED047TC2      <span class="cmt">; ← 代码里真的</span></code></pre>
+
+  <table>
+    <tr><th>环境</th><th>屏幕型号</th><th>板卡修订</th><th>尺寸</th><th>备注</th></tr>
+    <tr><td><code>[env:lilygo_t5_47]</code></td><td>ED047TC2</td><td>LILYGO_T5_47</td><td>4.7"</td><td>default_envs</td></tr>
+    <tr><td><code>[env:m5_paper]</code></td><td>ED047TC2</td><td>LILYGO_T5_47</td><td>4.7"</td><td>复用 T5 屏幕定义，只用 epdiy 的绘制代码</td></tr>
+    <tr><td><code>[env:epdiy]</code></td><td>ED060XC3</td><td>V6</td><td>6"</td><td>额外 <code>VCOM=1580</code>（mV）</td></tr>
+  </table>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>换屏幕 ≠ 改 <code>sdkconfig</code>。要同时核对 <code>CONFIG_EPD_DISPLAY_TYPE_*</code>（型号）与 <code>CONFIG_EPD_BOARD_REVISION_*</code>（板卡修订）两个宏，改完重新编译。只改型号不改修订，GPIO 与电源时序对不上，一样会花屏。</p>
+  </div>
+
+  <!-- ========== 3.4 刷新机制与全刷/局部刷新权衡 ========== -->
+  <h2>3.4 刷新机制与全刷/局部刷新权衡</h2>
+
+  <p>EPDiy 刷新的核心逻辑浓缩在 <code>EpdiyRenderer::flush_display()</code> 的一行里：<code>epd_hl_update_screen(&amp;m_hl, needs_gray_flush ? MODE_GC16 : MODE_DU, temperature)</code>。这里有两个刷新模式。<strong>MODE_DU</strong>（Direct Update，直接更新）快，适合黑白文字翻页，代价是会产生<strong>残影</strong>（ghosting）——上一张画面的影子会残留，翻多几页尤其明显。<strong>MODE_GC16</strong> 是 16 级灰度全刷新，慢但干净，能把残影彻底清掉。二者怎么选？靠一个布尔标志 <code>needs_gray_flush</code> 自动判断。</p>
+
+  <p>这个标志的置位逻辑在 <code>EpdiyFrameBufferRenderer::needs_gray(color)</code> 里：只要画进去的像素 <code>color</code> 不是 <code>0</code>（纯黑）也不是 <code>255</code>（纯白），就置位 <code>needs_gray_flush = true</code>。换句话说，"我画了一个中间灰"就等于向渲染器承诺：下一次全刷必须走 GC16，因为 DU 只支持二值。项目的字体是两色压缩的，正常文字不会触发；但抗锯齿的图标、图片缩略图这类带灰度的内容会。所以这是一个藏在绘制层、由数据自动驱动的决策——应用代码只需要"画灰像素时打一个标记"。</p>
+
+  <p>再看<strong>局部刷新</strong>——说人话：全刷把整块屏一次性重刷，慢但干净；局部刷新只重画屏上的一小块，快，但会留残影。<code>flush_area(x, y, w, h)</code> 用 <code>epd_hl_update_area</code> 只刷新屏上一个矩形区域，且固定使用 MODE_DU——因为 DU 是唯一支持"部分区域"的模式。沙漏图标（<code>show_busy()</code>）、电池电量、触摸反馈这些小块更新都用它，避免整屏闪烁。但局部刷的残影会随次数累积，所以积累到一定程度仍需一次 GC16 或 <code>epd_fullclear()</code> 来清屏。<code>temperature</code> 参数贯穿始终：墨水响应速度随温度变化，波形需要按温度补偿（<code>Renderer</code> 里默认 <code>temperature = 20</code>）。</p>
+
+<pre><code><span class="cmt">/* EpdiyRenderer.h（节选）：全刷与局部刷，一个在速度与干净之间权衡 */</span>
+<span class="kw">void</span> <span class="fn">flush_display</span>()
+{
+  <span class="fn">epd_hl_update_screen</span>(&amp;m_hl,
+      needs_gray_flush ? MODE_GC16 : MODE_DU,   <span class="cmt">// 有灰度 → GC16 全刷；纯黑白 → DU 快刷</span>
+      temperature);
+  needs_gray_flush = <span class="kw">false</span>;
+}
+<span class="kw">void</span> <span class="fn">flush_area</span>(<span class="type">int</span> x, <span class="type">int</span> y, <span class="type">int</span> width, <span class="type">int</span> height)
+{
+  <span class="fn">epd_hl_update_area</span>(&amp;m_hl, MODE_DU, temperature,   <span class="cmt">// 局部刷只用 DU</span>
+      {.x = x, .y = y, .width = width, .height = height});
+}
+<span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">reset</span>()
+{
+  <span class="fn">epd_fullclear</span>(&amp;m_hl, temperature);   <span class="cmt">// 彻底清屏，消除所有残影</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer.h（节选）：灰度标记与清屏 */</span>
+<span class="kw">void</span> <span class="fn">needs_gray</span>(<span class="type">uint8_t</span> color)
+{
+  <span class="kw">if</span> (color != <span class="num">0</span> &amp;&amp; color != <span class="num">255</span>)   <span class="cmt">// 非纯黑白，就要求下一刷用 GC16</span>
+    needs_gray_flush = <span class="kw">true</span>;
+}
+<span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">clear_screen</span>()
+{
+  <span class="fn">memset</span>(m_frame_buffer, <span class="num">0xFF</span>, EPD_WIDTH * EPD_HEIGHT / <span class="num">2</span>);
+  <span class="cmt">// 4bpp：每字节 2 个像素，0xFF = 两个白像素</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>看到 <code>EPD_WIDTH * EPD_HEIGHT / 2</code> 就想到"每像素 4 位、一字节装俩像素"。4.7" 屏（960×540）的帧缓冲约 <code>960×540/2 ≈ 259 kB</code>，再加解压缓冲，这就是为什么 README 把 PSRAM 列为硬性要求——内部 SRAM 只有约 520 kB，根本兜不住。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：双稳态与功耗 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用"特性→后果"的句式，写出双稳态给阅读器带来的三条好处；再解释：为什么"画面定格时不耗电"，而"刷新那一瞬间"反而最耗电？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从"粒子被黏住"这个物理机制出发；刷新意味着要重新驱动几百万个胶囊运动。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>双稳态 → 断电后像素保持 → 静态零功耗，一页可以停几周；双稳态 → 不需要背光维持 → 反射式、无频闪、护眼；双稳态 → 画面长期不变 → 配合深睡眠可做成便携低功耗设备。而刷新要重新给所有胶囊施加电场、驱动带电粒子运动，整屏同时翻转，瞬时电流很大——所以耗电集中在"翻页那一下"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读刷新源码 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>打开 <code>lib/Epub/Renderer/EpdiyRenderer.h</code> 与 <code>EpdiyFrameBufferRenderer.h</code>，回答：(a) <code>needs_gray_flush</code> 在哪些地方会被置位？(b) <code>show_busy()</code>（沙漏图标）为什么主动置位它？(c) 局部刷新 <code>flush_area()</code> 固定用哪个模式？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>注意 <code>needs_gray()</code> 的入参判断，以及 <code>show_busy()</code> 里画图用的透明色 <code>0xE0</code> 是不是纯黑白。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 每当 <code>needs_gray(color)</code> 收到非 0、非 255 的颜色时置位；另外 <code>show_busy()</code> 也会显式置位。(b) 沙漏图标用 <code>0xE0</code> 这种中间灰度绘制，是"非纯黑白"，所以必须用 GC16 才能正确显示灰阶。(c) <code>flush_area()</code> 固定用 <code>MODE_DU</code>——DU 是唯一支持部分区域更新的模式，代价是残影。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：屏幕型号漂移 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>README 的移植示例写 <code>ED047TC1</code>，而 <code>platformio.ini</code> 实际是 <code>ED047TC2</code>。(a) 假如你照 README 给新板配宏，最可能看到什么症状？(b) 用一条命令核对当前 env 到底用了哪个型号？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>型号决定波形与像素参数；<code>grep</code> 只搜 <code>platformio.ini</code> 和 README 即可。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 屏幕刷新异常——波形参数不匹配会导致对比度不对、残影严重甚至画面错乱，而代码本身看不出任何问题，因为宏的值是"对的那一侧"在漂。(b) <code>grep -rn "EPD_DISPLAY_TYPE" platformio.ini README.md</code>，看到 <code>platformio.ini</code> 里是 <code>ED047TC2</code>，README 里是 <code>ED047TC1</code>——以 <code>platformio.ini</code> 为准。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：设计局部刷新策略 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>翻页时整页走 DU 快刷，但页码这一小块想用 <code>flush_area()</code> 单独更新，避免整屏闪烁。请设计这套策略：何时能用 DU 局部刷、何时必须回到 GC16/全清，并解释为什么反复局部刷之后残影会越来越明显。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>DU 的原理是"只搬动该区域的粒子"，但边界处粒子可能没完全归位；想想页码区域的颜色构成。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>策略要点：(1) 页码区若保持纯黑白，可长期用 <code>flush_area()</code> + DU；(2) 每次局部刷都会在区域边缘留下少量未完全翻转的粒子，多次累积就是可见残影，所以每隔若干次、或每次全页翻页前做一次 GC16 或 <code>epd_fullclear()</code> 归零；(3) 一旦该区域要画灰度内容（如电池图标），<code>needs_gray</code> 会强制下一次全刷走 GC16。总之，把"快"留给高频小区域，把"干净"留给低频的整页与清屏。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

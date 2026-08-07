@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章：板级抽象：Board 工厂 - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="4" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：板级抽象——Board 工厂</h1>
+  <p class="chapter-subtitle">运筹帷幄：把三块板子的差异，关进同一个接口</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄，决胜千里</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「兵法讲'兵无常势，水无常形'——同一支军队，要能应对不同的地形。三块板子就是三种地形：屏幕驱动不同、按键布线不同、电源时序不同。高明的统率不是为每种地形各写一套兵书，而是把'板子'抽象成一个接口，让调度者只认接口行事。这一章，我们就拆解这场'运筹帷幄'。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 为什么要抽象板级 ========== -->
+  <h2>4.1 为什么要抽象板级</h2>
+
+  <p>仓库支持三块板子，但它们之间的差异堪称"三副面孔"。屏幕驱动：M5 Paper 用的是自己的 <code>M5EPD_Driver</code>（独立驱动），LilyGo T5 4.7" 与 EPDiy V6 用 EPDiy 驱动——但对外都呈现为同一个 <code>Renderer</code>（渲染器，就是负责往屏幕上画内容的那个对象）。按键：LilyGo 与 M5 Paper 是三个 <strong>GPIO</strong>（芯片上可读可写的通用引脚）直连、按下为低电平；EPDiy V6 只有 SELECT 直连 GPIO（且高电平有效），UP/DOWN 还得通过 I2C 上的 PCA9555 扩展芯片去读——但对外都呈现为同一个 <code>ButtonControls</code>。电源时序：LilyGo 的 <code>power_up()</code> 要主动 <code>epd_poweron()</code> 才能点亮屏幕并顺带给 SD 卡供电，M5 Paper 要一直 hold 住主电源脚，EPDiy V6 则什么都不用做。SD 卡的四根 SPI <strong>引脚</strong>（芯片伸出来的物理针脚）、电池的 ADC 通道，三块板也各不相同。</p>
+
+  <p>如果主程序把这些差异全部硬编码进去，<code>main.cpp</code> 会立刻变成一个 #ifdef 地狱。作者的解法是第 3 章那层"渲染器抽象"的向上延伸：在 <code>src/boards/</code> 定义 <code>Board</code> 抽象基类，把"三块板的差异"全部关进它的子类里。这种设计叫<strong>板级抽象</strong>（也叫适配层）：把每块板各自的硬件差异（引脚、电源、驱动）藏进一层统一接口，让上层代码只对着接口说话，不关心自己在哪块板上。看 <code>main.cpp</code> 的主任务开头——它先 <code>Board::factory()</code> 拿到一个 <code>Board*</code>，然后一路 <code>power_up()</code>、<code>get_renderer()</code>、<code>get_button_controls()</code>……主循环从头到尾不知道自己跑在哪块板上。换板 = 换一个 env = 换一个 <code>-DBOARD_TYPE_*</code> 宏，主程序一行不用改。这就是抽象的威力：<strong>差异被集中，共性被复用</strong>。</p>
+
+<pre><code><span class="cmt">/* main.cpp（节选）：主任务只跟 Board 抽象打交道 */</span>
+Board *board = <span class="fn">Board::factory</span>();        <span class="cmt">// 编译期选板，由 BOARD_TYPE_* 宏决定</span>
+board-&gt;<span class="fn">power_up</span>();
+Renderer *renderer = board-&gt;<span class="fn">get_renderer</span>();
+board-&gt;<span class="fn">start_filesystem</span>();
+Battery *battery = board-&gt;<span class="fn">get_battery</span>();
+ButtonControls *button_controls = board-&gt;<span class="fn">get_button_controls</span>(ui_queue);
+TouchControls *touch_controls = board-&gt;<span class="fn">get_touch_controls</span>(renderer, ui_queue);
+<span class="cmt">// …… 主循环只消费 renderer / battery / button_controls ……</span>
+board-&gt;<span class="fn">stop_filesystem</span>();
+board-&gt;<span class="fn">prepare_to_sleep</span>();</code></pre>
+
+<pre><code><span class="cmt">; platformio.ini：三套 env 各定义一个 BOARD_TYPE_*，交给 factory 选板</span>
+[env:lilygo_t5_47]
+-DBOARD_TYPE_LILIGO_T5_47     <span class="cmt">; → new Lilygo_t5_47()</span>
+[env:epdiy]
+-DBOARD_TYPE_EPDIY            <span class="cmt">; → new Epdiy()</span>
+[env:m5_paper]
+-DBOARD_TYPE_M5_PAPER         <span class="cmt">; → new M5Paper()</span></code></pre>
+
+  <table>
+    <tr><th>维度</th><th>LilyGo T5 4.7"</th><th>EPDiy V6</th><th>M5 Paper</th></tr>
+    <tr><td>屏幕驱动 / 渲染器</td><td>EPDiy / <code>EpdiyRenderer</code></td><td>EPDiy / <code>EpdiyRenderer</code></td><td><code>M5EPD_Driver</code> / <code>M5PaperRenderer</code></td></tr>
+    <tr><td>按键引脚</td><td>UP 34 · DOWN 39 · SELECT 35</td><td>仅 SELECT 39</td><td>UP 37 · DOWN 39 · SELECT 38</td></tr>
+    <tr><td>按键极性</td><td>低电平（0）</td><td>高电平（1）</td><td>低电平（0）</td></tr>
+    <tr><td>UP / DOWN 读取</td><td>GPIO 直连</td><td>I2C（PCA9555 扩展芯片）</td><td>GPIO 直连</td></tr>
+    <tr><td><code>power_up()</code></td><td><code>epd_poweron()</code></td><td>空实现</td><td>空实现</td></tr>
+    <tr><td><code>prepare_to_sleep()</code></td><td><code>epd_poweroff()</code></td><td><code>epd_poweroff()</code></td><td><code>rtc_gpio_hold_en</code> 保持主电源</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>判断一个抽象是否成功，标准不是"它多优雅"，而是"换一块板子要改几处"。在 Board 工厂下，换板等于改 <code>platformio.ini</code> 的一个 <code>-D</code> 宏——改动被压缩到最小、最局部。这正是"运筹"的工程化定义。</p>
+  </div>
+
+  <!-- ========== 4.2 Board.h / Board.cpp：接口与工厂 ========== -->
+  <h2>4.2 Board.h / Board.cpp：接口与工厂</h2>
+
+  <p><code>Board.h</code> 定义<strong>抽象基类</strong>（抽象类，也叫接口：只声明方法、不实现具体逻辑的类，具体做法交给子类去填）。方法分两层。<strong>纯虚方法</strong>（<code>virtual ... = 0</code>）共 4 个：<code>power_up()</code>、<code>prepare_to_sleep()</code>、<code>get_renderer()</code>、<code>get_button_controls()</code>——每块板都必须自己实现，因为它们最容易变。另有 4 个<strong>带默认实现的虚方法</strong>：<code>start_filesystem()</code>、<code>stop_filesystem()</code>、<code>get_battery()</code>、<code>get_touch_controls()</code>——大多数板子直接继承默认行为，只有需要特殊处理时才覆写（M5 Paper 就覆写了 <code>stop_filesystem()</code>）。这个"纯虚强制 + 默认虚可选"的分层，让新板子只需要关心真正不同的那部分。</p>
+
+  <p><code>Board.cpp</code> 的 <code>factory()</code> 是<strong>编译期选板</strong>的关键——这种"用一个函数按类型返回对应对象"的写法就是<strong>工厂模式</strong>：调用方不用关心选板细节，一句 <code>Board::factory()</code> 就能拿到该拿的那块板。它用一连串 <code>#ifdef BOARD_TYPE_*</code> 决定 <code>new</code> 哪个子类——因为宏来自 <code>platformio.ini</code>，选板发生在编译期而非运行期，没有虚表查找的运行时开销，也不用在启动时做一堆 <code>if</code> 判断。注意宏名 <code>BOARD_TYPE_LILIGO_T5_47</code>（少了个 Y）是照抄 <code>platformio.ini</code> 的拼写，别试图"顺手修正"——改了反而匹配不上。</p>
+
+  <p>再看默认实现本身，它们也全是"编译期配置"的体现。<code>start_filesystem()</code>：定义了 <code>USE_SPIFFS</code> 就 <code>new SPIFFS("/fs")</code>，否则 <code>new SDCard("/fs", MISO, MOSI, CLK, CS)</code>，引脚从 <code>SD_CARD_PIN_NUM_*</code> 宏读取；<code>get_battery()</code>：定义了 <code>BATTERY_ADC_CHANNEL</code> 就 <code>new ADCBattery(...)</code>，否则返回 <code>nullptr</code>（不显示电量）；<code>get_touch_controls()</code>：默认返回一个什么都不做的哑实现。这套"默认值"把 <code>platformio.ini</code> 的宏和 Board 的运行时对象牢牢绑在一起——宏变，对象变，代码不变。</p>
+
+<pre><code><span class="cmt">/* Board.h：纯虚方法 = 每块板必须实现；默认虚方法 = 可继承 */</span>
+<span class="kw">class</span> Board {
+<span class="kw">protected</span>:
+<span class="kw">#ifdef</span> USE_SPIFFS
+  SPIFFS *spiffs;                 <span class="cmt">// 文件系统二选一，编译期决定</span>
+<span class="kw">#else</span>
+  SDCard *sdcard;
+<span class="kw">#endif</span>
+<span class="kw">public</span>:
+  <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">power_up</span>() = <span class="num">0</span>;                    <span class="cmt">// 上电、开屏等启动工作</span>
+  <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">prepare_to_sleep</span>() = <span class="num">0</span>;           <span class="cmt">// 进深睡眠前的收尾</span>
+  <span class="kw">virtual</span> Renderer *<span class="fn">get_renderer</span>() = <span class="num">0</span>;          <span class="cmt">// 本板的渲染器</span>
+  <span class="kw">virtual</span> ButtonControls *<span class="fn">get_button_controls</span>(xQueueHandle ui_queue) = <span class="num">0</span>;
+
+  <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">start_filesystem</span>();               <span class="cmt">// 默认：SPIFFS 或 SD 卡</span>
+  <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">stop_filesystem</span>();
+  <span class="kw">virtual</span> Battery *<span class="fn">get_battery</span>();                <span class="cmt">// 默认：ADCBattery 或 nullptr</span>
+  <span class="kw">virtual</span> TouchControls *<span class="fn">get_touch_controls</span>(Renderer *r, xQueueHandle q); <span class="cmt">// 默认哑实现</span>
+
+  <span class="kw">static</span> Board *<span class="fn">factory</span>();                          <span class="cmt">// 编译期选板</span>
+};</code></pre>
+
+<pre><code><span class="cmt">/* Board.cpp：工厂方法——用 #ifdef 在编译期选板 */</span>
+Board *<span class="fn">Board::factory</span>()
+{
+<span class="kw">#ifdef</span> BOARD_TYPE_LILIGO_T5_47
+  <span class="kw">return</span> <span class="kw">new</span> Lilygo_t5_47();
+<span class="kw">#endif</span>
+<span class="kw">#ifdef</span> BOARD_TYPE_EPDIY
+  <span class="kw">return</span> <span class="kw">new</span> Epdiy();
+<span class="kw">#endif</span>
+<span class="kw">#ifdef</span> BOARD_TYPE_M5_PAPER
+  <span class="kw">return</span> <span class="kw">new</span> M5Paper();
+<span class="kw">#endif</span>
+}
+
+<span class="cmt">/* 默认文件系统实现：宏决定用 SPIFFS 还是 SD 卡 */</span>
+<span class="kw">void</span> <span class="fn">Board::start_filesystem</span>()
+{
+<span class="kw">#ifdef</span> USE_SPIFFS
+  spiffs = <span class="kw">new</span> SPIFFS(<span class="str">"/fs"</span>);
+<span class="kw">#else</span>
+  sdcard = <span class="kw">new</span> SDCard(<span class="str">"/fs"</span>,
+      SD_CARD_PIN_NUM_MISO, SD_CARD_PIN_NUM_MOSI,
+      SD_CARD_PIN_NUM_CLK,  SD_CARD_PIN_NUM_CS);
+<span class="kw">#endif</span>
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>factory()</code> 的三个 <code>#ifdef</code> 是互相独立的，不是 <code>#elif</code> 链。这意味着理论上可以同时定义两个 <code>BOARD_TYPE_*</code> 宏——那样 <code>new</code> 会先命中写在前面的分支，另一块板的代码永远不会被实例化。真正的 <code>platformio.ini</code> 只定义其一，但读懂"谁先谁后"能帮你理解这种写法的不严谨之处。</p>
+  </div>
+
+  <!-- ========== 4.3 三块板实现对比 ========== -->
+  <h2>4.3 三块板实现对比</h2>
+
+  <p><strong>Lilygo_t5_47.cpp</strong> 是最典型的"EPDiy 板"。按键引脚 34 / 39 / 35，按下为低电平（<code>BUTONS_ACTIVE_LEVEL 0</code>）；<code>power_up()</code> 调 <code>epd_poweron()</code>，注释说得很明白——"Need to power on the EDP to get power to the SD Card"，点亮屏幕才能给 SD 卡供电；<code>prepare_to_sleep()</code> 则对称地 <code>epd_poweroff()</code>。渲染器用 <code>EpdiyRenderer</code>；若定义了 <code>USE_L58_TOUCH</code>，触摸走 <code>L58TouchControls</code>，否则退回哑实现。</p>
+
+  <p><strong>M5Paper.cpp</strong> 的屏幕不是 EPDiy 驱动，而是 M5 自家的 <code>M5EPD_Driver</code>，所以渲染器是 <code>M5PaperRenderer</code>。按键 37 / 39 / 38，低电平有效。它的电源策略最特殊：<code>prepare_to_sleep()</code> 不是关电，而是把主电源脚 <code>M5EPD_MAIN_PWR_PIN</code>（<code>GPIO_NUM_2</code>）用 <code>rtc_gpio_hold_en()</code> 保持在高电平——因为进的是深睡眠而不是彻底关机，主电源要一直维持。它还覆写了 <code>stop_filesystem()</code>，故意不 <code>delete sdcard</code>，源码注释交代原因："seems to cause issues with the M5 Paper"。</p>
+
+  <p><strong>Epdiy.cpp</strong> 的按键结构最与众不同：V6 板上只有 SELECT 直连 GPIO（<code>GPIO_NUM_39</code>），UP/DOWN 通过 I2C 上的 <strong>PCA9555</strong> IO 扩展芯片读取（<code>EpdiyV6ButtonControls</code> 里一个 <code>control_task</code> 每 50 ms 轮询一次 I2C）。所以它返回的不是 <code>GPIOButtonControls</code>，而是专门的 <code>EpdiyV6ButtonControls</code>。极性是<strong>高电平有效</strong>（<code>BUTONS_ACTIVE_LEVEL 1</code>），源码注释解释了原因："For some reason in EPDiy on low it wakes up directly from deepsleep"——低电平方案在 EPDiy 上有深睡眠误唤醒的怪问题。而 <code>power_up()</code> 特意什么都不做（"do not call epd_poweron in this case"），V6 板不需要手动开屏。</p>
+
+<pre><code><span class="cmt">/* Lilygo_t5_47.cpp（节选）：按键 GPIO 直连、低电平有效，power_up 开屏给 SD 供电 */</span>
+<span class="kw">#define</span> BUTTON_UP_GPIO_NUM     <span class="type">GPIO_NUM_34</span>
+<span class="kw">#define</span> BUTTON_DOWN_GPIO_NUM   <span class="type">GPIO_NUM_39</span>
+<span class="kw">#define</span> BUTTON_SELECT_GPIO_NUM <span class="type">GPIO_NUM_35</span>
+<span class="kw">#define</span> BUTONS_ACTIVE_LEVEL    <span class="num">0</span>   <span class="cmt">// 按下为低电平</span>
+
+<span class="kw">void</span> <span class="fn">Lilygo_t5_47::power_up</span>()
+{
+  <span class="cmt">// Need to power on the EDP to get power to the SD Card</span>
+  <span class="fn">epd_poweron</span>();
+}
+<span class="kw">void</span> <span class="fn">Lilygo_t5_47::prepare_to_sleep</span>()
+{
+  <span class="fn">epd_poweroff</span>();
+}</code></pre>
+
+<pre><code><span class="cmt">/* Epdiy.cpp（节选）：只有 SELECT 直连 GPIO，UP/DOWN 走 I2C 扩展芯片 */</span>
+<span class="cmt">// Only select is managed in EPDiy V6 version, up and down are read by I2C</span>
+<span class="kw">#define</span> BUTTON_SELECT_GPIO_NUM <span class="type">GPIO_NUM_39</span>
+<span class="kw">#define</span> BUTONS_ACTIVE_LEVEL    <span class="num">1</span>   <span class="cmt">// 高电平有效（EPDiy 上低电平会误唤醒深睡眠）</span>
+
+<span class="kw">void</span> <span class="fn">Epdiy::power_up</span>()
+{
+  <span class="cmt">// nothing to do for this board - do not call epd_poweron in this case</span>
+}
+ButtonControls *<span class="fn">Epdiy::get_button_controls</span>(xQueueHandle ui_queue)
+{
+  <span class="kw">return</span> <span class="kw">new</span> EpdiyV6ButtonControls(
+      BUTTON_SELECT_GPIO_NUM, BUTONS_ACTIVE_LEVEL,
+      [ui_queue](UIAction action) { <span class="fn">xQueueSend</span>(ui_queue, &amp;action, <span class="num">0</span>); });
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>BUTONS_ACTIVE_LEVEL</code> 在 README 和全部三块板的源码里都拼成 "BUTONS"（少一个 O）——这是"错得一致"的典型：只要 <code>#define</code> 与使用处拼写相同，编译就通过。读到这种奇怪命名别急着"纠正"，先 <code>grep -rn "BUTONS" src/</code> 全仓搜一遍再决定。</p>
+  </div>
+
+  <!-- ========== 4.4 扩展新板的步骤 ========== -->
+  <h2>4.4 扩展新板的步骤</h2>
+
+  <p>README 的 <strong>"Porting to other boards"</strong> 一节给出了清晰的路线图，核心是两条腿：<strong>(1) 新建板类；(2) 新增 <code>platformio.ini</code> 环境</strong>。但有一条重要的"快捷通道"：如果你的屏幕本身就是 EPDiy 并行屏，板类这一步可以<strong>整个省略</strong>——只要在 env 里定义 <code>BOARD_TYPE_EPDIY</code> + <code>CONFIG_EPD_DISPLAY_TYPE_*</code> + <code>CONFIG_EPD_BOARD_REVISION_*</code>，<code>factory()</code> 就会自动 <code>new Epdiy()</code>。真正需要写 <code>Board</code> 子类的，是那些"既不是 EPDiy 屏、也没有现成板类"的全新板。</p>
+
+  <p>全新板的步骤再细化就是 4 步。第一步，在 <code>src/boards/</code> 新建 <code>MyBoard.h/.cpp</code>，实现 <code>Board.h</code> 的 4 个纯虚方法——最低限度要返回一个能画到屏幕上的 <code>Renderer</code> 和一个能翻页的 <code>ButtonControls</code>；README 的原话是 "Have a look at <code>M5Paper.h</code> for inspiration"——因为它把"继承默认实现"和"覆写差异"平衡得最好。第二步，把新板类型加进 <code>Board::factory()</code>，加一个 <code>#ifdef BOARD_TYPE_MY_BOARD</code> 分支。第三步，在 <code>platformio.ini</code> 新增 <code>[env:my_board]</code>，写入屏幕型号、<code>BOARD_TYPE</code>、SD 引脚、<code>BUTONS_ACTIVE_LEVEL</code>、电池 ADC 通道等宏。第四步，作者还请你把移植成果发回仓库——README 明确说欢迎 Pull Request。</p>
+
+  <p>README 点名的"重要设置"，其实就是 4.3 那些宏的通用版：前两个来自 epdiy 库（屏幕型号 + 板卡修订，见第 3 章）；<code>BUTONS_ACTIVE_LEVEL</code> 告诉代码按键是按下为低还是按下为高（深睡眠唤醒机制也随之不同——低电平用 ULP、高电平用 EXT1，详见第 15 章）；然后是 SD 卡的 4 根 SPI 引脚、可选的 L58 触摸、以及电池电压分压器接的 ADC 通道。把这些宏填对，一块新板通常就能跑起来——剩下的交给 Board 抽象。</p>
+
+<pre><code><span class="cmt"># README "Porting to other boards"：两条腿的路线图</span>
+<span class="cmt"># 1. Create a new board class in src/boards that implements Board.h</span>
+<span class="cmt">#    - 若用 EPDIY 板：只需 -DBOARD_TYPE_EPDIY，一切由预处理宏搞定</span>
+<span class="cmt">#    - 全新板：至少返回一个 Renderer + 一个 GPIOButtonControls</span>
+<span class="cmt">#      Have a look at M5Paper.h for inspiration.</span>
+<span class="cmt">#    - 并把新板类型加进 Board::factory()</span>
+<span class="cmt"># 2. Add a new environment to platformio.ini</span>
+<span class="cmt">#    关键设置：屏幕型号、板卡修订、BUTONS_ACTIVE_LEVEL、SD 引脚、ADC 通道</span></code></pre>
+
+<pre><code><span class="cmt">; platformio.ini：为一块全新板子新增 env（最小配置模板）</span>
+[env:my_board]
+extends = esp32_common
+build_flags =
+  ${common.build_flags}
+  <span class="cmt">; 让工厂实例化你的板类</span>
+  -DBOARD_TYPE_MY_BOARD
+  <span class="cmt">; EPDiy 屏幕型号 + 板卡修订（若你的屏兼容 EPDiy）</span>
+  -DCONFIG_EPD_DISPLAY_TYPE_ED060XC3
+  -DCONFIG_EPD_BOARD_REVISION_V6
+  <span class="cmt">; 按键极性：按下为 0（低有效）或 1（高有效）</span>
+  -DBUTONS_ACTIVE_LEVEL=0
+  <span class="cmt">; SD 卡四根 SPI 引脚</span>
+  -DSD_CARD_PIN_NUM_MISO=GPIO_NUM_36
+  -DSD_CARD_PIN_NUM_MOSI=GPIO_NUM_0
+  -DSD_CARD_PIN_NUM_CLK=GPIO_NUM_13
+  -DSD_CARD_PIN_NUM_CS=GPIO_NUM_14</code></pre>
+
+  <table>
+    <tr><th>步骤</th><th>动作</th><th>何时可省</th></tr>
+    <tr><td>1. 板类</td><td><code>src/boards/</code> 新建子类，实现 <code>Board.h</code> 纯虚方法；加入 <code>factory()</code></td><td>屏幕兼容 EPDiy 时——只需 <code>-DBOARD_TYPE_EPDIY</code></td></tr>
+    <tr><td>2. 渲染器</td><td><code>get_renderer()</code> 返回本板 Renderer</td><td>EPDiy 并行屏直接返回 <code>EpdiyRenderer</code></td></tr>
+    <tr><td>3. 按键</td><td><code>get_button_controls()</code> 返回 <code>GPIOButtonControls</code>（或定制类）</td><td>—</td></tr>
+    <tr><td>4. 环境</td><td><code>platformio.ini</code> 新增 <code>[env:my_board]</code>，写屏幕 / 引脚 / 极性宏</td><td>—</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>动手移植前，先回答三个问题：(1) 屏幕驱动是 EPDiy 并行屏还是别的？(2) 按键是 GPIO 直连还是有 IO 扩展芯片？(3) 供电要不要手动开？三个答案决定了你要写多少代码——三个都是"是"，你可能只需复制 <code>[env:epdiy]</code> 改几个引脚宏。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：读工厂方法 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>src/boards/Board.cpp</code> 的 <code>factory()</code>，列出三个 <code>#ifdef</code> 分支各自实例化哪个板类。如果某个 env 同时定义了 <code>BOARD_TYPE_EPDIY</code> 和 <code>BOARD_TYPE_M5_PAPER</code> 两个宏，会发生什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个分支是独立的 <code>#ifdef</code> 不是 <code>#elif</code>；想想编译器遇到多个匹配分支时哪个 <code>return</code> 先执行。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>三个分支依次是 <code>BOARD_TYPE_LILIGO_T5_47</code> → <code>new Lilygo_t5_47()</code>、<code>BOARD_TYPE_EPDIY</code> → <code>new Epdiy()</code>、<code>BOARD_TYPE_M5_PAPER</code> → <code>new M5Paper()</code>。若同时定义 EPDIY 与 M5_PAPER，<code>#ifdef BOARD_TYPE_EPDIY</code> 分支先命中，函数在 <code>new Epdiy()</code> 处 <code>return</code>，M5Paper 分支永远不会执行——后面的代码是死代码，但能通过编译。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：按键极性差异 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>对比 <code>Lilygo_t5_47.cpp</code> 与 <code>Epdiy.cpp</code>：两块板的 <code>BUTONS_ACTIVE_LEVEL</code> 分别是什么？结合源码注释，解释为什么 EPDiy V6 板选择了高电平有效。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>前者 0、后者 1；看 Epdiy.cpp 里 <code>BUTONS_ACTIVE_LEVEL</code> 正上方那行英文注释。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>LilyGo 是 <code>0</code>（低电平有效），EPDiy 是 <code>1</code>（高电平有效）。源码注释给出的原因："For some reason in EPDiy on low it wakes up directly from deepsleep"——在 EPDiy 板上若按低电平有效处理，一进深睡眠就会被直接误唤醒，所以作者改为高电平有效避开这个问题。注意 Epdiy.cpp 里"buttons are low when pressed"那句注释与实际的 <code>1</code> 自相矛盾，属于注释漂移，仍以代码值为准。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：最小移植 env <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为一块"未知品牌、EPDiy 并行屏、按键按下为低电平、SD 引脚 MISO36/MOSI0/CLK13/CS14"的板子写出最小 <code>[env:my_board]</code>（含必需宏），并说明哪些步骤可以省略。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>屏兼容 EPDiy → 可省板类；极性是低 → <code>BUTONS_ACTIVE_LEVEL=0</code>；对照 <code>[env:epdiy]</code> 的结构来写。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>env 只需四组宏：<code>-DBOARD_TYPE_EPDIY</code>（复用 Epdiy 板类，省略新建子类）、<code>-DCONFIG_EPD_DISPLAY_TYPE_ED060XC3</code> + <code>-DCONFIG_EPD_BOARD_REVISION_V6</code>（屏幕，按实际型号填）、<code>-DBUTONS_ACTIVE_LEVEL=0</code>（低有效）、<code>-DSD_CARD_PIN_NUM_MISO=GPIO_NUM_36</code> 等 4 行 SD 引脚。因为复用了 Epdiy 板类，1–3 步全部省略，只剩第 4 步写 env。若这块屏是独立驱动而非 EPDiy，则必须新建板类并加入 <code>factory()</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：抽象设计评价 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>Board 抽象把文件系统、电池、触摸做成"带默认实现的虚方法"。请各写两条：这个设计的好处，和它付出的代价（从"新板要写的代码量"与"接口的可读性/职责"两个角度展开）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>好处想"默认行为省事"；代价想"一个类同时是板子又是文件系统/电池工厂"——它违反了某种单一职责吗？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>好处：(1) 新板子只需实现 4 个纯虚方法，其余全继承默认行为，起点很低；(2) 三块板的文件系统、电池逻辑被复用在一处，改动只需改 <code>Board.cpp</code> 一处。代价：(1) <code>Board</code> 职责过载——它既是"板子"又是文件系统、电池、触摸的工厂，接口膨胀，读者要记住哪些可覆写、哪些别乱动；(2) 默认实现把"编译期宏"和"运行时对象"隐式耦合，读懂 <code>start_filesystem()</code> 必须同时盯着 <code>USE_SPIFFS</code>、SD 引脚宏和继承覆写关系，认知负担不小。取舍的实质：用"接口的适度臃肿"换"移植成本的显著降低"。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

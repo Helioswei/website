@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章：开发环境搭建 — Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="02" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：开发环境搭建</h1>
+  <p class="chapter-subtitle">工欲善其事，必先利其器。本章将带你从零开始搭建 Kotlin/Android 开发环境，创建并运行你的第一个项目。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「学徒啊，在我的工坊里，没有人会一进门就去刨木头。你要先认清眼前有哪些工具，挑出最趁手的那把；再把工作台收拾妥当，各种器具摆放得有条不紊；最后量准了、画好了线，才落下第一刀。写代码和做木工是一个道理——环境不对，再好的手艺也白费。今天，老夫带你把这间数字工坊从头布置好。」</p>
+    </div>
+  </div>
+
+  <!-- ==================== 2.1 选择你的 IDE ==================== -->
+  <h2>2.1 选择你的 IDE</h2>
+
+  <p>做木匠活之前，第一件事是什么？不是去砍树，而是挑一把好锯。程序员的"锯子"就是 IDE——集成开发环境。工具选对了，事半功倍；选错了，处处别扭。</p>
+
+  <p>Kotlin 是 JetBrains 这家"工具铺"亲手打造的语言，所以 JetBrains 家族的 IDE 对 Kotlin 的支持自然是最精良的，就像铸剑师用自己锻的剑最为顺手。你需要在两位主力"帮手"之间做出选择：</p>
+
+  <h3>IntelliJ IDEA</h3>
+  <p><strong>IntelliJ IDEA</strong> 是 JetBrains 出品的通用 Java/Kotlin IDE，好比工坊里的万能工作台。它分为两个版本：</p>
+  <ul>
+    <li><strong>Community Edition（社区版）</strong>：完全免费、开源，已经包含了完整的 Kotlin 支持，足以学习 Kotlin 语言本身。对于只想学好手艺的学徒来说，这把工具已经绰绰有余。</li>
+    <li><strong>Ultimate Edition（旗舰版）</strong>：付费版本，额外提供 Web 开发、数据库工具等功能，学习 Kotlin 时不需要。就像老夫工坊里那些精密的雕花刀——不是不好，而是你这个阶段用不上。</li>
+  </ul>
+  <p>由于 Kotlin 本身就是 JetBrains 开发的，IntelliJ IDEA 对 Kotlin 的支持可以说是"原生级别"——代码补全、重构、调试等体验都是最流畅的。打个比方：锻造师用自己铺子出的锤子，怎么抡都顺手。</p>
+
+  <h3>Android Studio</h3>
+  <p><strong>Android Studio</strong> 是 Google 官方推出的 Android 开发 IDE。它基于 IntelliJ IDEA Community Edition 构建，在此基础上添加了大量 Android 专属功能——就像在万能工作台上又加装了一整套专用夹具，专门为 Android 这种"材料"而设计：</p>
+  <ul>
+    <li>布局编辑器（Layout Editor）和 Compose 预览</li>
+    <li>Android 模拟器（Emulator）集成</li>
+    <li>APK 分析器、性能分析器（Profiler）</li>
+    <li>Android SDK Manager 和 AVD Manager</li>
+    <li>Gradle 构建系统的深度集成</li>
+  </ul>
+  <p>Android Studio 完全免费，是进行 Android 开发的首选工具。老夫的建议：如果你的目标是造 Android 应用这门手艺，那这就是你的主工作台。</p>
+
+  <h3>如何选择？</h3>
+
+  <p>老夫常说，"活儿定工具，工具不定活儿"。根据你要干的活计，选对应的家什：</p>
+
+  <table>
+    <tr>
+      <th>场景</th>
+      <th>推荐 IDE</th>
+      <th>理由</th>
+    </tr>
+    <tr>
+      <td>只想学习 Kotlin 语言</td>
+      <td>IntelliJ IDEA CE</td>
+      <td>轻量、启动快，专注语言本身</td>
+    </tr>
+    <tr>
+      <td>学习 Kotlin + Android 开发</td>
+      <td>Android Studio</td>
+      <td>内置模拟器、SDK 管理、Compose 预览等</td>
+    </tr>
+    <tr>
+      <td>Kotlin 后端开发（Ktor、Spring）</td>
+      <td>IntelliJ IDEA</td>
+      <td>对服务端框架支持更好</td>
+    </tr>
+    <tr>
+      <td>Kotlin Multiplatform</td>
+      <td>两者皆可</td>
+      <td>涉及 Android 部分时用 Android Studio</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <p class="tip-title">本教程的选择</p>
+    <p>由于本教程最终目标是 Android 开发，后续章节将以 <strong>Android Studio</strong> 为主要开发环境。这好比老夫教你做家具，虽然锯子和刨子都能在别的台子上用，但做家具最终还得到木工台前干活。如果你目前只想练习 Kotlin 语法，可以先安装 IntelliJ IDEA 社区版，后续再切换到 Android Studio——两者的 Kotlin 编码体验几乎一致，不用担心白学。</p>
+  </div>
+
+  <!-- ==================== 2.2 安装 Android Studio ==================== -->
+  <h2>2.2 安装 Android Studio</h2>
+
+  <p>好，工具选定了，现在该把它请进你的工坊了。安装 Android Studio 就像组装一张好的工作台：先领材料，再按步骤搭建，最后调试校准。老夫一步步带你来。</p>
+
+  <h3>下载</h3>
+  <p>访问 Android Studio 官方下载页面：</p>
+  <p><code>https://developer.android.com/studio</code></p>
+  <p>页面会自动检测你的操作系统并提供对应的安装包。Android Studio 支持 Windows、macOS 和 Linux 三大平台。无论你的工坊是什么样的台面，都有配套的安装方案。</p>
+
+  <h3>系统要求</h3>
+  <p>装工作台之前，先量量场地够不够大。老夫把最低门槛和推荐配置都列在这里了：</p>
+  <table>
+    <tr>
+      <th>项目</th>
+      <th>最低要求</th>
+      <th>推荐配置</th>
+    </tr>
+    <tr>
+      <td>操作系统</td>
+      <td>Windows 8 / macOS 10.14 / Linux 64位</td>
+      <td>最新版本</td>
+    </tr>
+    <tr>
+      <td>内存（RAM）</td>
+      <td>8 GB</td>
+      <td>16 GB 或更多</td>
+    </tr>
+    <tr>
+      <td>磁盘空间</td>
+      <td>8 GB（IDE + SDK + 模拟器）</td>
+      <td>20 GB 以上</td>
+    </tr>
+    <tr>
+      <td>屏幕分辨率</td>
+      <td>1280 x 800</td>
+      <td>1920 x 1080 或更高</td>
+    </tr>
+  </table>
+
+  <div class="warning">
+    <p class="tip-title">注意内存</p>
+    <p>这里老夫要多唠叨几句：Android Studio 本身就比较吃内存，再加上 Gradle 构建和模拟器运行，8 GB 内存只能说"勉强够用"——就像在一张小桌子上又要摊图纸又要放工具，转个身就碰到东西。如果你的电脑内存不足 8 GB，建议使用真机调试而非模拟器，或者先用 IntelliJ IDEA + Kotlin Playground 学习语言基础。磨刀不误砍柴工，但也别拿菜刀去伐大树。</p>
+  </div>
+
+  <h3>安装步骤概要</h3>
+  <p>安装过程就像搭榫卯结构——按顺序来，一步都不能跳：</p>
+  <ol>
+    <li><strong>下载安装包</strong>：从官网下载对应平台的安装文件（Windows 为 <code>.exe</code>，macOS 为 <code>.dmg</code>，Linux 为 <code>.tar.gz</code>）。</li>
+    <li><strong>运行安装程序</strong>：
+      <ul>
+        <li>Windows：双击 <code>.exe</code>，按向导一路点 Next 即可。</li>
+        <li>macOS：打开 <code>.dmg</code>，将 Android Studio 拖入 Applications 文件夹。</li>
+        <li>Linux：解压到 <code>/opt/</code> 或你喜欢的目录，运行 <code>bin/studio.sh</code>。</li>
+      </ul>
+    </li>
+    <li><strong>首次启动向导</strong>：选择 Standard 安装类型即可，它会自动下载所需的 SDK 组件。</li>
+  </ol>
+
+  <h3>首次启动配置向导</h3>
+  <p>第一次打开 Android Studio 时，会出现 Setup Wizard——可以理解为工作台的校准环节。关键步骤如下：</p>
+  <ol>
+    <li><strong>Install Type</strong>：选择 <strong>Standard</strong>。它会自动安装最新的 Android SDK、Build Tools、模拟器镜像等。就像老夫给新学徒备好了标准工具箱，该有的都有了。如果你需要精细控制，可以选 Custom。</li>
+    <li><strong>UI Theme</strong>：选择你喜欢的主题（Darcula 暗色主题 / Light 亮色主题）。工坊的灯光亮一点暗一点全凭个人习惯，不影响手艺。</li>
+    <li><strong>SDK Components</strong>：确认勾选了 Android SDK、Android SDK Platform、Android Virtual Device。这三样是基本家什，缺一不可。</li>
+    <li><strong>下载与安装</strong>：点击 Finish，等待组件下载完成。首次下载可能需要几分钟到十几分钟，取决于网络速度。耐心等待——好工具值得你等。</li>
+  </ol>
+
+  <div class="tip">
+    <p class="tip-title">国内网络问题</p>
+    <p>如果你在国内下载速度很慢，可以考虑配置代理或使用国内镜像源。在 Android Studio 中，进入 <code>File > Settings > Appearance & Behavior > System Settings > HTTP Proxy</code> 配置代理。也可以在 <code>gradle.properties</code> 文件中配置 Gradle 的代理设置。巧匠不怨路远，但搬砖总得找条近路不是？</p>
+  </div>
+
+  <h3>SDK Manager 配置</h3>
+  <p>安装完成后，建议打开 SDK Manager 盘点一下你的"工具箱"，确认各项工具齐备：</p>
+  <ol>
+    <li>进入 <code>Tools > SDK Manager</code>（或在欢迎页面点击 More Actions > SDK Manager）。</li>
+    <li>在 <strong>SDK Platforms</strong> 标签页：确保安装了最新的稳定版 Android API（如 Android 14 / API 34）。同时也建议安装一个较低版本的 API（如 API 26）用于测试兼容性。就像做家具，不但要在新木料上试效果，旧一点的料也得能用。</li>
+    <li>在 <strong>SDK Tools</strong> 标签页：确认以下工具已安装：
+      <ul>
+        <li>Android SDK Build-Tools（最新版本）</li>
+        <li>Android SDK Command-line Tools</li>
+        <li>Android Emulator</li>
+        <li>Android SDK Platform-Tools</li>
+      </ul>
+    </li>
+  </ol>
+
+  <p>以上四件工具，老夫称之为"四大件"。缺了哪个，后面都会出问题。趁现在一次配齐，省得回头返工。</p>
+
+  <!-- ==================== 2.3 创建第一个 Kotlin 项目 ==================== -->
+  <h2>2.3 创建第一个 Kotlin 项目</h2>
+
+  <p>工具到位，工作台校准完毕——万事俱备，该动手了。老夫有个规矩：每个学徒进工坊的第一天，都要亲手做一件最简单的物件。不是为了展示，而是为了验证所有工具都好使，手上的活儿能跑通全流程。今天你的"第一件作品"就是一个 Hello World 项目。</p>
+
+  <h3>新建项目步骤</h3>
+  <ol>
+    <li>打开 Android Studio，在欢迎页面点击 <strong>New Project</strong>。</li>
+    <li>在模板选择页面，选择 <strong>Phone and Tablet</strong> 分类下的 <strong>Empty Activity</strong>。
+      <ul>
+        <li>注意：新版 Android Studio 默认的 Empty Activity 模板已经使用 <strong>Jetpack Compose</strong>，这正是我们后续要学的 UI 框架。老夫挑这个模板不是随便选的——它是当前最主流的构建方式，从一开始就走正路。</li>
+      </ul>
+    </li>
+    <li>点击 <strong>Next</strong>，进入项目配置页面。</li>
+  </ol>
+
+  <h3>项目配置</h3>
+  <p>下面这张配置表就像图纸上的尺寸标注——每一项都有讲究，老夫逐一给你说明：</p>
+
+  <table>
+    <tr>
+      <th>配置项</th>
+      <th>说明</th>
+      <th>建议值</th>
+    </tr>
+    <tr>
+      <td>Name</td>
+      <td>项目名称，显示在应用标题栏</td>
+      <td><code>MyFirstApp</code></td>
+    </tr>
+    <tr>
+      <td>Package name</td>
+      <td>应用的唯一标识，通常是倒序域名格式</td>
+      <td><code>com.example.myfirstapp</code></td>
+    </tr>
+    <tr>
+      <td>Save location</td>
+      <td>项目保存路径</td>
+      <td>默认路径即可</td>
+    </tr>
+    <tr>
+      <td>Language</td>
+      <td>编程语言</td>
+      <td><strong>Kotlin</strong>（务必确认）</td>
+    </tr>
+    <tr>
+      <td>Minimum SDK</td>
+      <td>应用支持的最低 Android 版本</td>
+      <td><code>API 26 (Android 8.0)</code></td>
+    </tr>
+    <tr>
+      <td>Build configuration language</td>
+      <td>构建脚本语言</td>
+      <td><strong>Kotlin DSL</strong>（推荐）</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <p class="tip-title">关于 Minimum SDK</p>
+    <p>Minimum SDK 决定了你的应用能在多老的 Android 设备上运行。选择 API 26（Android 8.0）是个不错的平衡点——它覆盖了约 95% 以上的活跃设备，同时可以使用大部分现代 API。这就像做家具选木材的尺寸标准：太大了材料浪费，太小了强度不够，找到那个恰好的分寸。你可以点击下方的 "Help me choose" 链接查看各 API 级别的市场份额。</p>
+  </div>
+
+  <ol start="4">
+    <li>确认配置无误后，点击 <strong>Finish</strong>。老夫提醒你：动手前多看一眼图纸，总比返工强。</li>
+  </ol>
+
+  <h3>等待 Gradle 同步</h3>
+  <p>项目创建后，Android Studio 会自动执行 <strong>Gradle Sync</strong>——它会根据项目配置下载所需的依赖库和插件。你会在底部状态栏看到进度条。</p>
+  <p>首次同步可能需要较长时间（几分钟甚至更久），因为需要下载 Kotlin 编译器、Compose 库、AndroidX 库等大量依赖。好比老夫第一次进一家新材料铺，各种料子都要过一遍手——但只要过了这第一趟，后面就快了，因为依赖已经缓存到本地。</p>
+
+  <div class="warning">
+    <p class="tip-title">Gradle 同步失败？</p>
+    <p>如果 Gradle 同步失败，先别慌。老夫的经验：十次同步失败，八次是网络问题。检查你的网络连接，或尝试配置 Gradle 代理。另一个常见原因是 JDK 版本不匹配——Android Studio 自带了 JDK，一般不需要额外安装，但如果你手动设置过 <code>JAVA_HOME</code> 环境变量，可能会产生冲突。在 <code>File > Settings > Build > Build Tools > Gradle</code> 中确认使用的是 Android Studio 内置的 JDK。记住：排故障也是手艺的一部分，遇到问题不绕路、不回避，逐个排查。</p>
+  </div>
+
+  <!-- ==================== 2.4 项目结构解析 ==================== -->
+  <h2>2.4 项目结构解析</h2>
+
+  <p>Gradle 同步完成后，让我们打开这张"施工图"仔细看看。一个优秀的匠人不会拿到材料就乱锯，而是先把图纸读透。在左侧的 Project 面板中切换到 <strong>Project</strong> 视图（而不是默认的 Android 视图），你会看到真实的文件系统结构——这才是你的项目在磁盘上的本来面目：</p>
+
+  <pre><code>MyFirstApp/
+├── app/                          <span class="cmt">// 主应用模块</span>
+│   ├── src/
+│   │   ├── main/
+│   │   │   ├── java/             <span class="cmt">// Kotlin/Java 源代码（历史原因叫 java）</span>
+│   │   │   │   └── com/example/myfirstapp/
+│   │   │   │       └── MainActivity.kt
+│   │   │   ├── res/              <span class="cmt">// 资源文件（布局、图片、字符串等）</span>
+│   │   │   │   ├── drawable/
+│   │   │   │   ├── mipmap/
+│   │   │   │   └── values/
+│   │   │   └── AndroidManifest.xml  <span class="cmt">// 应用清单文件</span>
+│   │   └── test/                 <span class="cmt">// 单元测试代码</span>
+│   └── build.gradle.kts          <span class="cmt">// 模块级构建脚本</span>
+├── gradle/                       <span class="cmt">// Gradle Wrapper 文件</span>
+│   └── wrapper/
+│       ├── gradle-wrapper.jar
+│       └── gradle-wrapper.properties
+├── build.gradle.kts              <span class="cmt">// 项目级构建脚本</span>
+├── settings.gradle.kts           <span class="cmt">// 项目设置（模块声明等）</span>
+├── gradle.properties             <span class="cmt">// Gradle 属性配置</span>
+└── gradlew / gradlew.bat         <span class="cmt">// Gradle Wrapper 启动脚本</span></code></pre>
+
+  <p>这棵目录树就像一间精心规划的工坊：源代码有源代码的工位，资源文件有资源文件的架子，构建脚本相当于加工流程表。每样东西都有它该待的位置——乱放工具的匠人，做不出好活儿。</p>
+
+  <h3>关键文件详解</h3>
+
+  <p><strong>MainActivity.kt</strong> — 应用的入口 Activity，你作品的"大门"。用 Compose 模板创建的项目中，它大致长这样：</p>
+
+  <pre><code><span class="kw">class</span> <span class="type">MainActivity</span> : <span class="type">ComponentActivity</span>() {
+    <span class="kw">override fun</span> <span class="fn">onCreate</span>(<span class="param">savedInstanceState</span>: <span class="type">Bundle?</span>) {
+        <span class="kw">super</span>.<span class="fn">onCreate</span>(savedInstanceState)
+        <span class="fn">setContent</span> {
+            <span class="type">MyFirstAppTheme</span> {
+                <span class="type">Surface</span> {
+                    <span class="fn">Greeting</span>(<span class="str">"World"</span>)
+                }
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">Greeting</span>(<span class="param">name</span>: <span class="type">String</span>) {
+    <span class="type">Text</span>(text = <span class="str">"Hello </span><span class="kw">$</span><span class="str">name!"</span>)
+}</code></pre>
+
+  <p>现在不需要完全理解这段代码——就像你第一天进工坊，老夫不会让你立刻分辨十八种木料。只需知道：<code>setContent</code> 设置了屏幕上显示的内容，<code>Greeting</code> 是一个 Compose 可组合函数，它显示了 "Hello World!" 文本。后续章节，老夫会把每一行都拆开给你讲透。</p>
+
+  <p><strong>AndroidManifest.xml</strong> — 应用的"身份证"，也可以说是你这件作品的"出厂铭牌"，上面刻着：</p>
+  <ul>
+    <li>应用的包名和版本信息</li>
+    <li>应用包含哪些组件（Activity、Service 等）</li>
+    <li>应用需要的权限（网络、相机等）</li>
+    <li>应用的图标和主题</li>
+  </ul>
+
+  <p><strong>build.gradle.kts（模块级）</strong> — 这是整个项目最重要的配置文件之一，相当于加工流程表，控制着材料清单和制作规格：</p>
+
+  <pre><code><span class="cmt">// app/build.gradle.kts</span>
+<span class="fn">plugins</span> {
+    <span class="fn">alias</span>(libs.plugins.android.application)
+    <span class="fn">alias</span>(libs.plugins.kotlin.android)
+    <span class="fn">alias</span>(libs.plugins.kotlin.compose)
+}
+
+<span class="fn">android</span> {
+    namespace = <span class="str">"com.example.myfirstapp"</span>
+    compileSdk = <span class="num">34</span>
+
+    <span class="fn">defaultConfig</span> {
+        applicationId = <span class="str">"com.example.myfirstapp"</span>
+        minSdk = <span class="num">26</span>
+        targetSdk = <span class="num">34</span>
+        versionCode = <span class="num">1</span>
+        versionName = <span class="str">"1.0"</span>
+    }
+}
+
+<span class="fn">dependencies</span> {
+    <span class="fn">implementation</span>(libs.androidx.core.ktx)
+    <span class="fn">implementation</span>(libs.androidx.activity.compose)
+    <span class="fn">implementation</span>(<span class="fn">platform</span>(libs.androidx.compose.bom))
+    <span class="fn">implementation</span>(libs.androidx.compose.ui)
+    <span class="fn">implementation</span>(libs.androidx.compose.material3)
+    <span class="cmt">// ... 更多依赖</span>
+}</code></pre>
+
+  <p>这里定义了编译 SDK 版本、最低 SDK 版本、应用版本号，以及项目依赖的所有第三方库。老夫打个比方：<code>compileSdk</code> 是你能用的最新工具箱版本，<code>minSdk</code> 是你做出来的成品最低要在什么年代的"架子"上能放得稳，<code>dependencies</code> 则是你从外头采购来的零部件清单。</p>
+
+  <h3>Gradle Wrapper 的作用</h3>
+  <p>你可能注意到项目中有 <code>gradlew</code>（Mac/Linux）和 <code>gradlew.bat</code>（Windows）两个脚本，以及 <code>gradle/wrapper/</code> 目录。这就是 <strong>Gradle Wrapper</strong>。</p>
+  <p>它的作用是确保每个开发者使用<strong>完全相同版本</strong>的 Gradle 来构建项目，避免"在我的机器上可以运行"的问题。这个道理老夫最懂：如果两个匠人用的尺子刻度不一样，拼出来的家具一定合不上缝。Gradle Wrapper 就是那把"标准尺"——当你克隆一个项目时，不需要预先安装 Gradle，Wrapper 会自动下载正确版本的 Gradle，保证人人度量一致。</p>
+
+  <div class="tip">
+    <p class="tip-title">Android 视图 vs Project 视图</p>
+    <p>Android Studio 默认使用 <strong>Android 视图</strong>，它对目录结构做了简化和重新组织，更方便日常开发。比如它会把 <code>java/</code> 和 <code>kotlin/</code> 目录合并显示、将多个 <code>res/</code> 目录扁平化等。初学阶段建议两种视图都熟悉——Android 视图是经过整理的"简明图纸"，Project 视图是"实物原图"。两张图都能看懂，你对项目的理解才透彻。</p>
+  </div>
+
+  <!-- ==================== 2.5 运行你的第一个程序 ==================== -->
+  <h2>2.5 运行你的第一个程序</h2>
+
+  <p>材料备好了，图纸也读完了——现在到了最激动人心的一步：让你的第一件作品跑起来！老夫说句实话，一个匠人最大的成就感，就是看到自己手下的东西真正"活"了。你有两种方式运行 Android 应用：使用<strong>模拟器</strong>或<strong>真机</strong>。</p>
+
+  <h3>模拟器 vs 真机</h3>
+  <table>
+    <tr>
+      <th>方式</th>
+      <th>优点</th>
+      <th>缺点</th>
+    </tr>
+    <tr>
+      <td>模拟器（Emulator）</td>
+      <td>无需 Android 手机；可模拟不同设备和 API 版本；方便截图和录屏</td>
+      <td>占用大量内存和 CPU；部分硬件功能无法模拟（NFC、蓝牙等）</td>
+    </tr>
+    <tr>
+      <td>真机（Physical Device）</td>
+      <td>性能好、响应快；能测试真实硬件功能；体验最接近用户</td>
+      <td>需要一台 Android 手机；需要开启开发者模式和 USB 调试</td>
+    </tr>
+  </table>
+
+  <p>老夫的建议：先从<strong>模拟器</strong>开始。就像做木工，先在边角料上试手感，等熟练了再上正料。模拟器不需要额外设备，改了代码立刻能看效果。</p>
+
+  <h3>用 AVD Manager 创建模拟器</h3>
+  <p>AVD（Android Virtual Device）就是你的"虚拟试验台"。创建过程如下：</p>
+  <ol>
+    <li>点击工具栏的 <strong>Device Manager</strong> 按钮（手机图标），或进入 <code>Tools > Device Manager</code>。</li>
+    <li>点击 <strong>Create Virtual Device</strong>。</li>
+    <li><strong>选择硬件</strong>：在 Phone 分类下选择一个设备，比如 <strong>Pixel 7</strong>。点击 Next。</li>
+    <li><strong>选择系统镜像</strong>：选择一个推荐的（Recommended）系统镜像。如果未下载，点击旁边的下载图标先下载。建议选择最新的稳定版（如带有 "API 34" 标记的镜像）。</li>
+    <li><strong>确认配置</strong>：AVD 名称保持默认即可，点击 <strong>Finish</strong>。</li>
+  </ol>
+
+  <div class="tip">
+    <p class="tip-title">加速模拟器</p>
+    <p>为了让模拟器流畅运行，请确保你的电脑启用了硬件加速：Windows 上需要开启 Intel HAXM 或 Windows Hypervisor Platform（WHV），macOS 上默认使用 Hypervisor.framework（无需额外配置），Linux 上使用 KVM。如果模拟器启动后非常卡顿，很可能就是硬件加速没有启用。老夫的话：工具不利，干活受罪。这一步千万别偷懒。</p>
+  </div>
+
+  <h3>点击 Run</h3>
+  <p>一切就绪，开工！</p>
+  <ol>
+    <li>在工具栏的设备下拉菜单中，选择你刚才创建的模拟器设备。</li>
+    <li>点击绿色的 <strong>Run</strong> 按钮（三角形图标），或按快捷键 <code>Shift + F10</code>（Windows/Linux）/ <code>Control + R</code>（macOS）。</li>
+    <li>Android Studio 会依次执行以下步骤——这就像一条流水线，每道工序紧密衔接：
+      <ul>
+        <li>编译 Kotlin 代码</li>
+        <li>打包 APK</li>
+        <li>启动模拟器（如果尚未启动）</li>
+        <li>安装 APK 到模拟器</li>
+        <li>启动应用</li>
+      </ul>
+    </li>
+    <li>首次运行可能需要一两分钟。之后你会在模拟器上看到显示着 <strong>"Hello World!"</strong> 或 <strong>"Hello Android!"</strong> 的界面。</li>
+  </ol>
+
+  <p>看到了吗？屏幕上那行朴素的文字，就是你的第一件作品。虽然只是一行字，但从项目创建到成功运行，背后涉及了 Kotlin 编译器、Gradle 构建系统、Android SDK 和模拟器的协同工作——就像一件看似简单的榫卯接头，背后是对每种工具、每道工序的精确掌控。老夫要恭喜你：你已经打通了从"写代码"到"跑起来"的全链路。每一个 Hello World 都是一段匠人生涯的起点。</p>
+
+  <h3>使用真机调试</h3>
+
+  <p>如果你想在真实手机上运行应用，也不难——好比从试验台换到正式工位。总共三步：<strong>开启开发者模式 → 打开 USB 调试 → 连接电脑</strong>。不过老夫要提醒你：不同品牌的手机，"开关"藏的位置不太一样，就像不同师傅的工坊，工具柜的布局各有讲究。</p>
+
+  <h3>第一步：开启开发者模式</h3>
+
+  <p>所有 Android 手机的套路是一样的：找到某个"版本号"相关的字段，连续点击 <strong>7 次</strong>，系统会提示"您已进入开发者模式"。但这个字段藏在哪里，各家不同：</p>
+
+  <table>
+    <tr>
+      <th>手机品牌</th>
+      <th>路径</th>
+      <th>连续点击的字段</th>
+    </tr>
+    <tr>
+      <td>原生 Android / Pixel</td>
+      <td>设置 > 关于手机</td>
+      <td>版本号（Build number）</td>
+    </tr>
+    <tr>
+      <td>小米 / Redmi</td>
+      <td>设置 > 我的设备 > 全部参数与信息</td>
+      <td>MIUI 版本（或 HyperOS 版本）</td>
+    </tr>
+    <tr>
+      <td>华为 / 荣耀</td>
+      <td>设置 > 关于手机</td>
+      <td>版本号</td>
+    </tr>
+    <tr>
+      <td>OPPO / Realme</td>
+      <td>设置 > 关于本机</td>
+      <td>版本号</td>
+    </tr>
+    <tr>
+      <td>vivo / iQOO</td>
+      <td>设置 > 关于手机</td>
+      <td>软件版本号</td>
+    </tr>
+    <tr>
+      <td>三星</td>
+      <td>设置 > 关于手机 > 软件信息</td>
+      <td>编译编号（Build number）</td>
+    </tr>
+    <tr>
+      <td>一加</td>
+      <td>设置 > 关于本机</td>
+      <td>版本号</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <p class="tip-title">鲁班的经验</p>
+    <p>如果你的手机品牌不在上面的表里，也不用慌。万变不离其宗：进<strong>设置</strong>，找到<strong>"关于手机"</strong>相关的页面，看到带"版本"字样的字段就猛点 7 下。系统一定会给你反馈——"您已处于开发者模式"或者"还差 X 步进入开发者模式"。找开关这件事，耐心比运气重要。</p>
+  </div>
+
+  <h3>第二步：打开 USB 调试</h3>
+
+  <p>开启开发者模式后，你需要找到<strong>开发者选项</strong>并打开 <strong>USB 调试</strong>。注意，开发者选项的位置也因品牌而异：</p>
+
+  <table>
+    <tr>
+      <th>手机品牌</th>
+      <th>开发者选项的位置</th>
+    </tr>
+    <tr>
+      <td>原生 Android / Pixel</td>
+      <td>设置 > 系统 > 开发者选项</td>
+    </tr>
+    <tr>
+      <td>小米 / Redmi</td>
+      <td>设置 > 更多设置 > 开发者选项</td>
+    </tr>
+    <tr>
+      <td>华为 / 荣耀</td>
+      <td>设置 > 系统和更新 > 开发者选项</td>
+    </tr>
+    <tr>
+      <td>OPPO / Realme</td>
+      <td>设置 > 其他设置 > 开发者选项</td>
+    </tr>
+    <tr>
+      <td>vivo / iQOO</td>
+      <td>设置 > 系统管理 > 开发者选项</td>
+    </tr>
+    <tr>
+      <td>三星</td>
+      <td>设置 > 开发者选项</td>
+    </tr>
+    <tr>
+      <td>一加</td>
+      <td>设置 > 其他设置 > 开发者选项</td>
+    </tr>
+  </table>
+
+  <p>进入开发者选项后，找到并打开 <strong>USB 调试</strong>。</p>
+
+  <div class="warning">
+    <p class="tip-title">小米用户必看</p>
+    <p>小米/Redmi 手机除了打开 USB 调试之外，还必须额外开启 <strong>"USB 安装"</strong>（也在开发者选项中）。如果不开这个开关，Android Studio 能识别到手机，但安装应用时会失败——这就像门锁开了，但门闩没拔，还是推不开。开启时系统会要求你插入 SIM 卡并登录小米账号，按提示操作即可。</p>
+  </div>
+
+  <h3>第三步：连接电脑</h3>
+
+  <ol>
+    <li>用 USB 数据线将手机连接到电脑。注意要用<strong>支持数据传输</strong>的线，有些充电线只能充电不能传数据——老夫见过不少学徒在这一步卡住，换根线就好了。</li>
+    <li>手机上会弹出 <strong>"允许 USB 调试吗？"</strong> 的对话框，点击<strong>允许</strong>。建议勾选"始终允许来自这台计算机的调试"，省得每次都要确认。</li>
+    <li>连接成功后，Android Studio 工具栏的设备下拉菜单中会出现你的手机型号，选中它，点击 Run 即可将应用安装到真机上运行。</li>
+  </ol>
+
+  <div class="tip">
+    <p class="tip-title">无线调试（Android 11+）</p>
+    <p>如果你的手机是 Android 11 及以上版本，还可以使用<strong>无线调试</strong>，摆脱 USB 线的束缚。在开发者选项中打开"无线调试"，然后在 Android Studio 的 Device Manager 中通过"Pair Devices Using Wi-Fi"进行配对。老夫虽然是老派匠人，但好用的新工具也不排斥——不用线缆确实方便，改完代码扭头看手机就行。前提是手机和电脑在同一个 Wi-Fi 网络下。</p>
+  </div>
+
+  <!-- ==================== 2.6 其他学习工具 ==================== -->
+  <h2>2.6 其他学习工具</h2>
+
+  <p>老夫的工坊里不只有主工作台。老夫还有好几件小巧趁手的辅助工具——修边的、试样的、打草稿的。学 Kotlin 也一样，除了 Android Studio 这张主台之外，还有一些轻量级工具非常适合日常练手。在后续章节学习语言特性时，用这些工具可以快速验证想法，不需要每次都创建完整的 Android 项目。毕竟，试一行代码的效果，犯不着启动整条流水线。</p>
+
+  <h3>Kotlin Playground</h3>
+  <p>Kotlin Playground（<code>play.kotlinlang.org</code>）是 JetBrains 官方提供的在线 Kotlin 编辑器。老夫把它比作"随身携带的小工作台"，它的优势在于：</p>
+  <ul>
+    <li><strong>零安装</strong>：打开浏览器就能写代码，适合不方便使用 IDE 的时候（比如在别人的电脑上）。随时随地都能练手艺。</li>
+    <li><strong>即时运行</strong>：写完代码点击 Run 按钮，几秒钟就能看到输出结果。改一行看一行，这种即时反馈对学手艺最有效。</li>
+    <li><strong>分享代码</strong>：可以生成链接分享给他人，非常适合在论坛或社群中讨论问题。就像把你做的小样拿给同行看。</li>
+    <li><strong>示例丰富</strong>：内置了大量官方示例代码，可以直接运行学习。等于人家把教材和工具台都给你摆好了。</li>
+  </ul>
+
+  <p>来，试一把——在 Playground 中输入以下代码并运行：</p>
+
+  <pre><code><span class="kw">fun</span> <span class="fn">main</span>() {
+    <span class="kw">val</span> languages = <span class="fn">listOf</span>(<span class="str">"Java"</span>, <span class="str">"Kotlin"</span>, <span class="str">"Swift"</span>, <span class="str">"Dart"</span>)
+
+    languages
+        .<span class="fn">filter</span> { it.<span class="fn">startsWith</span>(<span class="str">"K"</span>) }
+        .<span class="fn">forEach</span> { <span class="fn">println</span>(<span class="str">"I love </span><span class="kw">$</span><span class="str">it!"</span>) }
+}
+<span class="cmt">// 输出: I love Kotlin!</span></code></pre>
+
+  <p>不用完全理解语法，只需要感受一下 Kotlin 代码的简洁和可读性——就像老夫给你看一件成品，你不用马上知道每道工序怎么做，先感受一下"好的手艺长什么样"。这些语法细节我们在第 3 章会详细学习。</p>
+
+  <h3>Kotlin REPL</h3>
+  <p><strong>REPL</strong>（Read-Eval-Print Loop，读取-求值-输出 循环）是一种交互式编程工具。你输入一行代码，它立即执行并显示结果。老夫觉得它最像什么呢？就像手边的一块试刨料——想试试这把刀快不快、这种纹路怎么走，随手一刨就知道了，不用专门找块好木头。</p>
+  <p>在 IntelliJ IDEA 或 Android Studio 中使用 Kotlin REPL：</p>
+  <ol>
+    <li>打开菜单 <code>Tools > Kotlin > Kotlin REPL</code>。</li>
+    <li>在底部弹出的窗口中输入 Kotlin 代码。</li>
+    <li>按 <code>Ctrl + Enter</code>（macOS 上是 <code>Cmd + Enter</code>）执行。</li>
+  </ol>
+
+  <pre><code><span class="cmt">// 在 REPL 中尝试</span>
+<span class="kw">val</span> x = <span class="num">10</span>
+<span class="kw">val</span> y = <span class="num">20</span>
+<span class="fn">println</span>(<span class="str">"x + y = </span><span class="kw">${</span>x + y<span class="kw">}</span><span class="str">"</span>)
+<span class="cmt">// 输出: x + y = 30</span>
+
+<span class="cmt">// 试试类型推断</span>
+<span class="kw">val</span> message = <span class="str">"Hello"</span>   <span class="cmt">// 自动推断为 String</span>
+<span class="fn">println</span>(message::<span class="kw">class</span>.simpleName)
+<span class="cmt">// 输出: String</span></code></pre>
+
+  <div class="tip">
+    <p class="tip-title">REPL 的使用场景</p>
+    <p>当你学习一个新的 API 或语法特性时，先在 REPL 中快速试验比创建文件来测试要高效得多。比如想看看 <code>String.reversed()</code> 的效果？直接在 REPL 里输入 <code>"Kotlin".reversed()</code>，立刻得到结果 <code>"niltoK"</code>。老夫说：好匠人动手前先试样，试样的速度越快，出活儿的质量越高。</p>
+  </div>
+
+  <h3>Scratch 文件</h3>
+  <p><strong>Scratch 文件</strong>（草稿文件）是 IntelliJ / Android Studio 提供的一种临时文件机制。它比 REPL 更强大——你可以写多行代码、定义函数和类，就像在正式项目文件中一样，但它不属于任何项目，不会被提交到版本控制。老夫把它比作"工坊里的草稿纸"——想到什么就画几笔，画完了也不心疼扔掉。</p>
+
+  <p>创建 Scratch 文件的方法：</p>
+  <ol>
+    <li>按快捷键 <code>Ctrl + Alt + Shift + Insert</code>（macOS 上是 <code>Cmd + Shift + N</code>，然后选择 Scratch File）。</li>
+    <li>或者进入菜单 <code>File > New > Scratch File</code>。</li>
+    <li>在弹出的对话框中选择 <strong>Kotlin</strong>。</li>
+  </ol>
+
+  <p>Scratch 文件的特点：</p>
+  <ul>
+    <li>可以访问项目中已有的依赖和类。</li>
+    <li>支持完整的 IDE 功能：代码补全、语法高亮、调试等。</li>
+    <li>文件保存在 IDE 的全局目录中，跨项目可用。</li>
+    <li>非常适合快速验证一段算法逻辑或 API 用法。</li>
+  </ul>
+
+  <div class="tip">
+    <p class="tip-title">工具选择小结</p>
+    <p>老夫最后帮你理一理，什么场合用什么工具，心里要有数：</p>
+    <p>
+      <strong>快速试验一行代码</strong> → Kotlin REPL（试刨料）<br>
+      <strong>写一段完整的测试代码</strong> → Scratch 文件（草稿纸）<br>
+      <strong>不在电脑旁 / 给别人演示</strong> → Kotlin Playground（随身工作台）<br>
+      <strong>正式项目开发</strong> → Android Studio 项目文件（主工作台）
+    </p>
+    <p>工具不在多，在于用得对路。该用小锤的时候别抡大锤，该上大锤的时候也别掏绣花针。</p>
+  </div>
+
+  <!-- ==================== 本章练习 ==================== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：搭建你自己的工作台 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>安装 Android Studio，完成首次启动配置向导，确保 SDK Manager 中的"四大件"（Build-Tools、Command-line Tools、Emulator、Platform-Tools）全部安装到位。然后截一张 SDK Manager 界面的图，确认工具齐全。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>打开 <code>Tools > SDK Manager</code>，切换到 <strong>SDK Tools</strong> 标签页，逐一检查四个工具的勾选状态。如果有未安装的，勾选后点击 Apply 进行安装。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>在 SDK Tools 标签页中，你应该能看到以下四项均显示 "Installed" 状态：</p>
+          <ul>
+            <li>Android SDK Build-Tools（最新版本）</li>
+            <li>Android SDK Command-line Tools（latest）</li>
+            <li>Android Emulator</li>
+            <li>Android SDK Platform-Tools</li>
+          </ul>
+          <p>如果任何一项缺失，勾选后点击 Apply，等待下载安装完成即可。鲁班说：开工之前，先把家什点齐了。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：第一件作品 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>按照本章 2.3 节的步骤，创建一个名为 <code>MyFirstApp</code> 的项目，使用 Empty Activity 模板、Kotlin 语言、Kotlin DSL 构建脚本。成功创建后，使用模拟器运行它，确认在屏幕上看到 "Hello" 字样。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>如果 Gradle 同步一直卡住，检查你的网络连接。可以在 <code>File > Settings > Build > Build Tools > Gradle</code> 中确认 JDK 配置。模拟器选择 Pixel 系列设备 + 最新稳定版系统镜像即可。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>完成以下检查点即为成功：</p>
+          <ul>
+            <li>项目在 Android Studio 中成功打开，左侧 Project 面板可以看到目录结构</li>
+            <li>底部状态栏显示 "Gradle sync finished"（而非报错）</li>
+            <li>模拟器启动后，屏幕上显示 "Hello World!" 或 "Hello Android!"</li>
+          </ul>
+          <p>如果你看到了那行字——恭喜，这就是你的第一件作品。鲁班说：万丈高楼平地起，第一块砖最重要。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：试试你的随身工作台 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 Kotlin Playground（<code>play.kotlinlang.org</code>），在编辑器中输入以下代码并运行，观察输出结果：</p>
+      <pre><code><span class="kw">fun</span> <span class="fn">main</span>() {
+    <span class="kw">val</span> tools = <span class="fn">listOf</span>(<span class="str">"锯子"</span>, <span class="str">"刨子"</span>, <span class="str">"凿子"</span>, <span class="str">"墨斗"</span>)
+    <span class="fn">println</span>(<span class="str">"鲁班的工具箱有 </span><span class="kw">${</span>tools.size<span class="kw">}</span><span class="str"> 件工具："</span>)
+    tools.<span class="fn">forEachIndexed</span> { index, tool <span class="op">-></span>
+        <span class="fn">println</span>(<span class="str">"  </span><span class="kw">${</span>index + <span class="num">1</span><span class="kw">}</span><span class="str">. </span><span class="kw">$</span><span class="str">tool"</span>)
+    }
+}</code></pre>
+      <p>然后尝试修改 <code>tools</code> 列表，加入你自己喜欢的"工具"名称，再次运行。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>在 <code>listOf()</code> 的括号内添加新的字符串即可，用逗号分隔。例如：<code>listOf("锯子", "刨子", "凿子", "墨斗", "曲尺")</code>。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>原始代码运行后，输出应为：</p>
+          <pre><code>鲁班的工具箱有 4 件工具：
+  1. 锯子
+  2. 刨子
+  3. 凿子
+  4. 墨斗</code></pre>
+          <p>修改后如果你加了"曲尺"，输出会变成 5 件工具，并多出一行 <code>5. 曲尺</code>。这个练习的目的是让你亲手感受 Kotlin 代码的即时反馈——改了就能看到结果，这种手感对于学手艺至关重要。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：熟悉你的工作台布局 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在练习 2 创建的项目中，完成以下操作：</p>
+      <ol>
+        <li>将左侧 Project 面板从默认的 <strong>Android 视图</strong> 切换到 <strong>Project 视图</strong>，找到 <code>MainActivity.kt</code> 的完整路径。</li>
+        <li>打开 <code>app/build.gradle.kts</code> 文件，找到 <code>minSdk</code> 的值，把它从 <code>26</code> 改为 <code>24</code>，然后点击顶部出现的 "Sync Now" 链接，观察 Gradle 重新同步。</li>
+        <li>打开 Kotlin REPL（<code>Tools > Kotlin > Kotlin REPL</code>），输入 <code>"Android".reversed()</code>，按 <code>Ctrl + Enter</code>（macOS 为 <code>Cmd + Enter</code>）执行，查看结果。</li>
+      </ol>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>切换视图：点击 Project 面板左上角的下拉菜单，选择 "Project" 即可。<code>MainActivity.kt</code> 的完整路径形如 <code>app/src/main/java/com/example/myfirstapp/MainActivity.kt</code>。修改 <code>minSdk</code> 后一定要同步 Gradle，否则修改不会生效。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>完成检查：</p>
+          <ul>
+            <li><code>MainActivity.kt</code> 的完整路径为：<code>app/src/main/java/com/example/myfirstapp/MainActivity.kt</code></li>
+            <li>修改 <code>minSdk</code> 后，Gradle 同步应成功完成（底部状态栏显示 "Gradle sync finished"），项目仍然可以正常运行</li>
+            <li>在 REPL 中执行 <code>"Android".reversed()</code>，输出结果为 <code>diordnA</code></li>
+          </ul>
+          <p>鲁班说：熟悉工作台上每个旋钮、每个开关的位置，以后干起活来才不会手忙脚乱。今天多花十分钟摸索布局，将来能省下无数翻找的时间。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ==================== 底部导航 ==================== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

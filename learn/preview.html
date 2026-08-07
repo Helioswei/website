@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>设计系统预览 - Helios 技术教程</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-root="./">
+  <nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+  <div class="container">
+    <h1>设计系统预览</h1>
+    <p class="chapter-subtitle">统一浅色设计系统 · 组件与 tokens 一览（仅作开发参考）</p>
+
+    <h2>标题与正文</h2>
+    <p>正文 16px/1.8。这是 <strong>强调文字</strong>，<code>inline code</code>，以及普通链接 <a href="index.html">示例链接</a>。</p>
+    <ul><li>列表项一</li><li>列表项二</li></ul>
+
+    <h2>导师卡片</h2>
+    <div class="mentor-card">
+      <div class="mentor-header"><span class="mentor-icon">🔬</span>
+        <div class="mentor-info"><h3>本章导师：费曼</h3><p class="mentor-method">核心方法论：第一性原理</p></div>
+      </div>
+      <div class="mentor-quote"><p>「从为什么出发。」</p></div>
+    </div>
+
+    <h2>代码</h2>
+    <pre><code><span class="cmt">// Kotlin 示例</span>
+<span class="kw">fun</span> <span class="fn">main</span>() {
+    <span class="kw">val</span> name <span class="op">=</span> <span class="str">"Helios"</span>
+    println(<span class="str">"Hello, </span>$name")
+}</code></pre>
+
+    <h2>提示 / 警告 / 表格</h2>
+    <div class="tip"><div class="tip-title">提示</div><p>这是一条提示。</p></div>
+    <div class="warning"><div class="tip-title">注意</div><p>这是一条警告。</p></div>
+    <table><tr><th>列A</th><th>列B</th></tr><tr><td>1</td><td>2</td></tr></table>
+
+    <h2>练习</h2>
+    <div class="exercise"><h2>章末练习</h2>
+      <div class="exercise-item"><h3>练习 1 <span class="difficulty difficulty-easy">入门</span></h3>
+        <details><summary>参考答案</summary><div class="answer-content"><p>答案。</p></div></details>
+      </div>
+    </div>
+
+    <div class="bottom-nav" id="bottom-nav"></div>
+  </div>
+  <script src="site-nav.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>

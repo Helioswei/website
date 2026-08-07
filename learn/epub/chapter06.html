@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章：存储：SD 卡与 SPIFFS - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="6" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：存储——SD 卡与 SPIFFS</h1>
+  <p class="chapter-subtitle">书放在哪，决定了你能带多少本书出门——SD 卡与 SPIFFS，各是一只好箱子。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「造一个书箱，先量三件事：箱子里要放几本书？书能不能随手抽换？箱子自己还能不能记个账？存储的选择从来不是'越大越好'，而是'刚刚好'。SD 卡是个能换的大柜子，SPIFFS 是焊死在板子上的小暗格，而阅读进度和屏幕画面，得找个深睡眠也忘不掉的地方收好。这章我们就用鲁班的尺子，把这几只箱子挨个量一遍。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 书放哪：SD 卡 vs SPIFFS ========== -->
+  <h2>6.1 EPUB 文件放哪：SD 卡 vs SPIFFS 的权衡</h2>
+
+  <p>阅读器的"书库"是<strong>文件系统</strong>（把存储空间整理成"文件夹套文件夹、里面放着文件"这种树状结构的机制）：EPUB 文件放在这里，<code>EpubList</code> 扫目录、列书单、打开章节都从这里读。这个项目给了两条路——<strong>SD 卡</strong>（走 <strong>SPI 接口</strong>——一种串行通信协议，一条总线上一个主机带多个外设，靠片选线点名选谁通信——并<strong>挂载</strong>成 FAT 文件系统，挂载（mount）就是让系统把存储设备"接"进文件系统，之后用 <code>/fs</code> 这样的路径就能读写它）和 <strong>SPIFFS</strong>（直接写在板载 Flash 的一个<strong>分区</strong>里，分区就是把 Flash 划出的一块独立区域、各管各的用途）。README 只用一句话点了二者的差距："You can use SPIFFS instead of an SD Card, but you won't be able to fit many books on it."（你可以用 SPIFFS 顶替 SD 卡，但装不下几本书。）</p>
+
+  <p>差距的根源在容量与可拆换。翻 <code>partitions.csv</code>（<strong>分区表</strong>：记录每块分区叫什么、从哪个地址开始、占多大的清单）：这颗 ESP32 的 4 MB Flash 里，<code>app0</code> 固件分区占 <code>0x120000</code>（约 1.1 MiB），<code>spiffs</code> 数据分区从 <code>0x130000</code> 起、大小 <code>0x2D0000</code>——换算一下是 2,949,120 字节，约 <strong>2.8 MiB</strong>。而 <code>data/</code> 里随仓库附带的两本示例书，<code>pg43-images.epub</code> 约 297 KiB、<code>pg14838-images.epub</code> 约 1.3 MiB，两本加起来就吃掉 1.6 MiB——也就是说，这个 2.8 MiB 的小暗格也就再塞得下一两本同等规模的书。反观 SD 卡动辄几 GB、还能随手抽换，装一百本古登堡书都不在话下。这就是"能装下多少本书"的物理边界。</p>
+
+<pre><code><span class="cmt"># partitions.csv：这颗 4 MB Flash 的分区地界</span>
+<span class="cmt"># Name,   Type, SubType, Offset,  Size,  Flags</span>
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x120000,  <span class="cmt"># 固件，约 1.1 MiB</span>
+spiffs,   data, spiffs,  0x130000,0x2D0000,  <span class="cmt"># SPIFFS 分区 ≈ 2.8 MiB</span></code></pre>
+
+<pre><code><span class="cmt"># data/：随仓库附带的两本古登堡示例书</span>
+pg43-images.epub       <span class="num">304004</span> bytes   <span class="cmt">≈ 297 KiB</span>
+pg14838-images.epub    <span class="num">1386783</span> bytes  <span class="cmt">≈ 1.3 MiB</span></code></pre>
+
+  <p>但容量不是唯一维度。可拆换意味着<strong>书库与固件解耦</strong>：SD 卡拔下来、插一张装满别的书的卡，固件不用重刷、分区不用重烧；SPIFFS 的书则"焊死"在 Flash 里，要换内容得重新烧文件系统。代价是硬件上多出 4 根 SPI 引脚和一个卡座。README 给出的默认主张很务实：能用 SD 卡就用 SD 卡，SPIFFS 更像"没有卡座、或者引脚不够时的备胎"。</p>
+
+  <table>
+    <tr><th>维度</th><th>SD 卡（SPI 模式）</th><th>SPIFFS（板载 Flash）</th></tr>
+    <tr><td>容量</td><td>GB 级，几乎装不满</td><td>固定分区，本项目约 2.8 MiB</td></tr>
+    <tr><td>可拆换</td><td>可插拔，换卡即换书库</td><td>固化在板上，需重新烧写</td></tr>
+    <tr><td>硬件开销</td><td>4 根 SPI 引脚 + 卡座</td><td>无额外引脚</td></tr>
+    <tr><td>挂载实现</td><td><code>esp_vfs_fat_sdspi_mount</code></td><td><code>esp_vfs_spiffs_register</code></td></tr>
+    <tr><td>深睡眠状态保存</td><td>稳定</td><td>README 承认存在已知问题</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>容量的"刚刚好"，得拿真实数字说话：SPIFFS 分区 <code>0x2D0000</code> = 2,949,120 字节 ≈ 2.8 MiB，两本示例书合计 ≈ 1.6 MiB。动手算一遍这个比例，你就不会再纠结"SPIFFS 够不够用"——它天然只适合"装几本书、跑个演示"，这就是 README 那句"won't fit many books"背后的算术。</p>
+  </div>
+
+  <!-- ========== 6.2 SD 卡 ========== -->
+  <h2>6.2 SD 卡：SPI 引脚配置、挂载与读取</h2>
+
+  <p>SD 卡在 ESP32 上有两种接法：<strong>SDMMC</strong>（原生 4 位总线，快但占用引脚多）和 <strong>SPI 模式</strong>（只用 4 根线：<code>MISO</code>、<code>MOSI</code>（两根<strong>数据线</strong>，一根收、一根发）、<code>CLK</code>（时钟线，给通信打节拍）、<code>CS</code>（<strong>片选</strong>，选中哪颗芯片才和它说话））。本项目走的是 SPI 模式，因为对阅读器来说，读几本书的带宽需求远没有 4 位并行带来的复杂度划算。四根线接在哪些引脚，由 <code>platformio.ini</code> 里的四个宏注入：<code>SD_CARD_PIN_NUM_MISO</code>、<code>SD_CARD_PIN_NUM_MOSI</code>、<code>SD_CARD_PIN_NUM_CLK</code>、<code>SD_CARD_PIN_NUM_CS</code>——每一块板子的布线不同，宏的值也不同，而代码只认宏、不认具体引脚。</p>
+
+<pre><code><span class="cmt">; platformio.ini [env:lilygo_t5_47]：SD 卡走 SPI，四根引脚由宏注入</span>
+-DSD_CARD_PIN_NUM_MISO=GPIO_NUM_14
+-DSD_CARD_PIN_NUM_MOSI=GPIO_NUM_13
+-DSD_CARD_PIN_NUM_CLK=GPIO_NUM_15
+-DSD_CARD_PIN_NUM_CS=GPIO_NUM_12</code></pre>
+
+  <table>
+    <tr><th>构建环境</th><th>MISO</th><th>MOSI</th><th>CLK</th><th>CS</th></tr>
+    <tr><td><code>lilygo_t5_47</code></td><td><code>GPIO_NUM_14</code></td><td><code>GPIO_NUM_13</code></td><td><code>GPIO_NUM_15</code></td><td><code>GPIO_NUM_12</code></td></tr>
+    <tr><td><code>epdiy</code></td><td><code>GPIO_NUM_36</code></td><td><code>GPIO_NUM_0</code></td><td><code>GPIO_NUM_13</code></td><td><code>GPIO_NUM_14</code></td></tr>
+    <tr><td><code>m5_paper</code></td><td><code>GPIO_NUM_13</code></td><td><code>GPIO_NUM_12</code></td><td><code>GPIO_NUM_14</code></td><td><code>GPIO_NUM_4</code></td></tr>
+  </table>
+
+  <p>挂载由 <code>lib/sd_card/src/SDCard.cpp</code> 完成，它把 ESP-IDF 的标准流程包成了一个类。构造时先 <code>spi_bus_initialize</code> 初始化 SPI 总线（DMA 通道 1），再用 <code>SDSPI_DEVICE_CONFIG_DEFAULT()</code>（<strong>SDSPI</strong> 就是"SD 卡走 SPI 协议"这一模式的合称）配置设备并把 <code>CS</code> 填进 <code>slot_config.gpio_cs</code>，最后 <code>esp_vfs_fat_sdspi_mount("/fs", ...)</code> 把卡挂到 <code>/fs</code> 挂载点。注意 mount_config 里 <code>format_if_mount_failed = true</code>：万一卡没格式化或文件系统坏了，驱动会<strong>直接帮你格式化</strong>再挂载——这在开发期很省心，但也意味着别在卡上放不可再生的数据。析构函数则反向收尾：<code>esp_vfs_fat_sdcard_unmount</code> 卸载、<code>spi_bus_free</code> 释放总线。</p>
+
+<pre><code><span class="cmt">/* Board.cpp：编译期二选一——SD 还是 SPIFFS */</span>
+<span class="kw">void</span> Board::start_filesystem()
+{
+<span class="kw">#ifdef</span> USE_SPIFFS
+  spiffs = <span class="kw">new</span> SPIFFS(<span class="str">"/fs"</span>);
+<span class="kw">#else</span>
+  sdcard = <span class="kw">new</span> SDCard(<span class="str">"/fs"</span>, SD_CARD_PIN_NUM_MISO, SD_CARD_PIN_NUM_MOSI,
+                        SD_CARD_PIN_NUM_CLK, SD_CARD_PIN_NUM_CS);
+<span class="kw">#endif</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* lib/sd_card/src/SDCard.cpp：挂载 FAT 到 /fs（节选） */</span>
+esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+    .format_if_mount_failed = <span class="kw">true</span>,    <span class="cmt">// 挂载失败会直接格式化</span>
+    .max_files = <span class="num">5</span>,
+    .allocation_unit_size = <span class="num">16</span> * <span class="num">1024</span>};
+ret = esp_vfs_fat_sdspi_mount(<span class="str">"/fs"</span>, &amp;m_host, &amp;slot_config, &amp;mount_config, &amp;m_card);
+<span class="kw">if</span> (ret != ESP_OK)
+  ESP_LOGE(TAG, <span class="str">"Failed to initialize the card (%s). Make sure SD card lines have pull-up resistors"</span>,
+           esp_err_to_name(ret));
+<span class="cmt">// 成功则打印卡信息：sdmmc_card_print_info(stdout, m_card);</span></code></pre>
+
+  <p>挂载成功后，<code>EpubList::load("/fs/")</code> 打开目录、逐条扫描以 <code>.epub</code> 结尾的文件，解析封面与书名后按标题排序生成书单——这正是第 1 章工作流里"扫目录列书单"的一步。如果没插卡、<code>opendir</code> 失败，它会在屏幕上画出警告图、"Please insert SD Card" 提示，然后延时重启。所以 SD 卡这条路上，"卡没插好"这个错误是有明确的用户反馈的，这也是选择 SD 卡的一个隐性好处的。</p>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p><code>esp_vfs_fat_sdmmc_mount_config_t</code> 里的 <code>format_if_mount_failed</code> 是一把双刃剑：开发时它替你兜底（卡没格式化也能用），但它会<strong>静默抹掉卡上数据</strong>。生产级设备通常要自己实现"格式化前先确认"的策略。动手改这个字段并观察行为，是你亲手理解挂载配置的最快方式。</p>
+  </div>
+
+  <!-- ========== 6.3 SPIFFS ========== -->
+  <h2>6.3 SPIFFS：-D USE_SPIFFS、pio run -t uploadfs 与 data/ 目录</h2>
+
+  <p>SPIFFS（SPI Flash File System）是专为小容量串行 Flash 设计的文件系统，直接把书存在板子的 Flash 分区里，不需要任何外部硬件。接入方式是一个编译宏：在 <code>platformio.ini</code> 的 <code>build_flags</code> 里加上 <code>-D USE_SPIFFS</code>，<code>Board.h</code>/<code>Board.cpp</code> 里的 <code>#ifdef USE_SPIFFS</code> 就会让 <code>start_filesystem()</code> 走 <code>SPIFFS("/fs")</code> 分支，否则走 SD 卡分支。这是教科书级的"<strong>编译期配置切换实现</strong>"——同一份源码，改一个宏就换一套存储后端。</p>
+
+  <p>翻 <code>platformio.ini</code> 看三块板的真实取舍很有意思：<code>lilygo_t5_47</code> 和 <code>epdiy</code> 都启用了 <code>-D USE_SPIFFS</code>，其中 EPDIY 环境还专门注释了一句——"如果这个参数被注释掉，就默认用 SD 卡，需要占用 4 根 SPI 引脚"；而 <code>m5_paper</code> 却把 <code>-D USE_SPIFFS</code> <strong>注释掉了</strong>，也就是说 M5 Paper 默认走 SD 卡。同样的代码、不同的板子，存储策略可以各自独立，这正是构建系统里"每块板一套配置"的价值。</p>
+
+<pre><code><span class="cmt">; platformio.ini：三个环境对 SPIFFS 的取舍</span>
+[env:lilygo_t5_47]   -D USE_SPIFFS     <span class="cmt">; 用 SPIFFS（示例即如此）</span>
+[env:epdiy]          -D USE_SPIFFS     <span class="cmt">; 用 SPIFFS，省下 4 根 SPI 引脚</span>
+[env:m5_paper]       ;-D USE_SPIFFS   <span class="cmt">; 注释掉 → 走 SD 卡</span></code></pre>
+
+<pre><code><span class="cmt">/* lib/spiffs/src/SPIFFS.cpp：注册 SPIFFS 到 /fs（节选） */</span>
+esp_vfs_spiffs_conf_t mount_cofig = {
+    .base_path = <span class="str">"/fs"</span>,
+    .partition_label = <span class="kw">NULL</span>,   <span class="cmt">// NULL = 自动找名为 spiffs 的分区</span>
+    .max_files = <span class="num">5</span>,
+    .format_if_mount_failed = <span class="kw">true</span>};
+esp_err_t ret = esp_vfs_spiffs_register(&amp;mount_cofig);</code></pre>
+
+  <p>SPIFFS 的内容从哪来？来自仓库根目录的 <code>data/</code> 文件夹。PlatformIO 约定：<code>data/</code> 是"要烧进文件系统分区的资产"，执行 <code>pio run -t uploadfs</code> 就会把 <code>data/</code> 里的 <code>.epub</code> 等文件整体烧进 <code>partitions.csv</code> 划出的 <code>spiffs</code> 分区。注意 <code>data/</code> 里还有个 <code>.keep</code> 文件——那是为了把空目录保留进 git 而放的占位符，上传时会被一并烧进去，但因为 <code>EpubList::load</code> 会跳过以 <code>.</code> 开头的隐藏文件，所以不会污染书单。</p>
+
+  <p>SPIFFS 的代价，README 的 "SPIFFS support" 一节说得非常坦诚：它存在一些问题，"particularly with persisting the state of the display when going into deep sleep"（尤其是在深睡眠时保存屏幕显示状态）。这正好牵出 6.4 的主题——存储不仅要装书，还要保管设备自己的"记忆"。</p>
+
+<pre><code><span class="cmt"># 把 data/ 里的书整包烧进 SPIFFS 分区</span>
+$ pio run -t uploadfs
+
+<span class="cmt"># data/ 目录内容（.keep 为占位文件，上传时会被跳过）</span>
+.keep                  <span class="cmt"># 隐藏文件，EpubList 不把它当书</span>
+pg43-images.epub
+pg14838-images.epub</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>README 原话："There some issues with SPIFFS which cause some problems - particularly with persisting the state of the display when going into deep sleep - if you can get an SD Card attached these problems don't exist."（SPIFFS 有些问题，尤其深睡眠时保存显示状态；只要你能接上 SD 卡，这些问题就不存在。）翻译成工程决策就是：<strong>演示与原型可以用 SPIFFS，追求稳定就上 SD 卡</strong>。</p>
+  </div>
+
+  <!-- ========== 6.4 状态持久化 ========== -->
+  <h2>6.4 状态持久化：阅读进度与显示状态的保存</h2>
+
+  <p>存储的第三项使命，是保管设备自己的"记忆"。阅读器有两个必须跨过深睡眠活下来的东西：一是<strong>屏幕画面</strong>，二是<strong>阅读进度</strong>。屏幕画面很重要——墨水屏断电后画面仍在，但它的内部缓存是另一回事；若醒来时不把"上一屏"恢复出来就重绘，会出现残影或闪烁。所以在入睡前 <code>main.cpp</code> 调 <code>renderer-&gt;dehydrate()</code>，把整帧画面<strong>压缩后写进文件系统</strong>，醒来再 <code>hydrate()</code> 读回。</p>
+
+  <p>具体实现藏在 <code>EpdiyFrameBufferRenderer</code> 里：帧缓冲是 <code>EPD_WIDTH * EPD_HEIGHT / 2</code> 字节（4 bpp），直接用 miniz 的 <code>tdefl_compress_mem_to_heap</code> 压成 <code>/fs/front_buffer.z</code>，因为"写磁盘很慢，压缩后再写能省空间、提速"——这正是代码注释的原话。醒来时 <code>tinfl_decompress_mem_to_mem</code> 解压回缓冲，<code>flush_display()</code> 把画面原样刷回屏上；若解压失败，则 <code>needs_redraw</code> 置真、整页重绘。注意这个文件落在 <code>/fs</code>——也就是 SD 卡上，<code>format_if_mount_failed</code> 再顺手格式化一下，就等于把"屏保"删了，所以 README 才说 SPIFFS 在这条路上有已知问题。</p>
+
+<pre><code><span class="cmt">/* main.cpp：120 秒无交互，进入深睡眠前的收尾 */</span>
+renderer-&gt;dehydrate();        <span class="cmt">// 压缩帧缓冲 → /fs/front_buffer.z</span>
+board-&gt;stop_filesystem();     <span class="cmt">// 卸载 /fs（SPIFFS 或 SD 卡）</span>
+board-&gt;prepare_to_sleep();
+ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
+button_controls-&gt;setup_deep_sleep();
+esp_deep_sleep_start();</code></pre>
+
+<pre><code><span class="cmt">/* EpdiyFrameBufferRenderer.h：把整屏内容压缩落盘（节选） */</span>
+<span class="kw">virtual bool</span> dehydrate()
+{
+  <span class="cmt">// 压缩能省空间并提速——写磁盘很慢</span>
+  <span class="type">size_t</span> compressed_size = <span class="num">0</span>;
+  <span class="type">void</span> *compressed = tdefl_compress_mem_to_heap(
+      m_frame_buffer, EPD_WIDTH * EPD_HEIGHT / <span class="num">2</span>, &amp;compressed_size, <span class="num">0</span>);
+  <span class="kw">if</span> (compressed)
+  {
+    FILE *fp = fopen(<span class="str">"/fs/front_buffer.z"</span>, <span class="str">"w"</span>);
+    <span class="kw">if</span> (fp)
+    {
+      fwrite(compressed, <span class="num">1</span>, compressed_size, fp);
+      fclose(fp);
+      <span class="kw">return</span> <span class="kw">true</span>;
+    }
+  }
+  <span class="kw">return</span> <span class="kw">false</span>;
+}</code></pre>
+
+  <p>阅读进度则走了另一条更省事的路——<strong>RTC 内存</strong>。上一章你见过 <code>RTC_NOINIT_ATTR</code>/<code>RTC_DATA_ATTR</code>：这段内存挂在不断电的 RTC 域上，深睡眠不掉。书单状态 <code>EpubListState</code> 里的每一项 <code>EpubListItem</code> 都带着 <code>current_section</code>、<code>current_page</code>、<code>pages_in_current_section</code> 三个字段，<code>EpubReader</code> 持有的是这份结构的<strong>引用</strong>（<code>EpubListItem &amp;state</code>）——翻页时改的就是 RTC 内存，醒来后进度自然还在。于是"屏幕画面走文件系统、阅读进度走 RTC 内存"，两种持久化手段各司其职，互不抢道。</p>
+
+  <p>把"什么数据、存在哪、何时写"摆成一张表，存储策略就一目了然。顺带一个细节：<code>M5Paper::stop_filesystem()</code> 里把 <code>delete sdcard</code> 注释掉了，理由是 "seems to cause issues with the M5 Paper"（在 M5 Paper 上删除会出问题）。存储生命周期在这种"按板子修修补补"里并不总是一帆风顺——这本身就是真实项目的常态。</p>
+
+<pre><code><span class="cmt">/* src/boards/M5Paper.cpp：板级差异的活例子 */</span>
+<span class="kw">void</span> M5Paper::stop_filesystem()
+{
+<span class="kw">#ifdef</span> USE_SPIFFS
+  delete spiffs;
+<span class="kw">#else</span>
+  <span class="cmt">// seems to cause issues with the M5 Paper</span>
+  <span class="cmt">// delete sdcard;</span>
+<span class="kw">#endif</span>
+}</code></pre>
+
+  <table>
+    <tr><th>数据</th><th>存储位置</th><th>写入时机</th></tr>
+    <tr><td>当前屏幕画面</td><td><code>/fs/front_buffer.z</code>（miniz 压缩）</td><td>入睡前 <code>dehydrate()</code></td></tr>
+    <tr><td>书单 + 阅读进度</td><td><code>RTC_DATA_ATTR</code> 的 <code>epub_list_state</code></td><td>翻页/换章时实时更新</td></tr>
+    <tr><td>目录选中项</td><td><code>RTC_DATA_ATTR</code> 的 <code>epub_index_state</code></td><td>目录导航时更新</td></tr>
+    <tr><td>当前 UI 状态</td><td><code>RTC_NOINIT_ATTR</code> 的 <code>ui_state</code></td><td>状态切换时更新</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>持久化要按数据的"性格"选位子：屏幕画面是"一次性、要随睡眠恢复的缓存"，适合放可擦写、可重写的文件系统；阅读进度是"要活到下次开机"的长期记忆，适合放一直供电的 RTC 内存。两类数据、两条通道，对应了两种断电后的存活能力——想清楚这个，你就能给自己的嵌入式项目也画一张"记忆分布图"。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：两种存储的取舍 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用"特性→后果"的句式，各列出 SD 卡与 SPIFFS 的至少两条特性及其带来的后果。再判断：为什么 EPDIY 环境更愿意用 SPIFFS，而 M5 Paper 默认走 SD 卡？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 6.1 的表格与 6.3 里 platformio.ini 的注释（"省下 4 根 SPI 引脚"）；想想哪块板子引脚更紧张。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>SD 卡：容量 GB 级 → 能装下整座书库；可插拔 → 换卡即换书库、不重刷固件；需 4 根 SPI 引脚 + 卡座 → 占用硬件资源。SPIFFS：写进 Flash 分区（本项目约 2.8 MiB）→ 装不下几本书；无额外引脚 → 适合引脚紧张的板子；固化在板上 → 换书要重新 uploadfs。EPDIY 环境用 SPIFFS 正是为了省下 4 根 SPI 引脚（platformio.ini 注释原话），M5 Paper 则没有这个顾虑，默认走 SD 卡。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读引脚配置 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>从 <code>platformio.ini</code> 读出三块板的 <code>SD_CARD_PIN_NUM_*</code> 宏，填进 6.2 的表格。再回答：SD 卡类为什么把引脚设计成<strong>构造函数参数</strong>而不是写死？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三块板的 CS 分别是 GPIO_NUM_12 / GPIO_NUM_14 / GPIO_NUM_4，MISO/MOSI/CLK 也各不相同；想想引脚由谁注入、要复用到别的板子时改哪里。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>lilygo_t5_47：MISO=14、MOSI=13、CLK=15、CS=12；epdiy：MISO=36、MOSI=0、CLK=13、CS=14；m5_paper：MISO=13、MOSI=12、CLK=14、CS=4。引脚由编译宏（<code>SD_CARD_PIN_NUM_*</code>）经 <code>Board::start_filesystem</code> 传入构造函数，而不是写死在 SDCard 类里——这样同一个 <code>SDCard</code> 类可以服务任意板子，换板只需改 <code>platformio.ini</code> 的宏值，实现了"配置与实现分离"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：状态持久化 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>阅读器的"记忆"分两条通道保存。请分别说明：(a) 屏幕画面存在哪、何时写、何时读回、读不回来怎么办？(b) 阅读进度存在哪、为什么它不需要"写文件"这个动作？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>屏幕走文件系统（<code>/fs/front_buffer.z</code>），进度走 RTC 内存；想想 <code>EpubReader</code> 持有的 <code>EpubListItem &amp;state</code> 引用指向哪里。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 入睡前 <code>dehydrate()</code> 把帧缓冲用 miniz 压缩成 <code>/fs/front_buffer.z</code>；醒来 <code>hydrate()</code> 读回、解压、刷回屏幕；若解压失败，<code>hydrate</code> 返回 false，主逻辑用 <code>needs_redraw=true</code> 触发整页重绘。(b) <code>EpubListItem</code> 的 <code>current_section</code>/<code>current_page</code> 存在 <code>RTC_DATA_ATTR</code> 的 <code>epub_list_state</code> 里，深睡眠不断电；<code>EpubReader</code> 持有它的引用，翻页即改写 RTC 内存，天然持久，无需显式"保存文件"动作。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：容量算术 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>由 <code>partitions.csv</code> 计算 <code>spiffs</code> 分区大小（<code>0x2D0000</code>），判断它能否放下 <code>data/</code> 里的两本示例书。若你还要放 10 本与 <code>pg14838-images.epub</code> 同等大小的书，会怎样？由此解释 README 那句话。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>0x2D0000</code> = 45 × 65536 = 2,949,120 字节；<code>pg14838-images.epub</code> ≈ 1.3 MiB、<code>pg43-images.epub</code> ≈ 297 KiB；算总账。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>SPIFFS 分区 = <code>0x2D0000</code> = 2,949,120 字节 ≈ 2.8 MiB。两本示例书合计 ≈ 1.6 MiB，能放下（还余约 1.2 MiB）。若再放 10 本 1.3 MiB 的书，需要约 13 MiB，远超 2.8 MiB——上传会失败或内容写不进。这正是 README 说 "you won't be able to fit many books on it"（装不下几本书）的算术本质：2.8 MiB 的小暗格只够塞两三本中等篇幅的书，而 SD 卡以 GB 计、几乎装不满。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

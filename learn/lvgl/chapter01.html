@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章：LVGL 的崛起与本仓库解剖 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="1" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第1章：LVGL 的崛起与本仓库解剖</h1>
+  <p class="chapter-subtitle">一个 C 语言的 UI 库，凭什么成为嵌入式图形的事实标准？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理，从"为什么"出发</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「在嵌入式世界里，屏幕上像素到 MCU 之间隔着厚厚的一层抽象。学 LVGL 之前，先问：为什么嵌入式 UI 需要一套框架？它到底解决什么痛点？把这个问题想透，后面每一个 API 你都能猜个八九不离十。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 1.1 嵌入式 UI 的痛点 ========== -->
+  <h2>1.1 嵌入式 UI 的痛点</h2>
+
+  <p>在动手敲任何一行 LVGL 代码之前，先回到第一性原理：<strong>没有框架时，在嵌入式屏幕上画界面到底是什么样的？</strong>绝大多数 MCU 开发板上，屏幕背后是一块帧缓冲（frame buffer）——一片按像素排列的内存。想画一个按钮，你要把按钮的颜色、边框、文字的每个像素手动写进缓冲区；按钮被按下要变色，你得先轮询触摸芯片，再决定重绘哪一块区域。</p>
+
+  <p>这不是"难"，而是"全是体力活"。你写下的每一段绘制代码都只对这一块屏、这一个界面有效。可一旦界面多起来，问题就从体力升级为复杂度：两个界面之间如何切换？按下物理按键回到哪个界面？动画播放到一半时来了触摸怎么处理？没有框架时，答案几乎都是同一个——一个巨大的 <code>switch-case</code> 状态机，把所有界面的"当前状态"和"输入分发"揉在一起。每加一个界面，状态机就膨胀一圈；每改一处逻辑，都要担心会不会碰坏另一个界面的绘制。</p>
+
+  <h3>抽象的意义：对象树与渲染引擎</h3>
+
+  <p>框架的解法，是把屏幕组织成一棵<strong>对象树</strong>（object tree）。按钮不再是一堆散落的像素，而是一个拥有位置、尺寸、样式、事件的对象；整个界面就是这棵树的根对象（LVGL 里叫 <code>screen</code>）下挂着的若干子对象。你只声明"这里放一个按钮、那里放一个标签"，至于它怎么被画出来、按下时怎么响应——全部交给库去处理。</p>
+
+  <p>渲染引擎遍历这棵对象树，把每个对象按自己的状态画到缓冲区。这一层抽象是所有图形框架的共同本质：无论是桌面上的 Qt、移动端的 Flutter，还是内存按 kB 计的 LVGL，核心都是同一件事。理解了这一点，你就理解了 LVGL 大部分 API 的设计意图。</p>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>当你第一次调用 <code>lv_button_create()</code> 时，别只把它当"一个创建按钮的函数"。它背后是"对象树 + 渲染引擎 + 事件分发"整套体系的一次落地。先想透这个体系，后面每一个 API 你都能从它推导出来。</p>
+  </div>
+
+  <!-- ========== 1.2 LVGL 是什么 ========== -->
+  <h2>1.2 LVGL 是什么</h2>
+
+  <p><strong>LVGL</strong>（Light and Versatile Graphics Library，轻量而多能的图形库）是一个免费开源的 UI 库，目标是为"<strong>任何厂商的 MCU 或 MPU、任何平台</strong>"提供图形界面。官方 README 把它定位得很清楚：<strong>无外部依赖</strong>，从几十 kB 内存的小 MCU，到带 3D 加速的多核 Linux MPU，都能编译运行。对典型的 UI，你只需要约 <code>100 kB</code> RAM、<code>200–300 kB</code> Flash，外加一块 1/10 屏幕大小的渲染缓冲。</p>
+
+  <p>它的"开箱即用"体现在一长串特性清单（README「Features」一节）：30+ 个内置控件（按钮、滑块、图表、键盘、弧、表格……）；一套灵活而强大的样式系统，100+ 样式属性；Flex 与 Grid 两种自动布局引擎；Observer 数据绑定，让 UI 与应用数据联动；多输入设备支持（触摸、鼠标、按键、编码器、外部按钮）；以及多显示器同时驱动。</p>
+
+  <p>光看一个按钮就能直观感受它的风格。README 里"C 与 XML 两种写法"的例子就是这样——C 代码创建按钮并居中，注册点击回调，再在按钮上放一个标签：</p>
+
+<pre><code><span class="cmt">/* 创建一个居中按钮，点击时打印消息 */</span>
+<span class="type">lv_obj_t</span> * button = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_center</span>(button);
+<span class="fn">lv_obj_add_event_cb</span>(button, button_clicked_cb, <span class="kw">LV_EVENT_CLICKED</span>, <span class="kw">NULL</span>);
+
+<span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(button);
+<span class="fn">lv_label_set_text</span>(label, <span class="str">"Hello from LVGL!"</span>);</code></pre>
+
+  <p>注意第 1 行——<code>lv_screen_active()</code> 返回的就是 1.1 里说的"对象树的根"。你不需要关心缓冲区怎么分配、像素怎么刷，<code>lv_obj_center()</code> 会替你完成布局，<code>LV_EVENT_CLICKED</code> 替你完成事件分发。当然，这些便利也不是白来的，LVGL 有自己的资源占用清单：</p>
+
+  <table>
+    <tr><th>需求</th><th>最低配置</th></tr>
+    <tr><td>RAM</td><td>~100 kB（典型 UI）</td></tr>
+    <tr><td>Flash</td><td>~200–300 kB</td></tr>
+    <tr><td>渲染缓冲</td><td>1/10 屏幕（支持 partial 渲染模式）</td></tr>
+    <tr><td>极致精简</td><td>32 kB RAM / 128 kB Flash（裸机极限）</td></tr>
+  </table>
+
+  <!-- ========== 1.3 解剖本仓库 lvgl-sample ========== -->
+  <h2>1.3 解剖本仓库 lvgl-sample</h2>
+
+  <p>先明确一点：这个 <code>lvgl-sample</code> 工作区并不是一个"应用工程"，而是一个<strong>「库 + 工具」的组合</strong>。就学习 LVGL 而言，仓库顶层有两个核心目录，分工极其清晰——<code>lvgl-master/</code> 是 LVGL 的完整源码仓库（本教程所有代码都建立在这份源码之上）；<code>LVGL_Pro_CLI-2.0.2-rc1-darwin/</code> 是官方设计工具 LVGL Pro 的命令行版本，负责把界面描述（XML）翻译成纯 C 代码。</p>
+
+<pre><code><span class="cmt">/* lvgl-sample 工作区结构 */</span>
+lvgl-master/                   <span class="cmt">LVGL v9.6.0 库源码</span>
+LVGL_Pro_CLI-2.0.2-rc1-darwin/ <span class="cmt">设计工具 CLI（XML→C）</span></code></pre>
+
+  <p>先看 <code>lvgl-master/</code>。顶层文件可以分成几类：<code>lv_conf_template.h</code> 是配置模板；<code>CMakeLists.txt</code> 是构建入口（配套还有 <code>lvgl.mk</code>、<code>SConscript</code> 等，README 说 Make、CMake、简单通配符编译都支持）；<code>src/</code> 是库的全部实现；<code>examples/</code>、<code>demos/</code> 提供可直接运行的示例与演示工程；<code>docs/</code> 存放文档（含中文版 README）；<code>include/</code> 是面向使用者的公共头文件目录。你日常打交道最多的，就是 <code>src/</code> 与 <code>include/</code>。</p>
+
+  <h3>lv_conf_template.h：一切的开关</h3>
+
+  <p>在这些文件里，<code>lv_conf_template.h</code> 值得单独说。LVGL 几乎所有行为都由配置宏控制——内存分配方式、功能模块开关、渲染缓冲策略……使用流程正如 README「Porting manually」一节所说：<strong>把它复制为 <code>lv_conf.h</code>，把开头的 <code>#if 0</code> 改成 <code>#if 1</code> 以启用配置</strong>，再按需裁剪。默认配置通常就能跑起来，这也是新手最该记住的一步。</p>
+
+  <p>这个文件还有一个用处：它的头部注释写着 <code>Configuration file for v9.6.0</code>，是判断当前仓库版本最直接的线索之一。我们下一节就来系统地读版本。</p>
+
+  <!-- ========== 1.4 src 子系统地图 ========== -->
+  <h2>1.4 src 子系统地图</h2>
+
+  <p>打开 <code>lvgl-master/src/</code>，你看到的是 19 个子系统目录。别被数量吓到——它们不是杂乱堆放的，而是按职责分层：<code>core</code> 在最中心，<code>widgets</code> 建立在 <code>core</code> 之上，<code>draw</code> 负责把对象画出来，<code>display</code> 与 <code>indev</code> 是连接物理世界的两个"口"，其余子系统则围绕它们提供通用能力。读这份目录，就像在读一张地图。</p>
+
+  <p>举几个例子理解分工。<code>core</code> 是对象模型与渲染管线的核心——<code>lv_obj</code> 的生命周期、布局、事件都从这里出发，是整个库的"地基"；<code>widgets</code> 是建立在地基上的控件库；<code>draw</code> 是一组渲染后端（<code>sw</code> 软件渲染、<code>opengles</code>、<code>vg-lite</code> 等），切换后端不影响你的 UI 代码；<code>display</code> 封装屏幕与渲染缓冲（还记得 1/10 缓冲吗？部分渲染模式就在这里定义）；<code>indev</code> 抽象各类输入设备，<code>lv_indev_type</code> 里定义了 pointer / keypad / encoder / button 等类型。</p>
+
+  <table>
+    <tr><th>子系统</th><th>职责</th></tr>
+    <tr><td><code>core</code></td><td>对象模型（lv_obj）与渲染管线核心</td></tr>
+    <tr><td><code>widgets</code></td><td>30+ 内置控件（button、label、slider、chart…）</td></tr>
+    <tr><td><code>draw</code></td><td>渲染引擎（sw / opengles / vg-lite…）</td></tr>
+    <tr><td><code>display</code> / <code>indev</code></td><td>屏幕与输入设备抽象</td></tr>
+    <tr><td><code>layouts</code></td><td>Flex / Grid 自动布局引擎</td></tr>
+    <tr><td><code>font</code> / <code>image</code></td><td>字体加载与图像解码</td></tr>
+    <tr><td><code>themes</code> / <code>libs</code> / <code>misc</code></td><td>主题、第三方库集成、通用工具</td></tr>
+  </table>
+
+  <p>还有几个"隐藏"子系统值得知道。<code>debugging</code> 提供调试辅助；<code>osal</code> 是对操作系统原语（互斥锁、信号量、线程）的抽象，配合 <code>tick</code> 时基，让 LVGL 能在裸机、FreeRTOS、Linux 等不同宿主上运行——这正是它"无外部依赖"的底气来源。</p>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>读源码别从 <code>draw</code> 或 <code>widgets</code> 开始，那是"结果"而不是"原因"。先看 <code>core</code> 里 <code>lv_obj.c</code> 的创建与销毁，再看 <code>misc</code> 里的计时器与动画，你就能拼出 LVGL 的运行主循环（README 里的 <code>lv_timer_handler()</code>）。地图越清晰，后面每一章都越省力。</p>
+  </div>
+
+  <!-- ========== 1.5 版本与 API 兼容 ========== -->
+  <h2>1.5 版本与 API 兼容</h2>
+
+  <p>先确认你手上是哪个版本。<code>lvgl-master/include/lvgl/lv_version.h</code> 用三个宏定义主次修订号，外加一个信息串：主版本 9、次版本 6、修订 0、信息 <code>"dev"</code>——也就是说这是一份 <strong>9.6.0-dev</strong> 的源码，与 <code>lv_conf_template.h</code> 头部注释完全吻合。</p>
+
+<pre><code><span class="cmt">/* include/lvgl/lv_version.h（节选） */</span>
+<span class="kw">#define</span> <span class="kw">LVGL_VERSION_MAJOR</span> <span class="num">9</span>
+<span class="kw">#define</span> <span class="kw">LVGL_VERSION_MINOR</span> <span class="num">6</span>
+<span class="kw">#define</span> <span class="kw">LVGL_VERSION_PATCH</span> <span class="num">0</span>
+<span class="kw">#define</span> <span class="kw">LVGL_VERSION_INFO</span> <span class="str">"dev"</span></code></pre>
+
+  <p>版本号背后是 API 的演进史。LVGL 9 相对 8 做过一次大规模改名：<code>lv_btn_create()</code> 改名为 <code>lv_button_create()</code>，对象家族也全面重命名。为了让存量代码不至于一夜失效，仓库在 <code>src/</code> 根下放了一串"兼容垫片"：<code>lv_api_map_v8.h</code>、<code>lv_api_map_v9_0.h</code>……一直到 <code>lv_api_map_v9_5.h</code>（<code>include/lvgl/api_map/</code> 下也有一份）。它们用宏把旧名字映射到新 API——这就是为什么很多 v8 时代的示例拿到 v9 也能编译通过。</p>
+
+  <p>最后是使用上的一个坑：<strong>include 路径</strong>。仓库根部有一个 <code>lv_version.h</code>，但它是"历史遗留"的转发头文件，顶部就带着一行 <code>#warning</code> 提示它已废弃。正确做法是包含 <code>include/lvgl/lv_version.h</code>，或者更省事地直接 <code>#include "lvgl/lvgl.h"</code>，它会替你引入版本信息与全部公共 API。</p>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>仓库内 <code>lvgl-master/lv_version.h</code> 顶部有 <code>#warning This file is deprecated</code>，请包含 <code>include/lvgl/lv_version.h</code>，或直接 <code>#include "lvgl/lvgl.h"</code>。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：仓库解剖 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>打开 <code>lvgl-master/</code>，列出 3 个顶层文件（或目录）并说明它们的用途。不要只写名字，试着说说它们各自解决什么问题。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从 <code>lv_conf_template.h</code>、<code>CMakeLists.txt</code>、<code>src/</code> 入手；想得更深一点，<code>include/</code> 和 <code>examples/</code> 也可以算进来。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>示例：<code>lv_conf_template.h</code>——配置模板，复制为 <code>lv_conf.h</code> 并启用开头 <code>#if 0</code> 后，可裁剪功能与资源占用；<code>CMakeLists.txt</code>——构建入口，把 <code>src/</code> 下的源码组织成库（还支持 <code>lvgl.mk</code>、SConscript 等方式）；<code>src/</code>——库的全部实现，按子系统分目录。此外 <code>include/</code> 是面向使用者的公共头文件，<code>examples/</code> 与 <code>demos/</code> 提供可直接运行的示例与演示。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：子系统职责判断 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设你要做下面四件事，分别应该查阅 / 修改 <code>src/</code> 下的哪个子系统？(1) 适配一块新分辨率的屏幕并调整渲染缓冲；(2) 从软件渲染切换到 OpenGL 后端；(3) 让文字正确显示中文与阿拉伯文；(4) 实现一个自动居中、随窗口伸缩的 Flex 布局。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 1.4 的子系统地图：显示、绘制、字形、排版，四件事恰好对应四个子系统。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) <code>display</code>——屏幕与渲染缓冲抽象，<code>lv_display_set_buffers()</code>、部分渲染模式都在这里；(2) <code>draw</code>——渲染后端切换（sw / opengles / vg-lite）；(3) <code>font</code>——字体加载与文本渲染，支持 UTF-8 及 CJK、阿拉伯文等书写系统；(4) <code>layouts</code>——Flex / Grid 自动布局引擎。核心启示：子系统边界就是职责边界，这也正是 <code>src/</code> 划分目录的依据。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：第一性原理推演 API 兼容 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>LVGL 9 做了一个看似矛盾的决定：一边大改 API（<code>lv_btn_create</code> → <code>lv_button_create</code>），一边又提供 <code>lv_api_map_v8.h</code> 等垫片让旧代码照常编译。请用第一性原理分析：这两个决定各自的动机是什么？它们为什么能同时成立？如果你来设计，会如何平衡"干净的 API"与"存量代码的兼容"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 v9 内部为什么还需要 <code>v9_0</code> 到 <code>v9_5</code> 的逐版本垫片；如果完全不兼容，社区要付出什么代价；如果永远兼容，新 API 会不会被旧名字拖累。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>大规模改名（v8→v9）是为了让 API 更统一、更可维护——例如控件名统一为 <code>button</code> 而非缩写 <code>btn</code>——这是"面向未来"的必要代价；而 <code>api_map</code> 垫片用宏把旧名映射到新名，让迁移可以渐进完成：先能编译、再逐步替换。二者能共存的关键是 C 预处理器的机制：改名发生在"源码头"，垫片是"兼容层"，互不干扰。<code>v9_0</code>~<code>v9_5</code> 的逐版本垫片，则是为了让同主版本内的升级"小步快跑"、平滑过渡。平衡之道：主版本可以激进，小版本必须平滑——这也解释了为什么未来版本大概率还会延续"主版本换名 + 垫片过渡"的模式。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

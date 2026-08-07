@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第10章：文本换行布局（动态规划） - ESP32 电子墨水屏教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-epub" data-track="epub" data-chapter="10" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：文本换行布局——动态规划</h1>
+  <p class="chapter-subtitle">一行能放几个词？数学上最小的代价，就是最均匀的排版。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理，从"为什么"出发</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「别背公式，先回到问题本身。我们手里只有一串单词和一行固定的宽度，要做的只有一件事：决定每个词在哪一行结束。小学生也会做——塞满就换行。可那样行右缘参差不齐，书页像被狗啃过。于是问题变精致了：能不能让所有行看起来均匀？这一问，就把"换行"从家务活变成了数学题——你需要一个代价函数，和一个在指数级可能里找到最优的那个搜索算法。动态规划，就是把"怎么找"变成"怎么记"。今天我们用第一性原理，把这段只有几十行的算法拆到骨头里。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 问题：word-wrap ========== -->
+  <h2>10.1 问题：给定一段文本和行宽，如何断行</h2>
+
+  <p>先把问题定义干净。我们有一个文本块：一串词 <code>words[0..n-1]</code>，每个词<strong>量好了宽度</strong> <code>word_widths[i]</code>（说人话：量宽，也叫度量，就是用字体数据算出文字实际占多宽），外加<strong>行宽</strong> <code>page_width</code>（说人话：一行能容纳多少宽度，超出就得换行）和词间距 <code>space_width</code>。要做的决定是：在哪些词之后换行。<code>TextBlock::layout</code> 的核心任务，就是算出这个断行方案——并让"每一行的右缘空白"尽量均匀。这不是嵌入式专属问题，它有个响亮的名字：<strong>word-wrap</strong>（说人话：在合适的位置把长文本切成多行，也就是"断行"，英文也叫 text justification），是每一个排版引擎都要过的关，从浏览器到 LaTeX 无一例外。</p>
+
+  <p>一个直观但次优的解法是<strong>贪心</strong>：从行首开始，能塞就塞，塞不下就换行。它快，但产出的行右缘参差。README 在 "Laying out a section of the book" 一节里提到了 MIT 公开课（<em>20. Dynamic Programming II: Text Justification, Blackjack</em>）和 geeksforgeeks 的 word-wrap DP 题（DP-19），正是因为这道题最适合用来演示"贪心 vs <strong>动态规划</strong>"的分野——说人话：动态规划是一种算法思路，把大问题拆成一个个子问题、保存中间结果来复用，从而避免重复计算。README 原话："we measure the width of each word in the block and then use some dynamic programming to break the words up into lines"（先量每个词的宽度，再用动态规划把词切进多行）；并且它大方承认："I copied the solution for this problem from geeksforgeeks with minor modifications"（我照着 geeksforgeeks 抄了这份解，做了点小改动）。</p>
+
+  <p>为什么"均匀"必须用数学定义？因为"好看"没法直接比较。我们把目标量化成一句话：<strong>每一行右侧空白的平方和越小，排版越均匀</strong>（最后一行除外——书的末行不强制对齐，代价记 0）。这就是整个算法的代价函数。注意"平方"而不是"绝对值"：平方放大了大块空白，算法会宁可把空白分散成多个小块，也不肯容忍一行巨空、一行挤爆。第 1 章预告过的那份 <code>dp[]</code> 代码，正是这段代价函数的物化。</p>
+
+<pre><code><span class="cmt">/* 换行问题的输入与输出（概念模型，非源码） */</span>
+输入：
+  words[0..n-1]       <span class="cmt">// 一串词</span>
+  word_widths[i]      <span class="cmt">// 每个词的宽度（由 renderer 量出）</span>
+  page_width          <span class="cmt">// 一行可用宽度</span>
+  space_width         <span class="cmt">// 词与词之间的空隙宽度</span>
+输出：
+  line_breaks[]       <span class="cmt">// 每个"行尾"之后下一个词的起始下标</span>
+目标：
+  最小化 Σ (page_width - 行实际宽度)² ，最后一行例外（代价为 0）</code></pre>
+
+<pre><code><span class="cmt">/* Renderer.h：度量能力全部来自这五个虚函数 */</span>
+<span class="kw">virtual</span> <span class="type">int</span> get_text_width(<span class="kw">const</span> <span class="type">char</span> *text, <span class="type">bool</span> bold = <span class="kw">false</span>, <span class="type">bool</span> italic = <span class="kw">false</span>) = <span class="num">0</span>;
+<span class="kw">virtual</span> <span class="type">int</span> get_space_width() = <span class="num">0</span>;
+<span class="kw">virtual</span> <span class="type">int</span> get_page_width() = <span class="num">0</span>;
+<span class="kw">virtual</span> <span class="type">int</span> get_page_height() = <span class="num">0</span>;
+<span class="kw">virtual</span> <span class="type">int</span> get_line_height() = <span class="num">0</span>;</code></pre>
+
+  <table>
+    <tr><th>量</th><th>含义</th><th>来源</th></tr>
+    <tr><td><code>words[i]</code></td><td>第 i 个词</td><td><code>TextBlock::add_span</code> 分词产生</td></tr>
+    <tr><td><code>word_widths[i]</code></td><td>第 i 个词的像素宽度</td><td><code>renderer-&gt;get_text_width</code></td></tr>
+    <tr><td><code>page_width</code></td><td>一行可用宽度</td><td><code>renderer-&gt;get_page_width</code>（可被 max_width 覆盖）</td></tr>
+    <tr><td><code>space_width</code></td><td>词间距</td><td><code>renderer-&gt;get_space_width</code></td></tr>
+    <tr><td><code>line_height</code></td><td>行高（分页用）</td><td><code>renderer-&gt;get_line_height</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>为什么最后一行代价是 0？想一想书的自然观感：倒数第二行如果塞得太满、最后一行的词却挤在左边，读者一眼就会察觉。但最后一行下面已经没有文字了，它右缘空多大都"无参照物"，所以算法干脆不对它计代价。这是整个 DP 边界条件里最关键的一行，后面会看到它如何决定了递推的起点。</p>
+  </div>
+
+  <!-- ========== 10.2 动态规划 ========== -->
+  <h2>10.2 动态规划：量词宽、代价函数、从后往前递推</h2>
+
+  <p>先算一下朴素搜索的代价。把 n 个词切成若干行，断点组合是指数级的——n=50 就有天文数字种切法，绝不可能枚举。动态规划的核心洞察只有一句：<strong>从单词 i 开始的那一行，无论前面怎么断，最优后缀只取决于 i 自己</strong>。于是我们定义 <code>dp[i]</code> = 从单词 i 开头那一行起的"最小总代价"（本行的代价 + 之后所有行的代价），并让每个 i 都向前看一步，决定"这一行到哪个词为止最划算"。有了 <code>dp[]</code>，指数级搜索就塌缩成一张可以查表的小表。</p>
+
+  <p>递推怎么写？对每个 i，尝试把行从 i 一直延伸到 j（j ≥ i），累加 <code>currlen</code>（词宽之和 + 词间距）；一旦 <code>currlen &gt; page_width</code> 说明塞不下了，break。可行时，这一整段的代价 = 当前行右侧空白的平方 <code>(page_width - currlen)²</code> + 之后所有行 <code>dp[j+1]</code>；若 j 恰好是最后一个词（最后一行），代价记 0。在所有候选 j 里取最小，写进 <code>dp[i]</code> 与 <code>ans[i]</code>。为了正确安放"最后一行"，递推必须<strong>从最后一个词开始、倒着往前算</strong>：<code>dp[n-1]=0, ans[n-1]=n-1</code>，然后 i 从 <code>n-2</code> 递减到 0。代码注释里还保留着 geeksforgeeks 原版的痕迹（"the last line cost is zero"）。</p>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：动态规划求最优断行（节选） */</span>
+<span class="type">int</span> n = word_widths.size();
+<span class="type">int</span> dp[n];                    <span class="cmt">// dp[i]：从词 i 开始那行的最小总代价</span>
+<span class="type">size_t</span> ans[n];                <span class="cmt">// ans[i]：最优时本行最后一个词的下标</span>
+
+dp[n - <span class="num">1</span>] = <span class="num">0</span>; ans[n - <span class="num">1</span>] = n - <span class="num">1</span>;
+<span class="kw">for</span> (<span class="type">int</span> i = n - <span class="num">2</span>; i &gt;= <span class="num">0</span>; i--)
+{
+  <span class="type">int</span> currlen = -<span class="num">1</span>;
+  dp[i] = INT_MAX;
+  <span class="kw">for</span> (<span class="type">int</span> j = i; j &lt; n; j++)
+  {
+    currlen += word_widths[j] + space_width;   <span class="cmt">// 行 i..j 的累计宽度</span>
+    <span class="kw">if</span> (currlen &gt; page_width) <span class="kw">break</span>;          <span class="cmt">// 塞不下了</span>
+    <span class="type">int</span> cost = (j == n - <span class="num">1</span>)
+        ? <span class="num">0</span>                                    <span class="cmt">// 最后一行代价 0</span>
+        : (page_width - currlen) * (page_width - currlen) + dp[j + <span class="num">1</span>];
+    <span class="kw">if</span> (cost &lt; dp[i]) { dp[i] = cost; ans[i] = j; }
+  }
+}</code></pre>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：把 ans 表翻译成真正的换行点 */</span>
+<span class="type">size_t</span> i = <span class="num">0</span>;
+<span class="kw">while</span> (i &lt; n)
+{
+  i = ans[i] + <span class="num">1</span>;                  <span class="cmt">// 跳到下一行的起始词</span>
+  <span class="kw">if</span> (i &gt; n)
+  {
+    ESP_LOGI(<span class="str">"TextBlock"</span>, <span class="str">"fallen off the end of the words"</span>);
+    <span class="kw">break</span>;
+  }
+  line_breaks.push_back(i);          <span class="cmt">// 记下这一行"结束之后"的下标</span>
+  <span class="kw">if</span> (line_breaks.size() &gt; <span class="num">1000</span>)  <span class="cmt">// 防御：一本书的行数不可能上万</span>
+  {
+    ESP_LOGE(<span class="str">"TextBlock"</span>, <span class="str">"too many line breaks"</span>);
+    <span class="kw">break</span>;
+  }
+}</code></pre>
+
+  <p>复杂度与直觉。先说<strong>算法复杂度</strong>（说人话：描述算法耗时随输入规模增大而变快多少的量，常用 O(...) 表示，如 O(n²) 意思是输入翻倍、耗时约翻四倍）：两层循环，i 和 j 都至多到 n，最坏 O(n²) 次比较；而一行通常只有十几个词，n 的规模很小，几十个词也就是几百次运算，在 ESP32 上毫无压力。<code>ans[]</code> 是个"前缀指引"：每个 i 记住最优情况下"这一行到哪结束"，回溯时像跳格子一样 <code>i = ans[i] + 1</code>，一步一行，得到的就是最优断行方案。这个"算的时候存决策、算完再回放"的两段式，是动态规划的标准动作——先正向填表，再反向走表。</p>
+
+  <table>
+    <tr><th>量</th><th>含义</th></tr>
+    <tr><td><code>dp[i]</code></td><td>从词 i 开始的最小总代价（本行 + 后缀）</td></tr>
+    <tr><td><code>ans[i]</code></td><td>dp[i] 最优时，本行最后一个词的下标</td></tr>
+    <tr><td><code>currlen</code></td><td>试探"i..j 放进同一行"的累计宽度</td></tr>
+    <tr><td><code>cost</code></td><td>某种断法（i..j 成行）的总代价</td></tr>
+    <tr><td><code>line_breaks</code></td><td>回溯得到的"行尾后下标"集合</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>为什么递推必须从最后往前？因为 <code>dp[j+1]</code> 是"后面的解"——后面的先算好，前面的查表才有意义。这与数学归纳法完全同构：先证 n=1（<code>dp[n-1]=0</code> 就是归纳基），再假设 k 之后都已知，往前推 k。如果你试着从前往后写这个 DP，会发现最后一行的"0 代价"边界根本无处安放。倒着写不是爱好，是代价函数的形状逼出来的。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>int dp[n]</code> 是变长数组（VLA），n 来自运行时的词数，数组在任务栈上。若某个块有上千个词（<code>dp</code> 4 字节 × n + <code>ans</code> 8 字节 × n ≈ 12 KB），栈就可能吃紧；代码里 1000 行的上限，以及那个 "fallen off the end of the words" 日志，都是针对"异常输入"的手写防御。在嵌入式上，凡是"数组大小来自外部输入"的地方，都要习惯性问一句：会不会爆栈、会不会越界。</p>
+  </div>
+
+  <!-- ========== 10.3 具体实现 ========== -->
+  <h2>10.3 具体实现：TextBlock 如何度量与换行</h2>
+
+  <p>度量在进入 DP 之前就完成了。<code>TextBlock::layout</code> 的第一段：for 每个词调一次 <code>renderer-&gt;get_text_width(words[i], word_styles[i] &amp; BOLD_SPAN, word_styles[i] &amp; ITALIC_SPAN)</code>，把结果 push 进 <code>word_widths</code>。粗细和斜体会改变字形宽度，所以度量必须带上样式位——这正是上一章 <code>add_span</code> 里每个词都存一份 <code>word_styles</code> 的原因：样式是逐词的，度量也是逐词的。第 9 章埋下的"逐词样式"，在这里第一次派上用场。</p>
+
+  <p>词从哪来？<code>add_span</code> 负责把一段文本切成词：它把 span 拷进自己的缓冲区，然后一遍 <code>skip_whitespace</code>（跳空白）加一遍 <code>skip_word</code>（吃到空白为止）反复扫描，把每个词的结束位置填上 <code>'\0'</code>，记下指向词头的指针，并用 <code>(is_bold ? BOLD_SPAN : 0) | (is_italic ? ITALIC_SPAN : 0)</code> 记录样式。空白定义只有三种字符：空格、<code>'\r'</code>、<code>'\n'</code>——代码开头的 TODO 注释也诚实写着：<em>is there any more whitespace we should consider?</em>（还有别的空白该考虑吗？）这是又一个"够用就好"的取舍，也正是给读者留下的改进钩子。</p>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：把一段文本切成词（节选） */</span>
+<span class="type">void</span> TextBlock::add_span(<span class="kw">const</span> <span class="type">char</span> *span, <span class="type">bool</span> is_bold, <span class="type">bool</span> is_italic)
+{
+  <span class="type">int</span> length = strlen(span);
+  <span class="type">char</span> *text = <span class="kw">new</span> <span class="type">char</span>[length + <span class="num">1</span>];
+  strcpy(text, span);
+  spans.push_back(text);                        <span class="cmt">// 拷一份，稍后要改</span>
+
+  <span class="type">int</span> index = <span class="num">0</span>;
+  <span class="kw">while</span> (index &lt; length)
+  {
+    index = skip_whitespace(span, index, length);  <span class="cmt">// 跳过空白</span>
+    <span class="type">int</span> word_start = index;
+    index = skip_word(span, index, length);        <span class="cmt">// 吃到下一个空白</span>
+    <span class="type">int</span> word_length = index - word_start;
+    <span class="kw">if</span> (word_length &gt; <span class="num">0</span>)
+    {
+      text[word_start + word_length] = <span class="str">'\0'</span>;     <span class="cmt">// 在词尾打结</span>
+      words.push_back(text + word_start);          <span class="cmt">// 记下词头指针</span>
+      word_styles.push_back((is_bold ? BOLD_SPAN : <span class="num">0</span>)
+                          | (is_italic ? ITALIC_SPAN : <span class="num">0</span>));
+    }
+  }
+}</code></pre>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：layout 第一段 —— 逐词度量（进入 DP 前） */</span>
+<span class="type">void</span> TextBlock::layout(Renderer *renderer, Epub *epub, <span class="type">int</span> max_width)
+{
+  <span class="kw">for</span> (<span class="type">int</span> i = <span class="num">0</span>; i &lt; words.size(); i++)
+  {
+    <span class="type">int</span> width = renderer-&gt;get_text_width(
+        words[i], word_styles[i] &amp; BOLD_SPAN, word_styles[i] &amp; ITALIC_SPAN);
+    word_widths.push_back(width);
+  }
+  <span class="type">int</span> page_width  = max_width != -<span class="num">1</span> ? max_width : renderer-&gt;get_page_width();
+  <span class="type">int</span> space_width = renderer-&gt;get_space_width();
+  <span class="cmt">/* …… 然后进入 10.2 的动态规划 …… */</span>
+}</code></pre>
+
+  <p><code>max_width</code> 参数是个彩蛋。<code>layout(renderer, epub, int max_width = -1)</code> 允许调用方覆盖行宽。默认 -1 表示"用整页宽"；而 <code>EpubList.cpp</code> 里渲染书目标题时传了 <code>text_width</code>（把标题限制在书名那一列的宽度内），<code>EpubToc.cpp</code> 渲染目录条目时传了 <code>renderer-&gt;get_page_width()</code>。同一个 TextBlock，既能排整段正文、也能排单行标题——行宽从"全局常量"变成"可注入参数"，靠的就是这个默认参数。它让"把块塞进多窄的一行"变成了调用方的自由，而不必改任何换行算法。</p>
+
+  <table>
+    <tr><th>步骤</th><th>代码位置</th><th>做什么</th></tr>
+    <tr><td>度量词宽</td><td><code>layout</code> 开头 for 循环</td><td><code>get_text_width</code> 逐词量宽</td></tr>
+    <tr><td>决定行宽</td><td><code>max_width</code> 覆盖 / <code>get_page_width</code></td><td>支持单行标题等窄行场景</td></tr>
+    <tr><td>DP 断行</td><td>双层 for</td><td><code>dp</code> / <code>ans</code> 求最优断点</td></tr>
+    <tr><td>回溯</td><td>while 循环</td><td>生成 <code>line_breaks</code></td></tr>
+    <tr><td>定位 x</td><td>逐行 for</td><td>计算每个词的 <code>word_xpos</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>注意这两个事实凑在一起的必然性：样式是逐词的，度量是带样式的。正因为 <code>word_styles</code> 里存的是每个词的掩码，<code>get_text_width</code> 才能按词带粗细/斜体去量；而只有量得准，DP 里 <code>currlen</code> 与 <code>page_width</code> 的比较才不虚。很多换行 bug 的根源不是算法错了，而是"量宽度"和"画文字"用了两套不同来源的宽度。这里从源头就把两者统一成同一个 renderer 接口，是隐藏的第一性原理：度量即真相。</p>
+  </div>
+
+  <!-- ========== 10.4 对齐与局限 ========== -->
+  <h2>10.4 对齐：JUSTIFIED / CENTER / LEFT，以及局限与改进</h2>
+
+  <p>换行之后还有对齐这一关。<code>TextBlock</code> 的 <code>BLOCK_STYLE</code> 有四个值：<code>JUSTIFIED</code>（两端对齐，正文默认）、<code>LEFT_ALIGN</code>、<code>CENTER_ALIGN</code>（标题）、<code>RIGHT_ALIGN</code>。layout 后半段遍历每一行：先算 <code>spare_space = page_width - total_word_width</code>（本行剩余空白），再决定把空白塞到哪。两端对齐的做法是把多余空白均摊到词与词之间——<code>actual_spacing = spare_space / (number_words - 1)</code>，即拉大词间距填满整行；但最后一行不摊（<code>i != line_breaks.size()-1</code> 才摊），免得末行被拉得稀稀拉拉。居中则是把整行空白的一半留给左缘：<code>xpos = (spare_space - (number_words-1)*space_width) / 2</code>。</p>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：逐行定位词的 x 坐标（节选） */</span>
+<span class="type">float</span> spare_space = page_width - total_word_width;
+<span class="type">float</span> actual_spacing = space_width;
+<span class="type">int</span> number_words = line_breaks[i] - start_word;
+<span class="cmt">/* 两端对齐：非末行、且一行有多个词时，把剩余空白均摊成词间距 */</span>
+<span class="kw">if</span> (i != line_breaks.size() - <span class="num">1</span> &amp;&amp; style == JUSTIFIED)
+{
+  <span class="kw">if</span> (number_words &gt; <span class="num">1</span>)
+    actual_spacing = spare_space / <span class="type">float</span>(number_words - <span class="num">1</span>);
+}
+<span class="type">float</span> xpos = <span class="num">0</span>;
+<span class="kw">if</span> (style == RIGHT_ALIGN)
+  xpos = spare_space - (number_words - <span class="num">1</span>) * space_width;
+<span class="kw">if</span> (style == CENTER_ALIGN)
+  xpos = (spare_space - (number_words - <span class="num">1</span>) * space_width) / <span class="num">2</span>;
+<span class="kw">for</span> (<span class="type">int</span> word_index = start_word; word_index &lt; line_breaks[i]; word_index++)
+{
+  word_xpos[word_index] = xpos;
+  xpos += word_widths[word_index] + actual_spacing;
+}</code></pre>
+
+  <p>这一段的产物是 <code>word_xpos</code>——每个词的 x 坐标。README 渲染一节里有一句很得意的话：<em>"a side effect of the text justification and line-breaking is that we have already computed the x position of each word on a line"</em>（两端对齐和断行的一个副作用是，每行里每个词的 x 坐标都已经算好了）。渲染时 <code>TextBlock::render</code> 只需逐词 <code>draw_text(x_pos + word_xpos[i], y_pos, ...)</code>，不必二次排版。布局期算好的坐标，渲染期直接消费——这一分工，让"按一下键翻一页"的实时性有了保证，也是"先把整页内容算好、最后才 flush"这套电纸屏编程模型的局部缩影。</p>
+
+<pre><code><span class="cmt">/* TextBlock.cpp：渲染 —— 布局期坐标直接消费 */</span>
+<span class="type">void</span> TextBlock::render(Renderer *renderer, <span class="type">int</span> line_break_index, <span class="type">int</span> x_pos, <span class="type">int</span> y_pos)
+{
+  <span class="type">int</span> start = line_break_index == <span class="num">0</span> ? <span class="num">0</span> : line_breaks[line_break_index - <span class="num">1</span>];
+  <span class="type">int</span> end = line_breaks[line_break_index];
+  <span class="kw">for</span> (<span class="type">int</span> i = start; i &lt; end; i++)
+  {
+    uint8_t style = word_styles[i];
+    renderer-&gt;draw_text(x_pos + word_xpos[i], y_pos, words[i],
+                        style &amp; BOLD_SPAN, style &amp; ITALIC_SPAN);
+  }
+}</code></pre>
+
+  <p>局限也要承认。README 的 "How well does it work" 一节直言：<em>"The code makes no attempt to break pages at suitable places - there are hints that can be extracted from the XHTML files and there are also CSS files that could be used"</em>（代码完全没有尝试在合适的地方分页——XHTML 里有可提取的线索，还有可用的 CSS）。换行本身也是如此：<code>Renderer.h</code> 里定义了 <code>MAX_WORD_LENGTH 100</code>，但 <code>add_span</code> 的分词只认空白、并没有真正按这个上限截断超长词；连字符断词（hyphenation）完全没有；词宽用的是单一字形序列，没有 kerning；空白只认三种字符。这些都是"够用"与"精致"之间的差距，也是 README 说它能 "be improved considerably"（大幅改进）的原因。</p>
+
+  <table>
+    <tr><th>环节</th><th>现状</th><th>改进空间</th></tr>
+    <tr><td>断行</td><td>O(n²) 动态规划，逐行代价平方</td><td>Knuth–Plass 按行分段、限制每行词数上限</td></tr>
+    <tr><td>对齐</td><td>仅把空白均摊到单词间</td><td>支持逐字母对齐、避免连续出现大间距空行</td></tr>
+    <tr><td>断词</td><td>不处理超长词（<code>MAX_WORD_LENGTH</code> 未真正生效）</td><td>实现连字符断词、按行宽主动折行</td></tr>
+    <tr><td>度量</td><td>每个词调用一次 <code>get_text_width</code></td><td>字形宽度缓存、加入 kerning</td></tr>
+    <tr><td>分页</td><td>y 超出页高即换页</td><td>用 XHTML/CSS 提示避免孤行孤字（见第 11 章）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>从第一性原理看这套设计的妙处：把"排版"拆成三个纯函数——<code>add_span</code> 分词（输入文本 → 输出词与样式）、<code>layout</code> 算坐标（输入词宽与行宽 → 输出 <code>line_breaks</code> 与 <code>word_xpos</code>）、<code>render</code> 画字（输入坐标 → 输出像素）。每一步的输出都是下一步的输入，中间没有全局状态。这种数据流划分让每个函数都能单独测试——<code>test/rubbish_html_parser.cpp</code> 里的 TestRenderer 把 <code>get_text_width</code> 实现成 <code>strlen(text)</code>，整个换行算法在本机就能跑，连真屏幕都不用。测试一个算法，未必需要硬件。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>"最后一行不强制对齐"是刻意的，但注意两端对齐的判定里藏着一次除法：<code>actual_spacing = spare_space / float(number_words - 1)</code>。如果一行只有一个词（比如一个超长的 URL），<code>number_words - 1 = 0</code>，会除零。代码用 <code>if (number_words &gt; 1)</code> 兜住了。读这段时请养成习惯：凡是除法出现在算法里，先问一句分母会不会是 0。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：手算动态规划 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>给定 3 个词，宽度 <code>[3, 5, 3]</code>，<code>space_width = 1</code>，<code>page_width = 10</code>。按 10.2 的递推手算 <code>dp[]</code> / <code>ans[]</code>，并给出最优断行方案与总代价。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先填 <code>dp[2]=0, ans[2]=2</code>；再算 i=1（j 从 1 到 2）、i=0（j 从 0 到 2，注意 currlen 以 -1 起步）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>dp[2]=0, ans[2]=2。<br>i=1：j=1，currlen=-1+5+1=5，cost=(10-5)²+dp[2]=25；j=2，currlen=5+3+1=9，j 是末词 → cost=0。得 dp[1]=0, ans[1]=2。<br>i=0：j=0，currlen=-1+3+1=3，cost=(10-3)²+dp[1]=49；j=1，currlen=3+5+1=9，cost=(10-9)²+dp[2]=1；j=2，currlen=9+3+1=13&gt;10，break。得 dp[0]=1, ans[0]=1。<br>回溯：i=0 → ans[0]=1 → line_breaks=[2]；i=2 → ans[2]=2 → line_breaks=[2,3]。最优断行 [词0词1] / [词2]，总代价 1。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：为什么用"平方" <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用具体数字说明代价函数为什么用"空白平方和"而不是"空白绝对值之和"。比较：方案 A 一行空 10px、一行空 0px；方案 B 两行各空 5px。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>把两组数字分别代入平方和与绝对值和的公式，看两种度量给出的选择是否一致。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>平方和：A=10²+0²=100，B=5²+5²=50 → 选 B（空白更分散）；绝对值和：A=10+0=10，B=5+5=10 → 平局，算法失去偏好。平方放大了"大块空白"，DP 会更倾向把空白分散成均匀小块——这正是"两端对齐看起来更均匀"的数学来源。若用绝对值，算法对"一行巨空"与"分散空"一视同仁，排版质量会明显变差。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：JUSTIFIED 与 LEFT_ALIGN <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 10.4 的 <code>word_xpos</code> 定位代码，指出两端对齐（JUSTIFIED）与左对齐（LEFT_ALIGN）在实现上的差异，并解释"最后一行不摊空白"的原因。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>差异集中在 <code>actual_spacing</code> 的计算条件上；再想想末行下方有没有参照物。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>JUSTIFIED 在"非末行且词数&gt;1"时把剩余空白均摊为词间距（<code>actual_spacing = spare_space/(number_words-1)</code>），行被拉满到右缘；LEFT_ALIGN（以及任何一行是末行时）保持 <code>actual_spacing = space_width</code>，词从左排起，右缘不齐。最后一行不摊，是因为它下面没有文字、拉满反而刺眼——这与 10.1 里"末行代价 0"是同一哲学：末行不再参与"均匀性"的博弈。CENTER_ALIGN 则把空白的一半留给左缘（<code>xpos = (spare_space-(number_words-1)*space_width)/2</code>），RIGHT_ALIGN 类似地留右边。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：VLA 与防御性编程 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>分析 <code>TextBlock::layout</code> 里 <code>int dp[n]</code> 变长数组与 <code>line_breaks.size() &gt; 1000</code> 上限的用意；并设计一个改进方案，让这段代码在"某章有一个几千词的超长段落"时不至于爆栈。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>VLA 占的是任务栈；<code>ans</code> 是 <code>size_t</code>（8 字节）。想想要不要换堆分配、要不要限制 n、要不要先估算栈余量。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>dp/ans 是栈上的变长数组，大小由运行时词数 n 决定、不受编译期约束；一个几千词的超长块会吃掉约 n×(4+8) 字节的栈，有溢出风险。1000 行的上限则是防止"断行回溯失败导致死循环"的最后防线。改进方向：改用堆分配（<code>new int[n]</code> / <code>std::vector</code>，配合 RAII 或智能指针）；或在 <code>add_span</code> 阶段限制单块词数（如超过阈值就另起一块）；更彻底的是换用 O(n·L) 的贪心+局部调整算法，把对栈与时间的依赖都降下来。这类"输入不可控、资源有上限"的处境，正是嵌入式算法与桌面算法最不同的地方。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

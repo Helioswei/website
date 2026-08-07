@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第8章：中文字体与动态字体加载 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="8" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：中文字体与动态字体加载</h1>
+  <p class="chapter-subtitle">"工欲善其事，必先利其器"——看书要舒服，字体这套器皿得先磨利。内置的字放 Flash 直读、TF 卡的字现用现取、字号字重按需切换，每一件都藏着鲁班式的匠心。</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器——先把"器"的尺寸、材料、用法量清楚再动手</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「鲁班造物前有个规矩：先量料，再下锯。字体这件事也一样——一个汉字字形多大、内存放不放得下、Flash 怎么读、TF 卡怎么扫，都要先量清楚。这一章我们不吹'字体渲染'多厉害，只讲三件器：FreeType 这把斧子、内置字库这块料、动态加载这条流水线。量清楚了，器就顺手。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 字体基础：FreeType 与 ft_dfs_bridge.c ========== -->
+  <h2>8.1 字体基础：FreeType 与 ft_dfs_bridge.c</h2>
+
+  <p>先把术语铺平。<strong>FreeType</strong> 是一个开源的字体渲染引擎——它读取 TTF / OTF 字体文件，把"字符码点"转换成屏幕上的字形位图。它的价值在于通用：同一个函数接口，既能画拉丁字母，也能画汉字。上一季已经讲过"字号、字重、字形缓存"这些概念，这里只回顾和移植最相关的部分，把重点放在一个移植版自己写的、上游没有的模块上——<code>src/ft_dfs_bridge.c</code>。</p>
+
+  <p>FreeType 有两种"打开字体"的方式。一种是 <code>FT_New_Memory_Face</code>：字体数据已经整个躺在内存里（内置字库走这条，见 8.2）；另一种是 <code>FT_New_Face</code>：FreeType 通过它自己的文件系统回调去读磁盘，每次需要数据就调用 <code>ft_fread</code> / <code>ft_fseek</code> 到文件特定偏移取一段。TF 卡上的外部字体走的就是后一条路（8.3）。关键就藏在 <code>ft_fread</code> 里：<strong>中文字体动辄十几兆，加载时 FreeType 会在 loca、glyf、hmtx、cmap 四张表之间频繁跳来跳去取数</strong>。如果只有一个单缓冲，每次跳转都要重新读盘——SD 卡在 RT-Thread 的 DFS（设备文件系统）上按块读取，LBA 寻址再快也扛不住这种"抖动"。这就像用一把窄锯来回锯大木料，锯半天木料没动。</p>
+
+  <p><code>ft_dfs_bridge.c</code> 的解法是<strong>多槽 LRU 读缓冲</strong>。它维护一个 <code>ft_file_t</code> 结构：一个 <code>FT_BUF_LO_SIZE</code>（64 KiB）的低区预读缓冲（专门覆盖 <code>FT_New_Face</code> 读文件头部那段时间的访问），外加 <code>FT_SLOT_COUNT</code>（16）个 4 KiB 的槽位。每次 <code>ft_fread</code> 先查低区缓冲，命中就直接复制；没命中再查 16 个槽（按 <code>start</code> 偏移精确匹配）；再没命中，就用 <code>slot_find_oldest</code> 找出最老的一个槽把它换掉，并 <code>slot_fill</code> 读入新数据。字形的局部性很强——同一个表的相邻数据经常连续读，所以槽位命中率很高，读盘次数大幅下降。另一个提速点是 <code>ft_fopen</code> 里的一行：<code>dfs_file_enable_fast_seek(dfs_fp, 1)</code>，它通过 <code>fd_get</code> / <code>fd_put</code> 拿到内核文件句柄，给 FatFs 打开簇链映射（CLMT），让 <code>lseek</code> 从"逐簇跳"变成 O(1) 的查表——随机访问字体表的代价从读盘次数降下来，换成一次内存查表。</p>
+
+<pre><code><span class="cmt">/* src/ft_dfs_bridge.c：读缓冲的尺寸与槽位定义 */</span>
+<span class="kw">#define</span> FT_BUF_LO_SIZE (<span class="num">64</span>*<span class="num">1024</span>)   <span class="cmt">/* 低区预读缓冲：覆盖 FT_New_Face 头部访问 */</span>
+<span class="kw">#define</span> FT_SLOT_SIZE   (<span class="num">4</span>*<span class="num">1024</span>)     <span class="cmt">/* 单个槽位大小 */</span>
+<span class="kw">#define</span> FT_SLOT_COUNT  <span class="num">16</span>             <span class="cmt">/* 槽位个数：多槽 LRU */</span>
+
+<span class="kw">typedef struct</span> FtBufSlot {
+    <span class="type">uint32_t</span> start;   <span class="cmt">/* 本槽在文件中的起始偏移 */</span>
+    <span class="type">uint8_t</span>  valid;   <span class="cmt">/* 本槽是否有效 */</span>
+    <span class="type">uint32_t</span> age;     <span class="cmt">/* 最近使用计数（LRU 依据） */</span>
+    <span class="type">uint8_t</span>  data[FT_SLOT_SIZE];
+} FtBufSlot;
+
+<span class="kw">typedef struct</span> {
+    <span class="type">int</span>        fd;         <span class="cmt">/* 文件描述符 */</span>
+    <span class="type">uint32_t</span>  file_size;
+    <span class="type">uint32_t</span>  file_pos;   <span class="cmt">/* 当前逻辑读位置 */</span>
+    <span class="type">uint8_t</span>   buf_lo[FT_BUF_LO_SIZE];  <span class="cmt">/* 低区预读缓冲 */</span>
+    <span class="kw">bool</span>      buf_lo_valid;
+    FtBufSlot slots[FT_SLOT_COUNT];       <span class="cmt">/* 多槽 LRU 缓冲 */</span>
+    <span class="type">uint32_t</span>  age_counter;
+} ft_file_t;</code></pre>
+
+<pre><code><span class="cmt">/* src/ft_dfs_bridge.c：打开文件时开启 fast_seek + 预读文件头 */</span>
+<span class="kw">void</span> *ft_fopen(<span class="kw">const char</span> *name, <span class="type">int</span> flags)
+{
+    <span class="cmt">/* ... */</span>
+    ft_file_t *ftf = malloc(<span class="kw">sizeof</span>(ft_file_t));
+    ftf-&gt;fd = open(name, O_RDONLY);
+    <span class="cmt">/* ... */</span>
+    struct dfs_fd *dfs_fp = fd_get(ftf-&gt;fd);
+    dfs_file_enable_fast_seek(dfs_fp, <span class="num">1</span>);  <span class="cmt">// FatFs CLMT：lseek O(1)</span>
+    fd_put(dfs_fp);
+    <span class="cmt">/* 预读文件头到低区缓冲 ... */</span>
+    <span class="kw">return</span> (<span class="type">void</span> *)ftf;
+}
+
+<span class="cmt">/* ft_fread 优先级：① 低区缓冲命中 → ② 多槽 LRU 命中 → ③ 淘汰最老槽 slot_fill */</span>
+<span class="type">int</span> ft_fread(<span class="type">void</span> *buf, <span class="type">int</span> size, <span class="type">int</span> count, <span class="type">void</span> *f)
+{
+    <span class="cmt">/* ① 命中低区缓冲：直接复制，免读盘 */</span>
+    <span class="cmt">/* ② 命中某个槽：更新 age 后复制 */</span>
+    <span class="cmt">/* ③ 未命中：slot_find_oldest() 选最老槽，slot_fill() 读入 */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>缓冲</th><th>大小</th><th>用途</th></tr>
+    <tr><td>低区预读缓冲</td><td>64 KiB</td><td><code>FT_New_Face</code> 读文件头的连续访问</td></tr>
+    <tr><td>多槽 LRU</td><td>16 × 4 KiB</td><td>loca / glyf / hmtx / cmap 四表间的随机跳读</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>量器：大字体文件加载慢，根因不是"读盘慢"，而是"跳读多"——单缓冲每跳一次读一次盘。多槽 LRU 换的是命中率：让"经常一起读的表"留在槽里，把读盘次数换成内存命中。下次遇到"从文件读数据慢"，先问：缓冲够不够、命中率高不高？</p>
+  </div>
+
+  <!-- ========== 8.2 内置字体：DroidSansFallback 与 Flash XIP ========== -->
+  <h2>8.2 内置字体：DroidSansFallback 与 Flash XIP</h2>
+
+  <p>内置字库选了 <strong>DroidSansFallback</strong>——一款来自 Android 开源项目的思源黑体降级字体，覆盖简体中文常用字，以 <strong>Apache License 2.0</strong> 开源协议发布（Copyright 2005-2008 The Android Open Source Project），约 3.9 MiB（<code>font/DroidSansFallback.ttf</code>）。选它当"默认字体"是因为：一，中文覆盖够用；二，开源可分发；三，黑体（无衬线）在墨水屏上笔画均匀、灰度友好，是电子书默认字体的稳妥选择。第 1 章说过它是编译时内置的，这一节把"编译时内置"五个字落到可验证的构建与代码上。</p>
+
+  <p>内置靠的是 SiFli SDK 的 SCons 构建脚本。<code>font/SConscript</code> 里有一行 <code>Env.ConvertFont(font_file, 'epub_ttf_data')</code>——这个自定义构建动作把 <code>DroidSansFallback.ttf</code> 整个转成一个 C 语言数组符号，名为 <code>epub_ttf_data</code>，同时在链接脚本的指定段放一份 <code>epub_ttf_data_size</code> 记录大小。于是源码里就能直接引用：<code>extern const unsigned char epub_ttf_data[]; extern const int epub_ttf_data_size;</code>（见 <code>main.cpp</code>）。这些数据最终放在 <strong>Flash 的 XIP 段</strong>里。</p>
+
+  <p>这里要解释一个关键术语。<strong>XIP（Execute In Place，原地执行）</strong>：程序或数据放在 Flash 里，CPU 通过内存映射直接访问，而不必先把内容复制到 RAM 再读。SF32 的 Flash 支持 XIP，所以 <code>epub_ttf_data[]</code> 这 3.9 MiB 的字形数据"住在 Flash、直接可读"，一分钱 RAM 都不占。再看 <code>font_ft.c</code>：<code>epd_font_ft_init_builtin</code> 调 <code>epd_font_ft_init(epub_ttf_data, epub_ttf_data_size, size)</code>，也就是走 <code>FT_New_Memory_Face</code>——"内存面"的名字会让人误会，其实这里的"内存"指的就是这块可直接寻址的 XIP 数据，FreeType 只管按指针读，不需要你把它搬到普通 RAM。启动日志里 <code>main.cpp</code> 会打印 <code>TTF data at %p, size=%d</code> 和 <code>PSRAM free before/after font init</code>，用 7.3 的 <code>heap_free_size()</code> 就能亲眼看到：初始化字体后，PSRAM 只少了结构体和缓存占用的那点，字形本体始终在 Flash 里躺着。</p>
+
+<pre><code><span class="cmt">/* font/SConscript：把 TTF 编译成内置数组符号 */</span>
+<span class="cmt"># 取当前目录下的字体文件，转成 epub_ttf_data / epub_ttf_data_size</span>
+font_file = os.path.join(cwd, <span class="str">'DroidSansFallback.ttf'</span>)
+Env.ConvertFont(font_file, <span class="str">'epub_ttf_data'</span>)</code></pre>
+
+<pre><code><span class="cmt">/* src/main.cpp：引用内置字体符号 */</span>
+<span class="kw">extern const unsigned char</span> epub_ttf_data[];
+<span class="kw">extern const int</span> epub_ttf_data_size;
+
+<span class="cmt">/* lib/epdiy/font_ft.c：内置字体走 FT_New_Memory_Face（数据直接可寻址） */</span>
+<span class="kw">void</span> epd_font_ft_init_builtin(<span class="type">uint32_t</span> pixel_size)
+{
+    epd_font_ft_init(epub_ttf_data, epub_ttf_data_size, pixel_size);
+}
+
+<span class="kw">static void</span> epd_font_ft_init(<span class="kw">const unsigned char</span> *ttf_data, <span class="type">size_t</span> size, <span class="type">uint32_t</span> pixel_size)
+{
+    FT_Library library;
+    FT_New_Library(&amp;library);                    <span class="cmt">// 初始化 FreeType 库</span>
+    <span class="cmt">/* ... */</span>
+    FT_New_Memory_Face(library, ttf_data, size, <span class="num">0</span>, &amp;face);  <span class="cmt">// 从 Flash XIP 数据建 Face</span>
+    FT_Set_Pixel_Sizes(face, <span class="num">0</span>, pixel_size);                 <span class="cmt">// 设置字号</span>
+    <span class="cmt">/* ... */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>环节</th><th>做法</th><th>代价</th></tr>
+    <tr><td>内置字库存储</td><td>Flash XIP，直接寻址</td><td>占 Flash 约 3.9 MiB，RAM 0</td></tr>
+    <tr><td>Face 打开方式</td><td><code>FT_New_Memory_Face</code></td><td>无读盘、无缓冲占用</td></tr>
+    <tr><td>字形数据来源</td><td><code>epub_ttf_data[]</code> 段内直读</td><td>一次 XIP 读 ≈ 一次内存读</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>料要放在最划算的地方。3.9 MiB 的汉字库放 RAM 是奢侈，放 Flash 读一次顶多慢一点、但省出一大块可编程内存。XIP 就是"用一次读的慢，换整块 RAM 的省"——记住这个交换，你就能在别处复用它。</p>
+  </div>
+
+  <!-- ========== 8.3 动态字体加载：font_manager.c 与 TF 卡 /fonts ========== -->
+  <h2>8.3 动态字体加载：font_manager.c 与 TF 卡 /fonts</h2>
+
+  <p>内置字库能打底，但不能满足所有人——有人想用思源宋体看正文，有人想换更粗的字重。于是移植版加了一条动态字体加载流水线：<strong>把字体文件放到 TF 卡的 <code>/fonts</code> 目录，开机自动扫描，用户即可在设置里选择</strong>。<code>src/font_manager.c</code> 是这个流水线的管家，几个宏写死了规模：<code>FONT_MAX_COUNT</code>（<strong>最多 64 个外部字体</strong>）、<code>FONT_NAME_MAX</code>（32）、<code>FONT_PATH_MAX</code>（64）。它维护一张 <code>g_font_list[FONT_MAX_COUNT]</code>，表项 <code>FontEntry</code> 有名字、路径、是否内置三个字段；<strong>第 0 项永远预留给内置的 "Default" 字体</strong>，用户怎么换都有一条兜底。</p>
+
+  <p>扫描在 <code>font_manager_init(font_dir)</code>：打开 <code>/fonts</code>，用 <code>opendir</code> / <code>readdir</code> 遍历目录，对每个条目调用 <code>is_ttf_file()</code>——它认 <code>.ttf</code> / <code>.TTF</code> / <code>.otf</code> / <code>.OTF</code> 四种后缀——匹配就把文件名和拼好的完整路径登记进 <code>g_font_list</code>。注意后缀大小写都要认：TF 卡是用户手动格式化，谁也不知道他存的是 <code>songti.ttf</code> 还是 <code>SongTi.TTF</code>。扫描完，主界面和设置页就能用 <code>font_manager_get_count()</code>、<code>font_manager_get_name(index)</code> 列出全部字体；<code>font_manager_select(index, pixel_size)</code> 负责真正切换。</p>
+
+  <p>切换的细节值得逐行看。<code>font_manager_select</code> 先做清理：<code>cache_clear()</code> 清掉旧字形的位图缓存（第 8 章开头说过 3 MiB 的 4bpp 字形缓存），再 <code>deinit()</code> 释放旧 Face。然后分两条路：<code>g_font_list[i].is_builtin</code> 为真，走 <code>epd_font_ft_init_builtin(pixel_size)</code>（Flash XIP，见 8.2）；为假，走 <code>epd_font_ft_init_from_file(path, pixel_size)</code>，FreeType 从 TF 卡文件直读，也就是 8.1 的 <code>ft_dfs_bridge</code> 发挥作用的地方——<strong>外部字体的数据不占 PSRAM，随用随读</strong>。一旦初始化失败（卡没插、文件损坏、格式不支持），代码回退到内置 Default 并置 <code>g_current_font=0</code>，返回 -4 让上层知道"没换成"。最后 <code>main.cpp</code> 的 <code>reading_settings_load</code> 会读 <code>/settings.cfg</code> 里的 <code>font_name=...</code>：如果设置的名字在列表里找不到（比如这次没插 TF 卡），就静默回退 Default。这一整套"找不到就兜底"的兜底设计，正是嵌入式 UI 该有的健壮性。</p>
+
+<pre><code><span class="cmt">/* src/font_manager.c：字体表与扫描（节选） */</span>
+<span class="kw">#define</span> FONT_MAX_COUNT <span class="num">64</span>
+<span class="kw">#define</span> FONT_NAME_MAX  <span class="num">32</span>
+<span class="kw">#define</span> FONT_PATH_MAX  <span class="num">64</span>
+
+<span class="kw">typedef struct</span> {
+    <span class="kw">char</span> name[FONT_NAME_MAX];     <span class="cmt">/* 字体名（文件名去后缀） */</span>
+    <span class="kw">char</span> path[FONT_PATH_MAX];     <span class="cmt">/* 完整路径，如 /fonts/songti.ttf */</span>
+    <span class="type">int</span>  is_builtin;             <span class="cmt">/* 1=内置 Default；0=TF 卡外部字体 */</span>
+} FontEntry;
+
+<span class="kw">static</span> FontEntry g_font_list[FONT_MAX_COUNT];   <span class="cmt">/* 第 0 项恒为内置 Default */</span>
+
+<span class="kw">int</span> font_manager_init(<span class="kw">const char</span> *font_dir)   <span class="cmt">// 调用方传 "/fonts"</span>
+{
+    <span class="cmt">/* 登记内置 Default：is_builtin=1，路径为空 */</span>
+    <span class="cmt">/* opendir / readdir 遍历，is_ttf_file() 匹配后缀则登记 */</span>
+}</code></pre>
+
+<pre><code><span class="cmt">/* src/font_manager.c：切换字体（节选） */</span>
+<span class="type">int</span> font_manager_select(<span class="type">int</span> index, <span class="type">uint32_t</span> pixel_size)
+{
+    cache_clear();                                  <span class="cmt">// 清空旧字形缓存</span>
+    deinit();                                       <span class="cmt">// 释放旧 Face</span>
+    <span class="kw">if</span> (g_font_list[index].is_builtin) {
+        <span class="cmt">// 内置字体：Flash XIP，通过 FT_New_Memory_Face</span>
+        epd_font_ft_init_builtin(pixel_size);
+    } <span class="kw">else</span> {
+        <span class="cmt">// TF 卡字体：FreeType 直接从文件读取，不占 PSRAM</span>
+        <span class="kw">if</span> (epd_font_ft_init_from_file(g_font_list[index].path, pixel_size) != <span class="num">0</span>) {
+            <span class="cmt">// 失败：回退内置 Default</span>
+            g_current_font = <span class="num">0</span>;
+            epd_font_ft_init_builtin(pixel_size);
+            <span class="kw">return</span> -<span class="num">4</span>;
+        }
+    }
+    g_current_font = index;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>配置</th><th>值</th><th>含义</th></tr>
+    <tr><td><code>FONT_MAX_COUNT</code></td><td>64</td><td>最多登记 64 个字体（含内置 Default）</td></tr>
+    <tr><td><code>/fonts</code></td><td>目录</td><td>外部字体放置位置，开机自动扫描</td></tr>
+    <tr><td>后缀识别</td><td>.ttf/.TTF/.otf/.OTF</td><td><code>is_ttf_file()</code> 大小写通吃</td></tr>
+    <tr><td>外部字体内存</td><td>不占 PSRAM</td><td>ft_dfs_bridge 随用随读</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>造流水线要留退路。扫描要兜底（第 0 项内置永远在）、切换要兜底（失败回退 Default 返回 -4）、设置要兜底（找不到名字回退 Default）。三条兜底，用户怎么折腾都不会白屏。这是"器"耐用的关键。</p>
+  </div>
+
+  <!-- ========== 8.4 字号与字重：24-48px、正常/中粗/粗体 ========== -->
+  <h2>8.4 字号与字重：正常 / 中粗 / 粗体</h2>
+
+  <p>字号和字重是阅读体验的两根旋钮。先量字号。<code>reading_settings.cpp</code> 把字号定义成 7 档枚举：<code>FONT_SIZES[] = {24, 28, 32, 36, 40, 44, 48}</code>，单位是像素——即把字形渲染到多高的格子。字号 32 像素时字占满 32px 高的格，行距由 <code>g_line_spacing</code>（默认 1.2）乘出来；第 9 章会讲行距和边距怎么配合。而 <code>epd_font_ft_set_size</code> 最终调 <code>FT_Set_Pixel_Sizes(face, 0, pixel_size)</code>，FreeType 会据此决定每级字形位图的大小。</p>
+
+  <p>字重（font weight）指的是笔画粗细——同一款字体有不同"粗细的变体"，常见分级是 400（正常）、500（中）、700（粗）。<code>reading_settings.cpp</code> 的 <code>BOLD_LEVELS[] = {0, 1, 2}</code> 对应三种状态，界面文案分别是 <code>正常 / 中粗 / 粗体</code>。真正的实现落在 <code>font_ft.c</code> 的两条腿：如果字体是<strong>可变字体</strong>（variable font，一个文件里能平滑表达多个字重的字体格式，字重是一个可调轴向），就用 <code>detect_variable_font</code> 检测、用 <code>apply_variable_weight</code> 把 <code>wght</code> 轴设到 <code>BOLD_WEIGHT_MAP[]={400, 600, 700}</code> 对应的值（FreeType 里字重轴用 <code>FT_MAKE_TAG('w','g','h','t')</code> 标识）；如果不是可变字体，就走 <code>EMBOLDEN_STRENGTH[]={0, 1, 2}</code>——用 <code>FT_Outline_Embolden</code> 把字形轮廓向外加粗。加粗会损失笔画细节、让字变糊，所以移植版把强度压在 3 档以内。<code>epd_font_ft_set_bold(level)</code> 会先 <code>clamp</code> 到 0–2，防止越界。</p>
+
+  <p>最后回答一个很多读者会问的问题：<strong>为什么默认不启用粗体 / 斜体中文字库？</strong>README 写得很直白——"为控制资源占用，默认未启用"。原因要分两层。其一，汉字没有"斜体"概念，粗体又常靠描边加粗凑数，专门的粗体字库要么没有、要么每个字都要另存一份（Flash 吃不消）；其二，一套中文字库动辄数兆，粗体再多备一套就翻倍——在 Flash 和 PSRAM 都金贵的嵌入式里不划算。所以移植版的取舍是：正文用一套内置黑体（<code>is_builtin</code> 的 Default），粗体效果靠 FreeType 运行时加粗（可变字重或 <code>FT_Outline_Embolden</code>），斜体干脆不提供。省下来的 Flash，留给用户自己往 <code>/fonts</code> 塞他喜欢的字体——这比内置十套"可能用不上"的字库聪明得多。</p>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：字号档位与字重档位 */</span>
+<span class="kw">static const int</span> FONT_SIZES[]  = {<span class="num">24</span>, <span class="num">28</span>, <span class="num">32</span>, <span class="num">36</span>, <span class="num">40</span>, <span class="num">44</span>, <span class="num">48</span>};  <span class="cmt">// 像素字号</span>
+<span class="kw">static const int</span> BOLD_LEVELS[] = {<span class="num">0</span>, <span class="num">1</span>, <span class="num">2</span>};                              <span class="cmt">// 正常 / 中粗 / 粗体</span>
+
+<span class="cmt">/* lib/epdiy/font_ft.c：字重映射与加粗强度 */</span>
+<span class="kw">static const uint32_t</span> BOLD_WEIGHT_MAP[]   = {<span class="num">400</span>, <span class="num">600</span>, <span class="num">700</span>};  <span class="cmt">// 可变字体 wght 轴目标值</span>
+<span class="kw">static const int</span>      EMBOLDEN_STRENGTH[] = {<span class="num">0</span>, <span class="num">1</span>, <span class="num">2</span>};     <span class="cmt">// 非可变字体轮廓加粗强度</span>
+
+<span class="cmt">// 可变字体：把 wght 轴设为对应字重</span>
+<span class="cmt">// FT_MAKE_TAG('w','g','h','t') 是 FreeType 里字重轴的标签</span>
+<span class="kw">void</span> apply_variable_weight(FT_Face face, <span class="type">int</span> level)
+{
+    FT_MM_Var *mm;
+    FT_Get_MM_Var(face, &amp;mm);
+    <span class="cmt">/* 找到 wght 轴，set_var_design 设为 BOLD_WEIGHT_MAP[level] ... */</span>
+}
+
+<span class="cmt">// 非可变字体：用 FT_Outline_Embolden 把轮廓加粗</span>
+<span class="cmt">// 调用前：FT_Load_Glyph → 判断是否有 outline → FT_Outline_Embolden(&amp;outline, strength)</span></code></pre>
+
+<pre><code><span class="cmt">/* src/reading_settings.cpp：字号档位选择（节选） */</span>
+<span class="kw">switch</span> (item) {
+  <span class="kw">case</span> SETTING_FONT_SIZE:
+    <span class="cmt">/* 用 FONT_SIZES[index] 取实际像素值 */</span>
+    epd_font_ft_set_size(FONT_SIZES[setting_value]);
+    <span class="kw">break</span>;
+  <span class="kw">case</span> SETTING_BOLD:
+    epd_font_ft_set_bold(BOLD_LEVELS[setting_value]);
+    <span class="kw">break</span>;
+  <span class="cmt">/* ... */</span>
+}</code></pre>
+
+  <table>
+    <tr><th>档位</th><th>字号（px）</th><th>字重</th><th>实现方式</th></tr>
+    <tr><td>字号</td><td>24 / 28 / 32 / 36 / 40 / 44 / 48</td><td>—</td><td><code>FT_Set_Pixel_Sizes</code></td></tr>
+    <tr><td>正常</td><td>—</td><td>0（weight 400 / 强度 0）</td><td>不处理</td></tr>
+    <tr><td>中粗</td><td>—</td><td>1（weight 600 / 强度 1）</td><td>可变字重 或 <code>FT_Outline_Embolden</code></td></tr>
+    <tr><td>粗体</td><td>—</td><td>2（weight 700 / 强度 2）</td><td>同上，更重</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>量清楚再下锯：字重有两套实现（可变字体走 wght 轴、普通字体走轮廓加粗），是因为"同一份数据"在不同字库上长得不一样。先探测字体是不是可变字体（<code>detect_variable_font</code>），再选对应路子——多分支不是复杂度，是对"料"的尊重。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p><code>FT_Outline_Embolden</code> 加粗是"伪粗体"：它在轮廓外围再加一圈，笔画确实变粗，但横竖撇捺的细节会被撑开、观感偏糊，小字号尤其明显。所以移植版只提供 0–2 三档、默认 0。真要漂亮的中文粗体，最稳的办法还是用户往 <code>/fonts</code> 放一套真正的粗体字库——器在手，材料可以自己换。</p>
+  </div>
+
+  <!-- ========== 8.5 字体系统一览：器、料、流水线 ========== -->
+  <h2>8.5 字体系统一览：器、料、流水线</h2>
+
+  <p>把这一章的"器"收进工具箱：<strong>器是 FreeType + ft_dfs_bridge.c</strong>，负责把字体文件变成字形位图，大字体靠多槽 LRU 缓冲扛住随机跳读；<strong>料是内置 DroidSansFallback</strong>，3.9 MiB 藏在 Flash XIP 里、开机即用，不占 RAM；<strong>流水线是 font_manager.c + /fonts</strong>，扫描 TF 卡、最多 64 个外部字体、切换失败回退 Default；<strong>旋钮是字号 7 档 + 字重 3 档</strong>，字号走 <code>FT_Set_Pixel_Sizes</code>，字重走可变字重或轮廓加粗。四件套各司其职，串起来就是完整的中文字体系统。</p>
+
+  <p>收尾前再看一眼字形缓存，因为它和阅读体验直接挂钩。<code>font_ft.c</code> 里维护一个 <strong>4bpp（4 位/像素，即每像素 16 级灰度）字形位图缓存</strong>，上限 <code>CACHE_MAX_MEMORY</code>（3 MiB），LRU 淘汰——渲染过的字先进缓存，翻页时命中就免去重复光栅化。两档预热量线值得记住：<code>epd_font_ft_preheat(text)</code> 是阻塞式预热（打开书时把整页字形一次备好）；<code>epd_font_ft_preheat_async</code> 则起一个名为 "ft_pre" 的后台 RT-Thread 线程（栈 16384 字节、优先级 25，每 50 个字符主动让出一次 CPU），在后台慢慢把常用字烘进去——这正是第 7 章那把页面互斥锁存在的原因：预热量线和排版解析并行，共享的页面数组必须上锁。缓存命中率、内存占用可以分别用 <code>epd_font_ft_cache_count()</code>、<code>epd_font_ft_cache_memory()</code> 查出来，这两只探针就是第 9 章调行距、第 10 章调渲染性能时你最趁手的量具。</p>
+
+  <p>最后对照 README 的"当前功能"核实一遍：中文 / 英文显示 ✓；动态字体加载（TF 卡 /fonts，最多 64 个）✓；内置 Default 为编译时内置的 FreeType 字体（DroidSansFallback，Flash XIP）✓；外部字体由 FreeType 直接从 TF 卡文件读取 ✓；默认未启用粗体 / 斜体中文字库 ✓。字体的每一件"器"都有出处、可验证——这就是鲁班完工的标准：器顺手、料到位、流水线不打结。</p>
+
+<pre><code><span class="cmt">/* lib/epdiy/font_ft.c：字形位图缓存与预热量线（节选） */</span>
+<span class="kw">#define</span> CACHE_HASH_SIZE  <span class="num">256</span>
+<span class="kw">#define</span> CACHE_MAX_MEMORY (<span class="num">3</span>*<span class="num">1024</span>*<span class="num">1024</span>)   <span class="cmt">// 3 MiB 上限，LRU 淘汰</span>
+
+<span class="cmt">/* 预热量线：后台逐字光栅化填缓存（真实代码节选） */</span>
+<span class="kw">static void</span> preheat_thread_entry(<span class="type">void</span> *param)
+{
+    (void)param;
+    <span class="kw">const uint8_t</span> *p = (<span class="kw">const uint8_t</span> *)g_preheat_text;   <span class="cmt">// 文本提前拷入全局</span>
+    <span class="type">uint32_t</span> cp; <span class="type">int</span> total = <span class="num">0</span>;
+    <span class="kw">while</span> ((cp = next_cp(&amp;p)) != <span class="num">0</span>) {
+        <span class="kw">if</span> (g_preheat_stop) <span class="kw">break</span>;                      <span class="cmt">// 可随时停止</span>
+        rasterize_glyph(cp);                                 <span class="cmt">// 光栅化一个字符入缓存</span>
+        <span class="kw">if</span> (++total % <span class="num">50</span> == <span class="num">0</span>)
+            rt_thread_delay(<span class="num">1</span>);                         <span class="cmt">// 每 50 字符让出 CPU</span>
+    }
+}
+<span class="cmt">// 线程创建：rt_thread_create("ft_pre", preheat_thread_entry, RT_NULL, 16384, 25, 10)</span></code></pre>
+
+<pre><code><span class="cmt"># 字体系统四件套一览</span>
+<span class="cmt">器        ：FreeType + ft_dfs_bridge.c（多槽 LRU 读缓冲，大字体随机跳读提速）</span>
+<span class="cmt">料        ：内置 DroidSansFallback（3.9 MiB，Flash XIP，FT_New_Memory_Face）</span>
+<span class="cmt">流水线    ：font_manager.c + /fonts（扫描 TF 卡，≤64 外部字体，失败回退 Default）</span>
+<span class="cmt">旋钮      ：字号 7 档（24-48px）+ 字重 3 档（正常/中粗/粗体）</span>
+<span class="cmt">缓存      ：4bpp 字形位图，3 MiB 上限，LRU 淘汰 + 阻塞/异步预热量线</span></code></pre>
+
+  <table>
+    <tr><th>能力</th><th>实现位置</th><th>一句话原理</th></tr>
+    <tr><td>中英文字形渲染</td><td><code>font_ft.c</code></td><td>FreeType 把码点光栅化成 4bpp 位图</td></tr>
+    <tr><td>大字体文件读取</td><td><code>ft_dfs_bridge.c</code></td><td>64 KiB 低区 + 16 槽 LRU，少读盘</td></tr>
+    <tr><td>内置字体</td><td><code>font/SConscript</code> + XIP</td><td>编译期转数组，Flash 直读不占 RAM</td></tr>
+    <tr><td>外部字体</td><td><code>font_manager.c</code> + <code>/fonts</code></td><td>扫描登记，随用随读，失败回退</td></tr>
+    <tr><td>翻页流畅</td><td>字形缓存 + 预热量线</td><td>命中缓存免重光栅化，后台预热</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>完工自查就两问：器能不能独立验证（缓存有 <code>cache_count/memory</code> 探针）、料放在最划算的地方没有（内置 XIP、外部即读）。两问都答上，这台字体的"机器"才算打磨完工。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：XIP 与内置字体 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>什么是 XIP？内置的 DroidSansFallback 为什么不占 RAM？它 3.9 MiB 的数据最终放在哪里、如何被 FreeType 读取？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>XIP 是原地执行——数据放 Flash，CPU 通过内存映射直接访问；内置字体靠 SConscript 的 ConvertFont 转成 epub_ttf_data 数组，走 FT_New_Memory_Face。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>XIP（Execute In Place，原地执行）指程序或数据放在 Flash 里、CPU 通过内存映射直接访问，无需先拷进 RAM。DroidSansFallback 经 font/SConscript 的 <code>Env.ConvertFont(font_file, 'epub_ttf_data')</code> 编译成数组符号 <code>epub_ttf_data</code>（大小 <code>epub_ttf_data_size</code>），放在 Flash 的 XIP 段；font_ft.c 用 <code>FT_New_Memory_Face</code> 直接拿这 3.9 MiB 数据建 Face，字形本体始终在 Flash，RAM 只花结构体和缓存的份。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：ft_dfs_bridge 的缓冲 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为什么大字体文件加载会"频繁跳读"？ft_dfs_bridge.c 用了哪两级缓冲，各自解决什么？dfs_file_enable_fast_seek 起什么作用？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>FreeType 在 loca/glyf/hmtx/cmap 四表间跳读；低区 64 KiB 覆盖文件头，16 槽 LRU 覆盖四表随机跳；fast_seek 打开 FatFs CLMT 让 lseek 变 O(1)。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>加载时 FreeType 会在 loca、glyf、hmtx、cmap 四张表间来回取数，单缓冲每跳一次读一次盘。ft_dfs_bridge.c 用两级缓冲：64 KiB 低区预读缓冲专门覆盖 <code>FT_New_Face</code> 读文件头的连续访问；16 个 4 KiB 槽组成多槽 LRU，覆盖四表间的随机跳读（命中就不读盘，miss 才 <code>slot_find_oldest</code> 淘汰最老槽 <code>slot_fill</code>）。<code>dfs_file_enable_fast_seek(dfs_fp, 1)</code> 给 FatFs 打开簇链映射（CLMT），把 <code>lseek</code> 从逐簇跳变成 O(1) 查表。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：动态字体加载 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>font_manager_init 如何扫描 /fonts？切换字体时 font_manager_select 做了哪些事？外部字体加载失败会怎样？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>opendir/readdir 遍历 + is_ttf_file 认四类后缀；select 先 cache_clear 再 deinit，内置走 FT_New_Memory_Face、外部走 init_from_file；失败回退 Default 返回 -4。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>init 用 <code>opendir</code>/<code>readdir</code> 遍历 /fonts，<code>is_ttf_file()</code> 认 <code>.ttf/.TTF/.otf/.OTF</code> 后缀，把名字和路径登记进 <code>g_font_list</code>（第 0 项恒为内置 Default）。select 先 <code>cache_clear()</code> 清旧字形缓存、<code>deinit()</code> 释放旧 Face；内置走 <code>epd_font_ft_init_builtin</code>（Flash XIP），外部走 <code>epd_font_ft_init_from_file</code>（TF 卡直读，不占 PSRAM）。外部加载失败则回退内置 Default、置 <code>g_current_font=0</code>、返回 -4，用户不会白屏。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：字号与字重 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>字重为什么默认不启用粗体 / 斜体中文字库？可变字体与普通字体的粗体实现有何不同？"伪粗体"有什么代价？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>资源考虑 + 中文字库体积；可变字体用 BOLD_WEIGHT_MAP 走 wght 轴，普通字体用 EMBOLDEN_STRENGTH 走 FT_Outline_Embolden；加粗会撑开笔画细节。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>README 明说"为控制资源占用，默认未启用"：一套中文字库动辄数兆，粗体再备一套 Flash 吃不消，且汉字无斜体概念，故只内置一套黑体，粗体靠运行时加粗。可变字体（一个文件内含多个字重）用 <code>apply_variable_weight</code> 把 wght 轴设到 <code>BOLD_WEIGHT_MAP[]={400,600,700}</code>；普通字体用 <code>EMBOLDEN_STRENGTH[]={0,1,2}</code> 调 <code>FT_Outline_Embolden</code> 把轮廓向外加粗。"伪粗体"的代价是笔画被撑开、细节变糊，小字号更明显，所以强度只压到 3 档且默认 0。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

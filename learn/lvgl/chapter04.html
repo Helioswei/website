@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章：显示、输入与渲染缓冲 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="4" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：显示、输入与渲染缓冲</h1>
+  <p class="chapter-subtitle">工欲善其事，必先利其器：显示、输入与渲染缓冲，是 LVGL 引擎室里三只最重要的阀门</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一章我们跑起了第一个界面，但那套代码里藏着三个你还没拆开看的'黑箱'：像素先在渲染缓冲里画好、再由 flush 回调搬上屏幕、触摸通过 indev 回调变成数据。工具要趁手，就得先弄清每一段链条怎么转。这一章，我们把引擎室的门打开，一个一个阀门拧给你看。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 渲染缓冲与三种渲染模式 ========== -->
+  <h2>4.1 渲染缓冲与三种渲染模式</h2>
+
+  <p>LVGL 从来不是"直接往屏幕上画"。它先在内存里的一块<strong>渲染缓冲</strong>（render buffer）中把界面画好，再一次性把这块缓冲交给屏幕。为什么绕这一圈？因为 MCU 写内存比写 LCD 控制器快得多，而且"先画缓冲、再整体刷屏"天然避免了闪烁。缓冲划多大、怎么和屏幕对齐，就是本章的核心——也就是 <code>lv_display_set_buffers()</code> 的第四个参数：渲染模式。</p>
+
+  <p>渲染模式是 <code>lv_display_render_mode_t</code> 枚举，定义在 <code>lvgl-master/include/lvgl/display/lv_display.h</code> 里。三种模式的差别可以用一句话概括：<strong>缓冲多大、每次重绘多少</strong>。<code>LV_DISPLAY_RENDER_MODE_PARTIAL</code> 用"至少 1/10 屏幕"的小缓冲，一次只渲染一小块区域再拼到屏幕；<code>LV_DISPLAY_RENDER_MODE_DIRECT</code> 需要整屏大小的缓冲，LVGL 始终在正确的位置作画，但只有发生变化的部分会被更新；<code>LV_DISPLAY_RENDER_MODE_FULL</code> 同样要整屏缓冲，但哪怕只改了一个像素，也把整屏重新画一遍。</p>
+
+<pre><code><span class="cmt">/* include/lvgl/display/lv_display.h（节选） */</span>
+<span class="kw">typedef</span> <span class="kw">enum</span> {
+    LV_DISPLAY_RENDER_MODE_PARTIAL,  <span class="cmt">/* 小缓冲，分区域渲染（推荐至少 1/10 屏） */</span>
+    LV_DISPLAY_RENDER_MODE_DIRECT,   <span class="cmt">/* 整屏缓冲，只更新变化区域 */</span>
+    LV_DISPLAY_RENDER_MODE_FULL,     <span class="cmt">/* 整屏缓冲，每次都全屏重绘 */</span>
+} lv_display_render_mode_t;</code></pre>
+
+  <p>选哪种模式，本质是<strong>拿 RAM 换刷新效率</strong>。同样的 320×240、16 位色深屏幕：partial 模式 <code>320 * 240 / 10 * 2 = 15360</code> 字节就够；direct/full 模式则要 <code>320 * 240 * 2 = 153600</code> 字节——整整差 10 倍。所以小 RAM 的 MCU 几乎都选 partial，带外部 RAM 的中端芯片才有底气上 direct。注意 <code>lv_display_set_buffers()</code> 还接受第二个缓冲 <code>buf2</code>：传入两块缓冲即为<strong>双缓冲</strong>，渲染与刷屏可以并行流水，是消除撕裂与卡顿的常用手段。</p>
+
+<pre><code><span class="cmt">/* partial：一块 1/10 屏的缓冲就够（16 位色深，每像素 2 字节） */</span>
+<span class="kw">static</span> <span class="type">uint8_t</span> buf[TFT_HOR_RES * TFT_VER_RES / <span class="num">10</span> * <span class="num">2</span>];
+<span class="fn">lv_display_set_buffers</span>(disp, buf, <span class="kw">NULL</span>, <span class="kw">sizeof</span>(buf),
+                       <span class="kw">LV_DISPLAY_RENDER_MODE_PARTIAL</span>);
+
+<span class="cmt">/* full / direct：需要整屏缓冲，可给两块做双缓冲 */</span>
+<span class="kw">static</span> <span class="type">uint8_t</span> buf1[TFT_HOR_RES * TFT_VER_RES * <span class="num">2</span>];
+<span class="kw">static</span> <span class="type">uint8_t</span> buf2[TFT_HOR_RES * TFT_VER_RES * <span class="num">2</span>];
+<span class="fn">lv_display_set_buffers</span>(disp, buf1, buf2, <span class="kw">sizeof</span>(buf1),
+                       <span class="kw">LV_DISPLAY_RENDER_MODE_FULL</span>);</code></pre>
+
+  <table>
+    <tr><th>渲染模式</th><th>缓冲要求</th><th>刷新行为</th><th>典型场景</th></tr>
+    <tr><td><code>PARTIAL</code></td><td>至少 1/10 屏</td><td>分小块渲染后搬上屏幕</td><td>RAM 紧张的小 MCU</td></tr>
+    <tr><td><code>DIRECT</code></td><td>整屏大小</td><td>只在正确位置作画，仅更新变化区域</td><td>有足够 RAM 的中端 MCU</td></tr>
+    <tr><td><code>FULL</code></td><td>整屏大小</td><td>无论改多少都全屏重绘</td><td>重绘开销可忽略，或双缓冲换地址</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>缓冲字节数 = 宽 × 高 ×（<code>LV_COLOR_DEPTH / 8</code>）×（1 或 1/10）。16 位色深每像素 2 字节，32 位是 4 字节；partial 模式先按 1/10 屏估，内存够用再往上加。先跑通，再谈性能——这是移植屏幕的通用顺序。</p>
+  </div>
+
+  <!-- ========== 4.2 flush 回调：把像素送上屏幕的最后一公里 ========== -->
+  <h2>4.2 flush 回调：把像素送上屏幕的最后一公里</h2>
+
+  <p>渲染缓冲只是 LVGL 的"画板"，真正把像素搬进屏幕（帧缓冲或 LCD 控制器）的是你注册的 <strong>flush 回调</strong>。<code>lv_display_set_flush_cb(disp, cb)</code> 负责注册它，回调签名是固定的：<code>void (*)(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)</code>。每当 LVGL 渲染完一块区域，就会带着这块区域的坐标 <code>area</code> 和像素数据 <code>px_map</code> 来调用你的回调——<code>area</code> 告诉你"画哪"，<code>px_map</code> 告诉你"画什么"。</p>
+
+  <p>回调里你必须做两件事：把 <code>px_map</code> 的数据写到 <code>area-&gt;x1..x2, y1..y2</code> 对应的屏幕坐标（具体取决于你的 LCD 驱动），然后<strong>务必调用 <code>lv_display_flush_ready(disp)</code></strong> 通知 LVGL"这块刷完了"。漏掉这一句，LVGL 会一直以为上一块还没刷完，界面要么卡住不动、要么闪烁——这是新手移植屏幕遇到的最常见"白屏/花屏"原因之一。README「Porting manually」里的最小 flush 回调就是这样。</p>
+
+<pre><code><span class="cmt">/* README「Porting manually」的 flush 回调（节选） */</span>
+<span class="kw">static</span> <span class="kw">void</span> my_flush_cb(<span class="type">lv_display_t</span> * <span class="param">disp</span>, <span class="kw">const</span> <span class="type">lv_area_t</span> * <span class="param">area</span>,
+                         <span class="type">uint8_t</span> * <span class="param">px_map</span>)
+{
+    <span class="cmt">/* 把 px_map 写到屏幕 area->x1..x2, y1..y2 对应的位置 */</span>
+
+    <span class="fn">lv_display_flush_ready</span>(disp);   <span class="cmt">/* 通知 LVGL 本区域已刷完 */</span>
+}</code></pre>
+
+  <p>如果你用双缓冲，flush 还能进一步简化。在 direct/full 模式下，LVGL 始终把整幅画面渲染进某块缓冲，刷屏只是"通知硬件换一块地址"——README 说的"在 flush_cb 里只需要换地址"就是这个意思。若你的屏幕硬件有 DMA，你还可以注册 <code>lv_display_set_flush_wait_cb()</code> 作为"同步闸门"：等 DMA 真正把数据搬完再让 LVGL 复用这块缓冲，避免画到一半被覆盖。整套 flush 相关的 API 就四五个，职责非常清晰。</p>
+
+<pre><code><span class="cmt">/* 双缓冲 + DMA 的 flush：地址切换 + 可选同步闸门 */</span>
+<span class="kw">static</span> <span class="kw">void</span> my_flush_cb(<span class="type">lv_display_t</span> * <span class="param">disp</span>, <span class="kw">const</span> <span class="type">lv_area_t</span> * <span class="param">area</span>,
+                         <span class="type">uint8_t</span> * <span class="param">px_map</span>)
+{
+    <span class="cmt">/* LCD 控制器通常只需切换 RAM 地址即可显示新缓冲 */</span>
+    set_lcd_frame_address(px_map);
+
+    <span class="fn">lv_display_flush_ready</span>(disp);     <span class="cmt">/* 立即回执：下次渲染交给另一块缓冲 */</span>
+}
+
+<span class="cmt">/* 若担心 DMA 还没搬完：注册 flush_wait 回调等待传输完成 */</span>
+<span class="kw">static</span> <span class="kw">void</span> my_flush_wait_cb(<span class="type">lv_display_t</span> * <span class="param">disp</span>)
+{
+    <span class="cmt">/* 阻塞直到上一次 DMA 传输结束，再让 LVGL 复用缓冲 */</span>
+}
+
+<span class="fn">lv_display_set_flush_cb</span>(disp, my_flush_cb);
+<span class="fn">lv_display_set_flush_wait_cb</span>(disp, my_flush_wait_cb);</code></pre>
+
+  <table>
+    <tr><th>API</th><th>职责</th></tr>
+    <tr><td><code>lv_display_set_flush_cb()</code></td><td>注册"把缓冲写入屏幕"的回调</td></tr>
+    <tr><td><code>lv_display_flush_ready()</code></td><td>通知 LVGL 当前区域已刷完，可继续渲染下一块</td></tr>
+    <tr><td><code>lv_display_set_flush_wait_cb()</code></td><td>（可选）同步闸门：等硬件/DMA 搬完再复用缓冲</td></tr>
+    <tr><td><code>lv_display_set_buffers()</code></td><td>绑定渲染缓冲（buf1 + 可选 buf2 双缓冲）与渲染模式</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>判断"是不是 flush 的问题"有个捷径：把 <code>my_flush_cb</code> 里临时写死成"把整块 <code>px_map</code> 填成纯色"，如果界面能正常刷新颜色、只是内容不对，那问题在渲染侧；如果连颜色都不动，问题基本就在 flush 或缓冲配置上。</p>
+  </div>
+
+  <!-- ========== 4.3 tick 时基：LVGL 的脉搏 ========== -->
+  <h2>4.3 tick 时基：LVGL 的脉搏</h2>
+
+  <p>动画要算时间、长按要计时、闪烁要定时——LVGL 需要知道"现在是第几毫秒"，这个来源就是 <strong>tick</strong>。在 v9 中 tick 被独立成 <code>lvgl-master/src/tick/</code> 子系统，核心 API 只有三个：<code>lv_tick_set_cb()</code> 注册一个"返回当前毫秒数"的函数，<code>lv_tick_get()</code> 随时读取它，<code>lv_tick_inc()</code> 则是裸机环境下手动累加的入口。README 里 <code>lv_tick_set_cb(my_tick_cb)</code> 正是第一步——没有它，动画和计时器全部停摆。</p>
+
+  <p>tick 回调的签名是 <code>uint32_t (*)(void)</code>，返回系统毫秒数即可。不同平台的接法不同：裸机上，如果 OS 提供毫秒时钟（如 SysTick），就直接把读取函数传进去；如果只有周期性中断，就在中断里每 1ms 调一次 <code>lv_tick_inc(1)</code>；Linux 或 SDL 模拟器则直接接系统时钟——2.3 节里 SDL 驱动调用的就是 <code>lv_tick_set_cb(SDL_GetTicks)</code>，把时基接到 SDL 的毫秒计时上。</p>
+
+<pre><code><span class="cmt">/* README：注册毫秒时基回调 */</span>
+<span class="kw">static</span> <span class="type">uint32_t</span> my_tick_cb(<span class="kw">void</span>)
+{
+    <span class="kw">return</span> my_get_millisec();   <span class="cmt">/* 返回自启动以来的毫秒数 */</span>
+}
+
+<span class="fn">lv_tick_set_cb</span>(my_tick_cb);     <span class="cmt">/* 让 LVGL 知道"现在几点" */</span></code></pre>
+
+<pre><code><span class="cmt">/* 裸机方案 B：只有周期性定时器，就手动累加 */</span>
+<span class="kw">void</span> SysTick_Handler(<span class="kw">void</span>)   <span class="cmt">/* 每 1ms 进一次中断 */</span>
+{
+    <span class="fn">lv_tick_inc</span>(<span class="num">1</span>);            <span class="cmt">/* 累加 1ms */</span>
+}
+
+<span class="cmt">/* 需要当前时间时 */</span>
+<span class="type">uint32_t</span> now = <span class="fn">lv_tick_get</span>();</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>忘注册 tick，表现通常是"界面能画出来、但动画不动、按钮长按没反应"。排查时先确认 <code>lv_tick_set_cb()</code> 有没有被调用、返回的值是不是真的在递增——用 <code>lv_tick_get()</code> 连续打印两次对比即可。</p>
+  </div>
+
+  <!-- ========== 4.4 输入设备 indev：把物理触摸翻译成数据 ========== -->
+  <h2>4.4 输入设备 indev：把物理触摸翻译成数据</h2>
+
+  <p>显示是"输出"，输入靠 <strong>indev</strong>（input device，输入设备）。LVGL 不直接感知硬件，它把所有输入抽象成一个统一的回调：你负责把物理状态（触点坐标、按键、编码器转了几格）填进一个结构体，LVGL 负责把它翻译成"谁被按下了"。创建输入设备的套路固定三步：<code>lv_indev_create()</code> 建对象 → <code>lv_indev_set_type()</code> 指定类型 → <code>lv_indev_set_read_cb()</code> 注册读取回调。类型用 <code>LV_INDEV_TYPE_POINTER</code>（触摸/鼠标）、<code>LV_INDEV_TYPE_KEYPAD</code>（键盘）、<code>LV_INDEV_TYPE_ENCODER</code>（旋钮）、<code>LV_INDEV_TYPE_BUTTON</code>（映射到固定坐标的物理按键）来区分。</p>
+
+  <p>回调和显示侧的 flush 是镜像关系：LVGL 周期性调用你的读取回调，你往它传进来的 <code>lv_indev_data_t * data</code> 里填数据。<code>lv_indev_data_t</code> 定义在 <code>lvgl-master/include/lvgl/indev/lv_indev.h</code>，对 pointer 型设备，关键是 <code>point</code>（触点坐标）和 <code>state</code>（按下/抬起）；对 keypad 是 <code>key</code>，对 encoder 是 <code>enc_diff</code>。README 的 <code>my_touch_read_cb</code> 就是这个模式的教科书写法。</p>
+
+<pre><code><span class="cmt">/* README「Porting manually」的触摸读取回调 */</span>
+<span class="kw">static</span> <span class="kw">void</span> my_touch_read_cb(<span class="type">lv_indev_t</span> * <span class="param">indev</span>, <span class="type">lv_indev_data_t</span> * <span class="param">data</span>)
+{
+    <span class="kw">if</span>(my_touch_is_pressed()) {
+        data-&gt;point.x = touchpad_x;
+        data-&gt;point.y = touchpad_y;
+        data-&gt;state = <span class="kw">LV_INDEV_STATE_PRESSED</span>;
+    }
+    <span class="kw">else</span> {
+        data-&gt;state = <span class="kw">LV_INDEV_STATE_RELEASED</span>;
+    }
+}
+
+<span class="cmt">/* 注册：创建 + 类型 + 回调 */</span>
+<span class="type">lv_indev_t</span> * indev = <span class="fn">lv_indev_create</span>();
+<span class="fn">lv_indev_set_type</span>(indev, <span class="kw">LV_INDEV_TYPE_POINTER</span>);
+<span class="fn">lv_indev_set_read_cb</span>(indev, my_touch_read_cb);</code></pre>
+
+<pre><code><span class="cmt">/* include/lvgl/indev/lv_indev.h（节选）：回调与数据 */</span>
+<span class="kw">typedef</span> <span class="kw">void</span> (*<span class="type">lv_indev_read_cb_t</span>)(<span class="type">lv_indev_t</span> * <span class="param">indev</span>, <span class="type">lv_indev_data_t</span> * <span class="param">data</span>);
+
+<span class="kw">typedef</span> <span class="kw">struct</span> {
+    <span class="type">lv_indev_state_t</span> state;  <span class="cmt">/* LV_INDEV_STATE_PRESSED / RELEASED */</span>
+    <span class="type">lv_point_t</span> point;        <span class="cmt">/* 指针型：当前触点坐标 */</span>
+    <span class="type">uint32_t</span> key;            <span class="cmt">/* 键盘型：当前按键 */</span>
+    <span class="type">int16_t</span> enc_diff;        <span class="cmt">/* 编码器型：距上次读取的步数 */</span>
+    <span class="type">uint32_t</span> timestamp;      <span class="cmt">/* 事件时间戳 */</span>
+    <span class="kw">bool</span> continue_reading;   <span class="cmt">/* 置 true 会再次调用读取回调 */</span>
+} lv_indev_data_t;</code></pre>
+
+  <table>
+    <tr><th>indev 类型</th><th>物理设备示例</th><th>填写的字段</th></tr>
+    <tr><td><code>LV_INDEV_TYPE_POINTER</code></td><td>触摸屏、鼠标</td><td><code>point</code> + <code>state</code></td></tr>
+    <tr><td><code>LV_INDEV_TYPE_KEYPAD</code></td><td>键盘、矩阵按键</td><td><code>key</code></td></tr>
+    <tr><td><code>LV_INDEV_TYPE_ENCODER</code></td><td>旋转编码器</td><td><code>enc_diff</code></td></tr>
+    <tr><td><code>LV_INDEV_TYPE_BUTTON</code></td><td>映射到屏幕坐标的物理按键</td><td><code>btn_id</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>指针型回调里，<code>state</code> 务必每次都给——即使没有按下也要填 <code>LV_INDEV_STATE_RELEASED</code>。LVGL 靠"上一次按下、这一次抬起"来判定一次完整的点击，漏报一次抬起，你的按钮就会"卡在按下的样子"。</p>
+  </div>
+
+  <!-- ========== 4.5 合成：从一次触摸到一块刷新 ========== -->
+  <h2>4.5 合成：从一次触摸到一块刷新</h2>
+
+  <p>把前三节串起来，就是一个完整的移植模板——它正是 README「Porting manually」的 C 示例。初始化顺序固定：<code>lv_init()</code> 先初始化全局 → <code>lv_tick_set_cb()</code> 给 LVGL 上弦 → <code>lv_display_create()</code> 建显示 → <code>lv_display_set_buffers()</code> 绑缓冲 → <code>lv_display_set_flush_cb()</code> 接刷屏 → <code>lv_indev_create()</code> 建触摸。之后主循环每次调 <code>lv_timer_handler()</code>，LVGL 就在这一帧里完成"读输入 → 处理事件 → 渲染变化区域 → 回调 flush"的完整闭环。</p>
+
+  <p>读懂这条链的价值在于：当问题发生时你能精准定位是哪一环。屏幕没反应，先查 flush；点了没反应，先查 indev；动画不动，先查 tick；内容错乱，先查缓冲大小与色深。显示是输出通道、indev 是输入通道、tick 是时钟、缓冲是画板——四者各司其职，组合起来就是 LVGL 在裸机上的全部"引擎室"。</p>
+
+<pre><code><span class="cmt">/* README「Porting manually」最小程序（合并本片）：tick + display + buffer + flush + indev */</span>
+<span class="kw">void</span> main(<span class="kw">void</span>)
+{
+    my_hardware_init();
+
+    <span class="fn">lv_init</span>();
+    <span class="fn">lv_tick_set_cb</span>(my_tick_cb);   <span class="cmt">/* 时基 */</span>
+
+    <span class="type">lv_display_t</span> * display = <span class="fn">lv_display_create</span>(TFT_HOR_RES, TFT_VER_RES);
+    <span class="kw">static</span> <span class="type">uint8_t</span> buf[TFT_HOR_RES * TFT_VER_RES / <span class="num">10</span> * <span class="num">2</span>];
+    <span class="fn">lv_display_set_buffers</span>(display, buf, <span class="kw">NULL</span>, <span class="kw">sizeof</span>(buf),
+                           <span class="kw">LV_DISPLAY_RENDER_MODE_PARTIAL</span>);
+    <span class="fn">lv_display_set_flush_cb</span>(display, my_flush_cb);
+
+    <span class="type">lv_indev_t</span> * indev = <span class="fn">lv_indev_create</span>();
+    <span class="fn">lv_indev_set_type</span>(indev, <span class="kw">LV_INDEV_TYPE_POINTER</span>);
+    <span class="fn">lv_indev_set_read_cb</span>(indev, my_touch_read_cb);
+
+    <span class="cmt">/* 驱动就绪，现在可以创建 UI 了 */</span>
+    <span class="type">lv_obj_t</span> * label = <span class="fn">lv_label_create</span>(<span class="fn">lv_screen_active</span>());
+    <span class="fn">lv_label_set_text</span>(label, <span class="str">"Hello world"</span>);
+    <span class="fn">lv_obj_center</span>(label);
+
+    <span class="kw">while</span>(<span class="num">1</span>) {
+        <span class="fn">lv_timer_handler</span>();       <span class="cmt">/* 一帧：读输入 → 渲染 → flush */</span>
+        my_sleep_ms(<span class="num">5</span>);
+    }
+}</code></pre>
+
+<pre><code><span class="cmt">/* 移植到新屏幕的 checklist（对照排查用） */</span>
+<span class="cmt">/* 1. lv_init()                全局初始化          */</span>
+<span class="cmt">/* 2. lv_tick_set_cb()         tick 递增了吗？      */</span>
+<span class="cmt">/* 3. lv_display_create()      分辨率对得上屏幕？   */</span>
+<span class="cmt">/* 4. lv_display_set_buffers() 缓冲大小含色深因子？ */</span>
+<span class="cmt">/* 5. lv_display_set_flush_cb() 有没有 flush_ready？*/</span>
+<span class="cmt">/* 6. lv_indev_*()             触摸 state 每次都给？*/</span>
+<span class="cmt">/* 7. lv_timer_handler()       主循环有在调吗？     */</span></code></pre>
+
+  <table>
+    <tr><th>环节</th><th>负责 API</th><th>排查信号</th></tr>
+    <tr><td>输出</td><td><code>lv_display_*</code> + flush 回调</td><td>白屏/花屏 → 缓冲与 flush</td></tr>
+    <tr><td>输入</td><td><code>lv_indev_create/set_type/set_read_cb</code></td><td>点了没反应 → indev 回调</td></tr>
+    <tr><td>时钟</td><td><code>lv_tick_set_cb</code> / <code>lv_tick_inc</code></td><td>动画不动 → tick 未递增</td></tr>
+    <tr><td>驱动</td><td><code>lv_timer_handler()</code></td><td>全部不动 → 主循环没跑</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>这套"四件套"（tick / display / buffer / indev）在任何平台——裸机、FreeRTOS、Linux、SDL 模拟器——都是同一个骨架。模拟器只是把四件套预组装好了。吃透本章，你移植任何屏幕都只剩"填四个回调"的机械劳动。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：三种渲染模式 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>一块 480×320、<code>LV_COLOR_DEPTH = 16</code> 的屏幕。分别计算 partial（按 1/10 屏）、direct、full 三种模式下渲染缓冲至少需要多少字节？各模式刷屏行为有什么差别？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>缓冲字节 = 宽 × 高 ×（色深/8），partial 模式再乘以 1/10。对照 4.1 的表格回忆每种模式"重绘多少"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>每像素 16 位 = 2 字节。partial：<code>480 * 320 / 10 * 2 = 30720</code> 字节（1/10 屏，分块渲染）；direct 与 full 都要整屏：<code>480 * 320 * 2 = 307200</code> 字节。差别：partial 只渲染变化的小块区域，direct 渲染到正确位置但仅更新变化区，full 无论改多少都整屏重绘。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：补齐 flush 回调 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>写出一个完整的 flush 回调骨架：签名是什么？回调里除了"把 <code>px_map</code> 写到 <code>area</code> 对应屏幕区域"之外，最后必须调用哪个函数？如果漏掉它，现象会是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 4.2 的代码块；想想 LVGL 怎么知道"这块缓冲可以复用了"。<code>area</code> 的边界字段是 <code>x1/x2/y1/y2</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>签名 <code>void my_flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)</code>；写完像素后调用 <code>lv_display_flush_ready(disp)</code>。漏掉它 LVGL 会认为当前缓冲仍在使用中，不再把新渲染交给屏幕——表现为界面卡住、刷新停滞甚至花屏。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：实现一个触摸读取回调 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设你的触摸芯片只在按下时才有坐标，读取函数是 <code>bool my_touch_is_pressed(void)</code> 与 <code>int my_touch_get_x(void)</code> / <code>my_touch_get_y(void)</code>。用 <code>lv_indev_create</code> + <code>lv_indev_set_type</code> + <code>lv_indev_set_read_cb</code> 接好它，并写出读取回调（别忘了没有按下时也要给 <code>LV_INDEV_STATE_RELEASED</code>）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>直接套 4.4 里 README 的 <code>my_touch_read_cb</code> 结构，把坐标来源换成你自己的读取函数。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_indev_t * indev = lv_indev_create(); lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER); lv_indev_set_read_cb(indev, my_touch_read_cb);</code>。回调内：<code>if(my_touch_is_pressed()) { data-&gt;point.x = my_touch_get_x(); data-&gt;point.y = my_touch_get_y(); data-&gt;state = LV_INDEV_STATE_PRESSED; } else { data-&gt;state = LV_INDEV_STATE_RELEASED; }</code>。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：双缓冲与 DIRECT 模式的玄机 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>4.2 提到 direct/full 模式配双缓冲时，flush 回调"只需要换地址"。请解释：为什么 direct 模式用两块整屏缓冲就能做到？而 partial 模式下为什么做不到"只换地址"？提示：回想三块缓冲各自内容的语义（谁画、谁在显示）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>direct 模式缓冲始终保存整幅画面且 LVGL 只在正确位置作画；想想"屏幕上正在显示哪块、LVGL 在画哪块"——换地址后显示的是不是完整的下一帧？partial 模式缓冲只有 1/10 屏，屏幕其余部分由谁维护？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>direct（及 full）模式每块缓冲都承载整屏画面：一块在显示、一块在渲染，二者内容互补为一帧。刷新时只需把"显示地址"指向刚渲染完的那块（也就是"只换地址"），下次渲染再用另一块——天然消除撕裂。partial 模式缓冲只含 1/10 屏，屏幕其余部分是 LVGL 靠多次 flush 逐块拼出来的，任何时刻缓冲都不代表完整画面，所以必须真地把数据搬进屏幕，无法只换地址。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

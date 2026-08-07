@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章：常用 Widgets 上手 - LVGL 嵌入式图形库教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-lvgl" data-track="lvgl" data-chapter="5" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：常用 Widgets 上手</h1>
+  <p class="chapter-subtitle">系统分析：create → 定位 → 设属性，一套套路吃遍绝大多数控件</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析，把零散控件纳入统一框架</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「破案要先画一张嫌疑人关系图，学控件也一样：先把 button、label、checkbox、slider 这些'嫌疑人'的关系摆清楚——它们全是从 <code>lv_obj</code> 这个'祖宗'派生出来的，创建、定位、设属性的套路完全一致。摸清这套规律，剩下的只是查 API 的功夫。现在，我们开始系统分析。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 Widget 家族总览：一脉相承的对象树 ========== -->
+  <h2>5.1 Widget 家族总览：一脉相承的对象树</h2>
+
+  <p>第 3 章讲过，LVGL 的一切都是 <code>lv_obj</code>。这一章的所有"控件"（widget）可以这样理解：<strong>它们都是 <code>lv_obj</code> 的派生物</strong>——按钮、标签、复选框、滑块……每一个都先是一个普通对象，再被装上专属的行为与外观。因此创建控件的 API 有个铁律一样的规律：<code>lv_xxx_create(parent)</code>，返回的仍然是 <code>lv_obj_t *</code>。你在 <code>lv_obj</code> 上学到的所有操作——定位、改尺寸、加事件——对任意控件全部照常生效。</p>
+
+  <p>所以"学控件"其实是在学一份<strong>档案表</strong>：记住每个控件叫什么、创建函数是谁、它擅长表达什么。以 <code>lvgl-master/examples/widgets/</code> 里的 <code>lv_example_button_basic.c</code> 为例，它展示的"按钮 + 居中标签"结构，恰恰暴露了控件的本质：按钮是一个可点击的基础对象，标签是它的子对象，二者拼出一个完整的交互单元。创建几个常用控件，代码风格惊人地一致。</p>
+
+<pre><code><span class="cmt">/* 五个常用控件，创建套路完全一致：lv_xxx_create(parent) */</span>
+<span class="type">lv_obj_t</span> * scr = <span class="fn">lv_screen_active</span>();
+
+<span class="type">lv_obj_t</span> * btn    = <span class="fn">lv_button_create</span>(scr);
+<span class="type">lv_obj_t</span> * label  = <span class="fn">lv_label_create</span>(scr);
+<span class="type">lv_obj_t</span> * cb     = <span class="fn">lv_checkbox_create</span>(scr);
+<span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(scr);
+<span class="type">lv_obj_t</span> * sw     = <span class="fn">lv_switch_create</span>(scr);</code></pre>
+
+<pre><code><span class="cmt">/* 控件就是 lv_obj：返回类型通用，对象 API 通用 */</span>
+<span class="type">lv_obj_t</span> * button = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+
+<span class="cmt">/* 以下全部是 lv_obj 级 API，对 button 同样有效： */</span>
+<span class="fn">lv_obj_set_size</span>(button, <span class="num">160</span>, <span class="num">48</span>);
+<span class="fn">lv_obj_center</span>(button);
+<span class="fn">lv_obj_set_pos</span>(button, <span class="num">10</span>, <span class="num">20</span>);</code></pre>
+
+  <table>
+    <tr><th>控件</th><th>创建函数</th><th>用途</th></tr>
+    <tr><td>按钮</td><td><code>lv_button_create()</code></td><td>可点击的交互单元（常内嵌一个 label）</td></tr>
+    <tr><td>标签</td><td><code>lv_label_create()</code></td><td>显示文本，支持换行/省略/滚动</td></tr>
+    <tr><td>复选框</td><td><code>lv_checkbox_create()</code></td><td>带文本的勾选项（勾选态 = <code>LV_STATE_CHECKED</code>）</td></tr>
+    <tr><td>滑块</td><td><code>lv_slider_create()</code></td><td>拖拽调节数值（在 bar 基础上加了可拖动的旋钮）</td></tr>
+    <tr><td>开关</td><td><code>lv_switch_create()</code></td><td>开/关二态开关（勾选态也走 <code>LV_STATE_CHECKED</code>）</td></tr>
+    <tr><td>进度条</td><td><code>lv_bar_create()</code></td><td>只读地展示进度/占比</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>记不住控件没关系，抓住"<code>lv_xxx_create</code> 返回 <code>lv_obj_t *</code>"这条主线：先用对象 API 把它摆对位置，再查它专属的 <code>lv_xxx_set_*</code> 去设专属属性。绝不要试图背全每个控件的 API。</p>
+  </div>
+
+  <!-- ========== 5.2 定位与尺寸：给控件排兵布阵 ========== -->
+  <h2>5.2 定位与尺寸：给控件排兵布阵</h2>
+
+  <p>控件创建出来默认堆在父对象左上角，得先给它"站位"。定位 API 有三兄弟：<code>lv_obj_set_pos()</code> 用绝对坐标摆放；<code>lv_obj_align()</code> 把对象对齐到父对象的某个锚点再偏移；<code>lv_obj_center()</code> 则是"对齐到中心"的快捷方式。对齐锚点来自 <code>lv_align_t</code> 枚举——<code>LV_ALIGN_TOP_MID</code>（顶部居中）、<code>LV_ALIGN_LEFT_MID</code>（左垂直居中）、<code>LV_ALIGN_BOTTOM_MID</code>（底部居中）等，<code>LV_ALIGN_CENTER</code> 就是正中央。</p>
+
+  <p>尺寸同样有规律。<code>lv_obj_set_size()</code> 一次设宽高，<code>lv_obj_set_width()</code> / <code>lv_obj_set_height()</code> 分别设。一个容易踩的坑：<strong>坐标和尺寸的原点是父对象的"内容区"</strong>，带边框或内边距时会略有偏移；而且某些控件（如按钮）默认"包着内容自适应"——给按钮设宽高，其实是给它的基础对象设定尺寸，内部标签仍居中对齐。理解了"控件 = 对象 + 专属行为"，这些行为就都好解释了。</p>
+
+<pre><code><span class="cmt">/* 对齐到父对象锚点，再偏移 */</span>
+<span class="fn">lv_obj_align</span>(title, <span class="kw">LV_ALIGN_TOP_MID</span>, <span class="num">0</span>, <span class="num">10</span>);   <span class="cmt">/* 顶部居中，向下偏 10px */</span>
+<span class="fn">lv_obj_align</span>(nav,   <span class="kw">LV_ALIGN_LEFT_MID</span>, <span class="num">8</span>, <span class="num">0</span>);    <span class="cmt">/* 左侧垂直居中 */</span>
+<span class="fn">lv_obj_center</span>(logo);                              <span class="cmt">/* 等价于 LV_ALIGN_CENTER */</span></code></pre>
+
+<pre><code><span class="cmt">/* 尺寸：一次设 vs 分别设 */</span>
+<span class="fn">lv_obj_set_size</span>(panel, <span class="num">220</span>, <span class="num">120</span>);    <span class="cmt">/* 同时设宽高 */</span>
+<span class="fn">lv_obj_set_width</span>(slider, <span class="num">180</span>);         <span class="cmt">/* 只改宽，高保持默认 */</span>
+<span class="fn">lv_obj_set_pos</span>(panel, <span class="num">30</span>, <span class="num">40</span>);       <span class="cmt">/* 绝对坐标摆放 */</span></code></pre>
+
+  <table>
+    <tr><th>API</th><th>作用</th><th>典型写法</th></tr>
+    <tr><td><code>lv_obj_set_pos()</code></td><td>用 (x, y) 绝对坐标摆放</td><td><code>lv_obj_set_pos(obj, 30, 40)</code></td></tr>
+    <tr><td><code>lv_obj_align()</code></td><td>对齐到父对象锚点并偏移</td><td><code>lv_obj_align(obj, LV_ALIGN_TOP_MID, 0, 10)</code></td></tr>
+    <tr><td><code>lv_obj_center()</code></td><td>对齐到父对象中心</td><td><code>lv_obj_center(obj)</code></td></tr>
+    <tr><td><code>lv_obj_set_size()</code></td><td>同时设定宽高</td><td><code>lv_obj_set_size(obj, 220, 120)</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>调试定位问题时，最有效的一招是给对象临时加个背景色（<code>lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), 0)</code>，样式系统第 6 章细讲）——看到它的实际范围，比猜坐标快得多。对齐偏移的 <code>y</code> 参数往屏幕下方是正方向。</p>
+  </div>
+
+  <!-- ========== 5.3 按钮与标签：最小可交互单元 ========== -->
+  <h2>5.3 按钮与标签：最小可交互单元</h2>
+
+  <p>按钮和标签是出场率最高的组合，也最能说明"控件怎么拼"。按钮 <code>lv_button_create()</code> 默认按内容自适应尺寸，所以你通常给它设一个显式尺寸，再在里面创建一个标签并 <code>lv_obj_align</code> 到中心。这个"按钮里嵌标签"的结构，参考 <code>lvgl-master/examples/widgets/button/lv_example_button_basic.c</code> 即可：第二个按钮显式 <code>lv_obj_set_size(button_2, 160, 48)</code>，标签再居中，文字就稳稳落在按钮正中央。</p>
+
+  <p>标签 <code>lv_label_create()</code> 的核心是 <code>lv_label_set_text()</code> 与它的"长文本模式"。文本太长放不下怎么办？<code>lv_label_set_long_mode()</code> 决定行为：<code>LV_LABEL_LONG_MODE_WRAP</code> 自动换行并撑高、<code>LV_LABEL_LONG_MODE_DOTS</code> 末尾省略号、<code>LV_LABEL_LONG_MODE_SCROLL_CIRCULAR</code> 循环滚动。做状态提示时，还常用 <code>lv_label_set_text_fmt()</code> 格式化拼接，比如 <code>"当前值: %d"</code>——第 8 章事件系统的滑块示例就大量用它实时刷新。</p>
+
+<pre><code><span class="cmt">/* 按钮 + 居中标签：最小可交互单元（参考 lv_example_button_basic.c） */</span>
+<span class="type">lv_obj_t</span> * btn = <span class="fn">lv_button_create</span>(<span class="fn">lv_screen_active</span>());
+<span class="fn">lv_obj_set_size</span>(btn, <span class="num">160</span>, <span class="num">48</span>);     <span class="cmt">/* 显式宽高，不然会包着标签自适应 */</span>
+<span class="fn">lv_obj_center</span>(btn);
+
+<span class="type">lv_obj_t</span> * btn_label = <span class="fn">lv_label_create</span>(btn);   <span class="cmt">/* 标签是按钮的子对象 */</span>
+<span class="fn">lv_obj_set_align</span>(btn_label, <span class="kw">LV_ALIGN_CENTER</span>);
+<span class="fn">lv_label_set_text</span>(btn_label, <span class="str">"Click me"</span>);</code></pre>
+
+<pre><code><span class="cmt">/* 标签长文本模式：三种典型处理 */</span>
+<span class="fn">lv_obj_set_width</span>(lbl_wrap, <span class="num">120</span>);
+<span class="fn">lv_label_set_long_mode</span>(lbl_wrap, <span class="kw">LV_LABEL_LONG_MODE_WRAP</span>);        <span class="cmt">/* 换行撑高 */</span>
+
+<span class="fn">lv_obj_set_width</span>(lbl_dots, <span class="num">120</span>);
+<span class="fn">lv_label_set_long_mode</span>(lbl_dots, <span class="kw">LV_LABEL_LONG_MODE_DOTS</span>);         <span class="cmt">/* 太长打省略号 */</span>
+
+<span class="fn">lv_obj_set_width</span>(lbl_scroll, <span class="num">120</span>);
+<span class="fn">lv_label_set_long_mode</span>(lbl_scroll, <span class="kw">LV_LABEL_LONG_MODE_SCROLL_CIRCULAR</span>); <span class="cmt">/* 循环滚动 */</span>
+
+<span class="cmt">/* 格式化文本：实时刷新状态提示的利器 */</span>
+<span class="fn">lv_label_set_text_fmt</span>(status, <span class="str">"Value: %d"</span>, value);</code></pre>
+
+  <table>
+    <tr><th>长文本模式</th><th>行为</th></tr>
+    <tr><td><code>LV_LABEL_LONG_MODE_WRAP</code></td><td>保持宽度，超长换行并撑高对象</td></tr>
+    <tr><td><code>LV_LABEL_LONG_MODE_DOTS</code></td><td>保持尺寸，末尾显示省略号</td></tr>
+    <tr><td><code>LV_LABEL_LONG_MODE_SCROLL</code></td><td>保持尺寸，文本来回滚动</td></tr>
+    <tr><td><code>LV_LABEL_LONG_MODE_SCROLL_CIRCULAR</code></td><td>保持尺寸，文本循环滚动</td></tr>
+    <tr><td><code>LV_LABEL_LONG_MODE_CLIP</code></td><td>保持尺寸，直接裁切</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>改完 <code>lv_label_set_long_mode()</code> 后文本没反应？先确认对象有明确宽度（<code>lv_obj_set_width</code>）——长文本模式都是"尺寸定死、处理超出的文字"，没有定宽的模式等于没有约束，自然看不出效果。</p>
+  </div>
+
+  <!-- ========== 5.4 复选框、开关与滑块：状态与取值 ========== -->
+  <h2>5.4 复选框、开关与滑块：状态与取值</h2>
+
+  <p>复选框与开关都是"二态"控件，它们的"选中"不靠专用 API，而是对象的一个状态位：<code>LV_STATE_CHECKED</code>。设置用 <code>lv_obj_add_state()</code>，清除用 <code>lv_obj_remove_state()</code>，读取用 <code>lv_obj_has_state()</code>。用户点击时控件自己会翻转这个状态，你只需在回调里读取它。复选框还能直接带文本——<code>lv_checkbox_create()</code> 之后调 <code>lv_checkbox_set_text()</code>，文字就会画在勾选框旁边。</p>
+
+  <p>滑块 <code>lv_slider_create()</code> 是"取值型"控件的代表。取值范围默认是 0–100，可用 <code>lv_slider_set_range()</code> 改成任意区间，<code>lv_slider_set_value()</code> 设置当前值（第三个参数 <code>LV_ANIM_ON/OFF</code> 决定是否带动画），<code>lv_slider_get_value()</code> 读取。注意滑块本质是"能拖动的进度条"，它和 5.5 的进度条共用一套数值模型——这也是"系统分析"要看到的规律：<strong>bar 提供数值与外观，slider 在 bar 之上加了交互</strong>。</p>
+
+<pre><code><span class="cmt">/* 复选框与开关：都是 LV_STATE_CHECKED 状态位 */</span>
+<span class="type">lv_obj_t</span> * cb = <span class="fn">lv_checkbox_create</span>(scr);
+<span class="fn">lv_checkbox_set_text</span>(cb, <span class="str">"Enable feature"</span>);
+<span class="fn">lv_obj_add_state</span>(cb, <span class="kw">LV_STATE_CHECKED</span>);   <span class="cmt">/* 预置为勾选 */</span>
+
+<span class="type">lv_obj_t</span> * sw = <span class="fn">lv_switch_create</span>(scr);
+<span class="fn">lv_obj_add_state</span>(sw, <span class="kw">LV_STATE_CHECKED</span>);   <span class="cmt">/* 开关默认打开 */</span>
+
+<span class="cmt">/* 读取：bool 判断当前是否勾选/打开 */</span>
+<span class="kw">if</span>(<span class="fn">lv_obj_has_state</span>(cb, <span class="kw">LV_STATE_CHECKED</span>)) { <span class="cmt">/* 已勾选 */</span> }</code></pre>
+
+<pre><code><span class="cmt">/* 滑块：范围 + 取值 + 读取（参考 lv_example_slider_event.c） */</span>
+<span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(scr);
+<span class="fn">lv_obj_set_width</span>(slider, <span class="num">200</span>);
+<span class="fn">lv_slider_set_range</span>(slider, <span class="num">0</span>, <span class="num">100</span>);
+<span class="fn">lv_slider_set_value</span>(slider, <span class="num">50</span>, <span class="kw">LV_ANIM_OFF</span>);
+
+<span class="cmt">/* 回调里读取当前值（事件系统第 8 章深入，这里先用 LV_EVENT_VALUE_CHANGED） */</span>
+<span class="kw">static</span> <span class="kw">void</span> slider_event_cb(<span class="type">lv_event_t</span> * <span class="param">e</span>)
+{
+    <span class="type">lv_obj_t</span> * obj = <span class="fn">lv_event_get_target_obj</span>(e);
+    <span class="type">int32_t</span> v = <span class="fn">lv_slider_get_value</span>(obj);
+    <span class="fn">lv_label_set_text_fmt</span>(status_label, <span class="str">"Value: %d"</span>, (<span class="kw">int</span>)v);
+}
+
+<span class="fn">lv_obj_add_event_cb</span>(slider, slider_event_cb, <span class="kw">LV_EVENT_VALUE_CHANGED</span>, <span class="kw">NULL</span>);</code></pre>
+
+  <table>
+    <tr><th>控件</th><th>状态/数值模型</th><th>关键 API</th></tr>
+    <tr><td>复选框</td><td>勾选态 = <code>LV_STATE_CHECKED</code></td><td><code>lv_checkbox_set_text()</code></td></tr>
+    <tr><td>开关</td><td>开/关 = <code>LV_STATE_CHECKED</code></td><td>无专属取值，走 <code>lv_obj_add_state</code></td></tr>
+    <tr><td>滑块</td><td>区间内整数</td><td><code>lv_slider_set_range/set_value/get_value</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>复选框和开关用同一个状态位，这是刻意的设计：你的代码里"要不要某功能"的判断，对两者写法完全一样（<code>lv_obj_has_state(..., LV_STATE_CHECKED)</code>）。换控件不用改逻辑——系统分析的回报就在这种地方。</p>
+  </div>
+
+  <!-- ========== 5.5 进度条与综合面板：把控件拼成仪表盘 ========== -->
+  <h2>5.5 进度条与综合面板：把控件拼成仪表盘</h2>
+
+  <p>进度条 <code>lv_bar_create()</code> 是"只读的数值展示"。它的 API 与滑块几乎对称：<code>lv_bar_set_range()</code> 设范围、<code>lv_bar_set_value()</code> 设当前值（同样带 <code>LV_ANIM_ON/OFF</code>）、<code>lv_bar_set_mode()</code> 选模式（<code>LV_BAR_MODE_NORMAL</code> 普通、<code>LV_BAR_MODE_SYMMETRICAL</code> 对称、<code>LV_BAR_MODE_RANGE</code> 区间）。做仪表盘时，bar 的典型用途是把另一个控件的值"可视化"——比如让滑块的值实时反映到一根进度条上。</p>
+
+  <p>现在把前面所有技巧合成一个完整的小面板：顶部一个标题、中间一根滑块、下面一根进度条、最底一个状态标签。全部用 <code>lv_obj_align</code> 锚定到顶部居中的不同垂直位置，代码量不到 20 行——这就是"控件 = 对象 + 专属属性"在实战里的样子。参考 <code>lvgl-master/examples/widgets/bar/</code> 与 <code>examples/widgets/slider/</code>，可以找到大量同类组合。</p>
+
+<pre><code><span class="cmt">/* 进度条：范围 + 值（参考 lv_example_bar_value_range.c 思路） */</span>
+<span class="type">lv_obj_t</span> * bar = <span class="fn">lv_bar_create</span>(scr);
+<span class="fn">lv_obj_set_size</span>(bar, <span class="num">200</span>, <span class="num">16</span>);
+<span class="fn">lv_bar_set_range</span>(bar, <span class="num">0</span>, <span class="num">100</span>);
+<span class="fn">lv_bar_set_value</span>(bar, <span class="num">70</span>, <span class="kw">LV_ANIM_ON</span>);   <span class="cmt">/* 带动画填充到 70% */</span></code></pre>
+
+<pre><code><span class="cmt">/* 综合面板：标题 + 滑块 + 进度条 + 状态标签，纯 align 排布 */</span>
+<span class="type">lv_obj_t</span> * title  = <span class="fn">lv_label_create</span>(scr);
+<span class="fn">lv_label_set_text</span>(title, <span class="str">"Fan Speed"</span>);
+<span class="fn">lv_obj_align</span>(title, <span class="kw">LV_ALIGN_TOP_MID</span>, <span class="num">0</span>, <span class="num">16</span>);
+
+<span class="type">lv_obj_t</span> * slider = <span class="fn">lv_slider_create</span>(scr);
+<span class="fn">lv_obj_set_size</span>(slider, <span class="num">200</span>, <span class="num">16</span>);
+<span class="fn">lv_slider_set_range</span>(slider, <span class="num">0</span>, <span class="num">100</span>);
+<span class="fn">lv_obj_align</span>(slider, <span class="kw">LV_ALIGN_TOP_MID</span>, <span class="num">0</span>, <span class="num">60</span>);
+
+<span class="type">lv_obj_t</span> * bar = <span class="fn">lv_bar_create</span>(scr);
+<span class="fn">lv_obj_set_size</span>(bar, <span class="num">200</span>, <span class="num">16</span>);
+<span class="fn">lv_bar_set_range</span>(bar, <span class="num">0</span>, <span class="num">100</span>);
+<span class="fn">lv_obj_align</span>(bar, <span class="kw">LV_ALIGN_TOP_MID</span>, <span class="num">0</span>, <span class="num">100</span>);
+
+<span class="type">lv_obj_t</span> * status = <span class="fn">lv_label_create</span>(scr);
+<span class="fn">lv_label_set_text</span>(status, <span class="str">"Speed: 0%"</span>);
+<span class="fn">lv_obj_align</span>(status, <span class="kw">LV_ALIGN_TOP_MID</span>, <span class="num">0</span>, <span class="num">140</span>);
+
+<span class="cmt">/* 让滑块驱动进度条与状态文本（事件在第 8 章深入） */</span>
+<span class="fn">lv_obj_add_event_cb</span>(slider, fan_event_cb, <span class="kw">LV_EVENT_VALUE_CHANGED</span>, <span class="kw">NULL</span>);</code></pre>
+
+  <table>
+    <tr><th>控件</th><th>创建函数</th><th>典型用法</th></tr>
+    <tr><td>进度条</td><td><code>lv_bar_create()</code></td><td>只读展示进度，<code>lv_bar_set_value()</code></td></tr>
+    <tr><td>滑块</td><td><code>lv_slider_create()</code></td><td>可拖拽取值，<code>lv_slider_get_value()</code></td></tr>
+    <tr><td>状态标签</td><td><code>lv_label_create()</code></td><td><code>lv_label_set_text_fmt()</code> 实时刷新</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>做一个多控件面板的通用流程：先规划布局（用 align 锚点 + 垂直偏移排成列/行），再逐个创建控件，最后用一个 <code>LV_EVENT_VALUE_CHANGED</code> 回调把"输入控件"连到"输出控件"。先摆得对，再连得上——顺序别反。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：创建并摆放一个按钮 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>在活跃屏幕上创建一个 160×48 的按钮，内部放一个居中的标签，文本为 <code>"Press"</code>，整个按钮对齐到屏幕正中央。写出完整代码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回忆 5.3 的"按钮 + 居中标签"结构：<code>lv_button_create</code> → <code>lv_obj_set_size</code> → <code>lv_obj_center</code>，再 <code>lv_label_create</code> 到按钮上并对齐。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_obj_t * btn = lv_button_create(lv_screen_active()); lv_obj_set_size(btn, 160, 48); lv_obj_center(btn); lv_obj_t * lbl = lv_label_create(btn); lv_obj_set_align(lbl, LV_ALIGN_CENTER); lv_label_set_text(lbl, "Press");</code></p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：滑块与进度条联动 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>写一个小程序：一根滑块（范围 0–100）和一根进度条，拖动滑块时进度条实时同步到滑块的值，并用一个标签显示当前值。需要用到哪些 API？回调里如何拿到滑块当前值？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 5.4 与 5.5 的代码：<code>lv_slider_get_value</code> 读值，<code>lv_bar_set_value</code> 设进度，<code>lv_label_set_text_fmt</code> 刷文本；事件用 <code>LV_EVENT_VALUE_CHANGED</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>回调 <code>static void cb(lv_event_t * e) { lv_obj_t * s = lv_event_get_target_obj(e); int32_t v = lv_slider_get_value(s); lv_bar_set_value(bar, v, LV_ANIM_OFF); lv_label_set_text_fmt(status, "Value: %d", (int)v); }</code>，再 <code>lv_obj_add_event_cb(slider, cb, LV_EVENT_VALUE_CHANGED, NULL)</code>。注意 <code>slider</code>/<code>bar</code>/<code>status</code> 需定义为文件级变量供回调访问。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：复选框与开关组成设置面板 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>做一个两行的小设置面板：一行是复选框"启用通知"（默认勾选），一行是开关"夜间模式"（默认打开）。请写出创建代码，并说明：读取这两个控件当前状态分别该用什么 API？为什么它们的写法一致？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>勾选/打开都是 <code>LV_STATE_CHECKED</code> 状态位：设置用 <code>lv_obj_add_state</code>，读取用 <code>lv_obj_has_state</code>。复选框记得 <code>lv_checkbox_set_text</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p><code>lv_obj_t * cb = lv_checkbox_create(scr); lv_checkbox_set_text(cb, "启用通知"); lv_obj_add_state(cb, LV_STATE_CHECKED);</code>；<code>lv_obj_t * sw = lv_switch_create(scr); lv_obj_add_state(sw, LV_STATE_CHECKED);</code>。读取统一用 <code>lv_obj_has_state(x, LV_STATE_CHECKED)</code>。因为二者都复用 <code>LV_STATE_CHECKED</code> 状态位，逻辑代码与控件类型解耦——这正是 5.4 强调的"换控件不改逻辑"。</p></div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：系统分析——三兄弟的异同 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用本章的"系统分析"方法，对比 button、switch、checkbox 三个控件：它们各自在"被点击后改变什么"？哪些依赖 <code>LV_STATE_CHECKED</code>？为什么按钮通常不依赖它？参考 <code>lvgl-master/examples/widgets/button/lv_example_button_states.c</code> 与 <code>examples/widgets/switch/</code>，试着从源码层面找依据。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>思考三者的"点击语义"：按钮是"瞬时动作"，开关/复选框是"保持状态"。去 examples 里看 <code>LV_STATE_CHECKED</code> 被谁用到；button 例子里的 checked 态是怎么来的（通常要靠事件去 <code>lv_obj_add_state</code>，不是自带的）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content"><p>开关与复选框天生"toggle"：点一下翻转 <code>LV_STATE_CHECKED</code>，状态自持、可再点回来，所以它们内部就依赖这个状态位。按钮的语义是"瞬时触发"——按下释放一次完成动作，无需记住被按下；按钮出现"选中/保持"外观时（如工具栏 toggle 按钮），通常是开发者在 <code>LV_EVENT_CLICKED</code> 里自己调 <code>lv_obj_add_state(btn, LV_STATE_CHECKED)</code>，而非内置。所以依赖 <code>LV_STATE_CHECKED</code> 的是"有持久状态"的控件；区分"瞬时动作 vs 持久状态"，正是选择控件时的第一判断。</p></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

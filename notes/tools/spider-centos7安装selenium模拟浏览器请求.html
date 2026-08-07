@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>spider-centos7安装selenium模拟浏览器请求 - 赫利俄斯的AI实验室</title>
+  <meta name="description" content="安装selenium 安装chrome浏览器 1，配置yum源 在目录/etc/yum.repos.d/ 下新建文件 google chrome.repo 写入以下内容 安装google chrome浏览器 google官方源可能在中国无法">
+  <meta name="keywords" content="">
+  <link rel="canonical" href="https://aigcwei.cn/notes/tools/spider-centos7安装selenium模拟浏览器请求.html">
+  <meta property="og:title" content="spider-centos7安装selenium模拟浏览器请求">
+  <meta property="og:description" content="安装selenium 安装chrome浏览器 1，配置yum源 在目录/etc/yum.repos.d/ 下新建文件 google chrome.repo 写入以下内容 安装google chrome浏览器 google官方源可能在中国无法">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/notes/tools/spider-centos7安装selenium模拟浏览器请求.html">
+  <meta property="og:site_name" content="赫利俄斯的AI实验室">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>spider-centos7安装selenium模拟浏览器请求</h1>
+          <div class="article-meta"><span>2020-07-22</span></div>
+        </header>
+        <div class="article-body">
+<h3>安装selenium</h3>
+<pre><code>
+pip install selenium
+</code></pre>
+<h3>安装chrome浏览器</h3>
+<h5>1，配置yum源</h5>
+<p>在目录/etc/yum.repos.d/ 下新建文件 google-chrome.repo</p>
+<pre><code>
+cd /etc/yum.repos.d/
+vim google-chrome.repo
+</code></pre>
+<p>写入以下内容</p>
+<pre><code>
+[google-chrome]
+name=google-chrome
+baseurl=http://dl.google.com/linux/chrome/rpm/stable/$basearch
+enabled=1
+gpgcheck=1
+gpgkey=https://dl-ssl.google.com/linux/linux_signing_key.pub
+</code></pre>
+<p>安装google chrome浏览器</p>
+<pre><code>
+ yum -y install google-chrome-stable
+</code></pre>
+<p>google官方源可能在中国无法使用，导致安装失败或者在国内无法更新，可以添加以下参数来安装</p>
+<pre><code>
+yum -y install google-chrome-stable --nogpgcheck
+</code></pre>
+<h5>运行chrome</h5>
+<p>找到chrome路径，并做个软连接，方便使用：</p>
+<pre><code>
+which google-chrome-stable
+ln -s xxx /bin/chrome
+</code></pre>
+<p>使用root用户启动chrome示例时会提示添加参数–no-sandbox flag</p>
+<pre><code>
+chrome --no-sandbox flag
+</code></pre>
+<h3>安装chromedriver</h3>
+<p>查看google-chrome的版本</p>
+<pre><code>
+google-chrome --version
+</code></pre>
+<p>chromedriver版本支持的Chrome版本</p>
+<p><a href="https://sites.google.com/a/chromium.org/chromedriver/downloads">chromeDriver官网</a>官网一般比较慢</p>
+<p><a href="http://npm.taobao.org/mirrors/chromedriver/">淘宝镜像</a></p>
+<p>移动chromedriver到/usr/bin</p>
+<h3>selenium+python验证</h3>
+<p>运行一段test.py</p>
+<pre><code>
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+chrome_options = Options()
+chrome_options.add_argument(&quot;--headless&quot;)
+chrome_options.add_argument(&#x27;--disable-gpu&#x27;)
+chrome_options.add_argument(&#x27;--no-sandbox&#x27;)    # 禁止沙箱模式，否则肯能会报错遇到chrome异常
+url=&quot;https://www.west.cn/login.asp&quot;
+brower=webdriver.Chrome(executable_path=&quot;/usr/bin/chromedriver&quot;, chrome_options=chrome_options)
+brower.get(url)
+print(brower.current_url)
+brower.get(&quot;https://www.west.cn/Manager/&quot;)
+print(brower.current_url)
+brower.quit()
+</code></pre>
+<pre><code>
+python3.6 test.py
+</code></pre>
+<p>结果：</p>
+<pre><code>
+https://www.west.cn/login.asp
+https://www.west.cn/login.asp?pageStr=/Manager/Default.asp
+</code></pre>
+<h3>使用pyautogui</h3>
+<p>对于一些元素虽然页面可以点击，但是获取的元素无法点击，我们可以使用pyautogui来模拟鼠标的点击更加的方便</p>
+<pre><code>
+pip install pyautogui
+</code></pre>
+<h3>远程调用</h3>
+<p>使用selenium-server-standalone进行远程调用，<a href="https://www.xiehai.win/java/2019/05/24/selenium-server-standalone.html">详解可以看这篇连接</a></p>
+<p><a href="http://selenium-release.storage.googleapis.com/index.html">selenium-server-standalone下载</a></p>
+<h5>jar8环境的安装</h5>
+<p><a href="https://www.yaosansi.com/post/install-java-jdk-on-centos/">jar环境的安装</a></p>
+<h5>参数配置</h5>
+<p>参数配置方式</p>
+<pre><code>
+# 启动hub
+java -jar selenium-server-standalone-3.141.59.jar -role hub -maxSession 10 -port 4444
+# 启动node
+java -jar  -&quot;Dwebdriver.chrome.driver=C:\\tools\\driver\\chromedriver.exe&quot; selenium-server-standalone-3.141.59.jar -role node  -hub http://localhost:4444/grid/register -port 4445
+</code></pre>
+<p>配置文件方式</p>
+<pre><code>
+# 启动hub
+java -jar selenium-server-standalone-3.141.59.jar -role hub -hubConfig hub.json
+# 启动node
+java -jar selenium-server-standalone-3.141.59.jar -role node -hub http://localhost:4444/grid/register -nodeConfig node.json
+</code></pre>
+<p><code>hub.json</code></p>
+<pre><code>
+{
+  &quot;port&quot;: 4444,
+  &quot;newSessionWaitTimeout&quot;: -1,
+  &quot;servlets&quot;: [],
+  &quot;capabilityMatcher&quot;: &quot;org.openqa.grid.internal.utils.DefaultCapabilityMatcher&quot;,
+  &quot;throwOnCapabilityNotPresent&quot;: true,
+  &quot;nodePolling&quot;: 5000,
+  &quot;cleanUpCycle&quot;: 5000,
+  &quot;timeout&quot;: 60,
+  &quot;browserTimeout&quot;: 60,
+  &quot;maxSession&quot;: 10,
+  &quot;jettyMaxThreads&quot;: -1
+}
+</code></pre>
+<p><code>node.json</code></p>
+<pre><code>
+{
+  &quot;capabilities&quot;: [
+	{
+	  &quot;browserName&quot;: &quot;firefox&quot;,
+	  &quot;marionette&quot;: true,
+	  &quot;maxInstances&quot;: 1,
+	  &quot;seleniumProtocol&quot;: &quot;WebDriver&quot;
+	},
+	{
+	  &quot;browserName&quot;: &quot;chrome&quot;,
+	  &quot;maxInstances&quot;: 3,
+	  &quot;platform&quot;: &quot;WINDOWS&quot;,
+	  &quot;webdriver.chrome.driver&quot;: &quot;D:\\javaproject\\oATFWeb\\External\\chromedriver2.4.1.exe&quot;,
+	  &quot;seleniumProtocol&quot;: &quot;WebDriver&quot;
+	},
+	{
+	  &quot;browserName&quot;: &quot;internet explorer&quot;,
+	  &quot;platform&quot;: &quot;WINDOWS&quot;,
+	  &quot;maxInstances&quot;: 1,
+	  &quot;seleniumProtocol&quot;: &quot;WebDriver&quot;
+	},
+	{
+	  &quot;browserName&quot;: &quot;safari&quot;,
+	  &quot;technologyPreview&quot;: false,
+	  &quot;platform&quot;: &quot;MAC&quot;,
+	  &quot;maxInstances&quot;: 1,
+	  &quot;seleniumProtocol&quot;: &quot;WebDriver&quot;
+	}
+  ],
+  &quot;proxy&quot;: &quot;org.openqa.grid.selenium.proxy.DefaultRemoteProxy&quot;,
+  &quot;maxSession&quot;: 5,
+  &quot;port&quot;: 5555,
+  &quot;register&quot;: true,
+  &quot;registerCycle&quot;: 5000,
+  &quot;hub&quot;: &quot;http://10.12.1.140:4444&quot;,
+  &quot;nodeStatusCheckTimeout&quot;: 5000,
+  &quot;nodePolling&quot;: 5000,
+  &quot;role&quot;: &quot;node&quot;,
+  &quot;unregisterIfStillDownAfter&quot;: 60000,
+  &quot;downPollingLimit&quot;: 2,
+  &quot;debug&quot;: false,
+  &quot;servlets&quot;: [],
+  &quot;withoutServlets&quot;: [],
+  &quot;custom&quot;: {},
+  &quot;browserTimeout&quot;: 60,
+  &quot;timeout&quot;: 60
+}
+</code></pre>
+<p><code>访问http://hub.ip:port/grid/console可以看到node的详细配置</code></p>
+<h5>例子</h5>
+<pre><code>
+from selenium import webdriver
+from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver
+from selenium.webdriver.chrome.options import Options
+import time
+
+
+chrome_options = Options()
+
+proxy=&#x27;58.254.220.116:53579&#x27;
+#chrome_options.add_experimental_option(&#x27;excludeSwitches&#x27;, [&#x27;enable-automation&#x27;])
+#chrome_options.add_argument(&quot;--proxy-server=http://&quot; + proxy)
+chrome_options.add_argument(&quot;start-maximized&quot;)
+chrome_options.add_argument(&quot;enable-automation&quot;)
+chrome_options.add_argument(&quot;--headless&quot;)
+#chrome_options.add_argument(&quot;blink-settings=imagesEnabled=false&quot;)
+chrome_options.add_argument(&#x27;--disable-gpu&#x27;)
+#chrome_options.add_argument(&quot;--dns-prefetch-disable&quot;)
+#chrome_options.add_argument(&quot;--no-proxy-server&quot;)
+chrome_options.add_argument(&#x27;--no-sandbox&#x27;)    # 禁止沙箱模式，否则肯能会报错遇到chrome异常
+#url=&quot;https://www.365365918.com/#/AC/B1/C1/D8/E91032124/F3/I1/&quot;
+#url=&quot;https://www.365365918.com/&quot;
+url=&quot;https://www.betvictor68.mobi/&quot;
+#url=&quot;https://blog.csdn.net/tiantiantdx/article/details/79434550?utm_medium=distribute.pc_relevant.none-task-blog-BlogCommendFromMachineLearnPai2-8.edu_weight&amp;depth_1-utm_source=distribute.pc_relevant.none-task-blog-BlogCommendFromMachineLearnPai2-8.edu_weight&quot;
+#url=&quot;https://juejin.im/entry/5b2ca6316fb9a00e7747561a&quot;
+#url=&quot;https://stackoverflow.com/questions/48450594/selenium-timed-out-receiving-message-from-renderer&quot;
+#url=&quot;https://zhuanlan.zhihu.com/p/111859925&quot;
+#打开google浏览器
+#brower=webdriver.Chrome(executable_path=&quot;/usr/bin/chromedriver&quot;, chrome_options=chrome_options)
+brower=RemoteWebDriver(command_executor=&quot;http://192.168.50.74:4444/wd/hub&quot;, desired_capabilities=chrome_options.to_capabilities())
+#访问地址
+brower.get(url)
+#设置请求的时间，等待js执行完毕
+#time.sleep(5)
+brower.implicitly_wait(30);
+pageSource=brower.find_element_by_xpath(&quot;//*&quot;).get_attribute(&quot;outerHTML&quot;)
+#pageSource=brower.execute_script(&quot;return document.documentElement.outerHTML&quot;)
+fo = open(&quot;/root/bet365.html&quot;, &quot;w&quot;)
+fo.write(pageSource)
+fo.close()
+#print(pageSource)
+#退出Google浏览器
+brower.quit()
+</code></pre>
+<h3>windows搭建python的环境</h3>
+<p><a href="https://www.python.org/downloads/windows/">直接到官网</a>下载对应版本的</p>
+<p>submit text3执行python</p>
+<h5>设置build</h5>
+<pre><code>
+打开sublime，依次点击菜单Tools--&gt;Build System--&gt;New Build System
+</code></pre>
+<pre><code>
+{
+	&quot;cmd&quot;: [&quot;D:\helios\software\python\python.exe&quot;, &quot;-u&quot;, &quot;$file&quot;],
+	&quot;file_regex&quot;: &quot;[ ]File \&quot;(…?)\&quot;, line ([0-9]*)&quot;,
+	&quot;selector&quot;: &quot;source.python&quot;
+}
+</code></pre>
+<pre><code>
+ctrl + b来执行python
+</code></pre>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

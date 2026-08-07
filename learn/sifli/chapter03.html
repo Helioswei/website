@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章：板级配置：v11 / v12 / SPI 多板 - SF32 电子书移植实战</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-sifli" data-track="sifli" data-chapter="3" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：板级配置——v11 / v12 / SPI 多板</h1>
+  <p class="chapter-subtitle">同一块主控，凭什么能配出三种不同的"身子"？</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一章我们把『车』（构建工具）造出来了，这章该把『方向盘』——板级配置——摸透了。同一颗 SF32 芯片，装到 V1.1、V1.2 上长得一模一样，可一旦接上 SPI 墨水屏，连引脚都得换一套。匠人手里的同一把凿子，换料就得换刀。把『哪块板、哪块屏、走哪个口』这条链路记牢，后面写驱动、改功能才不至于找错门。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 多板支持的设计：一块芯片，三种"板身" ========== -->
+  <h2>3.1 多板支持的设计：一块芯片，三种"板身"</h2>
+
+  <p>先看这张"家族照"：仓库的 <code>epdiy-epub/</code> 下躺着 <strong>三块开发板的板级配置</strong>，外加一份公共配置——<code>sf32-oed-epd_v11</code>（V1.1 板）、<code>sf32-oed-epd_v12</code>（V1.2 板）、<code>sf32-oed-epd_v12_spi</code>（V1.2 板、但墨水屏走 <strong>SPI</strong> 接口）、以及 <code>sf32-oed-epd_base</code>（V1.1 与 V1.2 共用的软件板级配置）。为什么同一颗 <code>SF32LB52X</code> 主控要配三套"身子"？因为<strong>硬件版本不同、屏幕接口不同</strong>：V1.1 与 V1.2 的 8-bit 并行墨水屏电路几乎一样，所以共用一份 base；而 v12_spi 换成了更小的 SPI 墨水屏，接口引脚完全不同，只能自成一派。</p>
+
+  <p>README 在「硬件连接」一节把话说得很直白：<strong>V1.1 与 V1.2 可共用 <code>sf32-oed-epd_base</code> 软件板级配置</strong>。这份 base 里藏着两样"公共资产"：一是 <code>Kconfig.board</code>，定义了 8-bit 并行屏的信号引脚（D0-D7、CLK、LE、OE、SPH、STV、CPV、GMODE）、TPS 电源管理芯片的 I2C 引脚、触控芯片引脚与按键引脚；二是 <code>bsp_*.c</code> 这一批板级驱动（<code>bsp_init.c</code> 做时钟与启动、<code>bsp_pinmux.c</code> 做引脚复用、<code>bsp_power.c</code> 做上下电、<code>bsp_lcd_tp.c</code> 做屏与触控的电源管理）。v11 与 v12 的 <code>Kconfig.board</code> 都只有一行——把 base 引进来，剩下的引脚差异靠各自 <code>hcpu/</code> 下的 <code>Kconfig.board</code> 与 <code>board.conf</code> 再补。</p>
+
+  <table>
+    <tr><th>目标板</th><th>板级配置目录</th><th>是否共用 base</th><th>屏幕接口</th><th>默认屏（Kconfig.proj）</th></tr>
+    <tr><td>V1.1</td><td><code>sf32-oed-epd_v11</code></td><td>是（<code>source "../sf32-oed-epd_base/Kconfig.board"</code>）</td><td>8-bit 并行</td><td>YZC085 1032×758</td></tr>
+    <tr><td>V1.2</td><td><code>sf32-oed-epd_v12</code></td><td>是（同上）</td><td>8-bit 并行</td><td>YZC085 1032×758</td></tr>
+    <tr><td>V1.2 + SPI</td><td><code>sf32-oed-epd_v12_spi</code></td><td>否（自带一套 <code>bsp_*.c</code>）</td><td>SPI 串行</td><td>OPM037A3 240×416</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># epdiy-epub/README.md · 「硬件连接」</span>
+- 将开发板与墨水屏通过对应连接器连接，注意排线方向。
+- SF32-OED-EPD_V1.1 与 SF32-OED-EPD_V1.2 可共用 sf32-oed-epd_base 软件板级配置。</code></pre>
+
+  <pre><code><span class="cmt"># sf32-oed-epd_v11/Kconfig.board —— 全部内容就这一行：把 base 引进来</span>
+source <span class="str">"../sf32-oed-epd_base/Kconfig.board"</span>
+
+<span class="cmt"># sf32-oed-epd_v12_spi/Kconfig.board —— 自带头文件，不引用 base</span>
+config ASIC
+    bool
+    default y
+config EPD_SDA
+    int
+    default  <span class="num">5</span>
+config EPD_SCK
+    int
+    default  <span class="num">4</span>
+<span class="cmt"># ...（EPD_DC / EPD_RES / EPD_CS / EPD_BUSY 等 SPI 信号，后面 3.2 再展开）</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>判断"一块板能不能复用 base"，只看一件事：<strong>它和 base 那块的 EPD 引脚是不是同一套。</strong>V1.1、V1.2 都是 8-bit 并行（D0-D7 + LE/OE/SPH/STV/CPV/GMODE），信号一致，所以共用；v12_spi 换成 SPI 的 SDA/SCK/DC/CS/RES/BUSY，引脚对不上，只能自己带一份 <code>bsp_*.c</code>。所以别被"同系列"骗了——<strong>接口变了，base 就变了。</strong></p>
+  </div>
+
+  <!-- ========== 3.2 板级目录结构：Kconfig.board、hcpu/lcpu、ptab.json、SConscript ========== -->
+  <h2>3.2 板级目录结构：Kconfig.board、hcpu/lcpu、ptab.json、SConscript</h2>
+
+  <p>翻开 <code>sf32-oed-epd_v11/</code>，它只有五个东西：<code>Kconfig.board</code>（引脚配置入口）、<code>SConscript</code>（该板源文件的编译入口）、<code>hcpu/</code>（<strong>HCPU</strong>，高性能核的配置）、<code>lcpu/</code>（<strong>LCPU</strong>，低功耗核的配置）、<code>ptab.json</code>（<strong>Flash 分区表</strong>，决定固件、文件系统、波形表各自烧在哪个地址）。<code>hcpu/</code> 里是主核的配置四件套：<code>board.conf</code>（开启哪些外设驱动）、<code>rtconfig.py</code>（芯片型号 / 核 / 目标名）、<code>Kconfig.board</code>（定义 <code>BSP_USING_BOARD_*</code> 板宏并再次引用 base）、<code>custom_mem_map.h</code>（Flash 分区的 FAL 映射）。<code>lcpu/</code> 结构类似，但内容极简。</p>
+
+  <p>最值得看的两处：<strong>hcpu 与 lcpu 的分工</strong>和<strong>lcpu 的"减法"</strong>。SF32LB52X 是双核 SoC——HCPU 跑应用（主循环、EPUB 解析、界面渲染都在它上面），LCPU 是个低功耗协处理器，系统休眠时用极小功耗盯着按键、定时器，把 HCPU 放回睡眠。所以 <code>lcpu/board.conf</code> 几乎全被注释掉了（没有 Finsh、没有文件系统、没有串口、没有引脚、没有 DMA）——它不需要那些外设，越精简越省电。而 <code>ptab.json</code> 里除了常规的 <code>bootloader</code>、<code>dfu</code>（升级区）、<code>HCPU_FLASH_CODE</code>（主固件）、<code>BUILTIN_RESOURCE</code>（内置资源）、<code>fs_root</code>（文件系统镜像，装样书），还专门划了一块 <code>wave_table</code>（标签 <code>CUSTOM_EPD_WAVE_TABLE</code>）——那是给墨水屏波形文件预留的，第 4 章会用到。</p>
+
+  <table>
+    <tr><th>目录 / 文件</th><th>职责</th></tr>
+    <tr><td><code>Kconfig.board</code></td><td>板级引脚宏：EPD 接口、触控、TPS 电源、按键</td></tr>
+    <tr><td><code>SConscript</code></td><td>该板 <code>.c</code> 文件的 SCons 编译入口（v11/v12 会条件式带上 base）</td></tr>
+    <tr><td><code>hcpu/</code></td><td>主核配置：<code>board.conf</code>、<code>rtconfig.py</code>、<code>Kconfig.board</code>、<code>custom_mem_map.h</code></td></tr>
+    <tr><td><code>lcpu/</code></td><td>低功耗核配置：极简 <code>board.conf</code>、<code>rtconfig.py</code></td></tr>
+    <tr><td><code>ptab.json</code></td><td>Flash 分区表：flash2 / psram1 / hpsys_ram / lpsys_ram</td></tr>
+    <tr><td><code>sf32-oed-epd_base/*.c</code></td><td>公共板级驱动：<code>bsp_init.c</code>、<code>bsp_pinmux.c</code>、<code>bsp_power.c</code>、<code>bsp_lcd_tp.c</code></td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># sf32-oed-epd_v11/hcpu/Kconfig.board：定义"这块板"的唯一宏，再引 base</span>
+config BSP_USING_BOARD_SF32_OED_EPD_V11
+    bool
+    select SOC_SF32LB52X
+    select BF0_HCPU
+    default y
+
+rsource <span class="str">"../../sf32-oed-epd_base/Kconfig.board"</span></code></pre>
+
+  <pre><code><span class="cmt"># sf32-oed-epd_v11/lcpu/board.conf（低功耗核：外设几乎全关）</span>
+<span class="cmt"># CONFIG_RT_USING_FINSH is not set</span>
+<span class="cmt"># CONFIG_RT_USING_DFS is not set</span>
+<span class="cmt"># CONFIG_RT_USING_SERIAL is not set</span>
+<span class="cmt"># CONFIG_RT_USING_PIN is not set</span>
+<span class="cmt"># CONFIG_BSP_USING_MPI is not set</span>
+<span class="cmt"># CONFIG_BSP_USING_DMA is not set</span>
+
+<span class="cmt"># sf32-oed-epd_v11/lcpu/rtconfig.py</span>
+CORE = <span class="str">"LCPU"</span>
+CHIP = <span class="str">'SF32LB52X'</span>
+TARGET_NAME = <span class="str">'lcpu'</span></code></pre>
+
+  <pre><code><span class="cmt">// sf32-oed-epd_v11/ptab.json（节选：文件系统区与波形表区）</span>
+{
+    <span class="str">"offset"</span>: <span class="str">"0x00E00000"</span>,
+    <span class="str">"max_size"</span>: <span class="str">"0x00C0000"</span>,
+    <span class="str">"img"</span>: <span class="str">"fs_root"</span>,
+    <span class="str">"tags"</span>: [<span class="str">"FS_REGION"</span>]
+},
+{
+    <span class="str">"offset"</span>: <span class="str">"0x00EC0000"</span>,
+    <span class="str">"max_size"</span>: <span class="str">"0x00020000"</span>,
+    <span class="str">"img"</span>: <span class="str">"wave_table"</span>,
+    <span class="str">"tags"</span>: [<span class="str">"CUSTOM_EPD_WAVE_TABLE"</span>]
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>读板级配置，抓住"一主一从一表"三个抓手：<strong>hcpu 是主</strong>（应用真正用的外设都在 <code>hcpu/board.conf</code> 里开），<strong>lcpu 是从</strong>（低功耗协处理器，能不开就不开），<strong>ptab.json 是地图</strong>（固件烧哪、样书烧哪、波形烧哪）。尤其留意 <code>board.conf</code> 里的 <code>CONFIG_BSP_USING_EPIC=y</code>（EPIC 是墨水屏图像加速引擎，第 4 章的主角之一）与 <code>CONFIG_BSP_USING_LCD=y</code>——它们决定了屏驱代码是否被编进来。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>别看 <code>lcpu/board.conf</code> 全是"# ... is not set"，就以为它不重要。<strong>LCPU 固件是要作为镜像编进主固件的</strong>（第 2 章说过 <code>AddLCPU(...)</code>）。一旦在 lcpu 里误开了带中断的外设，反而可能干扰低功耗唤醒。改低功耗行为时，第一优先级是去查 <code>lcpu/</code>，而不是 HCPU。</p>
+  </div>
+
+  <!-- ========== 3.3 Kconfig 与板级宏：Custom LCD driver 的四块屏 ========== -->
+  <h2>3.3 Kconfig 与板级宏：Custom LCD driver 的四块屏</h2>
+
+  <p>先把 <strong>Kconfig</strong> 说人话：它是一种<strong>文本化的"配置菜单"格式</strong>（源自 Linux 内核生态，RT-Thread 也用它），用 <code>config</code> / <code>choice</code> / <code>select</code> 等关键字描述"有哪些开关、默认开不开、选了一个会不会连带开别的"，再由 <code>menuconfig</code> 把菜单渲染出来。本项目里 <code>project/Kconfig.proj</code> 放项目级配置，各板的 <code>Kconfig.board</code> 放板级引脚——构建时先按 <code>--board</code> 找到板配置，再和项目配置合起来生成最终的编译开关（<code>CONFIG_*</code> 宏）。这就是第 2 章那句"配置放哪比背命令重要"的落点。</p>
+
+  <p>整份 <code>Kconfig.proj</code> 里，和屏幕直接相关的核心是一段 <code>choice "Custom LCD driver"</code>——一个只能选一项的选项组，让用户在 <strong>四块屏</strong>里挑一块。前三块是 8-bit 并行大屏（YZC085 V1.1 版、YZC085 V1.2 版、R7D005 1448×1072），第四块 <code>LCD_USING_EPD_OPMO37A3</code> 是 <strong>SPI</strong> 小屏（240×416）。每个选项用 <code>select</code> 自动连带打开它依赖的宏：8-bit 屏 <code>select BSP_LCDC_USING_EPD_8BIT</code>（这条总线宏正好是 <code>display_dbi</code> 驱动被编进来的条件，见 3.4），SPI 屏 <code>select LCD_USING_EPD_SPI</code>；触控芯片也跟着换——V1.1 配 <code>TSC_USING_FT5446U_V01</code>，V1.2 配 <code>TSC_USING_GT967</code>，SPI 小屏配 <code>TSC_USING_FT6336U</code>。</p>
+
+  <p>选完屏，还要告诉系统"这屏多大、多密"——三个宏 <code>LCD_HOR_RES_MAX</code>（横向像素）、<code>LCD_VER_RES_MAX</code>（纵向像素）、<code>LCD_DPI</code>（每英寸点数）按屏幕宏分别给默认值。这两个分辨率宏不是摆设：帧缓冲、屏驱的"每行时钟数"（<code>LCD_HOR_RES_MAX/4</code>）、行数（<code>LCD_VER_RES_MAX</code>）全由它们驱动，第 4 章会直接看到它们出现在时序配置里。</p>
+
+  <table>
+    <tr><th>屏幕宏</th><th>分辨率</th><th>DPI</th><th>总线宏</th><th>触控芯片</th></tr>
+    <tr><td><code>LCD_USING_EPD_YZC085_V100</code></td><td>1032×758</td><td>300</td><td><code>BSP_LCDC_USING_EPD_8BIT</code></td><td>FT5446U_V01</td></tr>
+    <tr><td><code>LCD_USING_EPD_YZC085_V100_V12</code></td><td>1032×758</td><td>300</td><td><code>BSP_LCDC_USING_EPD_8BIT</code></td><td>GT967</td></tr>
+    <tr><td><code>LCD_USING_EPD_R7D005</code></td><td>1448×1072</td><td>315</td><td><code>BSP_LCDC_USING_EPD_8BIT</code></td><td>FT5446U_V01</td></tr>
+    <tr><td><code>LCD_USING_EPD_OPMO37A3</code></td><td>240×416</td><td>130</td><td><code>LCD_USING_EPD_SPI</code></td><td>FT6336U</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># project/Kconfig.proj · choice "Custom LCD driver"（节选）</span>
+choice
+    prompt <span class="str">"Custom LCD driver"</span>
+    default LCD_USING_EPD_YZC085_V100 if BSP_USING_BOARD_SF32_OED_EPD_V11
+    default LCD_USING_EPD_YZC085_V100_V12 if BSP_USING_BOARD_SF32_OED_EPD_V12
+
+    config LCD_USING_EPD_YZC085_V100
+        bool <span class="str">"6.0 rect electronic paper display(EPD YZC085_V1.05 1032x758) for V1.1 board"</span>
+        select TSC_USING_FT5446U_V01 if BSP_USING_TOUCHD
+        select LCD_USING_OPM060D
+        select BSP_LCDC_USING_EPD_8BIT
+endchoice</code></pre>
+
+  <pre><code><span class="cmt"># project/Kconfig.proj · 分辨率与 DPI 宏（按屏给出默认值）</span>
+config LCD_HOR_RES_MAX
+    int
+    default <span class="num">1448</span> if LCD_USING_EPD_R7D005
+    default <span class="num">1032</span> if LCD_USING_EPD_YZC085_V100
+    default <span class="num">1032</span> if LCD_USING_EPD_YZC085_V100_V12
+    default <span class="num">240</span> if LCD_USING_EPD_OPMO37A3
+
+config LCD_VER_RES_MAX
+    int
+    default <span class="num">1072</span> if LCD_USING_EPD_R7D005
+    default <span class="num">758</span> if LCD_USING_EPD_YZC085_V100
+    default <span class="num">758</span> if LCD_USING_EPD_YZC085_V100_V12
+    default <span class="num">416</span> if LCD_USING_EPD_OPMO37A3
+
+config LCD_DPI
+    int
+    default <span class="num">315</span> if LCD_USING_EPD_R7D005
+    default <span class="num">300</span> if LCD_USING_EPD_YZC085_V100
+    default <span class="num">130</span> if LCD_USING_EPD_OPMO37A3</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>想看这四块屏是怎么"长"出来的？在 <code>epdiy-epub/project</code> 下跑一次 <code>scons --board=sf32-oed-epd_v11 --board_search_path=.. --menuconfig</code>，进入 <code>Custom LCD driver</code> 子菜单就能看到它们，且默认项会自动选成 <code>YZC085_V100</code>——因为 <code>default ... if BSP_USING_BOARD_SF32_OED_EPD_V11</code>。改 <code>--board</code>，默认项跟着变。这就是"板宏决定默认屏"的直观演示。</p>
+  </div>
+
+  <!-- ========== 3.4 不同板怎么选：--board 与 SCons 的挂钩 ========== -->
+  <h2>3.4 不同板怎么选：--board 与 SCons 的挂钩</h2>
+
+  <p>第 2 章已经见过编译命令，这里把"选板"的机制补完整：<code>scons --board=sf32-oed-epd_v11 --board_search_path=.. -j8</code> 里的 <code>--board</code> 是板配置目录名，<code>--board_search_path=..</code> 告诉 SCons 去哪找它（<code>..</code> 指 <code>epdiy-epub/</code> 根目录，四套配置都在那）。编译产物落在 <code>project/build_sf32-oed-epd_v11_hcpu/</code> 这类 <code>build_&lt;板名&gt;_hcpu</code> 目录里，烧录时用其中自动生成的 <code>uart_download.bat</code>，按提示输入串口号即可。想换板，把 <code>--board</code> 换成 <code>sf32-oed-epd_v12</code> 或 <code>sf32-oed-epd_v12_spi</code> 就行——<strong>代码不用改一行，改的是"选哪块板"</strong>。</p>
+
+  <p>这套"换板不改代码"是怎么挂钩的？链路分三步。第一步，<code>hcpu/Kconfig.board</code> 定义唯一板宏（<code>BSP_USING_BOARD_SF32_OED_EPD_V11</code> / <code>V12</code> / <code>V12_SPI</code>）。第二步，各板 <code>SConscript</code> 用 <code>depend = ['BSP_USING_BOARD_...']</code> 声明"只有这个板宏为真时才编译我"，v11/v12 还<strong>条件式地</strong>把 base 的 <code>SConscript</code> 追加进来（所以 base 只编进 v11/v12，不编进 v12_spi）。第三步，屏幕驱动目录 <code>display_dbi</code> / <code>display_spi</code> 各自用 <code>depend</code> 挂到 3.3 的总线宏上——<strong>选 8-bit 屏就编 DBI 驱动，选 SPI 屏就编 SPI 驱动</strong>。三张表串起来：板宏 → 默认屏宏 → 总线宏 → 驱动目录。</p>
+
+  <table>
+    <tr><th>--board 值</th><th>板宏</th><th>默认屏宏</th><th>编入的驱动目录</th></tr>
+    <tr><td><code>sf32-oed-epd_v11</code></td><td><code>BSP_USING_BOARD_SF32_OED_EPD_V11</code></td><td><code>LCD_USING_EPD_YZC085_V100</code></td><td><code>display_dbi</code></td></tr>
+    <tr><td><code>sf32-oed-epd_v12</code></td><td><code>BSP_USING_BOARD_SF32_OED_EPD_V12</code></td><td><code>LCD_USING_EPD_YZC085_V100_V12</code></td><td><code>display_dbi</code></td></tr>
+    <tr><td><code>sf32-oed-epd_v12_spi</code></td><td><code>BSP_USING_BOARD_SF32_OED_EPD_V12_SPI</code></td><td><code>LCD_USING_EPD_OPMO37A3</code></td><td><code>display_spi</code></td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># epdiy-epub/project 下执行（README · 「编译与烧录」）</span>
+scons --board=sf32-oed-epd_v11 --board_search_path=.. -j8
+<span class="cmt"># 编译完成后下载（批处理脚本，按提示输入串口号）</span>
+build_sf32-oed-epd_v11_hcpu\uart_download.bat
+
+<span class="cmt"># README · 「menuconfig」</span>
+scons --board=sf32-oed-epd_v11 --board_search_path=.. --menuconfig</code></pre>
+
+  <pre><code><span class="cmt"># sf32-oed-epd_v11/SConscript：只有本板宏为真才编，且条件式带上 base</span>
+group = DefineGroup(<span class="str">'Drivers'</span>, src, depend = [<span class="str">'BSP_USING_BOARD_SF32_OED_EPD_V11'</span>], CPPPATH = path)
+<span class="kw">if</span> GetDepend(<span class="str">'BSP_USING_BOARD_SF32_OED_EPD_V11'</span>):
+    group = group + SConscript(os.path.join(cwd, <span class="str">'../sf32-oed-epd_base/SConscript'</span>), variant_dir=<span class="str">"base"</span>, duplicate=<span class="num">0</span>)</code></pre>
+
+  <pre><code><span class="cmt"># src/boards/display_dbi/SConscript（8-bit 并行，依赖总线宏）</span>
+group = DefineGroup(<span class="str">'Drivers'</span>, src, depend = [<span class="str">'BSP_LCDC_USING_EPD_8BIT'</span>], CPPPATH = CPPPATH)
+
+<span class="cmt"># src/boards/display_spi/SConscript（SPI 串行，依赖总线宏）</span>
+group = DefineGroup(<span class="str">'Drivers'</span>, src, depend = [<span class="str">'LCD_USING_EPD_SPI'</span>], CPPPATH = CPPPATH)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>把 3.2-3.4 串成一句话记住：<strong>hcpu/Kconfig.board 认板（板宏）→ Kconfig.proj 认屏（屏宏 + 分辨率）→ SConscript 认口（总线宏）→ display_dbi/display_spi 干活。</strong>以后你给项目换屏、换板，脑子里先走这条链，就知道该改哪个文件、为什么其它文件不用动。</p>
+  </div>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>README「硬件连接」特意强调<strong>"注意排线方向"</strong>——这不是客套话。8-bit 并行屏的排线（D0-D7 + 控制信号）和 SPI 屏的排线（SDA/SCK/DC/CS/RES/BUSY）物理结构不同，插反轻则点不亮、重则烧板。选板时先看清自己手里是 V1.1/V1.2 并行屏还是 SPI 小屏，再决定用哪个 <code>--board</code>。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：术语三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>板级配置</code>、<code>Kconfig</code>、<code>--board</code>。要求先说自己的理解，再对照 3.1 / 3.3 / 3.4 检查有没有把"板 / 配置格式 / 选板命令"三个概念搞混。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>板级配置是"某块板"的硬件差异清单；Kconfig 是描述配置菜单的文本格式；--board 是 SCons 里选板的命令行参数。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>板级配置：针对某一块具体开发板的引脚、外设、内存布局等硬件差异整理成的配置集合，编译时据此生成合适固件；本项目有 <code>v11</code> / <code>v12</code> / <code>v12_spi</code> 三套，V1.1/V1.2 共用 <code>base</code>。Kconfig：文本化的配置菜单格式（源自 Linux/RT-Thread 生态），用 <code>config</code> / <code>choice</code> / <code>select</code> 描述选项树，配合 menuconfig 渲染。--board：<code>scons</code> 命令里指定板配置目录名的参数，配合 <code>--board_search_path</code> 定位板目录。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：四块屏对照 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>对照 3.3，把 <code>Kconfig.proj</code> 里四块屏的分辨率、DPI、总线宏列成一张表，并指出哪一块走 SPI、分别配哪颗触控芯片。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看 <code>choice "Custom LCD driver"</code> 的四个 <code>config</code>，以及 <code>LCD_HOR_RES_MAX / LCD_VER_RES_MAX / LCD_DPI</code> 的 <code>default ... if</code> 分支。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>YZC085_V100（V1.1）：1032×758、DPI 300、<code>BSP_LCDC_USING_EPD_8BIT</code>、FT5446U_V01；YZC085_V100_V12（V1.2）：1032×758、DPI 300、8BIT、GT967；R7D005：1448×1072、DPI 315、8BIT、FT5446U_V01；OPMO37A3（SPI）：240×416、DPI 130、<code>LCD_USING_EPD_SPI</code>、FT6336U。走 SPI 的是 OPM037A3，其余三块都是 8-bit 并行。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：为什么 v12_spi 不复用 base <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>读 <code>sf32-oed-epd_v11/Kconfig.board</code> 与 <code>sf32-oed-epd_v12_spi/Kconfig.board</code>，指出两者的 EPD 信号引脚各是什么、分别对应哪种接口；再解释为什么 v12_spi 必须自带一套 <code>bsp_*.c</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>v11 的 base 里是 EPD_D0-D7 / EPD_LE / EPD_OE / EPD_SPH / EPD_STV / EPD_CPV / EPD_GMODE；v12_spi 里是 EPD_SDA / EPD_SCK / EPD_DC / EPD_RES / EPD_CS / EPD_BUSY。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>v11（经 base）定义的是 8-bit 并行接口信号：8 根数据线 D0-D7 加 CLK、LE（锁存）、OE（输出使能）、SPH、STV、CPV、GMODE 等控制线；v12_spi 定义的是 SPI 串行接口信号：SDA（数据）、SCK（时钟）、DC（数据/命令）、RES（复位）、CS（片选）、BUSY（忙）。两者除了按键与电源引脚重合，屏接口引脚完全不同，<code>bsp_lcd_tp.c</code>、<code>bsp_pinmux.c</code> 里的引脚复用逻辑必须重写，所以 v12_spi 不复用 base，而是自带一份——这正印证了 3.1 那句"接口变了，base 就变了"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：新增一块屏的推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>假设要新增一块 8-bit 并行、分辨率 1200×800、DPI 264 的墨水屏给 V1.2 板用。按 3.3-3.4 的链路，列出你需要改动的全部位置（含 Kconfig.proj 里要新增的内容），并说明为什么 <code>display_dbi</code> 目录本身可能不用改。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从"认屏"到"认口"想：choice 里加一个新 <code>config</code> 并 <code>select BSP_LCDC_USING_EPD_8BIT</code>；分辨率/DPI 加 <code>default ... if</code>；屏驱配置文件参照第 4 章模板。注意 1200×800 仍走 8-bit 并行口，总线宏与 DBI 目录不变。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(1) <code>project/Kconfig.proj</code>：在 <code>choice "Custom LCD driver"</code> 下新增一个 <code>config LCD_USING_EPD_XXX_V12</code>，<code>bool "6.0 rect ... 1200x800 for V1.2 board"</code>，并 <code>select</code> 对应触控、<code>select LCD_USING_OPM060D</code>、<code>select BSP_LCDC_USING_EPD_8BIT</code>；(2) 同一文件给 <code>LCD_HOR_RES_MAX</code> 加 <code>default 1200 if ...</code>、<code>LCD_VER_RES_MAX</code> 加 <code>default 800 if ...</code>、<code>LCD_DPI</code> 加 <code>default 264 if ...</code>；(3) 可选：在 <code>choice</code> 的 <code>default ... if BSP_USING_BOARD_SF32_OED_EPD_V12</code> 换成本新屏宏；(4) 新建屏驱配置文件（复制 <code>epd_configs_opm060d.c</code> 为模板，改波形数组、时序、VCOM，见第 4 章）。因为这块新屏仍走 <code>BSP_LCDC_USING_EPD_8BIT</code> 总线，<code>display_dbi/epd_display.c</code> 的接口与 <code>SConscript</code> 的 <code>depend</code> 都不用动——这就是"认口"把驱动与屏解耦的好处。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>

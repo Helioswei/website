@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第9章：数据与网络 - Kotlin Android 开发教程</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body class="track-kotlin" data-track="kotlin" data-chapter="09" data-root="../">
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：数据与网络</h1>
+  <p class="chapter-subtitle">从本地数据库到远程 API，让你的 App 拥有真正的"灵魂" -- 数据</p>
+
+  <!-- ========== 导师卡片 ========== -->
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>柯南</h3>
+        <p class="mentor-method">追踪数据流，每条线索不放过</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>真相永远只有一个 -- 数据的流向也一样。一条数据从 API 出发，途经 Repository，在 ViewModel 的案件档案中汇总，最终呈堂到 UI 的法庭上。每个环节都是一条线索，每个线索都值得追踪。今天，我们就像侦探一样，顺着数据流向一路追查，从 ViewModel 的笔记本、Room 的证物柜，到 Retrofit 的情报网络，把整条链路查个水落石出。</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 ViewModel 与状态管理 ========== -->
+  <h2>9.1 ViewModel 与状态管理</h2>
+
+  <p>在前面的章节中，我们学会了用 Jetpack Compose 构建漂亮的 UI。但如果你试过旋转屏幕，你就会发现一个关键线索被遗漏了 -- <strong>数据不见了</strong>。计数器归零、表单清空、列表消失。这就像侦探在办案时，笔记本随手一丢，所有追踪记录全部丢失。原因是 Android 系统在屏幕旋转时会销毁并重建 Activity，而你把案件档案（数据）放在了一个随时可能被销毁的地方。</p>
+
+  <h3>为什么需要 ViewModel</h3>
+
+  <p>Android 的 Activity 和 Composable 函数有个致命缺陷：它们像临时出场的证人，随时可能被系统"请走"。常见的触发场景包括：</p>
+
+  <ul>
+    <li><strong>屏幕旋转</strong>：系统销毁当前 Activity，用新的配置重建</li>
+    <li><strong>系统内存不足</strong>：后台 Activity 可能被系统回收</li>
+    <li><strong>语言/主题切换</strong>：配置变更导致重建</li>
+  </ul>
+
+  <p>如果把数据直接放在这些组件中，每次重建都意味着案件档案丢失。我们需要一个<strong>比证人更可靠的地方</strong>来保管案件资料 -- 这就是 <code>ViewModel</code>，侦探的专属笔记本。</p>
+
+  <h3>ViewModel 的生命周期</h3>
+
+  <p><code>ViewModel</code> 的生命周期与 Activity 截然不同。追踪它的存活轨迹你会发现：当 Activity 因为配置变更（如旋转屏幕）而重建时，<code>ViewModel</code> 不会被销毁 -- 它会一直存活，直到 Activity <strong>真正结束</strong>（用户按返回键退出，或调用 <code>finish()</code>）。</p>
+
+  <div class="tip">
+    <div class="tip-title">生命周期对比</div>
+    <p>把 Activity 想象成办案的"外勤侦探"，配置变更时外勤人员轮换了，但 ViewModel 是"案件档案室"，无论外勤怎么换，案件档案始终完好保存。只有当案件真正结案（Activity 被 finish）时，档案才会销毁。</p>
+  </div>
+
+  <h3>创建 ViewModel</h3>
+
+  <p>首先，在 <code>build.gradle.kts</code> 中添加必要的依赖 -- 就像侦探出发前先准备好装备：</p>
+
+<pre><code><span class="cmt">// build.gradle.kts (Module)</span>
+<span class="fn">dependencies</span> {
+    <span class="fn">implementation</span>(<span class="str">"androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0"</span>)
+    <span class="fn">implementation</span>(<span class="str">"androidx.lifecycle:lifecycle-runtime-compose:2.8.0"</span>)
+}</code></pre>
+
+  <p>然后建立你的第一个案件档案室 -- ViewModel 类：</p>
+
+<pre><code><span class="kw">import</span> androidx.lifecycle.ViewModel
+<span class="kw">import</span> kotlinx.coroutines.flow.MutableStateFlow
+<span class="kw">import</span> kotlinx.coroutines.flow.StateFlow
+<span class="kw">import</span> kotlinx.coroutines.flow.asStateFlow
+
+<span class="kw">class</span> <span class="type">CounterViewModel</span> : <span class="type">ViewModel</span>() {
+
+    <span class="cmt">// 机密档案，只有档案室内部可以修改</span>
+    <span class="kw">private val</span> _count = <span class="type">MutableStateFlow</span>(<span class="num">0</span>)
+
+    <span class="cmt">// 对外公开的只读汇报，UI 层只能查阅，不能篡改</span>
+    <span class="kw">val</span> count: <span class="type">StateFlow</span>&lt;<span class="type">Int</span>&gt; = _count.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">fun</span> <span class="fn">increment</span>() {
+        _count.value++
+    }
+
+    <span class="kw">fun</span> <span class="fn">decrement</span>() {
+        _count.value--
+    }
+
+    <span class="kw">fun</span> <span class="fn">reset</span>() {
+        _count.value = <span class="num">0</span>
+    }
+}</code></pre>
+
+  <h3>StateFlow：案件档案的追踪通道</h3>
+
+  <p>在上面的代码中，我们使用了 <code>StateFlow</code> 来管理状态。你可以把它理解为一条从档案室到法庭（UI）的<strong>实时汇报通道</strong>。这是 Kotlin 协程库提供的一个特殊 Flow，非常适合追踪数据流向：</p>
+
+  <ul>
+    <li><code>MutableStateFlow</code>：可变的情报通道，ViewModel 内部用来更新案件进展</li>
+    <li><code>StateFlow</code>：只读的汇报通道，暴露给 UI 层观察</li>
+    <li>它始终持有一份<strong>最新情报</strong>，新的订阅者接入时立即收到当前状态</li>
+    <li>只有当情报<strong>真正发生变化</strong>时才会通知所有订阅者</li>
+  </ul>
+
+  <div class="tip">
+    <div class="tip-title">为什么用下划线前缀？</div>
+    <p>这是 Android 侦探界的一个行规：<code>_count</code> 是机密的可变档案，<code>count</code> 是对外的只读汇报。这种 "backing property" 模式确保了只有 ViewModel 这个"档案管理员"能修改数据，UI 层只能读取和观察，从而保证了<strong>单向数据流</strong> -- 情报只从源头流向终端，绝不允许逆流篡改。</p>
+  </div>
+
+  <h3>在 Compose 中使用 ViewModel</h3>
+
+  <p>档案室建好了，现在要在法庭（Compose UI）上接收汇报。让我们把两者连接起来：</p>
+
+<pre><code><span class="kw">import</span> androidx.compose.runtime.collectAsState
+<span class="kw">import</span> androidx.compose.runtime.getValue
+<span class="kw">import</span> androidx.lifecycle.viewmodel.compose.viewModel
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">CounterScreen</span>(
+    <span class="param">viewModel</span>: <span class="type">CounterViewModel</span> = <span class="fn">viewModel</span>()
+) {
+    <span class="cmt">// 接收档案室的实时汇报，转换为 Compose 可感知的状态</span>
+    <span class="kw">val</span> count <span class="kw">by</span> viewModel.count.<span class="fn">collectAsState</span>()
+
+    <span class="type">Column</span>(
+        modifier = <span class="type">Modifier</span>.<span class="fn">fillMaxSize</span>(),
+        horizontalAlignment = <span class="type">Alignment</span>.CenterHorizontally,
+        verticalArrangement = <span class="type">Arrangement</span>.<span class="fn">Center</span>
+    ) {
+        <span class="type">Text</span>(
+            text = <span class="str">"计数: $count"</span>,
+            style = <span class="type">MaterialTheme</span>.typography.headlineLarge
+        )
+        <span class="type">Spacer</span>(modifier = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+        <span class="type">Row</span>(horizontalArrangement = <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">8</span>.dp)) {
+            <span class="type">Button</span>(onClick = { viewModel.<span class="fn">decrement</span>() }) {
+                <span class="type">Text</span>(<span class="str">"-"</span>)
+            }
+            <span class="type">Button</span>(onClick = { viewModel.<span class="fn">reset</span>() }) {
+                <span class="type">Text</span>(<span class="str">"重置"</span>)
+            }
+            <span class="type">Button</span>(onclick = { viewModel.<span class="fn">increment</span>() }) {
+                <span class="type">Text</span>(<span class="str">"+"</span>)
+            }
+        }
+    }
+}</code></pre>
+
+  <p>追踪要点：</p>
+
+  <ul>
+    <li><code>viewModel()</code>：Compose 提供的函数，自动创建或获取已有的 ViewModel 实例 -- 相当于自动调配档案室</li>
+    <li><code>collectAsState()</code>：将 StateFlow 转换为 Compose 的 <code>State</code>，一旦档案更新，法庭自动收到汇报</li>
+    <li>现在旋转屏幕试试 -- 计数器的值不会丢失了！案件档案安全保存在档案室中</li>
+  </ul>
+
+  <!-- ========== 9.2 Room 数据库入门 ========== -->
+  <h2>9.2 Room 数据库入门</h2>
+
+  <p>ViewModel 解决了"外勤轮换"时的档案保全问题，但如果整个警局关门（App 被关闭）再开门呢？内存中的案件记录就真的消失了。要让证据永久留存，我们需要一个<strong>证物柜</strong> -- 数据库。</p>
+
+  <h3>Room 是什么</h3>
+
+  <p><strong>Room</strong> 是 Google 官方打造的 Android 证物柜方案。它本质上是 SQLite 之上的一个抽象层，但比直接操作 SQLite 可靠得多，就像用专业的证物管理系统取代了手写标签：</p>
+
+  <ul>
+    <li><strong>编译期 SQL 检查</strong>：SQL 语句有错误时，编译阶段就会报警，而不是运行时证据链断裂</li>
+    <li><strong>对象映射</strong>：自动将数据库中的记录映射为 Kotlin 对象，不用手动解析 Cursor</li>
+    <li><strong>Flow 支持</strong>：证物柜发生变动时，自动向追踪系统汇报</li>
+    <li><strong>协程支持</strong>：数据库操作天然支持挂起函数，后台默默取证</li>
+  </ul>
+
+  <h3>添加 Room 依赖</h3>
+
+<pre><code><span class="cmt">// build.gradle.kts (Module)</span>
+<span class="fn">dependencies</span> {
+    <span class="kw">val</span> roomVersion = <span class="str">"2.6.1"</span>
+
+    <span class="fn">implementation</span>(<span class="str">"androidx.room:room-runtime:$roomVersion"</span>)
+    <span class="fn">implementation</span>(<span class="str">"androidx.room:room-ktx:$roomVersion"</span>)       <span class="cmt">// 协程支持</span>
+    <span class="fn">ksp</span>(<span class="str">"androidx.room:room-compiler:$roomVersion"</span>)            <span class="cmt">// 注解处理器</span>
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意：KSP 插件</div>
+    <p>Room 使用注解处理器来生成代码，你需要在项目中启用 KSP（Kotlin Symbol Processing）插件。在项目级 <code>build.gradle.kts</code> 中添加 <code>id("com.google.devtools.ksp") version "..."</code>，并在模块级文件中应用 <code>id("com.google.devtools.ksp")</code>。装备不齐全，侦探可出不了任务。</p>
+  </div>
+
+  <h3>Room 的三大组件</h3>
+
+  <p>Room 的证物管理体系围绕三个核心角色展开，追踪每个角色的职责非常关键：</p>
+
+  <table>
+    <tr>
+      <th>组件</th>
+      <th>注解</th>
+      <th>在案件中的角色</th>
+    </tr>
+    <tr>
+      <td>实体 (Entity)</td>
+      <td><code>@Entity</code></td>
+      <td>证物本身 -- 定义每件证据的结构，每条记录是一件证物</td>
+    </tr>
+    <tr>
+      <td>数据访问对象 (DAO)</td>
+      <td><code>@Dao</code></td>
+      <td>证物管理员 -- 负责证物的存入、取出、更新和销毁</td>
+    </tr>
+    <tr>
+      <td>数据库 (Database)</td>
+      <td><code>@Database</code></td>
+      <td>证物柜本体 -- 数据库配置，是进入证物柜的唯一入口</td>
+    </tr>
+  </table>
+
+  <p>让我们用一个待办事项（Todo）案件来理解这三大组件。</p>
+
+  <h3>第一步：定义 Entity（登记证物）</h3>
+
+<pre><code><span class="kw">import</span> androidx.room.Entity
+<span class="kw">import</span> androidx.room.PrimaryKey
+
+<span class="ann">@Entity</span>(tableName = <span class="str">"todos"</span>)
+<span class="kw">data class</span> <span class="type">Todo</span>(
+    <span class="ann">@PrimaryKey</span>(autoGenerate = <span class="kw">true</span>)
+    <span class="kw">val</span> id: <span class="type">Int</span> = <span class="num">0</span>,
+
+    <span class="kw">val</span> title: <span class="type">String</span>,
+
+    <span class="kw">val</span> description: <span class="type">String</span> = <span class="str">""</span>,
+
+    <span class="kw">val</span> isCompleted: <span class="type">Boolean</span> = <span class="kw">false</span>,
+
+    <span class="kw">val</span> createdAt: <span class="type">Long</span> = <span class="type">System</span>.<span class="fn">currentTimeMillis</span>()
+)</code></pre>
+
+  <p>追踪解读：</p>
+  <ul>
+    <li><code>@Entity</code>：给证物贴上标签，告诉 Room 这个 data class 对应证物柜中的一个分类</li>
+    <li><code>tableName</code>：指定分类名（表名），不写默认用类名</li>
+    <li><code>@PrimaryKey(autoGenerate = true)</code>：证物编号，自动递增，确保每件证物有唯一标识</li>
+    <li>每个属性对应证物登记表中的一个字段</li>
+  </ul>
+
+  <h3>第二步：定义 DAO（证物管理员）</h3>
+
+<pre><code><span class="kw">import</span> androidx.room.*
+<span class="kw">import</span> kotlinx.coroutines.flow.Flow
+
+<span class="ann">@Dao</span>
+<span class="kw">interface</span> <span class="type">TodoDao</span> {
+
+    <span class="cmt">// 调取全部证物，返回 Flow 实现实时追踪</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos ORDER BY createdAt DESC"</span>)
+    <span class="kw">fun</span> <span class="fn">getAllTodos</span>(): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+
+    <span class="cmt">// 根据编号精确定位单件证物</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT * FROM todos WHERE id = :todoId"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">getTodoById</span>(<span class="param">todoId</span>: <span class="type">Int</span>): <span class="type">Todo</span>?
+
+    <span class="cmt">// 将一件新证物存入柜中</span>
+    <span class="ann">@Insert</span>(onConflict = <span class="type">OnConflictStrategy</span>.REPLACE)
+    <span class="kw">suspend fun</span> <span class="fn">insertTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="cmt">// 更新已有证物的记录</span>
+    <span class="ann">@Update</span>
+    <span class="kw">suspend fun</span> <span class="fn">updateTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="cmt">// 销毁一件证物</span>
+    <span class="ann">@Delete</span>
+    <span class="kw">suspend fun</span> <span class="fn">deleteTodo</span>(<span class="param">todo</span>: <span class="type">Todo</span>)
+
+    <span class="cmt">// 追踪尚未结案的证物数量</span>
+    <span class="ann">@Query</span>(<span class="str">"SELECT COUNT(*) FROM todos WHERE isCompleted = 0"</span>)
+    <span class="kw">fun</span> <span class="fn">getActiveCount</span>(): <span class="type">Flow</span>&lt;<span class="type">Int</span>&gt;
+}</code></pre>
+
+  <p>关键线索：</p>
+  <ul>
+    <li><code>suspend fun</code>：增删改操作使用挂起函数，在后台协程中默默取证，不阻塞主线程</li>
+    <li><code>Flow&lt;List&lt;Todo&gt;&gt;</code>：查询返回 Flow -- 证物柜中有任何变动，追踪系统自动汇报新情况，UI 自动更新</li>
+    <li>Room 会在<strong>编译期</strong>检查 SQL 语句的正确性，写错了编译时就会亮红灯，不给线索断裂的机会</li>
+  </ul>
+
+  <h3>第三步：定义 Database（建造证物柜）</h3>
+
+<pre><code><span class="kw">import</span> android.content.Context
+<span class="kw">import</span> androidx.room.Database
+<span class="kw">import</span> androidx.room.Room
+<span class="kw">import</span> androidx.room.RoomDatabase
+
+<span class="ann">@Database</span>(entities = [<span class="type">Todo</span>::<span class="kw">class</span>], version = <span class="num">1</span>)
+<span class="kw">abstract class</span> <span class="type">TodoDatabase</span> : <span class="type">RoomDatabase</span>() {
+
+    <span class="kw">abstract fun</span> <span class="fn">todoDao</span>(): <span class="type">TodoDao</span>
+
+    <span class="kw">companion object</span> {
+        <span class="ann">@Volatile</span>
+        <span class="kw">private var</span> INSTANCE: <span class="type">TodoDatabase</span>? = <span class="kw">null</span>
+
+        <span class="kw">fun</span> <span class="fn">getDatabase</span>(<span class="param">context</span>: <span class="type">Context</span>): <span class="type">TodoDatabase</span> {
+            <span class="kw">return</span> INSTANCE ?: <span class="kw">synchronized</span>(<span class="kw">this</span>) {
+                <span class="kw">val</span> instance = <span class="type">Room</span>.<span class="fn">databaseBuilder</span>(
+                    context.applicationContext,
+                    <span class="type">TodoDatabase</span>::<span class="kw">class</span>.java,
+                    <span class="str">"todo_database"</span>
+                ).<span class="fn">build</span>()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}</code></pre>
+
+  <p>这里使用了单例模式（<code>companion object</code> + <code>synchronized</code>），确保整栋大楼只有一个证物柜 -- 不能让证据散落在多个地方。</p>
+
+  <h3>Flow 集成：实时追踪证物变动</h3>
+
+  <p>Room 与 Flow 的联动是整条追踪链路中最精妙的环节。当 DAO 的查询方法返回 <code>Flow</code> 时，Room 就像一个永不下线的监控摄像头，实时监视证物柜的一切变动：</p>
+
+<pre><code><span class="cmt">// 在 ViewModel（案件档案室）中</span>
+<span class="kw">class</span> <span class="type">TodoViewModel</span>(
+    <span class="kw">private val</span> dao: <span class="type">TodoDao</span>
+) : <span class="type">ViewModel</span>() {
+
+    <span class="cmt">// 自动追踪证物柜变化，有新证据入库时 UI 自动刷新</span>
+    <span class="kw">val</span> allTodos: <span class="type">StateFlow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt; = dao.<span class="fn">getAllTodos</span>()
+        .<span class="fn">stateIn</span>(
+            scope = viewModelScope,
+            started = <span class="type">SharingStarted</span>.WhileSubscribed(<span class="num">5000</span>),
+            initialValue = <span class="fn">emptyList</span>()
+        )
+
+    <span class="kw">fun</span> <span class="fn">addTodo</span>(<span class="param">title</span>: <span class="type">String</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            dao.<span class="fn">insertTodo</span>(<span class="type">Todo</span>(title = title))
+        }
+    }
+
+    <span class="kw">fun</span> <span class="fn">toggleComplete</span>(<span class="param">todo</span>: <span class="type">Todo</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            dao.<span class="fn">updateTodo</span>(todo.<span class="fn">copy</span>(isCompleted = !todo.isCompleted))
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">数据流向的妙处</div>
+    <p>追踪这里的数据流向你会发现一个精妙之处：当你调用 <code>addTodo()</code> 存入一条新证据后，你<strong>不需要手动刷新列表</strong>。因为 <code>allTodos</code> 是一个 Flow，Room 会自动检测到证物柜的变动，并通过追踪通道发出新的证物清单。Compose 收到汇报后自动重组 UI。整个过程完全是<strong>响应式</strong>的 -- 证物一入库，所有追踪者同步收到通知。</p>
+  </div>
+
+  <!-- ========== 9.3 Retrofit 网络请求 ========== -->
+  <h2>9.3 Retrofit 网络请求</h2>
+
+  <p>本地证物柜搞定了，但要破解真正的大案，光靠内部证据远远不够。社交动态、新闻资讯、天气预报 -- 这些情报都来自外部世界。<strong>Retrofit</strong> 就是我们的情报网络，它是 Android 生态中最强大的线人系统，让从远程服务器获取情报变得像查阅本地档案一样简单。</p>
+
+  <h3>Retrofit 是什么</h3>
+
+  <p>Retrofit 由 Square 公司开发（他们还打造了 OkHttp、Moshi 等知名情报工具），是一个<strong>类型安全的 HTTP 客户端</strong>。它的核心思路是：你只需要定义一个接口来描述情报来源的地址和格式，Retrofit 会自动帮你完成联络线人、获取情报、解码密文的所有细节。</p>
+
+  <h3>添加依赖</h3>
+
+<pre><code><span class="cmt">// build.gradle.kts (Module)</span>
+<span class="fn">dependencies</span> {
+    <span class="cmt">// Retrofit 核心 -- 情报网络基础设施</span>
+    <span class="fn">implementation</span>(<span class="str">"com.squareup.retrofit2:retrofit:2.11.0"</span>)
+
+    <span class="cmt">// JSON 转换器 -- 密文解码器（二选一）</span>
+    <span class="cmt">// 方式一：Gson（简单，适合入门）</span>
+    <span class="fn">implementation</span>(<span class="str">"com.squareup.retrofit2:converter-gson:2.11.0"</span>)
+
+    <span class="cmt">// 方式二：kotlinx.serialization（Kotlin 原生，推荐）</span>
+    <span class="cmt">// implementation("com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0")</span>
+    <span class="cmt">// implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")</span>
+}</code></pre>
+
+  <div class="warning">
+    <div class="tip-title">别忘了网络权限</div>
+    <p>在 <code>AndroidManifest.xml</code> 中添加网络权限：<br>
+    <code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;</code><br>
+    没有这一行，你的情报网络一条线路都通不了！就像侦探出门办案忘了带警徽。</p>
+  </div>
+
+  <h3>定义 API 接口</h3>
+
+  <p>假设我们要联络一个天气情报来源，先定义情报的格式和联络方式：</p>
+
+<pre><code><span class="cmt">// 情报格式（数据模型）</span>
+<span class="kw">data class</span> <span class="type">WeatherResponse</span>(
+    <span class="kw">val</span> city: <span class="type">String</span>,
+    <span class="kw">val</span> temperature: <span class="type">Double</span>,
+    <span class="kw">val</span> description: <span class="type">String</span>,
+    <span class="kw">val</span> humidity: <span class="type">Int</span>
+)
+
+<span class="cmt">// 情报来源接口</span>
+<span class="kw">interface</span> <span class="type">WeatherApiService</span> {
+
+    <span class="cmt">// GET 请求，{city} 是追踪目标参数</span>
+    <span class="ann">@GET</span>(<span class="str">"weather/{city}"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">getWeather</span>(
+        <span class="ann">@Path</span>(<span class="str">"city"</span>) <span class="param">city</span>: <span class="type">String</span>
+    ): <span class="type">WeatherResponse</span>
+
+    <span class="cmt">// GET 请求，带搜索条件</span>
+    <span class="ann">@GET</span>(<span class="str">"weather/search"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">searchWeather</span>(
+        <span class="ann">@Query</span>(<span class="str">"q"</span>) <span class="param">query</span>: <span class="type">String</span>,
+        <span class="ann">@Query</span>(<span class="str">"units"</span>) <span class="param">units</span>: <span class="type">String</span> = <span class="str">"metric"</span>
+    ): <span class="type">List</span>&lt;<span class="type">WeatherResponse</span>&gt;
+}</code></pre>
+
+  <p>常用的 Retrofit 注解 -- 情报联络暗号对照表：</p>
+
+  <table>
+    <tr>
+      <th>注解</th>
+      <th>作用</th>
+      <th>示例</th>
+    </tr>
+    <tr>
+      <td><code>@GET</code></td>
+      <td>获取情报（GET 请求）</td>
+      <td><code>@GET("users/{id}")</code></td>
+    </tr>
+    <tr>
+      <td><code>@POST</code></td>
+      <td>提交情报（POST 请求）</td>
+      <td><code>@POST("users")</code></td>
+    </tr>
+    <tr>
+      <td><code>@Path</code></td>
+      <td>路径参数</td>
+      <td><code>@Path("id") id: Int</code></td>
+    </tr>
+    <tr>
+      <td><code>@Query</code></td>
+      <td>查询参数 (?key=value)</td>
+      <td><code>@Query("page") page: Int</code></td>
+    </tr>
+    <tr>
+      <td><code>@Body</code></td>
+      <td>请求体 (JSON)</td>
+      <td><code>@Body user: User</code></td>
+    </tr>
+    <tr>
+      <td><code>@Header</code></td>
+      <td>请求头（身份凭证）</td>
+      <td><code>@Header("Token") token: String</code></td>
+    </tr>
+  </table>
+
+  <h3>创建 Retrofit 实例</h3>
+
+<pre><code><span class="kw">import</span> retrofit2.Retrofit
+<span class="kw">import</span> retrofit2.converter.gson.GsonConverterFactory
+
+<span class="kw">object</span> <span class="type">RetrofitClient</span> {
+
+    <span class="kw">private const val</span> BASE_URL = <span class="str">"https://api.example.com/"</span>
+
+    <span class="kw">private val</span> retrofit: <span class="type">Retrofit</span> = <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+        .<span class="fn">baseUrl</span>(BASE_URL)
+        .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+        .<span class="fn">build</span>()
+
+    <span class="kw">val</span> weatherApi: <span class="type">WeatherApiService</span> = retrofit.<span class="fn">create</span>(<span class="type">WeatherApiService</span>::<span class="kw">class</span>.java)
+}</code></pre>
+
+  <p><code>object</code> 关键字确保整个情报网络只有一个总部。<code>GsonConverterFactory</code> 是密文解码器，负责自动将 JSON 格式的情报翻译成 Kotlin 对象。</p>
+
+  <h3>配合协程使用</h3>
+
+  <p>注意到 API 接口中的方法都用了 <code>suspend</code> 关键字。这意味着 Retrofit 会自动在后台执行情报收集任务，不会阻塞主线程 -- 就像派出便衣去接头，办公室里的工作照常进行：</p>
+
+<pre><code><span class="kw">class</span> <span class="type">WeatherViewModel</span> : <span class="type">ViewModel</span>() {
+
+    <span class="kw">private val</span> _weather = <span class="type">MutableStateFlow</span>&lt;<span class="type">WeatherResponse</span>?&gt;(<span class="kw">null</span>)
+    <span class="kw">val</span> weather: <span class="type">StateFlow</span>&lt;<span class="type">WeatherResponse</span>?&gt; = _weather.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">private val</span> _error = <span class="type">MutableStateFlow</span>&lt;<span class="type">String</span>?&gt;(<span class="kw">null</span>)
+    <span class="kw">val</span> error: <span class="type">StateFlow</span>&lt;<span class="type">String</span>?&gt; = _error.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">fun</span> <span class="fn">fetchWeather</span>(<span class="param">city</span>: <span class="type">String</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            <span class="kw">try</span> {
+                <span class="kw">val</span> result = <span class="type">RetrofitClient</span>.weatherApi.<span class="fn">getWeather</span>(city)
+                _weather.value = result
+                _error.value = <span class="kw">null</span>
+            } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+                _error.value = <span class="str">"情报获取失败: ${e.message}"</span>
+            }
+        }
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">协程 + Retrofit = 优雅的情报收集</div>
+    <p>对比传统的回调方式，协程让异步的情报收集看起来像同步的档案查阅一样直观。一个 <code>try/catch</code> 就能处理线人失联（网络错误）的情况，不需要写 <code>onSuccess</code>/<code>onFailure</code> 这种复杂的回调链。这正是我们在第6章学习协程时说的"用同步的方式写异步代码"。</p>
+  </div>
+
+  <!-- ========== 9.4 实战：构建新闻列表 App ========== -->
+  <h2>9.4 实战：构建新闻列表 App</h2>
+
+  <p>所有线索已经收集齐了，现在是破案的时刻。让我们把前面掌握的所有侦查手段串联起来，构建一个完整的<strong>新闻列表 App</strong>。这个案件会用到：ViewModel（案件档案室）管理状态、Retrofit（情报网络）请求远程数据、Compose（法庭展示）呈现 UI。把它想象成一次完整的案件侦办 -- 从收集情报，到整理归档，最后呈堂展示。</p>
+
+  <h3>项目结构</h3>
+
+  <p>一个组织严密的侦查小组需要明确的分工。我们按职责分包：</p>
+
+<pre><code>com.example.newsapp/
+├── model/          <span class="cmt">// 情报格式定义</span>
+│   └── Article.kt
+├── data/           <span class="cmt">// 情报来源层（线人网络、情报汇总）</span>
+│   ├── NewsApiService.kt
+│   └── NewsRepository.kt
+├── viewmodel/      <span class="cmt">// 案件档案室（状态管理）</span>
+│   └── NewsViewModel.kt
+└── ui/             <span class="cmt">// 法庭展示层（UI）</span>
+    ├── NewsScreen.kt
+    └── theme/</code></pre>
+
+  <h3>第一步：定义情报格式（数据模型）</h3>
+
+<pre><code><span class="cmt">// model/Article.kt</span>
+<span class="kw">data class</span> <span class="type">Article</span>(
+    <span class="kw">val</span> id: <span class="type">Int</span>,
+    <span class="kw">val</span> title: <span class="type">String</span>,
+    <span class="kw">val</span> summary: <span class="type">String</span>,
+    <span class="kw">val</span> imageUrl: <span class="type">String</span>,
+    <span class="kw">val</span> source: <span class="type">String</span>,
+    <span class="kw">val</span> publishedAt: <span class="type">String</span>,
+    <span class="kw">val</span> url: <span class="type">String</span>
+)
+
+<span class="cmt">// 情报来源返回的包装信封</span>
+<span class="kw">data class</span> <span class="type">NewsResponse</span>(
+    <span class="kw">val</span> status: <span class="type">String</span>,
+    <span class="kw">val</span> totalResults: <span class="type">Int</span>,
+    <span class="kw">val</span> articles: <span class="type">List</span>&lt;<span class="type">Article</span>&gt;
+)</code></pre>
+
+  <h3>第二步：建立情报来源（API 服务接口）</h3>
+
+<pre><code><span class="cmt">// data/NewsApiService.kt</span>
+<span class="kw">import</span> retrofit2.Retrofit
+<span class="kw">import</span> retrofit2.converter.gson.GsonConverterFactory
+<span class="kw">import</span> retrofit2.http.GET
+<span class="kw">import</span> retrofit2.http.Query
+
+<span class="kw">interface</span> <span class="type">NewsApiService</span> {
+
+    <span class="ann">@GET</span>(<span class="str">"top-headlines"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">getTopHeadlines</span>(
+        <span class="ann">@Query</span>(<span class="str">"country"</span>) <span class="param">country</span>: <span class="type">String</span> = <span class="str">"cn"</span>,
+        <span class="ann">@Query</span>(<span class="str">"apiKey"</span>) <span class="param">apiKey</span>: <span class="type">String</span> = <span class="str">"YOUR_API_KEY"</span>
+    ): <span class="type">NewsResponse</span>
+
+    <span class="ann">@GET</span>(<span class="str">"everything"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">searchNews</span>(
+        <span class="ann">@Query</span>(<span class="str">"q"</span>) <span class="param">query</span>: <span class="type">String</span>,
+        <span class="ann">@Query</span>(<span class="str">"apiKey"</span>) <span class="param">apiKey</span>: <span class="type">String</span> = <span class="str">"YOUR_API_KEY"</span>
+    ): <span class="type">NewsResponse</span>
+
+    <span class="kw">companion object</span> {
+        <span class="kw">private const val</span> BASE_URL = <span class="str">"https://newsapi.org/v2/"</span>
+
+        <span class="kw">fun</span> <span class="fn">create</span>(): <span class="type">NewsApiService</span> {
+            <span class="kw">return</span> <span class="type">Retrofit</span>.<span class="type">Builder</span>()
+                .<span class="fn">baseUrl</span>(BASE_URL)
+                .<span class="fn">addConverterFactory</span>(<span class="type">GsonConverterFactory</span>.<span class="fn">create</span>())
+                .<span class="fn">build</span>()
+                .<span class="fn">create</span>(<span class="type">NewsApiService</span>::<span class="kw">class</span>.java)
+        }
+    }
+}</code></pre>
+
+  <h3>第三步：建立情报汇总中心（Repository）</h3>
+
+  <p>Repository 是整个侦查行动的<strong>情报汇总中心</strong>。案件档案室（ViewModel）只跟情报中心对接，不需要知道情报是从哪个线人、哪条渠道得来的：</p>
+
+<pre><code><span class="cmt">// data/NewsRepository.kt</span>
+<span class="kw">class</span> <span class="type">NewsRepository</span>(
+    <span class="kw">private val</span> apiService: <span class="type">NewsApiService</span>
+) {
+
+    <span class="kw">suspend fun</span> <span class="fn">getTopHeadlines</span>(): <span class="type">List</span>&lt;<span class="type">Article</span>&gt; {
+        <span class="kw">val</span> response = apiService.<span class="fn">getTopHeadlines</span>()
+        <span class="kw">return</span> response.articles
+    }
+
+    <span class="kw">suspend fun</span> <span class="fn">searchNews</span>(<span class="param">query</span>: <span class="type">String</span>): <span class="type">List</span>&lt;<span class="type">Article</span>&gt; {
+        <span class="kw">val</span> response = apiService.<span class="fn">searchNews</span>(query)
+        <span class="kw">return</span> response.articles
+    }
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">情报汇总中心的价值</div>
+    <p>也许你会觉得 Repository 只是简单地转发了一下线人的情报，为什么要多设一个环节？追踪更深层的数据流向你就会明白：当案件变复杂后，Repository 可以同时对接网络线人（Retrofit）和本地证物柜（Room），实现"先展示证物柜里的存档、后台悄悄从线人处更新"的侦查策略。<strong>一层中间人，无限可能</strong>。</p>
+  </div>
+
+  <h3>第四步：用 sealed class 标记案件进展</h3>
+
+  <p>侦查行动有三种状态：侦查中、情报到手、行动失败。用 <code>sealed class</code>（在第5章学过）可以精确追踪这三种案件进展：</p>
+
+<pre><code><span class="cmt">// viewmodel/UiState.kt</span>
+<span class="kw">sealed class</span> <span class="type">NewsUiState</span> {
+
+    <span class="cmt">// 正在侦查中...</span>
+    <span class="kw">data object</span> <span class="type">Loading</span> : <span class="type">NewsUiState</span>()
+
+    <span class="cmt">// 情报到手，携带案件线索列表</span>
+    <span class="kw">data class</span> <span class="type">Success</span>(
+        <span class="kw">val</span> articles: <span class="type">List</span>&lt;<span class="type">Article</span>&gt;
+    ) : <span class="type">NewsUiState</span>()
+
+    <span class="cmt">// 行动失败，携带失败原因</span>
+    <span class="kw">data class</span> <span class="type">Error</span>(
+        <span class="kw">val</span> message: <span class="type">String</span>
+    ) : <span class="type">NewsUiState</span>()
+}</code></pre>
+
+  <p>使用 <code>sealed class</code> 的好处：在 <code>when</code> 表达式中，编译器会<strong>强制你处理所有状态</strong>。任何一种案件进展都不会被遗漏 -- 侦探最忌讳的就是漏掉线索。</p>
+
+  <h3>第五步：案件档案室（ViewModel）</h3>
+
+<pre><code><span class="cmt">// viewmodel/NewsViewModel.kt</span>
+<span class="kw">import</span> androidx.lifecycle.ViewModel
+<span class="kw">import</span> androidx.lifecycle.viewModelScope
+<span class="kw">import</span> kotlinx.coroutines.flow.MutableStateFlow
+<span class="kw">import</span> kotlinx.coroutines.flow.StateFlow
+<span class="kw">import</span> kotlinx.coroutines.flow.asStateFlow
+<span class="kw">import</span> kotlinx.coroutines.launch
+
+<span class="kw">class</span> <span class="type">NewsViewModel</span> : <span class="type">ViewModel</span>() {
+
+    <span class="kw">private val</span> repository = <span class="type">NewsRepository</span>(
+        apiService = <span class="type">NewsApiService</span>.<span class="fn">create</span>()
+    )
+
+    <span class="kw">private val</span> _uiState = <span class="type">MutableStateFlow</span>&lt;<span class="type">NewsUiState</span>&gt;(<span class="type">NewsUiState</span>.<span class="type">Loading</span>)
+    <span class="kw">val</span> uiState: <span class="type">StateFlow</span>&lt;<span class="type">NewsUiState</span>&gt; = _uiState.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">init</span> {
+        <span class="fn">loadNews</span>()
+    }
+
+    <span class="kw">fun</span> <span class="fn">loadNews</span>() {
+        viewModelScope.<span class="fn">launch</span> {
+            _uiState.value = <span class="type">NewsUiState</span>.<span class="type">Loading</span>
+            <span class="kw">try</span> {
+                <span class="kw">val</span> articles = repository.<span class="fn">getTopHeadlines</span>()
+                _uiState.value = <span class="type">NewsUiState</span>.<span class="fn">Success</span>(articles)
+            } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+                _uiState.value = <span class="type">NewsUiState</span>.<span class="fn">Error</span>(
+                    message = e.message ?: <span class="str">"未知错误"</span>
+                )
+            }
+        }
+    }
+
+    <span class="kw">fun</span> <span class="fn">searchNews</span>(<span class="param">query</span>: <span class="type">String</span>) {
+        viewModelScope.<span class="fn">launch</span> {
+            _uiState.value = <span class="type">NewsUiState</span>.<span class="type">Loading</span>
+            <span class="kw">try</span> {
+                <span class="kw">val</span> articles = repository.<span class="fn">searchNews</span>(query)
+                _uiState.value = <span class="type">NewsUiState</span>.<span class="fn">Success</span>(articles)
+            } <span class="kw">catch</span> (e: <span class="type">Exception</span>) {
+                _uiState.value = <span class="type">NewsUiState</span>.<span class="fn">Error</span>(
+                    message = e.message ?: <span class="str">"搜索失败"</span>
+                )
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>第六步：法庭呈堂（Compose UI 层）</h3>
+
+<pre><code><span class="cmt">// ui/NewsScreen.kt</span>
+<span class="kw">import</span> androidx.compose.foundation.layout.*
+<span class="kw">import</span> androidx.compose.foundation.lazy.LazyColumn
+<span class="kw">import</span> androidx.compose.foundation.lazy.items
+<span class="kw">import</span> androidx.compose.material3.*
+<span class="kw">import</span> androidx.compose.runtime.*
+<span class="kw">import</span> androidx.compose.ui.Alignment
+<span class="kw">import</span> androidx.compose.ui.Modifier
+<span class="kw">import</span> androidx.compose.ui.text.style.TextOverflow
+<span class="kw">import</span> androidx.compose.ui.unit.dp
+<span class="kw">import</span> androidx.lifecycle.viewmodel.compose.viewModel
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">NewsScreen</span>(
+    <span class="param">viewModel</span>: <span class="type">NewsViewModel</span> = <span class="fn">viewModel</span>()
+) {
+    <span class="kw">val</span> uiState <span class="kw">by</span> viewModel.uiState.<span class="fn">collectAsState</span>()
+
+    <span class="type">Scaffold</span>(
+        topBar = {
+            <span class="type">TopAppBar</span>(
+                title = { <span class="type">Text</span>(<span class="str">"新闻头条"</span>) }
+            )
+        }
+    ) { paddingValues <span class="op">-></span>
+        <span class="kw">when</span> (<span class="kw">val</span> state = uiState) {
+            <span class="cmt">// 侦查进行中：显示追踪指示器</span>
+            <span class="kw">is</span> <span class="type">NewsUiState</span>.<span class="type">Loading</span> <span class="op">-></span> {
+                <span class="type">Box</span>(
+                    modifier = <span class="type">Modifier</span>
+                        .<span class="fn">fillMaxSize</span>()
+                        .<span class="fn">padding</span>(paddingValues),
+                    contentAlignment = <span class="type">Alignment</span>.Center
+                ) {
+                    <span class="type">CircularProgressIndicator</span>()
+                }
+            }
+
+            <span class="cmt">// 情报到手：在法庭上展示所有线索</span>
+            <span class="kw">is</span> <span class="type">NewsUiState</span>.<span class="type">Success</span> <span class="op">-></span> {
+                <span class="type">LazyColumn</span>(
+                    modifier = <span class="type">Modifier</span>
+                        .<span class="fn">fillMaxSize</span>()
+                        .<span class="fn">padding</span>(paddingValues),
+                    contentPadding = <span class="type">PaddingValues</span>(<span class="num">16</span>.dp),
+                    verticalArrangement = <span class="type">Arrangement</span>.<span class="fn">spacedBy</span>(<span class="num">12</span>.dp)
+                ) {
+                    <span class="fn">items</span>(state.articles) { article <span class="op">-></span>
+                        <span class="fn">NewsCard</span>(article = article)
+                    }
+                }
+            }
+
+            <span class="cmt">// 行动失败：汇报失败原因，提供重新侦查的机会</span>
+            <span class="kw">is</span> <span class="type">NewsUiState</span>.<span class="type">Error</span> <span class="op">-></span> {
+                <span class="type">Column</span>(
+                    modifier = <span class="type">Modifier</span>
+                        .<span class="fn">fillMaxSize</span>()
+                        .<span class="fn">padding</span>(paddingValues),
+                    horizontalAlignment = <span class="type">Alignment</span>.CenterHorizontally,
+                    verticalArrangement = <span class="type">Arrangement</span>.Center
+                ) {
+                    <span class="type">Text</span>(
+                        text = state.message,
+                        color = <span class="type">MaterialTheme</span>.colorScheme.error
+                    )
+                    <span class="type">Spacer</span>(modifier = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">16</span>.dp))
+                    <span class="type">Button</span>(onClick = { viewModel.<span class="fn">loadNews</span>() }) {
+                        <span class="type">Text</span>(<span class="str">"重试"</span>)
+                    }
+                }
+            }
+        }
+    }
+}
+
+<span class="ann">@Composable</span>
+<span class="kw">fun</span> <span class="fn">NewsCard</span>(<span class="param">article</span>: <span class="type">Article</span>) {
+    <span class="type">Card</span>(
+        modifier = <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>(),
+        elevation = <span class="type">CardDefaults</span>.<span class="fn">cardElevation</span>(defaultElevation = <span class="num">2</span>.dp)
+    ) {
+        <span class="type">Column</span>(
+            modifier = <span class="type">Modifier</span>.<span class="fn">padding</span>(<span class="num">16</span>.dp)
+        ) {
+            <span class="cmt">// 案件标题</span>
+            <span class="type">Text</span>(
+                text = article.title,
+                style = <span class="type">MaterialTheme</span>.typography.titleMedium,
+                maxLines = <span class="num">2</span>,
+                overflow = <span class="type">TextOverflow</span>.Ellipsis
+            )
+
+            <span class="type">Spacer</span>(modifier = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">8</span>.dp))
+
+            <span class="cmt">// 案件摘要</span>
+            <span class="type">Text</span>(
+                text = article.summary,
+                style = <span class="type">MaterialTheme</span>.typography.bodyMedium,
+                maxLines = <span class="num">3</span>,
+                overflow = <span class="type">TextOverflow</span>.Ellipsis,
+                color = <span class="type">MaterialTheme</span>.colorScheme.onSurfaceVariant
+            )
+
+            <span class="type">Spacer</span>(modifier = <span class="type">Modifier</span>.<span class="fn">height</span>(<span class="num">8</span>.dp))
+
+            <span class="cmt">// 底部信息：情报来源 + 时间戳</span>
+            <span class="type">Row</span>(
+                modifier = <span class="type">Modifier</span>.<span class="fn">fillMaxWidth</span>(),
+                horizontalArrangement = <span class="type">Arrangement</span>.SpaceBetween
+            ) {
+                <span class="type">Text</span>(
+                    text = article.source,
+                    style = <span class="type">MaterialTheme</span>.typography.labelSmall,
+                    color = <span class="type">MaterialTheme</span>.colorScheme.primary
+                )
+                <span class="type">Text</span>(
+                    text = article.publishedAt,
+                    style = <span class="type">MaterialTheme</span>.typography.labelSmall,
+                    color = <span class="type">MaterialTheme</span>.colorScheme.outline
+                )
+            }
+        }
+    }
+}</code></pre>
+
+  <h3>完整数据流向追踪</h3>
+
+  <p>现在让我们像真正的侦探一样，追踪数据在整个应用中的完整流向。每一步都是一条不可遗漏的线索：</p>
+
+  <ol>
+    <li><strong>案件启动</strong> -> ViewModel 的 <code>init</code> 块发出侦查指令 <code>loadNews()</code></li>
+    <li><strong>档案室</strong>将案件状态标记为 <code>Loading</code>（侦查中）-> 法庭显示等待指示器</li>
+    <li><strong>档案室</strong>通过情报汇总中心（Repository）向线人网络（Retrofit）发起情报请求</li>
+    <li><strong>线人网络</strong>在后台执行 HTTP 请求，将 JSON 密文解码为 Kotlin 对象</li>
+    <li><strong>情报汇总中心</strong>将解码后的情报送回档案室</li>
+    <li><strong>档案室</strong>将案件状态更新为 <code>Success(articles)</code> 或 <code>Error(message)</code></li>
+    <li><strong>法庭</strong>（Compose）通过追踪通道感知到状态变化，自动重组 UI 呈现结果</li>
+  </ol>
+
+<pre><code><span class="cmt">// 完整数据流向追踪图</span>
+<span class="cmt">//</span>
+<span class="cmt">//  [法庭/UI]        [档案室/VM]        [情报中心/Repo]   [线人/API]</span>
+<span class="cmt">//     |                  |                  |               |</span>
+<span class="cmt">//     |  collectAsState  |                  |               |</span>
+<span class="cmt">//     |&lt;-- StateFlow ---|                  |               |</span>
+<span class="cmt">//     |                  |--- loadNews() --&gt;|               |</span>
+<span class="cmt">//     |                  |                  |-- HTTP GET --&gt;|</span>
+<span class="cmt">//     |                  |                  |&lt;-- JSON ------|</span>
+<span class="cmt">//     |                  |&lt;-- articles ----|               |</span>
+<span class="cmt">//     |&lt;-- 重组 UI ------|                  |               |</span>
+<span class="cmt">//</span></code></pre>
+
+  <div class="warning">
+    <div class="tip-title">API Key 安全提醒</div>
+    <p>示例代码中的 <code>"YOUR_API_KEY"</code> 只是占位符。在实际项目中，<strong>绝对不要</strong>把 API Key 硬编码在源代码中 -- 这就像把警局的门禁密码写在大门上。推荐的做法是将其放在 <code>local.properties</code> 文件（已被 .gitignore 忽略）中，然后通过 <code>BuildConfig</code> 在编译时注入。</p>
+  </div>
+
+  <h3>后续侦查方向</h3>
+
+  <p>这个新闻 App 已经是一个完整的可运行案件了，但真正的侦探永远不会满足于此。你可以继续追踪以下方向：</p>
+
+  <ul>
+    <li><strong>依赖注入</strong>：使用 Hilt/Koin 来统一调配侦查资源，而不是在档案室中直接创建情报中心</li>
+    <li><strong>本地缓存</strong>：将线人情报用 Room 证物柜缓存到本地，实现离线也能查阅案件档案</li>
+    <li><strong>分页加载</strong>：使用 Paging 3 库实现"翻到底部自动加载更多线索"</li>
+    <li><strong>图片加载</strong>：使用 Coil 库加载新闻配图 -- 给每条线索配上现场照片</li>
+    <li><strong>下拉刷新</strong>：添加 PullToRefresh 支持 -- 随时向线人索取最新情报</li>
+    <li><strong>错误重试</strong>：实现指数退避的重试机制 -- 线人暂时失联时耐心等待</li>
+  </ul>
+
+  <div class="tip">
+    <div class="tip-title">本章案件结案陈词</div>
+    <p>本章我们追踪了 Android 应用中最核心的数据流向链路：用 <strong>ViewModel</strong>（案件档案室）管理 UI 状态并在人员轮换时保全档案；用 <strong>Room</strong>（证物柜）实现证据的永久保存；用 <strong>Retrofit</strong>（情报网络）从远程服务器收集情报。最后通过一个新闻列表 App，将整条侦查链路从头到尾串联起来。这个"ViewModel + Repository + Retrofit/Room"的架构模式，就是 Android 官方推荐的标准办案流程，也是几乎所有商业 App 都在使用的模式。掌握了这条数据流向，你就拥有了追踪任何案件的基本能力。真相只有一个 -- 数据的流向也一样。</p>
+  </div>
+
+  <!-- ========== 练习题 ========== -->
+  <div class="exercise">
+    <h2>本章练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：侦探笔记本升级 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>为 <code>CounterViewModel</code> 添加一个 <code>history</code> 属性，用 <code>StateFlow&lt;List&lt;Int&gt;&gt;</code> 记录每次 count 变化后的值（追踪历史记录）。每当调用 <code>increment()</code>、<code>decrement()</code> 或 <code>reset()</code> 时，都将新的 count 值追加到历史列表中。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>使用一个 <code>MutableStateFlow&lt;List&lt;Int&gt;&gt;</code> 作为 backing property。每次修改 <code>_count</code> 之后，将新值追加到历史列表中。注意 <code>StateFlow</code> 通过引用相等判断变化，所以更新列表时需要创建一个新的 List 实例（例如用 <code>_history.value = _history.value + newValue</code>）。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">CounterViewModel</span> : <span class="type">ViewModel</span>() {
+
+    <span class="kw">private val</span> _count = <span class="type">MutableStateFlow</span>(<span class="num">0</span>)
+    <span class="kw">val</span> count: <span class="type">StateFlow</span>&lt;<span class="type">Int</span>&gt; = _count.<span class="fn">asStateFlow</span>()
+
+    <span class="cmt">// 追踪历史记录</span>
+    <span class="kw">private val</span> _history = <span class="type">MutableStateFlow</span>&lt;<span class="type">List</span>&lt;<span class="type">Int</span>&gt;&gt;(<span class="fn">listOf</span>(<span class="num">0</span>))
+    <span class="kw">val</span> history: <span class="type">StateFlow</span>&lt;<span class="type">List</span>&lt;<span class="type">Int</span>&gt;&gt; = _history.<span class="fn">asStateFlow</span>()
+
+    <span class="kw">private fun</span> <span class="fn">recordHistory</span>() {
+        _history.value = _history.value + _count.value
+    }
+
+    <span class="kw">fun</span> <span class="fn">increment</span>() {
+        _count.value++
+        <span class="fn">recordHistory</span>()
+    }
+
+    <span class="kw">fun</span> <span class="fn">decrement</span>() {
+        _count.value--
+        <span class="fn">recordHistory</span>()
+    }
+
+    <span class="kw">fun</span> <span class="fn">reset</span>() {
+        _count.value = <span class="num">0</span>
+        <span class="fn">recordHistory</span>()
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：证物柜搜索功能 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 <code>TodoDao</code> 中添加一个新方法 <code>searchTodos</code>，接收一个关键词参数 <code>query: String</code>，返回 <code>Flow&lt;List&lt;Todo&gt;&gt;</code>，查找 <code>title</code> 或 <code>description</code> 中包含该关键词的所有待办事项，结果按创建时间降序排列。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>在 Room 的 <code>@Query</code> 注解中使用 SQL 的 <code>LIKE</code> 操作符进行模糊匹配。通配符 <code>%</code> 需要在参数中拼接，而不是直接写在 SQL 字符串里。可以使用 <code>'%' || :query || '%'</code> 的写法在 SQL 层面拼接通配符。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="ann">@Dao</span>
+<span class="kw">interface</span> <span class="type">TodoDao</span> {
+
+    <span class="cmt">// ... 其他方法保持不变 ...</span>
+
+    <span class="cmt">// 根据关键词搜索证物</span>
+    <span class="ann">@Query</span>(<span class="str">"""
+        SELECT * FROM todos
+        WHERE title LIKE '%' || :query || '%'
+           OR description LIKE '%' || :query || '%'
+        ORDER BY createdAt DESC
+    """</span>)
+    <span class="kw">fun</span> <span class="fn">searchTodos</span>(<span class="param">query</span>: <span class="type">String</span>): <span class="type">Flow</span>&lt;<span class="type">List</span>&lt;<span class="type">Todo</span>&gt;&gt;
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：情报网络扩展 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>为 <code>WeatherApiService</code> 添加一个新的 POST 请求方法 <code>reportWeather</code>，用于向服务器提交一份天气观测报告。请求路径为 <code>"weather/report"</code>，需要在请求头中携带一个名为 <code>Authorization</code> 的认证令牌，请求体是一个 <code>WeatherReport</code> 对象（包含 <code>city: String</code>、<code>temperature: Double</code>、<code>notes: String</code> 三个字段）。返回一个 <code>ApiResult</code> 对象（包含 <code>success: Boolean</code> 和 <code>message: String</code>）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>需要用到三个 Retrofit 注解：<code>@POST</code> 定义请求类型和路径，<code>@Header</code> 添加请求头参数，<code>@Body</code> 标记请求体。别忘了方法需要用 <code>suspend</code> 关键字修饰，以支持协程调用。先定义好 <code>WeatherReport</code> 和 <code>ApiResult</code> 两个数据类。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="cmt">// 天气观测报告（提交给服务器的情报）</span>
+<span class="kw">data class</span> <span class="type">WeatherReport</span>(
+    <span class="kw">val</span> city: <span class="type">String</span>,
+    <span class="kw">val</span> temperature: <span class="type">Double</span>,
+    <span class="kw">val</span> notes: <span class="type">String</span>
+)
+
+<span class="cmt">// 服务器返回的操作结果</span>
+<span class="kw">data class</span> <span class="type">ApiResult</span>(
+    <span class="kw">val</span> success: <span class="type">Boolean</span>,
+    <span class="kw">val</span> message: <span class="type">String</span>
+)
+
+<span class="kw">interface</span> <span class="type">WeatherApiService</span> {
+
+    <span class="cmt">// ... 其他方法保持不变 ...</span>
+
+    <span class="ann">@POST</span>(<span class="str">"weather/report"</span>)
+    <span class="kw">suspend fun</span> <span class="fn">reportWeather</span>(
+        <span class="ann">@Header</span>(<span class="str">"Authorization"</span>) <span class="param">token</span>: <span class="type">String</span>,
+        <span class="ann">@Body</span> <span class="param">report</span>: <span class="type">WeatherReport</span>
+    ): <span class="type">ApiResult</span>
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：完整侦查链路 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>为新闻 App 的 <code>NewsViewModel</code> 添加一个"收藏新闻"功能。要求：(1) 新增一个 <code>_favorites</code> 状态，类型为 <code>MutableStateFlow&lt;Set&lt;Int&gt;&gt;</code>，存储被收藏文章的 id 集合；(2) 实现 <code>toggleFavorite(articleId: Int)</code> 方法，切换收藏/取消收藏；(3) 提供一个 <code>isFavorite(articleId: Int): Boolean</code> 方法供 UI 判断某篇文章是否被收藏。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content">
+          <p>使用 <code>Set&lt;Int&gt;</code> 来存储收藏的文章 id，这样查找和去重都很高效。<code>toggleFavorite</code> 方法的核心逻辑是：如果 id 已经在集合中就移除，否则就添加。注意 <code>StateFlow</code> 基于引用比较来判断值是否变化，所以每次更新时需要创建新的 Set 实例。<code>isFavorite</code> 方法直接检查 <code>_favorites.value</code> 中是否包含该 id 即可。</p>
+        </div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+<pre><code><span class="kw">class</span> <span class="type">NewsViewModel</span> : <span class="type">ViewModel</span>() {
+
+    <span class="cmt">// ... repository、uiState 等保持不变 ...</span>
+
+    <span class="cmt">// 收藏档案：存储被收藏文章的 id 集合</span>
+    <span class="kw">private val</span> _favorites = <span class="type">MutableStateFlow</span>&lt;<span class="type">Set</span>&lt;<span class="type">Int</span>&gt;&gt;(<span class="fn">emptySet</span>())
+    <span class="kw">val</span> favorites: <span class="type">StateFlow</span>&lt;<span class="type">Set</span>&lt;<span class="type">Int</span>&gt;&gt; = _favorites.<span class="fn">asStateFlow</span>()
+
+    <span class="cmt">// 切换收藏状态</span>
+    <span class="kw">fun</span> <span class="fn">toggleFavorite</span>(<span class="param">articleId</span>: <span class="type">Int</span>) {
+        <span class="kw">val</span> current = _favorites.value
+        _favorites.value = <span class="kw">if</span> (articleId <span class="kw">in</span> current) {
+            current - articleId    <span class="cmt">// 取消收藏：从集合中移除</span>
+        } <span class="kw">else</span> {
+            current + articleId    <span class="cmt">// 加入收藏：添加到集合中</span>
+        }
+    }
+
+    <span class="cmt">// 检查是否已收藏</span>
+    <span class="kw">fun</span> <span class="fn">isFavorite</span>(<span class="param">articleId</span>: <span class="type">Int</span>): <span class="type">Boolean</span> {
+        <span class="kw">return</span> articleId <span class="kw">in</span> _favorites.value
+    }
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+  </div>
+
+  <!-- ========== 底部导航 ========== -->
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+</body>
+</html>
