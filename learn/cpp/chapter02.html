@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第2章：构建系统入门：CMake 核心概念 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter02.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第2章：构建系统入门：CMake 核心概念 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter02.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="2" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：构建系统入门：CMake 核心概念</h1>
+  <p class="chapter-subtitle">写代码只是开始，把源代码变成能跑的程序才是第一关——这一章，我们把「构建」这件木工活里的家伙什儿认个遍</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「木匠做活，三分手艺七分家伙。上一章你见识了 C++ 的工具箱，可家伙什儿再多，不会使也白搭。这一章我带你磨第一把斧子——CMake。它不写一行代码，却管着你写的每一行代码怎么变成能跑的程序。磨好这把斧子，后面十几章的工程实践才砍得动木头。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 2.1 零基础铺垫：为什么 C++ 需要构建系统 ========== -->
+  <h2>2.1 零基础铺垫：为什么 C++ 需要构建系统</h2>
+
+  <p>先从一个最简单的场景说起。假设你只有一个源文件 <code>hello.cpp</code>，把它变成可执行文件，一条命令就够了：</p>
+
+  <pre><code><span class="cmt">// hello.cpp：人生第一个 C++ 程序</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+  std::cout <span class="op">&lt;&lt;</span> <span class="str">"Hello, C++!"</span> <span class="op">&lt;&lt;</span> std::endl;
+  <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 一条命令搞定单文件编译</span>
+<span class="fn">g++</span> hello.cpp -o hello
+./hello</code></pre>
+
+  <p>但如果项目变成几十个文件呢？比如你的程序拆成了 <code>main.cpp</code>、<code>math.cpp</code>、<code>utils.cpp</code>，还引用了第三方库，直接敲 g++ 就不灵了——你要手动记住每一个文件的编译命令，还得按正确的顺序执行。手动编译多文件工程，大概长这样：</p>
+
+  <pre><code><span class="cmt"># 场景：main.cpp 依赖 math.cpp 和 utils.cpp</span>
+<span class="fn">g++</span> -c main.cpp -o main.o
+<span class="fn">g++</span> -c math.cpp -o math.o
+<span class="fn">g++</span> -c utils.cpp -o utils.o
+<span class="fn">g++</span> main.o math.o utils.o -o app</code></pre>
+
+  <p>这才三个源文件，命令就开始变得啰嗦。工程一旦上了规模，<strong>手动编译会撞上三堵墙</strong>。第一堵是<strong>依赖顺序</strong>：C++ 的链接器（linker）处理目标文件时，被依赖的库要放在依赖它的库后面，顺序错了就会报 <code>undefined reference</code>（未定义的引用）——说白了就是"链接器找不到你要的函数"。第二堵是<strong>重复编译</strong>：你只改了一个文件，却要把几十个文件全部重新编译一遍，浪费时间。第三堵是<strong>跨平台</strong>：Linux 上编译用 <code>g++</code>，Windows 上用的是 MSVC 的 <code>cl</code>，命令参数完全两套，同一个项目换个系统就得重写一遍编译命令。</p>
+
+  <pre><code><span class="cmt"># 链接时库的顺序有讲究：被依赖的库要放在后面</span>
+<span class="fn">g++</span> main.o -lmath -lutils -o app    <span class="cmt"># 正确</span>
+<span class="fn">g++</span> main.o -lutils -lmath -o app    <span class="cmt"># 如果 utils 依赖 math，这里就会 undefined reference</span>
+
+<span class="cmt"># 同一段代码，Windows 上是另一套命令</span>
+<span class="fn">cl</span> /EHsc main.cpp math.cpp utils.cpp /Fe:app.exe</code></pre>
+
+  <p>于是<strong>构建系统</strong>（build system）就诞生了。说人话：构建系统就是自动帮你回答三个问题的程序——<strong>哪些文件要编译、按什么顺序、用什么参数</strong>，而且它还会记住上次编译的结果，你改了一个文件，它就只重编那一个。C++ 生态里的构建系统也有个演进谱系：1977 年问世的 <code>make</code> 是最古老也最普及的一位（至今仍是 Linux 构建的基石），后来出现了自动化程度更高的 autotools（GNU 工具链的官方配置方案），2000 年诞生的 <strong>CMake</strong> 则凭借跨平台能力成为现代 C++ 的事实标准，再往后还有追求更快的 <code>ninja</code>（2011 年）和更现代的 <code>meson</code>（2013 年）。本章的主角就是 CMake。</p>
+
+  <table>
+    <tr><th>痛点</th><th>手动 g++ 编译</th><th>构建系统处理</th></tr>
+    <tr><td>依赖顺序</td><td>自己记库的先后顺序，错了报 undefined reference</td><td>按 CMakeLists.txt 声明自动排序</td></tr>
+    <tr><td>重复编译</td><td>改一个文件，全部文件重编</td><td>只重编有改动的文件（增量编译）</td></tr>
+    <tr><td>跨平台</td><td>g++ / cl 两套命令，到处重写</td><td>一份配置，各平台生成对应构建文件</td></tr>
+    <tr><td>第三方库</td><td>手动拼 -I（头文件路径）和 -l（库名）</td><td>用 find_package / target_link_libraries 声明式解决</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>先分清两个词：<strong>编译</strong>（compile）是把单个源文件变成机器码目标文件（.o），干这活的是编译器；<strong>构建</strong>（build）是决定"编译哪些文件、按什么顺序、最后怎么拼成可执行文件"的整套流程，干这活的是构建系统。别把构建当编译，也别把编译器当构建系统——工具分工不同，磨斧子之前先认清楚哪把是斧子。</p>
+  </div>
+
+  <!-- ========== 2.2 CMake 是什么：跨平台构建系统生成器 ========== -->
+  <h2>2.2 CMake 是什么：跨平台构建系统生成器</h2>
+
+  <p><strong>CMake</strong> 是开源的跨平台构建工具，它的官方定位是"<strong>build system generator</strong>"——构建系统生成器。这个定位很关键：<strong>CMake 自己并不编译代码</strong>，它只读一份描述工程结构的文件（<code>CMakeLists.txt</code>），然后为你生成一份"施工图"：在 Linux 上生成 Makefile，在 Windows 上生成 Visual Studio 工程，在 macOS 上生成 Xcode 工程，也可以生成 ninja 的构建文件。说人话：CMake 是"构建系统的制造商"，你给它一份图纸，它按图纸造出你当前平台能用的施工文件，真正的砌墙（编译）交给 make、ninja 这些"施工队"。</p>
+
+  <p>这套设计带来一个巨大的好处：<strong>一次编写，到处生成</strong>。工程换平台时，<code>CMakeLists.txt</code> 一行不用改，重新跑一次 CMake，就得到新平台对应的构建文件。这就是为什么现代 C++ 项目（包括 vcpkg、jsoncpp、spdlog 这些库）几乎清一色用 CMake 组织工程。先确认你机器上的 CMake 可用：</p>
+
+  <pre><code><span class="cmt"># 查看 CMake 版本（输出形如 cmake version 3.22.1）</span>
+<span class="fn">cmake</span> --version</code></pre>
+
+  <pre><code><span class="cmt"># CMakeLists.txt —— 一份最简"图纸"（后面 2.3 节逐行讲解）</span>
+<span class="fn">cmake_minimum_required</span>(VERSION <span class="num">3.10</span>)
+<span class="fn">project</span>(hello <span class="type">CXX</span>)
+<span class="fn">add_executable</span>(hello main.cpp)</code></pre>
+
+  <p>CMake 的工作分两个阶段。<strong>配置阶段</strong>（configure）：读取 CMakeLists.txt，检查编译器、头文件、库是否就绪，把结果写进构建目录；<strong>生成阶段</strong>（generate）：根据配置结果生成构建文件。跑起来是这个样子（版本不同，输出细节略有差异）：</p>
+
+  <pre><code><span class="cmt"># -S 指定源码目录，-B 指定构建目录（CMake 3.13+ 的新写法）</span>
+<span class="fn">cmake</span> -S . -B build
+<span class="cmt"># 输出示例：</span>
+<span class="cmt"># -- The C compiler identification is GNU 11.4.0</span>
+<span class="cmt"># -- The CXX compiler identification is GNU 11.4.0</span>
+<span class="cmt"># -- Configuring done</span>
+<span class="cmt"># -- Generating done</span>
+<span class="cmt"># -- Build files have been written to: /path/to/project/build</span></code></pre>
+
+  <p>CMake 支持的生成器（generator）不止一种，常用的大致如下——记住"生成器 = CMake 生成的施工图类型"就够了：</p>
+
+  <table>
+    <tr><th>生成器</th><th>生成的构建文件</th><th>典型平台</th></tr>
+    <tr><td>Unix Makefiles（默认）</td><td>Makefile</td><td>Linux / macOS 命令行</td></tr>
+    <tr><td>Ninja</td><td>build.ninja</td><td>跨平台，构建速度最快</td></tr>
+    <tr><td>Visual Studio 17 2022</td><td>.sln / .vcxproj</td><td>Windows + MSVC</td></tr>
+    <tr><td>Xcode</td><td>.xcodeproj</td><td>macOS + Xcode IDE</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>cmake -S . -B build</code> 只完成了"配置 + 生成"，<strong>并没有编译你的代码</strong>。要真正得到可执行文件，还得再执行 <code>cmake --build build</code>（或进入 build 目录跑 make）。新手最常见的困惑就是"我明明 cmake 了，怎么没有可执行文件"——因为 CMake 不是编译器，它只是把施工图画好了，砖还没砌。</p>
+  </div>
+
+  <!-- ========== 2.3 CMakeLists.txt 基本结构：从配方到工程 ========== -->
+  <h2>2.3 CMakeLists.txt 基本结构：从配方到工程</h2>
+
+  <p><code>CMakeLists.txt</code> 是 CMake 的"配方"文件（名字固定，大小写敏感，不能写成别的），放在工程根目录。它由一条条<strong>命令</strong>（command）组成，语法形如 <code>命令名(参数...)</code>。核心命令只有几个，先把它们认全：<code>cmake_minimum_required</code>（声明最低 CMake 版本）、<code>project</code>（声明工程名和语言）、<code>add_executable</code>（声明要生成的可执行文件）、<code>add_library</code>（声明要生成的库）、<code>target_link_libraries</code>（声明目标之间的链接关系）、<code>target_include_directories</code>（声明头文件搜索目录）。</p>
+
+  <p>一个完整的最小工程长这样。<strong>注意顺序</strong>：<code>cmake_minimum_required</code> 必须写在第一行（它是 CMake 的"版本准入"声明），<code>project</code> 紧随其后，之后才能创建目标：</p>
+
+  <pre><code><span class="cmt"># CMakeLists.txt —— 完整的最小工程</span>
+<span class="fn">cmake_minimum_required</span>(VERSION <span class="num">3.10</span>)   <span class="cmt"># 第一行：声明最低 CMake 版本</span>
+<span class="fn">project</span>(hello <span class="type">CXX</span>)                  <span class="cmt"># 工程名 hello，语言 C++</span>
+<span class="fn">add_executable</span>(hello main.cpp)        <span class="cmt"># 用 main.cpp 编译出可执行文件 hello</span></code></pre>
+
+  <pre><code><span class="cmt"># 工程目录结构：源码 + 一份 CMakeLists.txt 就够了</span>
+hello/
+  CMakeLists.txt
+  main.cpp
+
+<span class="cmt"># 配置 + 构建 + 运行（三连）</span>
+<span class="fn">cmake</span> -S . -B build
+<span class="fn">cmake</span> --build build
+./build/hello</code></pre>
+
+  <p>工程变大后，通常会把代码按模块拆成<strong>库</strong>（library），再链接进主程序。<code>add_library</code> 的第二个参数指定库的类型：<code>STATIC</code>（静态库，编译期就拼进可执行文件）、<code>SHARED</code>（动态库，运行时加载）、<code>INTERFACE</code>（纯头文件库，后面 2.5 节细说）。链接关系用 <code>target_link_libraries</code> 声明，头文件搜索目录用 <code>target_include_directories</code> 声明：</p>
+
+  <pre><code><span class="cmt"># 模块化：把 math 和 utils 编成静态库，再链接进主程序</span>
+<span class="fn">add_library</span>(mathlib <span class="type">STATIC</span> math.cpp)                    <span class="cmt"># 生成 libmathlib.a</span>
+<span class="fn">add_library</span>(utils <span class="type">STATIC</span> utils.cpp)                     <span class="cmt"># 生成 libutils.a</span>
+<span class="fn">add_executable</span>(app main.cpp)
+<span class="fn">target_include_directories</span>(mathlib <span class="kw">PUBLIC</span> include)      <span class="cmt"># 头文件在 include/ 目录</span>
+<span class="fn">target_link_libraries</span>(app <span class="kw">PRIVATE</span> mathlib utils)       <span class="cmt"># app 链接两个库</span></code></pre>
+
+  <p>再配合两个常用的"全局设置"命令：<code>set</code> 设置变量（比如指定 C++ 标准），<code>message</code> 在配置时打印信息方便调试。注意 <code>CMAKE_CXX_STANDARD</code> 这类 <code>CMAKE_*</code> 开头的名字是 CMake 预定义的<strong>缓存变量</strong>（cache variable），它们的值会被记住，后面 2.6 节还会用到：</p>
+
+  <pre><code><span class="cmt"># 指定 C++ 标准 + 配置期打印一行信息</span>
+<span class="fn">set</span>(<span class="param">CMAKE_CXX_STANDARD</span> <span class="num">17</span>)               <span class="cmt"># 用 C++17</span>
+<span class="fn">set</span>(<span class="param">CMAKE_CXX_STANDARD_REQUIRED</span> <span class="kw">ON</span>)    <span class="cmt"># 编译器不支持 C++17 就直接报错</span>
+<span class="fn">message</span>(<span class="type">STATUS</span> <span class="str">"配置完成，构建目标: app"</span>)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>CMake 命令名不区分大小写（<code>ADD_EXECUTABLE</code> 和 <code>add_executable</code> 等价），但社区惯例是全小写，跟着惯例走。反过来，<strong>变量名是大小写敏感的</strong>：<code>${CMAKE_CXX_STANDARD}</code> 和 <code>${cmake_cxx_standard}</code> 是两个完全不同的变量。还有一处细节：命令名和左括号之间不能有空格（<code>add_executable (app main.cpp)</code> 是错的，官方文档明确不推荐），参数之间则随意。</p>
+  </div>
+
+  <!-- ========== 2.4 out-of-source 构建：别把工地建在图纸上 ========== -->
+  <h2>2.4 out-of-source 构建：别把工地建在图纸上</h2>
+
+  <p>CMake 配置时会在目标目录里生成一大堆中间文件：<code>CMakeCache.txt</code>（缓存的配置变量）、<code>CMakeFiles/</code>（各种中间产物）、Makefile 等。如果你直接在源码目录里跑 <code>cmake .</code>，这些文件就会和你的源代码混在一起——这就是 <strong>in-source 构建</strong>（源码内构建），新手很容易踩。它的坏处有三个：源码目录被弄得乱七八糟；<code>CMakeCache.txt</code> 里残留的旧配置会影响下次配置；一个源码目录同时只能有一种构建配置（不能既配 Release 又配 Debug）。</p>
+
+  <p>正确的姿势是 <strong>out-of-source 构建</strong>（源码外构建）：单独建一个 <code>build/</code> 目录，所有构建产物都放进去，源码目录保持干净。经典的三步流程是 <code>mkdir</code> → <code>cd</code> → <code>cmake</code> → <code>make</code>，很多老教程都是这么教的：</p>
+
+  <pre><code><span class="cmt"># 经典流程：建目录 → 进入 → 配置 → 构建</span>
+<span class="fn">mkdir</span> build <span class="op">&amp;&amp;</span> <span class="fn">cd</span> build
+<span class="fn">cmake</span> ..
+<span class="fn">make</span></code></pre>
+
+  <pre><code><span class="cmt"># 新式流程（CMake 3.13+）：-S 指定源码目录，-B 指定构建目录，不用 cd</span>
+<span class="fn">cmake</span> -S . -B build
+<span class="fn">cmake</span> --build build</code></pre>
+
+  <p>两种写法效果一样，推荐用新式——<code>-S/-B</code> 把"源码在哪、构建在哪"写在了命令里，一目了然。构建目录里那个 <code>CMakeCache.txt</code> 值得认识一下：它是本次配置的"记忆"，记录了所有缓存变量的值。下次改完 CMakeLists.txt 重新跑 <code>cmake -S . -B build</code>，CMake 会复用缓存、只更新变化的部分。如果改了什么关键配置导致缓存混乱（比如换了编译器），最干脆的解决办法是<strong>把 build 目录整个删掉重新配置</strong>——反正它里面全是可再生中间产物：</p>
+
+  <pre><code><span class="cmt"># 查看缓存变量（-L 只列普通缓存变量，-LH 额外显示帮助文本）</span>
+<span class="fn">cmake</span> -LH build
+
+<span class="cmt"># 彻底重新配置：删掉 build 重来，缓存不残留</span>
+<span class="fn">rm</span> -rf build <span class="op">&amp;&amp;</span> <span class="fn">cmake</span> -S . -B build</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>build/</code> 目录属于构建产物，<strong>不要提交进 git</strong>。它动辄几百 MB、每次构建都在变，提交它只会让仓库爆炸、冲突不断。在工程根目录的 <code>.gitignore</code> 里写一行 <code>build/</code> 就能把它挡在版本库之外——这也是"源码目录保持干净"的延伸。</p>
+  </div>
+
+  <!-- ========== 2.5 CMake 核心概念：target 为中心、属性、生成器表达式 ========== -->
+  <h2>2.5 CMake 核心概念：target 为中心、属性、生成器表达式</h2>
+
+  <p><strong>target</strong>（目标）是 CMake 最重要的概念。说人话：target 就是"你要构建出来的东西"——一个可执行文件（<code>add_executable</code> 创建的）或一个库（<code>add_library</code> 创建的）都是一个 target。CMake 3.0 之后，现代 CMake 的一切组织方式都以 target 为中心：<strong>依赖关系写在 target 上，而不是全局变量里</strong>。链接时的三个关键字 <code>PRIVATE</code>、<code>PUBLIC</code>、<code>INTERFACE</code> 就是用来描述"这条依赖的可见范围"的：</p>
+
+  <pre><code><span class="cmt"># 三种可见性，一句话版：</span>
+<span class="cmt"># PRIVATE   —— 只有我自己用（下游不知道、也不需要）</span>
+<span class="cmt"># PUBLIC    —— 我自己用，链接我的下游也会继承</span>
+<span class="cmt"># INTERFACE —— 我自己不用，只负责传给下游（典型：纯头文件库）</span>
+<span class="fn">target_link_libraries</span>(app <span class="kw">PRIVATE</span> mathlib)      <span class="cmt"># mathlib 只是 app 内部实现细节</span>
+<span class="fn">target_link_libraries</span>(gui <span class="kw">PUBLIC</span> app)         <span class="cmt"># 谁链接 gui，谁也能看到 app</span></code></pre>
+
+  <table>
+    <tr><th>关键字</th><th>对当前 target 生效？</th><th>传递给下游？</th><th>典型用途</th></tr>
+    <tr><td><code>PRIVATE</code></td><td>是</td><td>否</td><td>库内部实现依赖</td></tr>
+    <tr><td><code>PUBLIC</code></td><td>是</td><td>是</td><td>头文件目录、对外 API 依赖</td></tr>
+    <tr><td><code>INTERFACE</code></td><td>否</td><td>是</td><td>纯头文件库（如只含 .hpp 的库）</td></tr>
+  </table>
+
+  <p>第二个概念是<strong>属性</strong>（property）。每个 target 都带着一份"档案"，记录它的编译标准、输出文件名等配置；读写这份档案用 <code>set_target_properties</code> / <code>get_target_property</code>。常用属性有 <code>CXX_STANDARD</code>（C++ 标准）、<code>OUTPUT_NAME</code>（生成的文件名）、<code>POSITION_INDEPENDENT_CODE</code>（是否生成位置无关代码，动态库必须为 ON）：</p>
+
+  <pre><code><span class="cmt"># 给 target 设置属性：C++20 + 输出文件改名成 myapp</span>
+<span class="fn">set_target_properties</span>(app <span class="kw">PROPERTIES</span>
+  <span class="param">CXX_STANDARD</span> <span class="num">20</span>
+  <span class="param">OUTPUT_NAME</span> <span class="str">"myapp"</span>
+)
+
+<span class="cmt"># 读取属性（调试用）</span>
+<span class="fn">get_target_property</span>(out app <span class="param">OUTPUT_NAME</span>)
+<span class="fn">message</span>(<span class="type">STATUS</span> <span class="str">"输出文件是 ${out}"</span>)</code></pre>
+
+  <p>第三个概念是<strong>生成器表达式</strong>（generator expression）。说人话：它是一段 <code>$&lt;...&gt;</code> 包裹的"占位符"，在<strong>生成阶段</strong>（而不是配置阶段）才被求值，因此能根据最终的构建配置决定具体内容。比如 <code>$&lt;TARGET_FILE:mathlib&gt;</code> 会展开成库文件的完整路径，<code>$&lt;CONFIG:Debug&gt;</code> 在当前是 Debug 配置时求值为 1（否则为空）。它在 target 的链接参数、编译选项里特别常用：</p>
+
+  <pre><code><span class="cmt"># 生成时展开为库文件完整路径</span>
+<span class="fn">message</span>(<span class="type">STATUS</span> <span class="str">"mathlib 位于: </span><span class="ann">$&lt;TARGET_FILE:mathlib&gt;</span><span class="str">"</span>)
+
+<span class="cmt"># 条件编译：只有 Debug 配置才定义 DEBUG_MODE 宏</span>
+<span class="fn">target_compile_definitions</span>(app <span class="kw">PRIVATE</span>
+  <span class="ann">$&lt;$&lt;CONFIG:Debug&gt;:DEBUG_MODE&gt;</span>
+)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>初学阶段，生成器表达式 <code>$&lt;...&gt;</code> 很容易和变量引用 <code>${...}</code> 搞混，记住一句口诀：<strong>双美元看时间</strong>——<code>${VAR}</code> 在配置阶段就替换成变量值，<code>$&lt;EXPR&gt;</code> 拖到生成阶段才按最终配置算。什么时候必须用后者？当内容依赖"最终是 Debug 还是 Release、生成的文件叫什么名字"这类只有生成时才知道的信息时。</p>
+  </div>
+
+  <!-- ========== 2.6 常用命令速查：cmake 命令行手册 ========== -->
+  <h2>2.6 常用命令速查：cmake 命令行手册</h2>
+
+  <p>cmake 的命令行参数不多，掌握这一节就够日常使用了。第一类是<strong>配置命令</strong>：<code>-S</code> 指定源码目录、<code>-B</code> 指定构建目录、<code>-D</code> 设置缓存变量（可以写多个）。注意 <code>-D</code> 的本质是"往 <code>CMakeCache.txt</code> 里写一个缓存变量"，所以它必须在配置阶段传，之后想改就重新配置。最常用的两个配置项：<code>CMAKE_BUILD_TYPE</code>（构建类型，Debug/Release/RelWithDebInfo）和 <code>CMAKE_INSTALL_PREFIX</code>（安装路径，默认 <code>/usr/local</code>）：</p>
+
+  <pre><code><span class="cmt"># 配置：源码 . → 构建 build，并设置构建类型为 Release</span>
+<span class="fn">cmake</span> -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+<span class="cmt"># 多个 -D 可以连写：Release + 自定义安装路径</span>
+<span class="fn">cmake</span> -S . -B build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/home/helios/opt/myapp</code></pre>
+
+  <p>第二类是<strong>构建与安装命令</strong>：<code>--build</code> 执行构建（等价于进入 build 目录跑 make，但不用 cd）、<code>-j</code> 指定并行任务数、<code>--target</code> 只构建某个目标、<code>--install</code> 把构建产物安装到指定前缀（CMake 3.15+）：</p>
+
+  <pre><code><span class="cmt"># 构建：4 个任务并行</span>
+<span class="fn">cmake</span> --build build -j4
+
+<span class="cmt"># 只构建 mathlib 这一个目标（跳过 app）</span>
+<span class="fn">cmake</span> --build build --target mathlib
+
+<span class="cmt"># 安装到 2.6 上面配置的前缀目录</span>
+<span class="fn">cmake</span> --install build</code></pre>
+
+  <p>剩下的命令按需查阅即可，汇总成一张速查表，建议贴在手边：</p>
+
+  <table>
+    <tr><th>命令</th><th>作用</th></tr>
+    <tr><td><code>cmake --version</code></td><td>查看 CMake 版本</td></tr>
+    <tr><td><code>cmake -S 源码 -B 构建</code></td><td>配置 + 生成（3.13+ 推荐写法）</td></tr>
+    <tr><td><code>cmake -D&lt;变量&gt;=&lt;值&gt;</code></td><td>设置缓存变量，如 <code>-DCMAKE_BUILD_TYPE=Debug</code></td></tr>
+    <tr><td><code>cmake --build 构建目录</code></td><td>执行构建（可加 <code>-jN</code> 并行、<code>--target 名字</code> 指定目标）</td></tr>
+    <tr><td><code>cmake --install 构建目录</code></td><td>安装到前缀目录（3.15+）</td></tr>
+    <tr><td><code>cmake -LH 构建目录</code></td><td>列出缓存变量（带帮助）</td></tr>
+    <tr><td><code>cmake --trace</code></td><td>逐行打印 CMakeLists.txt 执行过程，排查配置问题</td></tr>
+    <tr><td><code>cmake --help</code></td><td>查看帮助；<code>cmake --help-command add_executable</code> 查具体命令</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>查 CMake 文档不用每次都开浏览器：<code>cmake --help-command add_executable</code> 能在终端直接看到该命令的完整官方说明和参数列表（输出的其实就是 cmake.org 文档的本地副本）。离线也能查，这个习惯在没网的环境里特别救命。</p>
+  </div>
+
+  <!-- ========== 2.7 与 Makefile 的关系：生成器在背后做了什么 ========== -->
+  <h2>2.7 与 Makefile 的关系：生成器在背后做了什么</h2>
+
+  <p>Linux 上 CMake 的默认生成器是 "Unix Makefiles"，也就是说 <code>cmake -S . -B build</code> 之后，build 目录里躺着的就是一份 <code>Makefile</code>。你执行 <code>cmake --build build</code> 时，CMake 其实是在背后帮你调用了 <code>make</code>。<code>make</code> 读 Makefile，按里面的规则逐条执行编译命令。想看看 CMake 到底生成了什么、make 到底执行了什么命令，两个手段：一是直接 <code>ls build</code>，二是构建时加 <code>VERBOSE=1</code>：</p>
+
+  <pre><code><span class="cmt"># 配置后 build 目录长这样（Makefile 就是 CMake 生成的施工图）</span>
+<span class="fn">ls</span> build
+<span class="cmt"># CMakeCache.txt  CMakeFiles/  Makefile  cmake_install.cmake</span>
+
+<span class="cmt"># 让 make 把执行的命令原样打印出来（VERBOSE=1）</span>
+<span class="fn">make</span> -C build VERBOSE=1
+<span class="cmt"># 输出示例（能看到真实的 g++ 调用）：</span>
+<span class="cmt"># /usr/bin/c++ -MD -MT CMakeFiles/app.dir/main.cpp.o \</span>
+<span class="cmt">#   -MF CMakeFiles/app.dir/main.cpp.o.d -o CMakeFiles/app.dir/main.cpp.o -c main.cpp</span></code></pre>
+
+  <p>make 之所以能做到"只重编改过的文件"，靠的是<strong>时间戳比较</strong>：Makefile 里记录了每个目标文件依赖哪些源文件（上面输出里的 <code>-MD -MF</code> 就是让编译器生成这种依赖清单 <code>.d</code> 文件），构建时 make 比较源文件和目标文件的修改时间，源文件更新才重新编译。这套增量编译机制由 CMake 生成的 Makefile 自动维护，你完全不用操心。想看看当前工程有哪些可用的 make 目标，直接问 make：</p>
+
+  <pre><code><span class="cmt"># 列出 Makefile 里的全部目标</span>
+<span class="fn">make</span> -C build help
+<span class="cmt"># 输出示例（节选）：</span>
+<span class="cmt"># ... app</span>
+<span class="cmt"># ... mathlib</span>
+<span class="cmt"># The following are some of the valid targets for this Makefile:</span>
+<span class="cmt"># ... all (the default if no target is provided)</span>
+<span class="cmt"># ... clean</span>
+<span class="cmt"># ... rebuild_cache</span></code></pre>
+
+  <p>那么问题来了：既然最后跑的还是 make，为什么不直接手写 Makefile？答案是<strong>跨平台与可维护性</strong>。Makefile 本身是一门方言——GNU make 的语法和 BSD make 不完全一样，Windows 上还没有 make 的对应物；而且手写 Makefile 要自己处理依赖扫描、编译器探测、跨平台差异这些脏活。CMake 的价值在于：你写一份声明式的 <code>CMakeLists.txt</code>，它替你生成各平台各自"正宗"的构建文件。什么时候值得手写 Makefile？只有一种情况：工程极小（一两个文件）、且确定只在 Linux 上用 <code>make</code> 构建——但即便如此，现在的主流选择依然是"小工程也上 CMake"，因为后续加库、加测试、加安装时不用推倒重来。追求更快的构建时，还可以给 CMake 指定 <code>ninja</code> 生成器（<code>cmake -G Ninja -S . -B build</code>，配合 <code>cmake --build build</code>），构建文件从 Makefile 换成 <code>build.ninja</code>，用法完全一样。</p>
+
+  <p>至此你已经有了一套完整的"构建"技能：认识构建系统、写 CMakeLists.txt、out-of-source 构建、理解 target 与生成器表达式、查命令行、知道 make 在背后干什么。下一章我们就要动手了——从源码编译安装编译器 GCC 本身，看看工具链最底层的那块砖是怎么砌起来的。到时候你会发现，手里这把 CMake 的斧子，正好用来验证安装好的 GCC 能不能正常干活。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念四连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>构建系统</code>、<code>CMake</code>、<code>target</code>、<code>out-of-source 构建</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个概念对应"调度员 / 图纸制造商 / 产品 / 工地选址"四个角色。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>构建系统：自动决定"哪些文件要编译、按什么顺序、用什么参数"并支持增量编译的程序（如 make）；CMake：跨平台的构建系统生成器，读 CMakeLists.txt 生成各平台的构建文件，自己不做编译；target：CMake 里"要构建出来的东西"，可执行文件或库都是一个 target，现代 CMake 以 target 为中心组织依赖；out-of-source 构建：把构建产物放在单独的 build/ 目录（而非源码目录），保持源码干净、支持多种配置并存。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：补全 CMakeLists.txt <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>工程结构如下：<code>main.cpp</code> 调用了 <code>math.h</code> 里的函数，<code>math.h</code> 在 <code>include/</code> 目录，实现文件是 <code>math.cpp</code>。要求：可执行文件叫 <code>app</code>，math 部分编成静态库 <code>mathlib</code> 再链接。请写出完整的 CMakeLists.txt（提示：需要 5 个命令）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用到的命令：cmake_minimum_required / project / add_library / add_executable / target_include_directories / target_link_libraries——数一数，其实六个，顺序别乱。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <pre><code><span class="fn">cmake_minimum_required</span>(VERSION <span class="num">3.10</span>)
+<span class="fn">project</span>(demo <span class="type">CXX</span>)
+
+<span class="fn">add_library</span>(mathlib <span class="type">STATIC</span> math.cpp)
+<span class="fn">add_executable</span>(app main.cpp)
+
+<span class="fn">target_include_directories</span>(mathlib <span class="kw">PUBLIC</span> include)   <span class="cmt"># main.cpp 要 #include &lt;math.h&gt;</span>
+<span class="fn">target_link_libraries</span>(app <span class="kw">PRIVATE</span> mathlib)</code></pre>
+          <p>要点：<code>target_include_directories</code> 用 <code>PUBLIC</code>——因为 <code>math.h</code> 不仅 mathlib 内部用，链接它的 app 也要能找到；若用 <code>PRIVATE</code>，app 编译时会报找不到头文件。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：链接顺序与可见性 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>(a) 为什么手动 <code>g++ main.o -lutils -lmath</code> 在 utils 依赖 math 时会报 undefined reference，而 CMake 里 <code>target_link_libraries(app PRIVATE utils math)</code> 就不会？(b) <code>PRIVATE</code>、<code>PUBLIC</code>、<code>INTERFACE</code> 三者对"下游 target"的可见性分别是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(a) 想想链接器从左到右处理库的顺序；(b) 回想 2.5 节的表格——"当前 target 用不用"和"下游知不知道"是两个维度。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 链接器从左到右扫描库，被依赖的库必须出现在依赖它的库<strong>之后</strong>，否则扫描到 utils 时 math 还没被加载，符号找不到就报 undefined reference。CMake 会自动按依赖关系重排库的链接顺序，所以声明式写法不会踩这个坑——这正是构建系统的价值之一。(b) PRIVATE：当前 target 内部可见，下游完全不知道；PUBLIC：当前 target 内部可见，下游也继承；INTERFACE：当前 target 内部不可见（它自己不链接），只把依赖传给下游，典型场景是纯头文件库。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：动手搭一个工程 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>实操：按练习 2 的结构建一个真实工程（main.cpp 里随便调用一个 math 函数），完成以下步骤并记录输出——① <code>cmake -S . -B build</code> 配置；② <code>cmake --build build -j4</code> 构建并运行；③ 修改 main.cpp 加一行代码，再构建，观察 make 是否<strong>只重编了 main.cpp 这一个文件</strong>；④ 用 <code>make -C build VERBOSE=1</code> 看一次真实的 g++ 编译命令；⑤ 重新用 <code>-DCMAKE_BUILD_TYPE=Release</code> 配置一次，对比 build 目录里可执行文件大小的变化。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>①②③④的观察点分别在 2.3、2.4、2.7 节；第⑤步注意——改了 <code>-D</code> 后要重新跑 <code>cmake -S . -B build</code> 让新配置生效（为什么？想想 <code>-D</code> 写进哪里）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 配置输出以 <code>-- Configuring done / -- Generating done / -- Build files have been written to</code> 结尾；② 可执行文件在 <code>build/app</code>；③ 增量编译生效，输出里只有 <code>main.cpp.o</code> 被重建（math.cpp.o 没有动静）；④ VERBOSE=1 能看到形如 <code>/usr/bin/c++ -MD -MT ... -c main.cpp</code> 的真实命令；⑤ Release 不携带调试符号、带优化，可执行文件通常显著变小——但注意：<code>-DCMAKE_BUILD_TYPE</code> 写入的是 <code>CMakeCache.txt</code>，所以必须重新跑一次配置（<code>cmake -S . -B build -DCMAKE_BUILD_TYPE=Release</code>）再 <code>cmake --build build</code>，直接 --build 不会生效。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

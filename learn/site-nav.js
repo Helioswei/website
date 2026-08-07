@@ -149,6 +149,39 @@ window.SITE_NAV = {
           { num: 16, title: "二次开发与移植新屏", mentor: "鲁班", method: "工欲善其事" }
         ]}
       ]
+    },
+    {
+      id: "cpp",
+      name: "C++ 工程实践",
+      accent: "#4a6b5d",
+      desc: "C++ 工程实践教程（工具链 / 包管理 / 测试 / 调试）",
+      tagline: "从工具链到工程化：GCC、CMake、vcpkg、测试、调试，一条把 C++ 写出生产级的路径",
+      parts: [
+        { title: "工程准备", chapters: [
+          { num: 1, title: "C++ 生态与开发环境全景", mentor: "费曼", method: "第一性原理" },
+          { num: 2, title: "构建系统入门：CMake 核心概念", mentor: "鲁班", method: "工欲善其事" },
+          { num: 3, title: "编译器与工具链：GCC 源码安装", mentor: "狄仁杰", method: "系统分析" },
+          { num: 4, title: "环境变量与多版本 GCC 切换", mentor: "柯南", method: "真相只有一个" }
+        ]},
+        { title: "包管理与第三方库", chapters: [
+          { num: 5, title: "包管理工具 vcpkg 入门", mentor: "鲁班", method: "工欲善其事" },
+          { num: 6, title: "JSON 处理：jsoncpp 实战", mentor: "柯南", method: "追踪数据流" },
+          { num: 7, title: "日志库：从 printf 到 spdlog", mentor: "福尔摩斯", method: "排除不可能" },
+          { num: 8, title: "REST 服务：pistache 实战", mentor: "诸葛亮", method: "运筹帷幄" }
+        ]},
+        { title: "测试与通信", chapters: [
+          { num: 9, title: "单元测试：gtest 与覆盖率", mentor: "包青天", method: "铁面无私" },
+          { num: 10, title: "远程调用：gRPC 入门", mentor: "达芬奇", method: "艺术与工程" },
+          { num: 11, title: "通用库：POCO 集成", mentor: "狄仁杰", method: "系统分析" },
+          { num: 12, title: "文档与代码分析：Doxygen", mentor: "福尔摩斯", method: "排除不可能" }
+        ]},
+        { title: "深入工程实践", chapters: [
+          { num: 13, title: "库的集成模式：静态库 / 动态库 / 链接", mentor: "费曼", method: "第一性原理" },
+          { num: 14, title: "调试实战：GDB 与断点", mentor: "包青天", method: "铁面无私" },
+          { num: 15, title: "性能分析入门", mentor: "诸葛亮", method: "运筹帷幄" },
+          { num: 16, title: "生态收尾：工具链全景回顾", mentor: "鲁班", method: "工欲善其事" }
+        ]}
+      ]
     }
   ]
 };

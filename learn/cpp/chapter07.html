@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第7章：日志库：从 printf 到 spdlog - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter07.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第7章：日志库：从 printf 到 spdlog - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter07.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="7" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：日志库：从 printf 到 spdlog</h1>
+  <p class="chapter-subtitle">printf 让你看见程序在跑，日志让你还原它为什么出错——从随手打印，到专业的黑匣子</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「当你排除了所有不可能的情况，剩下的，不管多么难以置信，那一定就是真相。日志就是侦探的第一手证据——printf 能让你看见程序在跑，却看不见它为什么出了错。这一章，我们从『随手打印』走向『专业记录』。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 零基础铺垫：为什么 printf 不够用 ========== -->
+  <h2>7.1 零基础铺垫：为什么 printf 不够用</h2>
+
+  <p>先回答一个最朴素的问题：<strong>什么是日志（log）？</strong>说人话，日志就是程序运行过程中留下的记录——什么时间连上了服务器、收到了多少数据、哪里超时重试了，一一写下来。它像飞机的黑匣子：平时没人看，一旦出事，它是还原现场的第一手证据。几乎每个 C++ 新手的第一行"调试代码"都是 <code>printf</code>，因为打印是最直觉的观察方式。但当你真正排查一个跑了很久的程序时，printf 会暴露三个致命伤。</p>
+
+  <p><strong>第一，没有级别。</strong>几十行输出混在一起，你分不清哪条是"正常通知"、哪条是"这里要出事了"。出问题时只能从头到尾一行行人肉扫描。<strong>第二，没有时间戳。</strong>无法判断事件发生的先后顺序，也就无法重建时间线——而"先发生了什么"往往是定位 bug 的关键。<strong>第三，生产环境关不掉。</strong>上线之后你想关掉调试输出，唯一的办法是注释代码、重新编译、重新部署，而生产环境恰恰最怕这种动静。这三点合起来，就是福尔摩斯说的"不可能三角"：你不可能靠 printf 同时做到<b>分级、带时间、可开关</b>。</p>
+
+  <p>再补一刀：<strong>多线程下 printf 也靠不住。</strong>虽然单次 <code>printf</code> 调用本身是线程安全的，但你的"一条日志"往往由多次调用拼成（先打印前缀、再打印数值、再打印换行），多个线程的输出会互相穿插，一条完整的日志被撕成碎片。所以结论很清晰：printf 适合"临时看一眼"，不适合"长期记录"。日志库（logging library）就是来接管这件事的——它把"记录"标准化：自动带时间戳、按级别过滤、随时开关、写文件还能轮转（rotation，即日志文件满了自动滚动换新文件，后文细讲）。</p>
+
+  <pre><code><span class="cmt">// 用 printf 排查：信息挤成一团，没有时间、没有级别、没有归属</span>
+<span class="fn">printf</span>(<span class="str">"connect ok fd=%d\n"</span>, <span class="param">fd</span>);
+<span class="fn">printf</span>(<span class="str">"timeout, retrying...\n"</span>);
+<span class="fn">printf</span>(<span class="str">"recv %zu bytes\n"</span>, <span class="param">n</span>);
+<span class="fn">printf</span>(<span class="str">"user=%s\n"</span>, <span class="param">uid</span>.c_str()); <span class="cmt">// 上线后想关掉这一条？注释、重编译、重启</span></code></pre>
+
+  <pre><code><span class="cmt">// 同样的事交给日志库（spdlog 写法，7.5 节细讲）</span>
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">info</span>(<span class="str">"connect ok fd={}"</span>, <span class="param">fd</span>);
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">warn</span>(<span class="str">"timeout, retrying..."</span>);
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">info</span>(<span class="str">"recv {} bytes"</span>, <span class="param">n</span>);
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">debug</span>(<span class="str">"user={}"</span>, <span class="param">uid</span>); <span class="cmt">// 生产环境把级别调到 info，这行自动消失，不用改代码</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>福尔摩斯办案的第一原则是"先看现场"。日志就是你程序的案发现场：<strong>时间戳</strong>告诉你是几点出的事，<strong>级别</strong>告诉你要优先看哪几行，<strong>可开关</strong>让你在不惊动生产的情况下随时加装监控。把这三点当成日志库的"体检标准"，后面选库、配库都有谱。</p>
+  </div>
+
+  <!-- ========== 7.2 日志级别：给每条信息一个身份 ========== -->
+  <h2>7.2 日志级别：给每条信息一个身份</h2>
+
+  <p><strong>日志级别（log level）</strong>说人话，就是给每条日志标上的"重要程度"，像新闻的紧急程度分级：天气预报是例行播报，台风红色预警就是头等大事。有了级别，程序运行时就可以按阈值过滤——低于阈值的日志干脆不写，既不打扰运行，也不浪费磁盘。这正是 7.1 里 printf 做不到的事。</p>
+
+  <p>spdlog 定义了六档级别，从低到高依次是 <strong>trace / debug / info / warn / error / critical</strong>：trace 最琐碎（每个函数进出的细节），debug 是调试期才关心的信息，info 是正常业务事件（服务启动、连接建立），warn 表示可疑但不致命（重试了一次、磁盘快满了），error 表示出错了但程序还活着，critical 是致命错误（内存耗尽、配置损坏，程序马上要完）。这套命名是社区约定俗成的，换个日志库（比如 easyloggingpp 用 TRACE/DEBUG/INFO/WARNING/ERROR/FATAL，外加一个 VERBOSE 详细日志档位）只是名字略有不同，概念完全一样。</p>
+
+  <p><strong>级别过滤</strong>的规则一句话：设置级别为 X，则 X 及比 X 更严重的才输出，比 X 轻的一律不写。说人话，级别像筛子，阈值是筛孔大小——孔开在 info，trace 和 debug 就被筛掉了。开发期把阈值放低（debug 甚至 trace）看细节，生产期把阈值抬到 info，日志量立刻降一个数量级，而"重要的事"一条不少。</p>
+
+  <table>
+    <tr><th>档位（低→高）</th><th>spdlog</th><th>easyloggingpp</th><th>什么时候用</th></tr>
+    <tr><td>0</td><td>trace</td><td>TRACE</td><td>函数进出、变量值等鸡毛蒜皮</td></tr>
+    <tr><td>1</td><td>debug</td><td>DEBUG</td><td>调试期才需要的细节</td></tr>
+    <tr><td>2</td><td>info</td><td>INFO</td><td>正常的业务事件</td></tr>
+    <tr><td>3</td><td>warn</td><td>WARNING</td><td>可疑但不致命</td></tr>
+    <tr><td>4</td><td>error</td><td>ERROR</td><td>出错但程序还能继续</td></tr>
+    <tr><td>5</td><td>critical</td><td>FATAL</td><td>致命错误，程序将终止</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// spdlog：全局级别 + 各级别示例</span>
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">set_level</span>(<span class="fn">spdlog</span><span class="op">::</span><span class="fn">level</span><span class="op">::</span><span class="param">debug</span>); <span class="cmt">// 全局阈值：debug 及以上输出</span>
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">trace</span>(<span class="str">"enter loop, i={}"</span>, <span class="param">i</span>); <span class="cmt">// 比 debug 轻，被过滤</span>
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">debug</span>(<span class="str">"buffer size = {}"</span>, <span class="param">n</span>); <span class="cmt">// 输出</span>
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">info</span>(<span class="str">"server started on port 8080"</span>); <span class="cmt">// 输出</span>
+<span class="fn">spdlog</span><span class="op">::</span><span class="fn">error</span>(<span class="str">"recv failed: {}"</span>, <span class="param">err</span>); <span class="cmt">// 输出</span>
+<span class="cmt">// 把阈值抬到 info：前两条自动消失，后三条保留</span></code></pre>
+
+  <pre><code><span class="cmt">// easyloggingpp：用 LOG(级别) 宏，级别名字略有不同</span>
+<span class="ann">LOG</span>(<span class="param">INFO</span>) <span class="op">&lt;&lt;</span> <span class="str">"server started"</span>;
+<span class="ann">LOG</span>(<span class="param">DEBUG</span>) <span class="op">&lt;&lt;</span> <span class="str">"cache hit, key="</span> <span class="op">&lt;&lt;</span> <span class="param">key</span>;
+<span class="ann">LOG</span>(<span class="param">WARNING</span>) <span class="op">&lt;&lt;</span> <span class="str">"disk usage over 90%"</span>;
+<span class="ann">LOG</span>(<span class="param">ERROR</span>) <span class="op">&lt;&lt;</span> <span class="str">"cannot open config file"</span>;
+<span class="ann">LOG</span>(<span class="param">FATAL</span>) <span class="op">&lt;&lt;</span> <span class="str">"out of memory, abort"</span>;</code></pre>
+
+  <div class="warning">
+    <p><strong>级别不是装饰品</strong>：把一切都写成 <code>info</code>，等于没有级别。排障时你要靠级别快速过滤，级别写准了，福尔摩斯才能"排除不可能"——直接跳过噪音，锁定 error 以上的行。</p>
+  </div>
+
+  <!-- ========== 7.3 easyloggingpp 入门：两个文件搞定日志 ========== -->
+  <h2>7.3 easyloggingpp 入门：两个文件搞定日志</h2>
+
+  <p>先认识本章的第一位选手：<strong>easyloggingpp</strong>（GitHub 上叫 <code>amrayn/easyloggingpp</code>，作者 Majid Q.）。作者在实战笔记里记录过它的真实用法（素材笔记《日志库LOG的使用》）——笔记里把它俗称 easyloggingcpp，官方文件名其实是 <code>easylogging++.h</code> 和 <code>easylogging++.cc</code>。它最大的特点是<strong>轻</strong>：整个库就这两个文件，不用安装、不依赖任何第三方库，直接把两个文件放进自己的项目一起编译就行，素材笔记原话是"直接把 easyloggingcpp.h 和 easyloggingcpp.cpp 放到自己的项目中进行编译就好了"。这种"扔进项目就能用"的形态，对不想引入复杂构建的项目非常友好。</p>
+
+  <p>用它的关键一步，是在 <strong>main 所在的文件</strong>里、最后一个 <code>#include</code> 之后写一行 <code>INITIALIZE_EASYLOGGINGPP</code>。<strong>宏（macro）</strong>说人话就是"预处理阶段展开的一小段代码"；这个宏会展开成一堆全局变量的定义，所以<strong>整个程序只能出现一次</strong>——放两处就会编译报"重复定义"错误，官方文档的原话是"should be used once and once-only"（只能且必须使用一次）。写日志则用 <code>LOG(INFO) &lt;&lt; "..."</code> 这种流式写法，和 <code>std::cout</code> 的手感几乎一样，后面接数字、字符串、变量都行。</p>
+
+  <p>编译也很直接：把两个文件一起交给编译器（官方 README 的编译命令）：<code>g++ main.cc easylogging++.cc -o prog -std=c++11</code>。注意 easyloggingpp 要求 C++11 及以上。跑起来后，每条日志会自动带上时间和级别——这个"开箱即用"的体验，正是它当年在嵌入式和小项目里流行的原因。</p>
+
+  <pre><code><span class="cmt">// main.cc —— easyloggingpp 最小示例（素材笔记的真实用法）</span>
+<span class="ann">#include</span> <span class="str">"easylogging++.h"</span>
+<span class="ann">INITIALIZE_EASYLOGGINGPP</span> <span class="cmt">// 只能出现一次，放在 main 所在文件的最后一个 include 之后</span>
+
+<span class="type">int</span> <span class="fn">main</span>(<span class="type">int</span> <span class="param">argc</span>, <span class="type">char</span><span class="op">*</span> <span class="param">argv</span><span class="op">[]</span>) {
+    <span class="ann">LOG</span>(<span class="param">INFO</span>) <span class="op">&lt;&lt;</span> <span class="str">"My first info log using default logger"</span>;
+    <span class="ann">LOG</span>(<span class="param">DEBUG</span>) <span class="op">&lt;&lt;</span> <span class="str">"connecting to server..."</span>;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 官方 README 的编译命令：两个文件一起编，-std=c++11 起步</span>
+g++ main.cc easylogging++.cc -o prog -std=c++11
+
+<span class="cmt"># 运行输出（示意）：自动带上日期时间与级别</span>
+<span class="cmt"># 2020-09-11 10:23:45,678 INFO  [default] My first info log using default logger</span>
+<span class="cmt"># 2020-09-11 10:23:45,678 DEBUG [default] connecting to server...</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>选库如同选线索：<strong>先排除不可能</strong>。easyloggingpp 从 2012 年维护到 2018 年，之后项目已归档（archived）、官方不再更新，作者在 README 里明确建议新项目考虑 spdlog 等仍在维护的库；好在它是 MIT 许可，你可以自由 fork 继续用。所以它的定位是：<strong>存量项目好用、拿来即走；但新项目选型，先排除它</strong>。这就是为什么本章的主角是后面的 spdlog。</p>
+  </div>
+
+  <!-- ========== 7.4 多线程日志：easyloggingpp 的雷区 ========== -->
+  <h2>7.4 多线程日志：easyloggingpp 的雷区</h2>
+
+  <p>素材笔记专门提醒过：<strong>多线程中使用 easyloggingpp，必须设置几个重要的点，不然就会抛出异常、导致程序中断</strong>。为什么？因为日志库内部要写共享的缓冲区或文件，多个线程同时写，就像多个人抢同一支笔往同一张纸上写字——字会糊、顺序会乱，最坏情况是崩溃。解决"多人抢一支笔"的办法叫<strong>锁（lock）</strong>，加了锁的代码才是<strong>线程安全（thread-safe）</strong>的，说人话就是"多个线程同时调用也不会出错"。</p>
+
+  <p>easyloggingpp 的设计是：<strong>默认不加锁</strong>，把性能留给单线程场景；要用多线程，就得显式打开线程安全模式，开关是一个宏：<code>ELPP_THREAD_SAFE</code>。素材笔记给了两种开法：<strong>编译时</strong>在编译参数里加 <code>-DELPP_THREAD_SAFE</code>（CMake 工程则在 CMakeLists.txt 里写 <code>SET(CMAKE_CXX_FLAGS "-DELPP_THREAD_SAFE")</code>，CMake 版本需要在 3.0 以上）；<strong>源码时</strong>在用到日志的文件里、<code>#include</code> 之前先 <code>#define ELPP_THREAD_SAFE</code>。两种方式效果相同，选一种即可，但注意<strong>宏必须在 include 之前定义</strong>，且所有用到 <code>LOG</code> 的翻译单元要保持一致，否则行为不可预期。</p>
+
+  <p>这个"默认不线程安全、要你手动开"的设计，恰恰是后来日志库改进的靶子。spdlog 把线程安全直接做进了名字里：后缀 <code>_mt</code>（multi-threaded）表示多线程安全版，<code>_st</code>（single-threaded）表示单线程高速版——创建 logger 时选好后缀就完事，不用记宏、不用担心漏配。这就是设计上的"排除不可能"：<strong>把容易踩的坑，在 API 层面直接消灭掉</strong>，而不是留给使用者小心翼翼。</p>
+
+  <pre><code><span class="cmt">// 方式一：在使用文件的 include 之前定义宏（素材笔记原文）</span>
+<span class="ann">#define</span> <span class="param">ELPP_THREAD_SAFE</span> <span class="cmt">// 必须在 include 之前！</span>
+<span class="ann">#include</span> <span class="str">"easylogging++.h"</span>
+
+<span class="type">void</span> <span class="fn">worker</span>(<span class="type">int</span> <span class="param">id</span>) {
+    <span class="ann">LOG</span>(<span class="param">INFO</span>) <span class="op">&lt;&lt;</span> <span class="str">"worker "</span> <span class="op">&lt;&lt;</span> <span class="param">id</span> <span class="op">&lt;&lt;</span> <span class="str">" done"</span>; <span class="cmt">// 多线程下安全</span>
+}</code></pre>
+
+  <pre><code><span class="cmt"># 方式二：CMakeLists.txt 里设置编译参数（素材笔记原文，CMake 3.0+）</span>
+<span class="fn">cmake_minimum_required</span>(<span class="kw">VERSION</span> <span class="num">3.0</span>)
+<span class="fn">project</span>(my_app <span class="type">CXX</span>)
+<span class="fn">SET</span>(<span class="param">CMAKE_CXX_FLAGS</span> <span class="str">"-DELPP_THREAD_SAFE"</span>)
+<span class="fn">add_executable</span>(my_app main.cc easylogging++.cc)</code></pre>
+
+  <div class="warning">
+    <p><strong>宏的位置是命门</strong>：<code>ELPP_THREAD_SAFE</code> 写在 <code>#include "easylogging++.h"</code> 之后等于没写——头文件已经按"单线程模式"完成了编译。排查这种问题时，福尔摩斯的方法就是按"宏是否先于 include 生效"逐一排除。</p>
+  </div>
+
+  <!-- ========== 7.5 spdlog 简介：现代日志库长什么样 ========== -->
+  <h2>7.5 spdlog 简介：现代日志库长什么样</h2>
+
+  <p>现在登场本章主角：<strong>spdlog</strong>（github.com/gabime/spdlog），README 上自称 "Fast C++ logging library"（快速的 C++ 日志库），C++11 编译器即可使用。说人话，它把"记录日志"这件事做成了专业选手：<strong>快</strong>（官方基准测试里单线程每秒能写数百万条）、<strong>格式化漂亮</strong>（基于 fmt 库，用 <code>{}</code> 占位符代替 printf 的 <code>%d</code>，类型安全、编译器会帮你检查参数）、<strong>输出目标多样</strong>（终端、文件、轮转文件、每日文件、syslog 等）。它的热度在 GitHub 上常年位居 C++ 库前列，是现在新项目的首选日志方案。</p>
+
+  <p>安装方式非常灵活：<strong>header-only</strong>（仅头文件）模式下，把仓库的 <code>include/spdlog</code> 目录拷进你的工程就能用，一个外部依赖都没有；官方 README 也推荐编译版（<code>git clone</code> + CMake 构建），编译速度更快。走包管理器的话，可以 <code>vcpkg install spdlog</code>（第 5 章的主角又出场了）、<code>sudo apt install libspdlog-dev</code>（Debian/Ubuntu）或 <code>brew install spdlog</code>（macOS）。</p>
+
+  <p>spdlog 里最重要的概念是 <strong>sink</strong>。sink 说人话就是日志的"去向"或"出口"——一条日志最终要流向哪里：终端？文件？轮转文件？syslog？一个 logger（日志器，说人话就是"负责写日志的那个对象"）可以同时挂多个 sink，比如"终端只显示 warn 以上，文件全量记录"。创建 logger 的工厂函数（factory function，说人话就是"专门负责造 logger 的函数"）后缀 <code>_mt</code> 表示线程安全版，日常直接用 <code>_mt</code> 系列即可。常用工厂函数对照如下：</p>
+
+  <table>
+    <tr><th>工厂函数</th><th>输出目标</th><th>典型用途</th></tr>
+    <tr><td><code>spdlog::stdout_color_mt("name")</code></td><td>终端（彩色）</td><td>开发期看输出</td></tr>
+    <tr><td><code>spdlog::stderr_color_mt("name")</code></td><td>标准错误（彩色）</td><td>错误单独走 stderr</td></tr>
+    <tr><td><code>spdlog::basic_logger_mt("name", "path")</code></td><td>单个文件</td><td>最简单的文件日志</td></tr>
+    <tr><td><code>spdlog::rotating_logger_mt("name", "path", max_size, max_files)</code></td><td>轮转文件</td><td>控制单个文件大小</td></tr>
+    <tr><td><code>spdlog::daily_logger_mt("name", "path", h, m)</code></td><td>每日文件</td><td>按天归档</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 安装方式三选一</span>
+<span class="cmt"># 方式一：vcpkg（第 5 章的主角）</span>
+./vcpkg/vcpkg install spdlog
+
+<span class="cmt"># 方式二：Linux 发行版包</span>
+sudo apt install libspdlog-dev
+
+<span class="cmt"># 方式三：header-only，把仓库的 include/spdlog 目录拷进工程</span>
+git clone https://github.com/gabime/spdlog
+cp -r spdlog/include/spdlog ./third_party/</code></pre>
+
+  <pre><code><span class="cmt">// 全局 logger 快速上手（官方 README 示例）</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/spdlog.h<span class="op">&gt;</span>
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">info</span>(<span class="str">"Welcome to spdlog!"</span>);
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">error</span>(<span class="str">"Some error message with arg: {}"</span>, <span class="num">1</span>);
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">warn</span>(<span class="str">"Easy padding in numbers like {:08d}"</span>, <span class="num">12</span>);
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">critical</span>(<span class="str">"hex: {0:x}, oct: {0:o}"</span>, <span class="num">42</span>);
+
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">set_level</span>(<span class="fn">spdlog</span><span class="op">::</span><span class="fn">level</span><span class="op">::</span><span class="param">debug</span>); <span class="cmt">// 全局级别调到 debug</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">debug</span>(<span class="str">"This message should be displayed.."</span>);
+
+    <span class="cmt">// 自定义输出格式：%n=logger 名 %L=级别 %t=线程号 %v=消息本体</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">set_pattern</span>(<span class="str">"[%H:%M:%S %z] [%n] [%^---%L---%$] [thread %t] %v"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>注意上面示例里的 <strong>pattern</strong>（输出格式模板）：<code>%v</code> 是消息本体，<code>%L</code> 是级别，<code>%n</code> 是 logger 名字，<code>%t</code> 是线程号，<code>%^</code> 和 <code>%$</code> 是颜色开关（两者之间的内容上色），<code>%H:%M:%S</code> 是时间、<code>%z</code> 是时区。这套 <code>%</code> 开头的占位符就是 spdlog 的"格式化语法"，想要什么样的日志行，拼一个 pattern 字符串即可——排障时把线程号打出来，多线程问题立刻能缩小范围。</p>
+
+  <!-- ========== 7.6 spdlog 实战：文件、轮转与异步 ========== -->
+  <h2>7.6 spdlog 实战：文件、轮转与异步</h2>
+
+  <p>先上最常用的文件日志。全局函数 <code>spdlog::info</code> 只写终端，要写文件得自己建 logger：<code>spdlog::basic_logger_mt("basic_logger", "logs/basic-log.txt")</code>——第一个参数是 logger 的名字（之后可以用 <code>spdlog::get("basic_logger")</code> 在任何地方取回它），第二个参数是文件路径。注意一个常见坑：<strong>文件所在目录必须已经存在</strong>，否则创建 logger 时会抛出 <code>spdlog::spdlog_ex</code> 异常（说人话就是"spdlog 自己定义的错误类型"），所以官方示例总是用 try/catch 包住创建过程。</p>
+
+  <p>生产环境更常用的是<strong>轮转日志（rotating log）</strong>。<strong>轮转</strong>说人话：日志文件写到上限后，把当前文件"滚动"成历史文件、重新开一个新文件继续写，最多保留 N 个历史文件——就像循环录像带，旧画面自动覆盖，磁盘永远不会被撑爆。对应函数 <code>spdlog::rotating_logger_mt("rot_logger", "logs/rotating.txt", max_size, max_files)</code>，例如单文件上限 5MB、最多保留 3 个历史文件（官方示例的参数）。此外还有 <code>daily_logger_mt</code>：每天凌晨固定时刻自动开一个新文件，适合按天归档的场景。</p>
+
+  <p>当日志量很大、或者不想让业务线程卡在写盘上时，用<strong>异步日志（async logging）</strong>。<strong>异步</strong>说人话：调用方把日志丢进一个内存队列就立刻返回，后台专门有一个线程从队列里取出来写盘——"前台只管交，后台负责写"。用之前要先 <code>spdlog::init_thread_pool(队列大小, 后台线程数)</code> 建线程池（官方默认建议 8192 条队列 + 1 个后台线程），再创建 logger 时套上 <code>spdlog::async_factory</code>。队列满时有两种策略：<code>block</code>（调用方阻塞等待队列空出位置）和 <code>overrun</code>（丢弃最旧的日志、优先保证新日志），取舍是"保完整"还是"保实时"。另外别忘<strong>冲刷（flush）</strong>：写文件是有缓冲的，程序异常退出可能丢日志，用 <code>spdlog::flush_every(std::chrono::seconds(3))</code> 让所有 logger 每 3 秒自动把缓冲落盘一次。</p>
+
+  <pre><code><span class="cmt">// 基础文件日志 + 轮转文件日志（官方 README 示例）</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/spdlog.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/sinks/basic_file_sink.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/sinks/rotating_file_sink.h<span class="op">&gt;</span>
+
+<span class="type">void</span> <span class="fn">file_example</span>() {
+    <span class="kw">try</span> {
+        <span class="kw">auto</span> <span class="param">basic</span> <span class="op">=</span> <span class="fn">spdlog</span><span class="op">::</span><span class="fn">basic_logger_mt</span>(<span class="str">"basic_logger"</span>, <span class="str">"logs/basic-log.txt"</span>);
+        <span class="param">basic</span><span class="op">-&gt;</span><span class="fn">info</span>(<span class="str">"hello from basic file logger"</span>);
+
+        <span class="kw">auto</span> <span class="param">max_size</span> <span class="op">=</span> <span class="num">1048576</span> <span class="op">*</span> <span class="num">5</span>; <span class="cmt">// 单文件 5MB</span>
+        <span class="kw">auto</span> <span class="param">max_files</span> <span class="op">=</span> <span class="num">3</span>;          <span class="cmt">// 保留 3 个历史文件</span>
+        <span class="kw">auto</span> <span class="param">rot</span> <span class="op">=</span> <span class="fn">spdlog</span><span class="op">::</span><span class="fn">rotating_logger_mt</span>(<span class="str">"rot_logger"</span>, <span class="str">"logs/rotating.txt"</span>, <span class="param">max_size</span>, <span class="param">max_files</span>);
+        <span class="param">rot</span><span class="op">-&gt;</span><span class="fn">warn</span>(<span class="str">"disk usage over 90%"</span>);
+    } <span class="kw">catch</span> (<span class="kw">const</span> <span class="fn">spdlog</span><span class="op">::</span><span class="type">spdlog_ex</span> <span class="op">&amp;</span><span class="param">ex</span>) {
+        <span class="fn">printf</span>(<span class="str">"log init failed: %s\n"</span>, <span class="param">ex</span><span class="op">.</span><span class="fn">what</span>()); <span class="cmt">// 目录不存在等错误会走到这里</span>
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">// 异步日志（官方 README 示例）</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/async.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/sinks/basic_file_sink.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>chrono<span class="op">&gt;</span>
+
+<span class="type">void</span> <span class="fn">async_example</span>() {
+    <span class="cmt">// 先建线程池：队列 8192 条，1 个后台写盘线程</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">init_thread_pool</span>(<span class="num">8192</span>, <span class="num">1</span>);
+    <span class="kw">auto</span> <span class="param">async_file</span> <span class="op">=</span> <span class="fn">spdlog</span><span class="op">::</span><span class="fn">basic_logger_mt</span><span class="op">&lt;</span><span class="fn">spdlog</span><span class="op">::</span><span class="fn">async_factory</span><span class="op">&gt;</span>(
+        <span class="str">"async_file_logger"</span>, <span class="str">"logs/async_log.txt"</span>);
+    <span class="param">async_file</span><span class="op">-&gt;</span><span class="fn">info</span>(<span class="str">"logged by background thread"</span>);
+
+    <span class="cmt">// 每 3 秒自动冲刷所有 logger，防止异常退出丢日志</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">flush_every</span>(<span class="fn">std</span><span class="op">::</span><span class="fn">chrono</span><span class="op">::</span><span class="type">seconds</span>(<span class="num">3</span>));
+}</code></pre>
+
+  <pre><code><span class="cmt">// 多 sink：一个 logger，终端与文件各设各的级别（官方 README 示例）</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/spdlog.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/sinks/stdout_color_sinks.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/sinks/basic_file_sink.h<span class="op">&gt;</span>
+
+<span class="type">void</span> <span class="fn">multi_sink_example</span>() {
+    <span class="kw">auto</span> <span class="param">console_sink</span> <span class="op">=</span> <span class="fn">std</span><span class="op">::</span><span class="fn">make_shared</span><span class="op">&lt;</span><span class="fn">spdlog</span><span class="op">::</span><span class="fn">sinks</span><span class="op">::</span><span class="type">stdout_color_sink_mt</span><span class="op">&gt;</span>();
+    <span class="param">console_sink</span><span class="op">-&gt;</span><span class="fn">set_level</span>(<span class="fn">spdlog</span><span class="op">::</span><span class="fn">level</span><span class="op">::</span><span class="param">warn</span>); <span class="cmt">// 终端只看 warn 及以上</span>
+
+    <span class="kw">auto</span> <span class="param">file_sink</span> <span class="op">=</span> <span class="fn">std</span><span class="op">::</span><span class="fn">make_shared</span><span class="op">&lt;</span><span class="fn">spdlog</span><span class="op">::</span><span class="fn">sinks</span><span class="op">::</span><span class="type">basic_file_sink_mt</span><span class="op">&gt;</span>(<span class="str">"logs/multisink.txt"</span>, <span class="kw">true</span>);
+    <span class="param">file_sink</span><span class="op">-&gt;</span><span class="fn">set_level</span>(<span class="fn">spdlog</span><span class="op">::</span><span class="fn">level</span><span class="op">::</span><span class="param">trace</span>); <span class="cmt">// 文件全量记录</span>
+
+    <span class="fn">spdlog</span><span class="op">::</span><span class="type">logger</span> <span class="param">logger</span>(<span class="str">"multi_sink"</span>, <span class="op">{</span><span class="param">console_sink</span>, <span class="param">file_sink</span><span class="op">}</span>);
+    <span class="param">logger</span><span class="op">.</span><span class="fn">warn</span>(<span class="str">"this appears in console and file"</span>);
+    <span class="param">logger</span><span class="op">.</span><span class="fn">info</span>(<span class="str">"this appears only in file"</span>);
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>官方基准测试（Intel i7-4770、Ubuntu 64 位）给出的参考数字：单线程 <code>basic_st</code> 约 578 万条/秒，10 线程抢同一个 <code>basic_mt</code> logger 约 166 万条/秒，异步模式约 268 万条/秒（队列溢出策略 overrun 时）。结论：<strong>绝大多数业务用同步的 <code>_mt</code> 就绰绰有余</strong>，只有日志量巨大、或写盘延迟会拖垮业务线程时，才值得引入异步。</p>
+  </div>
+
+  <!-- ========== 7.7 生产实践：福尔摩斯的日志排障法 ========== -->
+  <h2>7.7 生产实践：福尔摩斯的日志排障法</h2>
+
+  <p>把福尔摩斯的"排除不可能"落到日志排障上，就是四步走：<strong>① 定时间窗</strong>——靠时间戳把问题锁定到某几分钟；<strong>② 按级别筛</strong>——先看 error/critical，再看 warn，噪音瞬间消失；<strong>③ 锁线程与模块</strong>——pattern 里带上线程号 <code>%t</code> 和 logger 名 <code>%n</code>，多线程问题立刻缩小到具体线程；<strong>④ 还原现场</strong>——配合环形缓冲把出错前的蛛丝马迹倒出来。每一步都在排除一批"不可能"，剩下的就是真相。</p>
+
+  <p>生产环境的标配配置如下：级别开到 info（省磁盘、省 CPU），文件用轮转（10MB × 5 个，防止日志撑爆磁盘），pattern 带上完整时间（含毫秒 <code>%e</code>）和线程号，再用 <code>flush_every</code> 定期落盘防丢失。还有一招很实用：<code>spdlog::cfg::load_env_levels()</code> 支持用环境变量 <code>SPDLOG_LEVEL</code> 在<strong>不重新编译</strong>的情况下动态调级别，比如 <code>SPDLOG_LEVEL=info,mylogger=trace</code> 表示全局 info、只有 mylogger 降到 trace——上线后想临时放大某个模块的日志，一条环境变量命令搞定，这正是 7.1 说的"生产环境可开关"。</p>
+
+  <p>最后介绍一个排障利器：<strong>backtrace（环形缓冲）</strong>。<strong>环形缓冲（ring buffer）</strong>说人话就是一个"只留最近 N 条"的定长内存队列，新的进来、最旧的被挤掉。玩法是：平时让 debug 消息只写进环形缓冲、不落盘（零开销），一旦出错，调用 <code>spdlog::dump_backtrace()</code> 把最近 32 条一口气倒出来——平时不打扰，出事有证据，堪称"福尔摩斯的袖珍笔记本"。</p>
+
+  <pre><code><span class="cmt">// 生产环境初始化：轮转 + 级别 + 格式 + 定时冲刷</span>
+<span class="type">void</span> <span class="fn">setup_production_logging</span>() {
+    <span class="kw">auto</span> <span class="param">max_size</span> <span class="op">=</span> <span class="num">1048576</span> <span class="op">*</span> <span class="num">10</span>; <span class="cmt">// 10MB 轮转</span>
+    <span class="kw">auto</span> <span class="param">rot</span> <span class="op">=</span> <span class="fn">spdlog</span><span class="op">::</span><span class="fn">rotating_logger_mt</span>(<span class="str">"app"</span>, <span class="str">"logs/app.log"</span>, <span class="param">max_size</span>, <span class="num">5</span>);
+    <span class="param">rot</span><span class="op">-&gt;</span><span class="fn">set_level</span>(<span class="fn">spdlog</span><span class="op">::</span><span class="fn">level</span><span class="op">::</span><span class="param">info</span>); <span class="cmt">// 生产只留 info 及以上</span>
+    <span class="param">rot</span><span class="op">-&gt;</span><span class="fn">set_pattern</span>(<span class="str">"[%Y-%m-%d %H:%M:%S.%e] [%l] [%t] %v"</span>); <span class="cmt">// 时间+级别+线程</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">set_default_logger</span>(<span class="param">rot</span>); <span class="cmt">// 全局 spdlog::info 都走这个文件</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">flush_every</span>(<span class="fn">std</span><span class="op">::</span><span class="fn">chrono</span><span class="op">::</span><span class="type">seconds</span>(<span class="num">3</span>));
+}</code></pre>
+
+  <pre><code><span class="cmt">// 环形缓冲 + 环境变量调级别（官方 README 示例）</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/spdlog.h<span class="op">&gt;</span>
+<span class="ann">#include</span> <span class="op">&lt;</span>spdlog/cfg/env.h<span class="op">&gt;</span>
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">cfg</span><span class="op">::</span><span class="fn">load_env_levels</span>(); <span class="cmt">// 支持 SPDLOG_LEVEL 环境变量，免重编译调级别</span>
+
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">enable_backtrace</span>(<span class="num">32</span>); <span class="cmt">// 只攒最近 32 条 debug 消息，不落盘</span>
+    <span class="kw">for</span> (<span class="type">int</span> <span class="param">i</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">i</span> <span class="op">&lt;</span> <span class="num">100</span>; <span class="op">++</span><span class="param">i</span>) {
+        <span class="fn">spdlog</span><span class="op">::</span><span class="fn">debug</span>(<span class="str">"backtrace message {}"</span>, <span class="param">i</span>); <span class="cmt">// 此刻并不写盘</span>
+    }
+    <span class="cmt">// ……程序某处出错：</span>
+    <span class="fn">spdlog</span><span class="op">::</span><span class="fn">dump_backtrace</span>(); <span class="cmt">// 把最近 32 条一口气写出来，还原现场</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>至此，"从 printf 到 spdlog"这条路你已经走完了：printf 是"临时看一眼"，日志库是"长期记录与排障"；easyloggingpp 教会我们"两个文件搞定、多线程要开 ELPP_THREAD_SAFE"的轻量哲学，spdlog 则用 <code>_mt</code> 后缀、sink、轮转、异步把日志做成了工程级能力。下一章我们就要用第 5 章的 vcpkg 装 pistache 写 REST 服务——到时候记得先按这一章的方法把日志配好，因为服务上线之后，日志就是你唯一的眼睛。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>日志</code>、<code>日志级别</code>、<code>sink</code>。再按从低到高排出 spdlog 的六档级别。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>黑匣子 / 重要程度 / 日志的去向；六档顺序记口诀：trace 最细、critical 最狠。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>日志：程序运行过程留下的记录，像黑匣子，出事时是还原现场的第一手证据；日志级别：给每条日志标上的重要程度，用于按阈值过滤；sink：日志的输出去向（终端、文件、轮转文件等）。spdlog 六档由低到高：trace &lt; debug &lt; info &lt; warn &lt; error &lt; critical。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：补全 easyloggingpp 最小程序 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>补全下面的程序：让它能打印一条 INFO 日志和一条 ERROR 日志，并写出对应的编译命令（两个文件一起编译，C++11）。</p>
+      <pre><code><span class="cmt">// main.cc</span>
+<span class="ann">#include</span> <span class="str">"easylogging++.h"</span>
+<span class="op">?</span> <span class="cmt">// 这一行该写什么？</span>
+
+<span class="type">int</span> <span class="fn">main</span>(<span class="type">int</span> <span class="param">argc</span>, <span class="type">char</span><span class="op">*</span> <span class="param">argv</span><span class="op">[]</span>) {
+    <span class="op">?</span> <span class="cmt">// 打印 INFO 日志</span>
+    <span class="op">?</span> <span class="cmt">// 打印 ERROR 日志</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>还记得 7.3 那个"只能出现一次"的宏吗？日志用 <code>LOG(级别) &lt;&lt; 内容</code> 的流式写法。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>初始化行写 <code>INITIALIZE_EASYLOGGINGPP</code>（放在 main 所在文件最后一个 include 之后，只能出现一次）；日志行写 <code>LOG(INFO) &lt;&lt; "some info";</code> 和 <code>LOG(ERROR) &lt;&lt; "some error";</code>。编译命令：<code>g++ main.cc easylogging++.cc -o prog -std=c++11</code>。注意：如果程序里用了多线程，还要在 include 之前 <code>#define ELPP_THREAD_SAFE</code>（或编译时加 <code>-DELPP_THREAD_SAFE</code>）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：选对 spdlog 的工厂函数 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以下四个场景分别该用哪个 spdlog 工厂函数？并写出一段代码：创建名为 <code>"app"</code> 的文件 logger，写入 <code>logs/app.log</code>，级别设为 warn，再打一条 warn 日志。(a) 开发期想在终端看彩色输出；(b) 要求单文件不超过 5MB、最多留 3 个历史文件；(c) 每天凌晨 2:30 自动开新文件；(d) 日志量大，不想让业务线程卡在写盘。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 7.5 的表格；写文件级别用 <code>set_level(spdlog::level::warn)</code>；建 logger 的调用要 try/catch <code>spdlog::spdlog_ex</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>spdlog::stdout_color_mt("console")</code>；(b) <code>spdlog::rotating_logger_mt("name", "logs/x.log", 1048576 * 5, 3)</code>；(c) <code>spdlog::daily_logger_mt("name", "logs/daily.txt", 2, 30)</code>；(d) 先 <code>spdlog::init_thread_pool(8192, 1)</code>，再 <code>spdlog::basic_logger_mt&lt;spdlog::async_factory&gt;("name", "logs/async.txt")</code>。代码：<code>auto app = spdlog::rotating_logger_mt("app", "logs/app.log", 1048576 * 5, 3); app-&gt;set_level(spdlog::level::warn); app-&gt;warn("disk almost full");</code>（建 logger 用 try/catch 包住，捕获 <code>spdlog::spdlog_ex</code>）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：多线程日志方案设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你的服务有 10 个工作线程，每线程每秒打几十条日志，日志量中等。要求：日志绝不能崩程序、不能互相穿插、生产环境只留 warn 以上。请回答：(a) 用 easyloggingpp 时最少要做哪件事才不会崩？为什么默认会崩？(b) 用 spdlog 时该选 <code>basic_logger_mt</code> 还是 <code>basic_logger_st</code>？后缀分别代表什么？(c) 什么情况下才值得换异步日志？队列满时 <code>block</code> 和 <code>overrun</code> 策略各有什么代价？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(a) 想 7.4 的"抢笔"比喻；(b) mt = multi-threaded，st = single-threaded；(c) 想 7.6 的官方基准数字，再想想"丢日志"和"卡线程"哪个更不能接受。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 必须开启线程安全模式：所有用到 LOG 的翻译单元在 include 之前 <code>#define ELPP_THREAD_SAFE</code>，或编译参数加 <code>-DELPP_THREAD_SAFE</code>（CMake 里 <code>SET(CMAKE_CXX_FLAGS "-DELPP_THREAD_SAFE")</code>，CMake 3.0+）。因为 easyloggingpp 默认不加锁，多线程同时写共享缓冲会数据错乱甚至抛异常中断程序。(b) 选 <code>basic_logger_mt</code>：<code>_mt</code> 是多线程安全版（内部有锁，10 线程约 166 万条/秒），<code>_st</code> 是单线程高速版（约 578 万条/秒），多线程用 <code>_st</code> 是危险的。(c) 当日志量大到写盘阻塞业务线程、或业务对延迟敏感时才值得异步（官方基准异步 overrun 约 268 万条/秒）。队列满时 <code>block</code> 会阻塞调用方等待队列腾位置——保完整但可能卡业务；<code>overrun</code> 丢弃最旧日志——保实时但可能丢记录。中等日志量选同步 <code>_mt</code> + 轮转 + <code>flush_every</code> 即可。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

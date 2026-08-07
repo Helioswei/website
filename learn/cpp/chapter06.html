@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第6章：JSON 处理：jsoncpp 实战 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter06.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第6章：JSON 处理：jsoncpp 实战 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter06.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="6" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：JSON 处理：jsoncpp 实战</h1>
+  <p class="chapter-subtitle">一串字符走进内存，变成一棵树，再变回一串字符——跟着柯南把 JSON 的数据流完整走一遍</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：追踪数据流</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「数据不会说谎，但它会绕路。解析是把一串字符还原成它本来的结构，序列化是让结构重新出发——顺着这条数据流走一遍，每一处异常都藏不住。这一章，我们追踪 JSON 的全程：文本 → 内存树 → 文本。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 零基础铺垫：JSON 是什么，为什么 C++ 需要库 ========== -->
+  <h2>6.1 零基础铺垫：JSON 是什么，为什么 C++ 需要库</h2>
+
+  <p><strong>JSON（JavaScript Object Notation）是一种轻量级的数据交换格式</strong>——说人话：它是一种约定俗成的纯文本格式，程序之间用一串字符来传递结构化数据。你写的程序要跟别人写的程序（或者自己的另一个程序）说话，最省事的办法就是：我这边把数据拼成一串文本发过去，你那边把文本拆回数据。JSON 就是这个"拼/拆"的共同约定，它基于 JavaScript 的对象字面量语法，标准定义在 <strong>RFC 8259</strong> 和 <strong>ECMA-404</strong> 里，几乎所有编程语言都有现成的支持。它的两大结构只有两个：<strong>键值对（key-value pair）</strong>——一个名字对应一个值，用冒号连接；以及<strong>数组</strong>——一组按顺序排列的值，用逗号分隔。把这两种结构随便嵌套，就构成了 JSON 的整个世界：对象套数组、数组套对象，想怎么套怎么套。</p>
+
+  <p>JSON 的值一共有六种类型：<code>null</code>（空）、布尔值（<code>true</code>/<code>false</code>）、数字、字符串、数组、对象。注意两点：<strong>键必须带双引号</strong>，字符串也必须用双引号（单引号不合法）；数字不分整数和浮点，写出来什么样就是什么样。下面是一个典型的配置文件，很多程序启动时就是读这种文件来决定"连哪个服务器、开哪些功能"：</p>
+
+  <table>
+    <tr><th>JSON 类型</th><th>示例</th><th>说人话</th></tr>
+    <tr><td>null</td><td><code>null</code></td><td>空值，表示"这里什么都没有"</td></tr>
+    <tr><td>布尔值</td><td><code>true</code> / <code>false</code></td><td>是 / 否</td></tr>
+    <tr><td>数字</td><td><code>17</code>、<code>3.14</code></td><td>整数、小数都算数字</td></tr>
+    <tr><td>字符串</td><td><code>"柯南"</code></td><td>一段文本，必须双引号</td></tr>
+    <tr><td>数组</td><td><code>[1, 2, 3]</code></td><td>有序的一串值，用方括号</td></tr>
+    <tr><td>对象</td><td><code>{"name": "柯南"}</code></td><td>键值对的集合，用花括号</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// config.json：程序启动时读它来配置自己</span>
+{
+  <span class="str">"server"</span>: {
+    <span class="str">"host"</span>: <span class="str">"127.0.0.1"</span>,
+    <span class="str">"port"</span>: <span class="num">8080</span>
+  },
+  <span class="str">"users"</span>: [<span class="str">"alice"</span>, <span class="str">"bob"</span>],
+  <span class="str">"debug"</span>: <span class="kw">true</span>
+}</code></pre>
+
+  <p>那问题来了：<strong>C++ 为什么要借助库来处理 JSON？</strong>因为 C++ 标准库<strong>没有内置 JSON 支持</strong>——标准库里没有"JSON 解析"这个功能，这和 Python（自带 <code>json</code> 模块）、JavaScript（JSON 就是它的亲儿子）都不一样。没有现成的，就得自己写。自己写有多痛苦？你要处理转义字符（字符串里的引号、反斜杠）、处理层层嵌套的括号、判断"17"到底是数字还是字符串、还得报出"第几行第几列出错了"——这些细节错一个，整个解析结果就是错的，而且很难排查。下面的"错误示范"就是手动解析的真实体验：</p>
+
+  <pre><code><span class="cmt">// 错误示范：想从 JSON 里取 "age" 的值，直接按字符位置截取</span>
+std::string s = <span class="str">R"({"name":"柯南","age":17})"</span>;
+size_t pos = s.find(<span class="str">"\"age\""</span>);
+std::string v = s.substr(pos + <span class="num">6</span>);   <span class="cmt">// 下一个字符是冒号还是空格？值带不带引号？</span>
+<span class="cmt">// 万一 age 的值是字符串 "17" 呢？万一键名顺序变了呢？</span>
+<span class="cmt">// 万一嵌套在深层对象里呢？手动解析处处是坑</span></code></pre>
+
+  <p>所以社区的做法是：<strong>用现成的库</strong>。库帮你把"解析文本"和"生成文本"这两件又难又烦的事做好，你只管定义"数据长什么样"，然后调用几个函数。这一章的实战主角，就是 C++ 生态里最老牌、最简单的 JSON 库之一——jsoncpp。第 5 章我们用 vcpkg 铺好了"装库"的地基，本章正好实战检验。</p>
+
+  <!-- ========== 6.2 jsoncpp 是什么：把文本变成内存里的一棵树 ========== -->
+  <h2>6.2 jsoncpp 是什么：把文本变成内存里的一棵树</h2>
+
+  <p><strong>jsoncpp 是一个开源的 C++ JSON 解析与生成库</strong>——说人话：给它一串 JSON 文本，它帮你拆成 C++ 能直接用的数据；给它 C++ 里的数据，它帮你拼成 JSON 文本。它的源码托管在 <code>github.com/open-source-parsers/jsoncpp</code>，采用 MIT 许可，可以放心商用。项目已经非常成熟，目前处于"维护模式"（maintenance mode）——官方明确说优先保证稳定可靠，不追新功能、不搞性能竞赛，这对于一个"给老工程当依赖"的库来说反而是优点。它还有个少见的特色：<strong>解析和序列化时可以保留注释</strong>（JSON 标准本身不允许注释，但 jsoncpp 宽松处理），因此很适合拿 JSON 当配置文件格式的场景。</p>
+
+  <p>理解 jsoncpp，最关键的是理解它的<strong>核心模型</strong>：JSON 文档在内存里是一棵<strong>树</strong>，树的每个节点都是一个 <code>Json::Value</code>。柯南的方法论在这里派上用场——追踪数据流：<strong>文本（磁盘/网络）→ 解析 → 内存树 → 序列化 → 文本（磁盘/网络）</strong>。字符串进来，变成树；树改好，变回字符串。中间的每一步都有明确的 API 对应，本章后面几节就是沿着这条流逐一走。Json::Value 能表示 JSON 的所有类型，和 JSON 六种值类型一一对应（实现里细分了整数和浮点）：</p>
+
+  <table>
+    <tr><th>Json::Value 类型</th><th>对应 JSON</th><th>取值方法</th></tr>
+    <tr><td><code>nullValue</code></td><td><code>null</code></td><td><code>isNull()</code></td></tr>
+    <tr><td><code>booleanValue</code></td><td><code>true</code> / <code>false</code></td><td><code>asBool()</code></td></tr>
+    <tr><td><code>intValue</code> / <code>uintValue</code></td><td>整数</td><td><code>asInt()</code> / <code>asUInt()</code></td></tr>
+    <tr><td><code>realValue</code></td><td>浮点数</td><td><code>asDouble()</code></td></tr>
+    <tr><td><code>stringValue</code></td><td>字符串</td><td><code>asString()</code></td></tr>
+    <tr><td><code>arrayValue</code></td><td>数组</td><td><code>size()</code> + 下标</td></tr>
+    <tr><td><code>objectValue</code></td><td>对象</td><td><code>operator[]</code> + 键名</td></tr>
+  </table>
+
+  <p>第一次实战，先写一个最小的完整程序：解析一段 JSON 字符串，取出两个字段打印。头文件只有一个，就是素材笔记里的那个 <code>json/json.h</code>：</p>
+
+  <pre><code><span class="cmt">// demo.cpp：解析字符串 + 取字段（新 API：CharReaderBuilder）</span>
+<span class="ann">#include</span> &lt;json/json.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+<span class="ann">#include</span> &lt;memory&gt;
+<span class="ann">#include</span> &lt;string&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    std::string <span class="param">text</span> = <span class="str">R"({"name":"柯南","age":17})"</span>;
+
+    Json::CharReaderBuilder builder;                          <span class="cmt">// 解析器的"工厂"</span>
+    Json::Value <span class="param">root</span>;                                         <span class="cmt">// 树根节点</span>
+    std::string errs;                                         <span class="cmt">// 出错信息收集器</span>
+    std::unique_ptr&lt;Json::CharReader&gt; reader(builder.newCharReader());
+    <span class="type">bool</span> ok = reader-&gt;parse(text.c_str(), text.c_str() + text.size(), &amp;root, &amp;errs);
+
+    <span class="kw">if</span> (!ok) {
+        std::cerr &lt;&lt; <span class="str">"解析失败："</span> &lt;&lt; errs &lt;&lt; std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    std::cout &lt;&lt; root[<span class="str">"name"</span>].asString() &lt;&lt; std::endl;   <span class="cmt">// 柯南</span>
+    std::cout &lt;&lt; root[<span class="str">"age"</span>].asInt() &lt;&lt; std::endl;        <span class="cmt">// 17</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>这段代码信息量不小，先记住三个动作：<strong>建工厂</strong>（<code>CharReaderBuilder</code>）、<strong>解析</strong>（<code>parse</code>，成功返回 true）、<strong>取字段</strong>（<code>root["键名"]</code> 得到子节点，再 <code>asXxx()</code> 转成 C++ 类型）。解析完立刻再序列化回去，让数据流完整走一圈看看——注意输出的键序：</p>
+
+  <pre><code><span class="cmt">// 接着上面的代码：解析出来之后，马上序列化回字符串</span>
+Json::StreamWriterBuilder wbuilder;
+wbuilder[<span class="str">"indentation"</span>] = <span class="str">""</span>;                       <span class="cmt">// 紧凑输出</span>
+std::cout &lt;&lt; Json::writeString(wbuilder, root) &lt;&lt; std::endl;
+<span class="cmt">// 输入是 {"name":"柯南","age":17}，输出却是：</span>
+<span class="cmt">// {"age":17,"name":"柯南"}</span>
+<span class="cmt">// 键的顺序变了！为什么？6.7 节揭晓——这正是本章最大的坑</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>解析（parse）和序列化（write）是本章的两条主线：前者是"文本 → 树"，后者是"树 → 文本"。搞混了没关系，记住一个检验法：<strong>parse 是动词的"读"，write 是动词的"写"</strong>，一个进一个出，数据流的上下游就清楚了。</p>
+  </div>
+
+  <!-- ========== 6.3 安装 jsoncpp：vcpkg 一键装 & 源码编译 ========== -->
+  <h2>6.3 安装 jsoncpp：vcpkg 一键装 &amp; 源码编译</h2>
+
+  <p>装 jsoncpp 最省事的路径，就是第 5 章铺好的 vcpkg。装完之后 CMake 工程里 <code>find_package(jsoncpp CONFIG REQUIRED)</code> 找到它，链接目标用 <code>jsoncpp_lib</code>——注意 vcpkg 安装完成时会打印它支持的目标名，照抄即可。完整流程三件套：装包、CMake 声明、链接：</p>
+
+  <pre><code><span class="cmt"># 第 5 章装好的 vcpkg，一条命令装 jsoncpp（Linux 默认编译静态库）</span>
+./vcpkg/vcpkg install jsoncpp
+<span class="cmt"># 显式指定 64 位 Linux</span>
+./vcpkg/vcpkg install jsoncpp:x64-linux</code></pre>
+
+  <pre><code><span class="cmt"># CMakeLists.txt：找到 jsoncpp 并链接</span>
+<span class="fn">cmake_minimum_required</span>(<span class="type">VERSION</span> <span class="num">3.10</span>)
+<span class="fn">project</span>(json_demo <span class="type">CXX</span>)
+
+<span class="fn">find_package</span>(jsoncpp <span class="kw">CONFIG</span> <span class="kw">REQUIRED</span>)
+<span class="fn">add_executable</span>(json_demo main.cpp)
+<span class="fn">target_link_libraries</span>(json_demo <span class="kw">PRIVATE</span> jsoncpp_lib)</code></pre>
+
+  <p>第二条路径是<strong>源码编译</strong>，素材笔记里记录了真实操作。笔记里的环境是 CentOS，用的是老版本 jsoncpp（0.x 时代，如 <code>jsoncpp-src-0.5.0</code>），那个时代它的构建工具是 <strong>scons</strong>（一个 Python 写的构建工具），命令是 <code>scons platform=linux-gcc</code>。产物很有意思：编译好的链接库存放在源目录下的 <code>libs/</code> 里，名字形如 <code>libjson_linux-gcc-4.8.5_libmt.so</code>——其中 <code>linux-gcc-4.8.5</code> 是"平台 + 编译器 + 编译器版本"，<code>mt</code> 表示多线程（multi-threaded）。头文件则放在 <code>include/</code> 目录下。这套命名是 scons 构建时代留下的痕迹，看到老博客这么写不要慌：</p>
+
+  <pre><code><span class="cmt"># 素材笔记：老版本 jsoncpp（0.x）源码编译全过程</span>
+<span class="cmt"># 1. 先装构建工具 scons；yum 找不到就先更新 yum 源再装</span>
+yum install scons -y
+
+<span class="cmt"># 2. 进入 jsoncpp 源目录，执行素材里的真实命令</span>
+<span class="fn">cd</span> jsoncpp的源目录
+scons platform=linux-gcc
+
+<span class="cmt"># 3. 产物：头文件在 include/，链接库在 libs/（名字带编译器版本号）</span>
+ls include/json/json.h
+ls libs/libjson_linux-gcc-4.8.5_libmt.so</code></pre>
+
+  <p>不过要提醒：<strong>新版本 jsoncpp（1.x）早就改用 CMake 构建了</strong>，上面那套 scons 命令只适用于 0.x 老版本（1.x 要求 C++11，0.x 为老编译器保留）。自己从源码编新版的话，流程和绝大多数 CMake 项目一样：clone 仓库、建 build 目录、cmake 配置、make。另外 jsoncpp 还提供一个"单文件版"（amalgamated）选项：跑一个 <code>python3 amalgamate.py</code> 脚本，就能把整个库合并成 <code>jsoncpp.cpp</code> + <code>json/json.h</code> 两个文件，直接扔进你的工程一起编译，连 CMake 都省了：</p>
+
+  <pre><code><span class="cmt"># 新版本（1.x）源码编译：走标准 CMake 流程</span>
+git clone https://github.com/open-source-parsers/jsoncpp.git
+<span class="fn">cd</span> jsoncpp
+mkdir -p build <span class="op">&amp;&amp;</span> <span class="fn">cd</span> build
+cmake -DCMAKE_BUILD_TYPE=release ..
+make -j4
+<span class="cmt"># 产物：build/lib/ 下的 libjsoncpp.a（静态）或 libjsoncpp.so（动态），头文件在 include/</span>
+
+<span class="cmt"># 想要单文件版：在 jsoncpp 仓库根目录执行</span>
+python3 amalgamate.py
+<span class="cmt"># 生成 dist/ 目录：jsoncpp.cpp + json/json.h，拷贝进工程即可</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：网上很多老教程还写着 scons 编译 jsoncpp，那是 0.x 时代的命令。你现在从官网 clone 下来的都是 1.x，照抄 scons 会报"找不到 SConstruct"之类的错。判断标准很简单：<strong>看到 <code>SConstruct</code> 文件用 scons，看到 <code>CMakeLists.txt</code> 用 CMake</strong>——以仓库里实际存在的构建文件为准。</p>
+  </div>
+
+  <!-- ========== 6.4 核心 API：Json::Value——万能节点类型 ========== -->
+  <h2>6.4 核心 API：Json::Value——万能节点类型</h2>
+
+  <p>整个 jsoncpp 的 API 有一大半都集中在 <code>Json::Value</code> 这一个类上。<strong>Json::Value 是一个"万能节点"类型</strong>——说人话：它一个类能装下 JSON 的全部八种节点形态（null、布尔、整数、无符号整数、浮点、字符串、数组、对象），运行时自己记住"我当前是什么类型"。往里面塞字符串它就变成字符串节点，往里塞数组它就变成数组节点，不需要你预先声明。最常用的操作符是 <code>operator[]</code>：用键名访问对象成员、用下标访问数组元素，读和写都用它。给对象赋值用 <code>v["键"] = 值</code>，往数组里加元素用 <code>append()</code>，问元素个数用 <code>size()</code>。下面这段代码把"构建一个嵌套对象"完整演示了一遍：</p>
+
+  <pre><code><span class="cmt">// 构建：对象套数组、对象套对象，全用 operator[] 和 append</span>
+<span class="ann">#include</span> &lt;json/json.h&gt;
+
+Json::Value person;                            <span class="cmt">// 空节点，默认是 null</span>
+person[<span class="str">"name"</span>] = <span class="str">"柯南"</span>;                  <span class="cmt">// 赋字符串，节点自动变字符串</span>
+person[<span class="str">"age"</span>] = <span class="num">17</span>;                        <span class="cmt">// 赋整数，节点自动变整数</span>
+person[<span class="str">"score"</span>] = <span class="num">95.5</span>;                    <span class="cmt">// 浮点数</span>
+person[<span class="str">"isDetective"</span>] = <span class="kw">true</span>;               <span class="cmt">// 布尔</span>
+person[<span class="str">"skills"</span>].append(<span class="str">"推理"</span>);            <span class="cmt">// 第一次 append 时自动变成数组</span>
+person[<span class="str">"skills"</span>].append(<span class="str">"变声"</span>);
+
+Json::Value address;                           <span class="cmt">// 对象套对象</span>
+address[<span class="str">"city"</span>] = <span class="str">"东京"</span>;
+address[<span class="str">"zip"</span>] = <span class="str">"100-0001"</span>;
+person[<span class="str">"address"</span>] = address;</code></pre>
+
+  <p>读数据时，<strong>最忌讳"闭着眼睛取"</strong>。jsoncpp 提供三组配套方法：<strong>存在性</strong>——<code>isMember("键名")</code> 判断成员是否存在；<strong>类型判断</strong>——<code>isString()</code>、<code>isInt()</code>、<code>isArray()</code>、<code>isObject()</code>、<code>isNull()</code> 等；<strong>取值</strong>——<code>asString()</code>、<code>asInt()</code>、<code>asBool()</code>、<code>asDouble()</code> 等。标准姿势是"三连问"：先问在不在（isMember），再问是什么类型（isXxx），最后才取值（asXxx）。因为 <code>asInt()</code> 遇到类型不匹配的值（比如字符串、对象）会抛 <code>std::runtime_error</code> 异常，不提前检查程序就直接崩了。数组遍历也很简单，<code>size()</code> 拿到长度，下标从 0 开始：</p>
+
+  <pre><code><span class="cmt">// 读取：存在性 + 类型 + 取值，三连问之后再动手</span>
+<span class="kw">if</span> (person.isMember(<span class="str">"name"</span>) <span class="op">&amp;&amp;</span> person[<span class="str">"name"</span>].isString()) {
+    std::cout &lt;&lt; person[<span class="str">"name"</span>].asString() &lt;&lt; std::endl;
+}
+<span class="kw">if</span> (person[<span class="str">"age"</span>].isInt()) {
+    std::cout &lt;&lt; person[<span class="str">"age"</span>].asInt() &lt;&lt; std::endl;
+}
+
+<span class="cmt">// 数组遍历：size() + 下标</span>
+Json::Value skills = person[<span class="str">"skills"</span>];
+<span class="kw">for</span> (<span class="type">unsigned int</span> i = <span class="num">0</span>; i &lt; skills.size(); i++) {
+    std::cout &lt;&lt; skills[i].asString() &lt;&lt; std::endl;   <span class="cmt">// 推理 / 变声</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>真相只有一个：<strong>先 isMember，再 isXxx，最后 asXxx</strong>。这三连问写起来啰嗦，但它是 JSON 数据安全读取的护身符——接口返回的数据你永远不知道是什么类型，而 <code>asInt()</code> 在类型不匹配时是直接抛异常的。</p>
+  </div>
+
+  <!-- ========== 6.5 解析：从字符串和文件到 Value（Reader / CharReaderBuilder） ========== -->
+  <h2>6.5 解析：从字符串和文件到 Value（Reader / CharReaderBuilder）</h2>
+
+  <p>数据流的第一站：<strong>把 JSON 文本变成内存里的树，这一步叫解析（parse）</strong>。jsoncpp 提供两代解析 API。老一代是 <code>Json::Reader</code>，用法最简洁：构造一个 Reader，调用 <code>reader.parse(文本, 树)</code>，返回 true 表示成功。它从 0.x 时代就在，网上大量教程用的都是它，新版本里被标记为 <strong>deprecated（不推荐使用）</strong>——还能用，但新代码不推荐再写：</p>
+
+  <pre><code><span class="cmt">// 老 API：Json::Reader（简洁，但已标记 deprecated）</span>
+<span class="ann">#include</span> &lt;json/json.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+<span class="ann">#include</span> &lt;string&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    std::string <span class="param">text</span> = <span class="str">R"({"name":"柯南","age":17})"</span>;
+
+    Json::Reader reader;                       <span class="cmt">// 一个解析器</span>
+    Json::Value root;                          <span class="cmt">// 结果树</span>
+    <span class="kw">if</span> (reader.parse(text, root)) {           <span class="cmt">// 解析成功返回 true</span>
+        std::cout &lt;&lt; root[<span class="str">"name"</span>].asString() &lt;&lt; std::endl;
+    } <span class="kw">else</span> {
+        std::cerr &lt;&lt; <span class="str">"解析失败"</span> &lt;&lt; std::endl;
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>新一代是 <code>Json::CharReaderBuilder</code> + <code>Json::CharReader</code>，也就是 6.2 里第一次出场的那套。它走的是"工厂模式"：Builder 负责配置（比如要不要校验、怎么收集错误），<code>newCharReader()</code> 造出一个解析器，解析器的 <code>parse(起始指针, 结束指针, &amp;树, &amp;错误信息)</code> 负责干活。相比老 Reader，它的优势是<strong>可配置、错误信息更详细</strong>（出错时 <code>errs</code> 里会写清楚位置和原因）。注意 <code>parse</code> 接收的是<strong>指针范围</strong>（首地址 + 末地址），而不是整个字符串。除了从字符串解析，jsoncpp 还提供了 <code>Json::parseFromStream()</code>，可以直接从文件流解析，省去"先读文件再拼字符串"的中间步骤——数据流的源头直接从磁盘开始：</p>
+
+  <pre><code><span class="cmt">// 新 API：CharReaderBuilder —— 从字符串解析</span>
+std::string text = <span class="str">R"({"host":"127.0.0.1","port":8080})"</span>;
+Json::CharReaderBuilder builder;
+Json::Value root;
+std::string errs;
+std::unique_ptr&lt;Json::CharReader&gt; reader(builder.newCharReader());
+<span class="type">bool</span> ok = reader-&gt;parse(text.c_str(), text.c_str() + text.size(), &amp;root, &amp;errs);
+<span class="kw">if</span> (!ok) {
+    std::cerr &lt;&lt; <span class="str">"解析失败："</span> &lt;&lt; errs &lt;&lt; std::endl;
+    <span class="kw">return</span> <span class="num">1</span>;
+}
+std::cout &lt;&lt; root[<span class="str">"host"</span>].asString() &lt;&lt; std::endl;   <span class="cmt">// 127.0.0.1</span></code></pre>
+
+  <pre><code><span class="cmt">// 新 API：parseFromStream —— 直接从文件流解析（6.1 的 config.json）</span>
+<span class="ann">#include</span> &lt;json/json.h&gt;
+<span class="ann">#include</span> &lt;fstream&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    std::ifstream fin(<span class="str">"config.json"</span>);
+    Json::CharReaderBuilder builder;
+    Json::Value <span class="param">conf</span>;
+    std::string errs;
+    <span class="kw">if</span> (!Json::parseFromStream(builder, fin, &amp;conf, &amp;errs)) {
+        std::cerr &lt;&lt; <span class="str">"解析 config.json 失败："</span> &lt;&lt; errs &lt;&lt; std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="cmt">// 链式取嵌套字段：先取 "server" 节点，再取它下面的 "host"</span>
+    std::cout &lt;&lt; conf[<span class="str">"server"</span>][<span class="str">"host"</span>].asString() &lt;&lt; std::endl;  <span class="cmt">// 127.0.0.1</span>
+    std::cout &lt;&lt; conf[<span class="str">"server"</span>][<span class="str">"port"</span>].asInt() &lt;&lt; std::endl;       <span class="cmt">// 8080</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>两个例子都强调同一件事：<strong>解析的返回值必须检查</strong>。JSON 文本来自外部（配置文件、网络接口），你永远不知道它会不会是坏的：少个逗号、多个引号、类型写错……<code>parse</code> 返回 false 时，<code>root</code> 只会被填成半截甚至空树，不检查就直接用，后面取出来的全是默认值，Bug 藏在最深处。柯南的忠告：<strong>解析失败是数据流上的第一道闸门，闸门一开，后面全是脏数据</strong>。</p>
+
+  <!-- ========== 6.6 序列化：从 Value 回到字符串和文件（FastWriter / StreamWriterBuilder） ========== -->
+  <h2>6.6 序列化：从 Value 回到字符串和文件（FastWriter / StreamWriterBuilder）</h2>
+
+  <p>数据流的最后一站：<strong>把内存里的树变回 JSON 文本，这一步叫序列化（serialize / write）</strong>。和解析一样，序列化也有两代 API。老一代是 <code>Json::FastWriter</code>，<code>writer.write(树)</code> 直接返回字符串，输出<strong>紧凑、无缩进、无多余空格</strong>（键和值之间没有空格，形如 <code>{"age":17,"name":"柯南"}</code>），适合省流量的网络传输场景。它同样被标记为 deprecated，新代码推荐用 <code>Json::StreamWriterBuilder</code>。</p>
+
+  <p><code>Json::StreamWriterBuilder</code> 走的是和 CharReaderBuilder 一样的工厂模式，最常用的是它的<strong>设置项</strong>：<code>wbuilder["indentation"]</code> 控制缩进（默认是制表符 <code>\t</code>，设为 <code>"  "</code> 就是两级空格，设为 <code>""</code> 就是紧凑输出）。配合便捷函数 <code>Json::writeString(工厂, 树)</code> 一行出字符串。注意一个细节：jsoncpp 序列化时，对象成员之间用的是 <code>"键" : 值</code>——冒号前有一个空格，而 FastWriter 没有；两边输出风格不一样，别当成 Bug：</p>
+
+  <pre><code><span class="cmt">// 新 API：StreamWriterBuilder —— 可配置的序列化</span>
+Json::Value <span class="param">v</span>;
+v[<span class="str">"name"</span>] = <span class="str">"柯南"</span>;
+v[<span class="str">"age"</span>] = <span class="num">17</span>;
+
+Json::StreamWriterBuilder wbuilder;
+wbuilder[<span class="str">"indentation"</span>] = <span class="str">"  "</span>;                  <span class="cmt">// 两级空格缩进（默认是 \t）</span>
+std::string pretty = Json::writeString(wbuilder, v);
+std::cout &lt;&lt; pretty &lt;&lt; std::endl;
+<span class="cmt">// 输出：</span>
+<span class="cmt">// {</span>
+<span class="cmt">//   "age" : 17,</span>
+<span class="cmt">//   "name" : "柯南"</span>
+<span class="cmt">// }</span>
+
+wbuilder[<span class="str">"indentation"</span>] = <span class="str">""</span>;                    <span class="cmt">// 改成紧凑输出</span>
+std::cout &lt;&lt; Json::writeString(wbuilder, v) &lt;&lt; std::endl;
+<span class="cmt">// 输出：{"age":17,"name":"柯南"}</span></code></pre>
+
+  <p>要把树写回文件，两种姿势：要么 <code>writeString</code> 拿到字符串后自己写文件，要么直接用 <code>StreamWriter</code> 把树直接写进文件流——后者更省事，<code>newStreamWriter()</code> 造出 writer，<code>writer-&gt;write(树, &amp;输出流)</code> 一步到位。老 API FastWriter 的用法也一并给出，方便你读懂网上老代码：</p>
+
+  <pre><code><span class="cmt">// 写回文件：StreamWriter 直接写流（沿用上面的 v）</span>
+<span class="ann">#include</span> &lt;fstream&gt;
+
+std::ofstream fout(<span class="str">"out.json"</span>);
+Json::StreamWriterBuilder wb;
+wb[<span class="str">"indentation"</span>] = <span class="str">"  "</span>;
+std::unique_ptr&lt;Json::StreamWriter&gt; sw(wb.newStreamWriter());
+sw-&gt;write(v, &amp;fout);
+fout.close();</code></pre>
+
+  <pre><code><span class="cmt">// 老 API：FastWriter —— 紧凑输出，已标记 deprecated，但老代码很常见</span>
+Json::FastWriter writer;
+std::string out = writer.write(v);
+std::cout &lt;&lt; out;                <span class="cmt">// {"age":17,"name":"柯南"}，无缩进无空格</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>什么时候用哪种输出？<strong>给人看的配置文件用缩进版</strong>（方便人眼排查），<strong>给程序传的数据用紧凑版</strong>（省带宽、省存储）。纠结的话记住一句话：配置走缩进，传输走紧凑。</p>
+  </div>
+
+  <!-- ========== 6.7 常见坑与实战：数据流上的三处暗礁 ========== -->
+  <h2>6.7 常见坑与实战：数据流上的三处暗礁</h2>
+
+  <p>先揭晓 6.2 埋的悬念。<strong>坑一：序列化时键名按字母顺序排列</strong>。jsoncpp 内部用 <code>std::map</code> 存储对象的成员，而 <code>std::map</code> 是有序容器（默认按键的字母序），所以无论你插入的顺序如何，序列化输出时键永远按字母序排。这不是 Bug，是设计如此——素材笔记里记录了：jsoncpp 和 POCO 库的 JSON 模块都有这个行为（转 JSON 字符串时键名按字母顺序排列），而 protobuf 转 JSON 时则按 message 里字段声明的顺序输出。所以：<strong>别指望 JSON 对象的键序，读配置时也永远不要依赖键序</strong>；但数组元素顺序是保证的（数组就是顺序表），<code>append</code> 进去什么顺序，出来就什么顺序：</p>
+
+  <pre><code><span class="cmt">// 键序演示：插入顺序与输出顺序无关</span>
+Json::Value v;
+v[<span class="str">"zeta"</span>] = <span class="num">1</span>;
+v[<span class="str">"alpha"</span>] = <span class="num">2</span>;
+v[<span class="str">"mike"</span>] = <span class="num">3</span>;
+
+Json::StreamWriterBuilder wb;
+wb[<span class="str">"indentation"</span>] = <span class="str">""</span>;
+std::cout &lt;&lt; Json::writeString(wb, v) &lt;&lt; std::endl;
+<span class="cmt">// 输出：{"alpha":2,"mike":3,"zeta":1} —— 按字母序，不是插入序！</span></code></pre>
+
+  <p><strong>坑二：<code>operator[]</code> 找不到键时会"顺手"创建空成员</strong>。非 const 的 <code>Value</code> 上执行 <code>root["不存在的键"]</code>，jsoncpp 不会报错，而是默默插入一个值为 null 的成员——这原本是为了方便写入（<code>v["name"] = "柯南"</code> 直接就能建键），但读数据时它就是陷阱：你以为在"查"，其实在"写"，树被悄悄污染。加上 <code>asInt()</code> 对类型不匹配的值（字符串、对象、null）默认会抛 <code>std::runtime_error</code>，两个坑叠在一起，就是"程序莫名崩溃 + 输出多了一堆 null 键"。正确姿势永远只有一种：先 <code>isMember</code> 确认存在，再 <code>isXxx</code> 确认类型，最后 <code>asXxx</code> 取值：</p>
+
+  <pre><code><span class="cmt">// 坑二演示：读缺失键会"写入"空成员，序列化时现出原形</span>
+Json::Value root;
+root[<span class="str">"who"</span>];                                <span class="cmt">// 只是"读"一下，成员却被创建了！</span>
+Json::StreamWriterBuilder wb2;
+wb2[<span class="str">"indentation"</span>] = <span class="str">""</span>;
+std::cout &lt;&lt; Json::writeString(wb2, root) &lt;&lt; std::endl;   <span class="cmt">// {"who":null}</span>
+
+<span class="cmt">// 坑三：类型不匹配直接抛异常</span>
+Json::Value conf;
+conf[<span class="str">"port"</span>] = <span class="str">"8080"</span>;                   <span class="cmt">// 注意：字符串，不是数字</span>
+<span class="cmt">// int p = conf["port"].asInt();          // 抛出 std::runtime_error！</span>
+<span class="kw">if</span> (conf[<span class="str">"port"</span>].isString()) {              <span class="cmt">// 先问类型</span>
+    <span class="type">int</span> p = std::stoi(conf[<span class="str">"port"</span>].asString());   <span class="cmt">// 再决定怎么转</span>
+}</code></pre>
+
+  <p><strong>坑四：解析失败不检查，静默使用空树</strong>。这个 6.5 强调过，实战里再补一刀：JSON 解析失败时 <code>parse</code> 返回 false，<code>errs</code> 里是错误详情，但 <code>root</code> 并不会被清空——它可能是半截数据。如果你不看返回值，程序会"正常"跑下去，只是所有字段都是默认值（字符串空、数字 0、布尔 false），Bug 极难定位。养成习惯：<strong>parse 的返回值必须 if 检查，失败就打印 errs 并终止</strong>。</p>
+
+  <p>最后串一个完整实战：读配置 → 改配置 → 写回，把数据流从头走到尾。注意输出的键序会跟源文件不一样（坑一），这是正常现象，不是写坏了：</p>
+
+  <pre><code><span class="cmt">// config_tool.cpp：读配置、改配置、写回</span>
+<span class="ann">#include</span> &lt;json/json.h&gt;
+<span class="ann">#include</span> &lt;fstream&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// 1. 读：文件 → 树</span>
+    std::ifstream fin(<span class="str">"config.json"</span>);
+    Json::CharReaderBuilder builder;
+    Json::Value <span class="param">conf</span>;
+    std::string errs;
+    <span class="kw">if</span> (!Json::parseFromStream(builder, fin, &amp;conf, &amp;errs)) {
+        std::cerr &lt;&lt; <span class="str">"解析失败："</span> &lt;&lt; errs &lt;&lt; std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    fin.close();
+
+    <span class="cmt">// 2. 改：树上的增删改</span>
+    conf[<span class="str">"server"</span>][<span class="str">"port"</span>] = <span class="num">9090</span>;                  <span class="cmt">// 改端口</span>
+    conf[<span class="str">"users"</span>].append(<span class="str">"carol"</span>);                    <span class="cmt">// 数组追加</span>
+    conf[<span class="str">"version"</span>] = <span class="str">"2.0"</span>;                          <span class="cmt">// 新增字段</span>
+
+    <span class="cmt">// 3. 写：树 → 文件</span>
+    std::ofstream fout(<span class="str">"config.json"</span>);
+    Json::StreamWriterBuilder wb;
+    wb[<span class="str">"indentation"</span>] = <span class="str">"  "</span>;
+    std::unique_ptr&lt;Json::StreamWriter&gt; sw(wb.newStreamWriter());
+    sw-&gt;write(conf, &amp;fout);
+    fout.close();
+
+    std::cout &lt;&lt; <span class="str">"配置已更新（键序按字母排列，属正常现象）"</span> &lt;&lt; std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="warning">
+    <p><strong>总结</strong>：JSON 数据流上的四块暗礁——① 键名按字母序输出，别依赖键序；② 读缺失键会污染树，读之前先 isMember；③ asInt 类型不匹配抛异常，先 isXxx 再 asXxx；④ 解析失败必须检查返回值。把这条清单贴在工位上，比记住任何 API 都管用。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>JSON 的值有哪几种类型？它们分别对应 jsoncpp 的哪些节点类型？判断下面哪个是合法的 JSON，并说明理由：<code>{"a":1}</code>、<code>{a:1}</code>、<code>{'a':1}</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 6.1 的类型表和 6.2 的 Json::Value 类型表；重点检查键的引号规范。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>JSON 六种值类型：null、布尔、数字、字符串、数组、对象；jsoncpp 的 Json::Value 细分后对应 nullValue / booleanValue / intValue / uintValue / realValue / stringValue / arrayValue / objectValue。合法的只有 <code>{"a":1}</code>——JSON 规定键必须用双引号，<code>{a:1}</code> 键没加引号，<code>{'a':1}</code> 用了单引号，都不合法。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：抓 Bug <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面这段代码，假设 <code>root</code> 已经解析成功且内容是 <code>{"name":"柯南","age":17}</code>，请指出第 3 行会发生什么，为什么，怎么改？</p>
+      <pre><code>std::cout &lt;&lt; root[<span class="str">"age"</span>].asInt() &lt;&lt; std::endl;    <span class="cmt">// ① 正常</span>
+std::cout &lt;&lt; root[<span class="str">"name"</span>].asString() &lt;&lt; std::endl; <span class="cmt">// ② 正常</span>
+std::cout &lt;&lt; root[<span class="str">"name"</span>].asInt() &lt;&lt; std::endl;    <span class="cmt">// ③ ?</span>
+std::cout &lt;&lt; root[<span class="str">"height"</span>].asInt() &lt;&lt; std::endl;  <span class="cmt">// ④ ?</span></code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 asInt 遇到字符串和 null 时默认的行为；再想想 operator[] 读缺失键的副作用。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>③ 抛 <code>std::runtime_error</code>——<code>"name"</code> 是字符串，asInt() 类型不匹配默认抛异常；④ 同样抛异常，而且 <code>root["height"]</code> 会先把 <code>height</code> 成员创建为 null（树被污染），再在 null 上 asInt() 抛异常。正确写法：<code>if (root.isMember("name") &amp;&amp; root["name"].isString()) std::cout &lt;&lt; root["name"].asString();</code>，取数字同理先 isInt()。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：完整读写实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个程序：读入 6.1 的 config.json（含 <code>server.host</code> / <code>server.port</code> 和 <code>users</code> 数组），把 port 改成 9090、向 users 追加一个名字、新增一个字段 <code>version: "2.0"</code>，然后写回文件。运行后打开文件，回答：为什么输出文件的键序和源文件不一样？数组顺序变了吗？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三段式：parseFromStream 读 → operator[] 改 → StreamWriterBuilder 写。键序问题回到 6.7 坑一找答案。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心代码见 6.7 的 config_tool.cpp，结构完全一样。原因：jsoncpp 用 <code>std::map</code> 存对象成员，序列化按字母序输出，所以 <code>server</code> 内部的 host/port 以及顶层键都会按字母重排（如 debug 排到 server 前、users 前）；而数组底层是顺序容器，<code>append</code> 的顺序就是输出顺序，users 数组内顺序保持不变。结论：对象键序不可依赖，数组顺序可靠。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：新旧 API 对比 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>解析侧 Reader → CharReaderBuilder、序列化侧 FastWriter → StreamWriterBuilder，两对演进各解决了什么问题？为什么新代码推荐用后者？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从"能不能配置、错误信息细不细、输出格式可不可控"三个角度对比。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>老 API（Reader / FastWriter）用起来最省事，但不可配置：Reader 的错误信息有限，FastWriter 输出格式写死（紧凑、无缩进）。新 API 采用工厂模式，Builder 负责统一配置：CharReaderBuilder 能控制解析行为并通过 <code>errs</code> 收集更详细的错误位置；StreamWriterBuilder 能通过 <code>wbuilder["indentation"]</code> 等设置项控制输出格式（缩进 / 紧凑），还支持直接写流（<code>newStreamWriter()</code> + <code>write(树, &amp;流)</code>）。所以老 API 被标记 deprecated，能读懂即可，新代码统一用 Builder 系。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

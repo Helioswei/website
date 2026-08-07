@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第10章：远程调用：gRPC 入门 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter10.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第10章：远程调用：gRPC 入门 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter10.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="10" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：远程调用：gRPC 入门</h1>
+  <p class="chapter-subtitle">让远程服务调用得像本地函数一样自然——用一份 .proto 契约，打通两个进程、两种语言</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「伟大的工程都有艺术的内核：比例、节奏、留白。接口设计亦然——一份好的 .proto 契约，读起来像一张设计图，两端程序按图施工，严丝合缝。这一章，我们就用 gRPC 这副画笔，把\"跨机器调用\"这件事画成一件作品。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 铺垫：RPC 是什么——像调用本地函数一样调用远程服务 ========== -->
+  <h2>10.1 铺垫：RPC 是什么——像调用本地函数一样调用远程服务</h2>
+
+  <p>前九章我们都在\"单机\"世界里打转：编译、链接、日志、测试，全在一个进程里。但真实系统是分布式的：用户下单，订单服务要问库存服务\"还有没有货\"。程序一旦拆到不同进程、不同机器上，\"怎么互相调用\"就成了新问题。最原始的办法是自己用 socket 收发字节流——可你要自己设计报文格式、处理粘包半包、定义错误码，第 8 章手写 HTTP 解析的痛苦换个皮再来一遍。于是，<strong>RPC</strong> 登场了。</p>
+
+  <p><strong>RPC（Remote Procedure Call，远程过程调用）——说人话：让一段程序像调用本地函数一样调用另一台机器上的函数，中间的打包、传输、解包全部藏起来。</strong>核心思想是\"调用透明\"：客户端这边有一个和远程函数长得一模一样的替身，叫做 <strong>stub（桩）</strong>——说人话就是\"本地替身\"：你调用它，它替你打包参数、发到网络、收回应、拆包，再把结果像返回值一样还给你。调用方全程感觉不到网络的存在——这也是它最难的地方：透明之下藏着序列化、传输、并发、失败重试一大堆细节。</p>
+
+  <p>对比两种方案，就知道为什么没人手写协议了：</p>
+
+  <pre><code><span class="cmt">// 方案 A：自己用 socket 实现远程调用（手写协议，痛苦）</span>
+<span class="cmt">// 要自己解决：报文格式、字节序、粘包、半包、超时、重试、错误码……</span>
+<span class="cmt">// 每个接口都要写一遍"打包 + 发送 + 等待 + 解包"，全是样板代码。</span>
+
+<span class="cmt">// 方案 B：用 RPC 框架（比如 gRPC）</span>
+<span class="cmt">// 你只需要：用 .proto 定义接口（10.3 讲）+ 实现函数体（10.6 讲）</span>
+<span class="cmt">// 剩下的序列化、传输、解包、重试，框架全部包办。</span></code></pre>
+
+  <pre><code><span class="cmt">// RPC 的四个幕后动作（以"客户端发一个请求"为例）</span>
+<span class="cmt">// ① 序列化：把参数按约定格式打包成紧凑的二进制字节流（stub 帮你做）</span>
+<span class="cmt">// ② 传输：通过 HTTP/2 连接把字节流发给远程服务器</span>
+<span class="cmt">// ③ 服务器反序列化：还原参数，调用真正的实现函数，结果再序列化回传</span>
+<span class="cmt">// ④ 客户端反序列化：把返回的字节流还原成"返回值"，交还给调用方</span>
+<span class="cmt">// 调用方全程只看到：int sum = remote_add(1, 2);  // 返回 3</span>
+<span class="cmt">// 中间发生了什么，由 RPC 框架（stub 与 server）替你包办</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>第 8 章的 REST 也是远程调用，和 RPC 什么关系？REST 是\"风格约定\"，通常基于 HTTP 文本传输，URL 描述资源；RPC 是\"方法调用\"，接口像函数签名，数据用二进制。公开 Web API 多用 REST（浏览器友好），内部高性能调用多用 RPC——gRPC 正是后者的代表。</p>
+  </div>
+
+  <!-- ========== 10.2 gRPC 是什么：Google 开源的现代 RPC 框架 ========== -->
+  <h2>10.2 gRPC 是什么：Google 开源的现代 RPC 框架</h2>
+
+  <p><strong>gRPC 是 Google 在 2015 年开源的高性能 RPC 框架（Apache 2.0 协议）——说人话：它把\"定义接口 → 生成代码 → 跑起服务\"整条流水线都做好了，你专心写业务。</strong>为什么在众多 RPC 框架里选它？三个理由最有说服力：</p>
+
+  <p>第一，<strong>传输层用 HTTP/2</strong>。HTTP/2 是多路复用（multiplexing）的——说人话：一条连接上可以同时跑很多个请求，互不排队，还能双向同时传数据，比 HTTP/1.1 排队高效得多。第二，<strong>序列化用 protobuf</strong>（10.3 的主角），紧凑的二进制格式——说人话：同样的数据，打包出的字节比 JSON/XML 这类文本格式少得多，拆包也快得多。第三，<strong>跨语言</strong>：一份接口契约，官方就支持 C++、Java、Python、Go 等十几种语言生成代码，客户端用 Python、服务端用 C++ 照样互通——\"每种语言各写各的\"在大公司就是这么活的。</p>
+
+  <p>gRPC 支持四种 RPC 类型，从\"一问一答\"到\"两边同时说\"（接口来自官方 route_guide 示例）：</p>
+
+  <table>
+    <tr><th>类型</th><th>proto 声明</th><th>说人话</th></tr>
+    <tr><td>一元 RPC</td><td>rpc GetFeature(Point) returns (Feature)</td><td>一问一答，最像普通函数调用</td></tr>
+    <tr><td>服务端流式</td><td>rpc ListFeatures(Rectangle) returns (stream Feature)</td><td>问一次，服务端连发一串回来</td></tr>
+    <tr><td>客户端流式</td><td>rpc RecordRoute(stream Point) returns (RouteSummary)</td><td>客户端连发一串，最后收一个总结</td></tr>
+    <tr><td>双向流式</td><td>rpc RouteChat(stream RouteNote) returns (stream RouteNote)</td><td>两边同时说，互不等待</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// 四种 RPC 类型在 .proto 里的声明方式（stream 关键字决定流式方向）</span>
+<span class="kw">service</span> <span class="type">RouteGuide</span> {
+  <span class="fn">rpc</span> GetFeature(Point) <span class="kw">returns</span> (Feature) {}
+  <span class="fn">rpc</span> ListFeatures(Rectangle) <span class="kw">returns</span> (<span class="kw">stream</span> Feature) {}
+  <span class="fn">rpc</span> RecordRoute(<span class="kw">stream</span> Point) <span class="kw">returns</span> (RouteSummary) {}
+  <span class="fn">rpc</span> RouteChat(<span class="kw">stream</span> RouteNote) <span class="kw">returns</span> (<span class="kw">stream</span> RouteNote) {}
+}</code></pre>
+
+  <pre><code><span class="cmt">// gRPC 客户端的两个核心概念（10.6 会真正用上）：</span>
+<span class="cmt">// channel（通道）：到服务器的逻辑连接，管地址、凭据、重连</span>
+<span class="type">std::shared_ptr</span>&lt;<span class="type">grpc::Channel</span>&gt; <span class="param">channel</span> =
+    <span class="fn">grpc::CreateChannel</span>(<span class="str">"localhost:50051"</span>,
+                        <span class="fn">grpc::InsecureChannelCredentials</span>());
+<span class="cmt">// stub（桩）：绑在 channel 上的"远程对象"，调它的方法就是发一次 RPC</span>
+<span class="type">std::unique_ptr</span>&lt;<span class="type">Greeter::Stub</span>&gt; <span class="param">stub</span> = <span class="type">Greeter</span>::<span class="fn">NewStub</span>(channel);</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>gRPC 的传输要求两端都支持 HTTP/2，浏览器默认不支持它的二进制帧，需要 grpc-web 之类的代理中转。但服务器与服务器、服务器与 App 之间的通信，正是它的拿手好戏。</p>
+  </div>
+
+  <!-- ========== 10.3 protobuf 与 .proto 文件：先定契约，再写代码 ========== -->
+  <h2>10.3 protobuf 与 .proto 文件：先定契约，再写代码</h2>
+
+  <p><strong>protobuf（Protocol Buffers，协议缓冲区）——说人话：Google 开发的一种序列化格式，把姓名、年龄、列表这类结构化数据压成紧凑的二进制；配套用一种叫 proto 的\"接口描述语言\"（IDL，Interface Definition Language，说人话：专门描述数据结构和接口的说明书语言）来写 .proto 文件。</strong>gRPC 用 .proto 文件同时定义两样东西：消息（数据结构）和服务（接口）。这份文件就是<strong>契约（contract）</strong>——说人话：客户端和服务端共同遵守的\"接口合同\"，先谈好合同，两端再各自开工。</p>
+
+  <p>.proto 文件开头第一行是 <code>syntax = "proto3";</code>，声明使用第 3 版语法——说人话：proto3 比老版本更简洁，所有字段都有默认值（字符串默认空串、整数默认 0），不用手写初始化。接着用 <code>message</code> 定义数据结构：每个字段由\"类型 + 名字 + 编号\"组成。那个数字编号是字段在二进制格式里的\"身份证号\"——打包时用它标识\"这段数据是哪个字段\"，所以编号不能重复，发布后更不能随便改，否则老客户端就解不出来了。</p>
+
+  <p>数据定义好了，再用 <code>service</code> 定义服务：一个服务就是一组 RPC 方法的集合，每个方法声明\"传入什么消息、返回什么消息\"。下面就是官方 helloworld 示例的完整 .proto 文件，全章的地基：</p>
+
+  <pre><code><span class="cmt">// 官方示例 examples/protos/helloworld.proto</span>
+<span class="kw">syntax</span> = <span class="str">"proto3"</span>;          <span class="cmt">// 使用 proto3 语法</span>
+<span class="kw">package</span> <span class="type">helloworld</span>;            <span class="cmt">// 包名：生成代码的命名空间（C++ 里是 namespace）</span>
+
+<span class="cmt">// 服务定义：一组 RPC 方法的集合</span>
+<span class="kw">service</span> <span class="type">Greeter</span> {
+  <span class="cmt">// 一元 RPC：传 HelloRequest，返回 HelloReply</span>
+  <span class="fn">rpc</span> SayHello (HelloRequest) <span class="kw">returns</span> (HelloReply) {}
+}
+
+<span class="cmt">// 请求消息：一个 string 字段 name，编号 1</span>
+<span class="kw">message</span> <span class="type">HelloRequest</span> {
+  <span class="type">string</span> <span class="param">name</span> = <span class="num">1</span>;
+}
+
+<span class="cmt">// 响应消息：一个 string 字段 message，编号 1</span>
+<span class="kw">message</span> <span class="type">HelloReply</span> {
+  <span class="type">string</span> <span class="param">message</span> = <span class="num">1</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// 字段编号是二进制格式识别字段的依据，改编号 = 破坏协议</span>
+<span class="kw">message</span> <span class="type">Person</span> {
+  <span class="type">string</span> <span class="param">name</span>  = <span class="num">1</span>;   <span class="cmt">// 打包时用"编号 1"标记这段数据是 name</span>
+  <span class="type">int32</span>  <span class="param">age</span>   = <span class="num">2</span>;   <span class="cmt">// 用"编号 2"标记 age</span>
+  <span class="cmt">// 编号一旦发布就不能改；但可以追加新字段、用新编号：</span>
+  <span class="type">string</span> <span class="param">email</span> = <span class="num">3</span>;   <span class="cmt">// 后来加的字段，老客户端解析时会安全跳过</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>proto3 里标量字段没有\"是否填了\"的概念——没赋值就是默认值（0、空串），解析出来分不清\"没填\"和\"恰好是默认值\"。真想表达\"字段缺失\"，要给字段加 <code>optional</code> 关键字或用包装类型。</p>
+  </div>
+
+  <!-- ========== 10.4 编译流程：protoc 与 grpc_cpp_plugin 生成代码 ========== -->
+  <h2>10.4 编译流程：protoc 与 grpc_cpp_plugin 生成代码</h2>
+
+  <p>.proto 只是设计图，不能直接运行。<strong>protoc（Protocol Buffer Compiler）——说人话：把 .proto 文件翻译成各种语言代码的编译器。</strong>C++ 要用两条命令：<code>--cpp_out</code> 生成消息的读写代码，<code>--grpc_out</code> 生成服务端基类和客户端 stub 代码。后者依赖 <strong>grpc_cpp_plugin</strong>——说人话：protoc 的\"外挂插件\"，由 gRPC 官方提供，专门把 <code>service</code> 翻译成 C++ 骨架，用 <code>--plugin=protoc-gen-grpc=路径</code> 指定它的位置。</p>
+
+  <p>运行 protoc 后，当前目录会多出四个文件，分工如下：</p>
+
+  <pre><code><span class="cmt"># 官方编译命令（C++）：先 --grpc_out 再 --cpp_out</span>
+protoc -I <span class="num">../../</span>protos --grpc_out=. \
+    --plugin=protoc-gen-grpc=`<span class="fn">which</span> grpc_cpp_plugin` <span class="num">../../</span>protos/helloworld.proto
+protoc -I <span class="num">../../</span>protos --cpp_out=. <span class="num">../../</span>protos/helloworld.proto</code></pre>
+
+  <pre><code><span class="cmt"># 生成的四个文件及其内容</span>
+helloworld.pb.h        <span class="cmt"># 消息类声明：HelloRequest / HelloReply，set_name()、message() 等</span>
+helloworld.pb.cc       <span class="cmt"># 消息类实现：二进制序列化 / 反序列化</span>
+helloworld.grpc.pb.h   <span class="cmt"># 服务端基类 Greeter::Service + 客户端 Greeter::Stub 的声明</span>
+helloworld.grpc.pb.cc  <span class="cmt"># 服务端 / 客户端骨架实现</span>
+<span class="cmt"># 四个文件都是自动生成的，顶部写着"DO NOT EDIT"——不要手改，下次生成就覆盖</span></code></pre>
+
+  <p>官方示例的 Makefile 怎么知道插件在哪？靠 <code>which</code> 自动探测——这行看似不起眼的规则，正是 10.5 那个著名报错 <code>which: no grpc_cpp_plugin</code> 的来源：</p>
+
+  <pre><code><span class="cmt"># 官方 examples/cpp/helloworld/Makefile 关键规则（节选）</span>
+GRPC_CPP_PLUGIN ?= $(<span class="fn">shell</span> which grpc_cpp_plugin)  <span class="cmt"># 找不到插件时，which 报错</span>
+PROTOC ?= $(<span class="fn">shell</span> which protoc)
+
+helloworld.grpc.pb.cc: <span class="num">../../</span>protos/helloworld.proto
+	$(PROTOC) -I <span class="num">../../</span>protos --grpc_out=. --plugin=protoc-gen-grpc=$(GRPC_CPP_PLUGIN) $&lt;
+helloworld.pb.cc: <span class="num">../../</span>protos/helloworld.proto
+	$(PROTOC) -I <span class="num">../../</span>protos --cpp_out=. $&lt;</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>想看生成代码长什么样？编译后打开 <code>helloworld.grpc.pb.h</code>：<code>class Greeter</code> 下嵌着 <code>class Stub</code>（客户端）和 <code>class Service</code>（服务端基类），还有 <code>NewStub(...)</code>——10.6 的代码全是从这里长出来的。生成代码是最好的\"API 字典\"。</p>
+  </div>
+
+  <!-- ========== 10.5 编译安装 gRPC：CentOS 实战与常见坑 ========== -->
+  <h2>10.5 编译安装 gRPC：CentOS 实战与常见坑</h2>
+
+  <p>gRPC 的依赖很多（protobuf、OpenSSL、zlib 等），当年（素材笔记，2020 年）在 CentOS 7 上必须从源码编译。下面的命令全部来自真实操作记录，可以照抄。第一步装编译工具和依赖包——注意 CMake 也要新版：yum 自带的版本太低，素材是去 cmake.org 下载源码安装的（<code>./configure</code> → <code>make &amp;&amp; make install</code>），必要时用 <code>ln -s</code> 把新 cmake 指到 <code>/usr/bin/cmake</code>。</p>
+
+  <pre><code><span class="cmt"># 素材笔记（CentOS 7）：安装编译依赖</span>
+yum install -y pkgconfig autoconf automake libtool make gcc-c++ unzip
+yum install -y gflags-devel gtest-devel clang libcxx-devel
+yum install -y openssl openssl-devel
+yum install -y libunwind libunwind-devel
+yum install -y epel-release
+yum install -y golang   <span class="cmt"># gRPC 工具链需要</span></code></pre>
+
+  <pre><code><span class="cmt"># 克隆 gRPC 源码并初始化子模块（protobuf 就在 third_party 里）</span>
+git clone https://github.com/grpc/grpc.git
+<span class="fn">cd</span> grpc
+git submodule update --init
+
+<span class="cmt"># 先编译 protobuf（素材原样）：gRPC 依赖它生成消息代码</span>
+<span class="fn">cd</span> third_party/protobuf
+git submodule update --init --recursive
+./autogen.sh
+./configure --prefix=/usr/local/helios/protobuf
+make
+make check
+make install
+
+<span class="cmt"># 软链 protoc 到系统路径并验证</span>
+ln -s /usr/local/helios/protobuf/bin/protoc /usr/local/bin/protoc
+protoc --version</code></pre>
+
+  <pre><code><span class="cmt"># 再编译 gRPC 本体（素材原样，CMake 方式）</span>
+<span class="fn">cd</span> grpc
+mkdir -p cmake/build
+<span class="fn">cd</span> cmake/build        <span class="cmt"># ../../ 指向 grpc 根目录</span>
+cmake -DBUILD_SHARED_LIBS=on -DCMAKE_INSTALL_PREFIX=/usr/local/helios/grpc \
+      -DCMAKE_BUILD_TYPE=DEBUG -Wno-dev <span class="num">../../</span>
+make
+make install</code></pre>
+
+  <p>装完跑官方示例 <code>examples/cpp/helloworld</code>，素材笔记里一连串环境报错，根因只有一个：<strong>东西装进了自定义前缀 <code>/usr/local/helios/</code>，而各工具默认的搜索路径不知道这件事</strong>。四个问题逐一解决：插件找不到（PATH）、头文件找不到（CPLUS_INCLUDE_PATH，第 4 章讲过）、pkg-config 找不到包（PKG_CONFIG_PATH）、运行时报动态库缺失（LD_LIBRARY_PATH）。</p>
+
+  <pre><code><span class="cmt"># 坑 1：make 时 protoc 插件找不到</span>
+<span class="cmt"># 报错：which: no grpc_cpp_plugin in (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin)</span>
+<span class="cmt"># 插件在自定义路径，不在 PATH 里——软链到系统路径即可</span>
+ln -s /usr/local/helios/grpc/bin/grpc_cpp_plugin /usr/local/bin/grpc_cpp_plugin
+
+<span class="cmt"># 坑 2：编译器找不到 protobuf 头文件</span>
+<span class="cmt"># 报错：helloworld.pb.h:10:40: fatal error: google/protobuf/port_def.inc: No such file or directory</span>
+<span class="kw">export</span> CPLUS_INCLUDE_PATH=$CPLUS_INCLUDE_PATH:/usr/local/helios/grpc/include
+
+<span class="cmt"># 坑 3：pkg-config 找不到 protobuf / grpc 的 .pc 描述文件</span>
+<span class="cmt"># 报错：Package protobuf was not found in the pkg-config search path.</span>
+<span class="kw">export</span> PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/local/helios/protobuf/lib/pkgconfig/:/usr/local/helios/grpc/lib/pkgconfig/
+
+<span class="cmt"># 坑 4：运行时动态库找不到</span>
+<span class="cmt"># 报错：error while loading shared libraries: libgrpc_plugin_support.so.1: cannot open shared object file</span>
+<span class="kw">export</span> LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/helios/grpc/lib/:/usr/local/helios/grpc/lib64/:/usr/local/helios/protobuf/lib</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：素材还记录了一个 2020 年老版本 gRPC 的诡异问题：编译好的 helloworld 服务器运行后\"没有响应\"（官方 issue #21280），根因是初始化时 tracer 重复注册了同一个 TraceFlag，解法是给源码打两个补丁（<code>src/core/lib/surface/init.cc</code> 里注销 <code>grpc_tracer_init()</code>，<code>src/core/lib/debug/trace.cc</code> 的 <code>TraceFlagList::Add</code> 加去重检查）。<strong>这是历史版本 bug，新版本早已修复</strong>——现在遇到\"服务器卡死无响应\"，先检查版本与日志，别急着改源码。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>今天的官方 quickstart 已经不用这么折腾：<code>git clone --recurse-submodules -b v1.81.0 --depth 1 https://github.com/grpc/grpc</code> 一步带子模块，再 <code>cmake -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD=17 -DCMAKE_INSTALL_PREFIX=$MY_INSTALL_DIR ../..</code> 连 protobuf 一起装好。但素材的四连坑到今天依然天天发生——第 4 章的环境变量功夫，这里正好实战验收。</p>
+  </div>
+
+  <!-- ========== 10.6 helloworld 拆解：服务端与客户端 ========== -->
+  <h2>10.6 helloworld 拆解：服务端与客户端</h2>
+
+  <p>地基打好了，来看真家伙。10.3 的 greeter.proto 经 10.4 生成代码后，服务端要做的只有一件事：<strong>继承生成的 <code>Greeter::Service</code> 基类，覆写 <code>SayHello</code></strong>。生成的基类里每个方法默认返回\"未实现\"状态（UNIMPLEMENTED），覆写才有真实业务逻辑。启动服务器的四个零件：<strong>ServerBuilder</strong>（说人话：服务器的\"装配车间\"）→ <strong>AddListeningPort</strong>（绑定地址端口，第二参数是凭据，这里用不加密的）→ <strong>RegisterService</strong>（把实现注册进车间）→ <strong>BuildAndStart</strong>（建成并启动）。最后 <code>Wait()</code> 阻塞等待请求到来。</p>
+
+  <pre><code><span class="cmt">// greeter_server.cc（简化自官方示例：实现 Greeter::Service 并启动服务器）</span>
+<span class="ann">#include</span> &lt;grpcpp/grpcpp.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+<span class="ann">#include</span> &lt;memory&gt;
+<span class="ann">#include</span> &lt;string&gt;
+<span class="ann">#include</span> <span class="str">"helloworld.grpc.pb.h"</span>
+
+<span class="kw">using</span> <span class="kw">namespace</span> helloworld;
+
+<span class="cmt">// 服务端实现：继承 Greeter::Service 覆写 SayHello</span>
+<span class="kw">class</span> <span class="type">GreeterServiceImpl</span> <span class="kw">final</span> : <span class="kw">public</span> <span class="type">Greeter::Service</span> {
+  <span class="type">grpc::Status</span> <span class="fn">SayHello</span>(<span class="type">grpc::ServerContext</span>* <span class="param">context</span>,
+                       <span class="kw">const</span> <span class="type">HelloRequest</span>* <span class="param">request</span>,
+                       <span class="type">HelloReply</span>* <span class="param">reply</span>) <span class="kw">override</span> {
+    reply-&gt;<span class="fn">set_message</span>(<span class="str">"Hello "</span> + request-&gt;<span class="fn">name</span>());  <span class="cmt">// 把结果写进 reply</span>
+    <span class="kw">return</span> <span class="type">grpc::Status</span>::<span class="param">OK</span>;                    <span class="cmt">// 返回 OK 表示成功</span>
+  }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+  <span class="type">std::string</span> <span class="param">server_address</span>(<span class="str">"0.0.0.0:50051"</span>);
+
+  <span class="type">GreeterServiceImpl</span> <span class="param">service</span>;                        <span class="cmt">// 业务实现</span>
+  <span class="type">grpc::ServerBuilder</span> <span class="param">builder</span>;                      <span class="cmt">// 装配车间</span>
+  builder.<span class="fn">AddListeningPort</span>(server_address,             <span class="cmt">// 绑定地址与端口</span>
+                           <span class="fn">grpc::InsecureServerCredentials</span>());
+  builder.<span class="fn">RegisterService</span>(&amp;service);                 <span class="cmt">// 注册实现</span>
+  <span class="type">std::unique_ptr</span>&lt;<span class="type">grpc::Server</span>&gt; <span class="param">server</span>(builder.<span class="fn">BuildAndStart</span>());
+  std::cout &lt;&lt; <span class="str">"Server listening on "</span> &lt;&lt; server_address &lt;&lt; std::endl;
+
+  server-&gt;<span class="fn">Wait</span>();                                    <span class="cmt">// 阻塞，等待请求</span>
+  <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>客户端对称地来四步：<strong>CreateChannel</strong> 建通道 → <strong>Greeter::NewStub</strong> 造桩 → 填 <code>HelloRequest</code> → <code>stub-&gt;SayHello(&amp;context, request, &amp;reply)</code> 发 RPC。其中 <strong>ClientContext</strong>——说人话：一次调用的\"档案袋\"，装着超时时间、元数据、取消信号，出问题时它是排查的第一现场。返回值 <code>grpc::Status</code> 是调用成败的\"体检报告\"，<code>status.ok()</code> 为真才是成功。官方示例用类把调用包装起来（GreeterClient），这里直接内联，逻辑完全一样：</p>
+
+  <pre><code><span class="cmt">// greeter_client.cc（简化自官方示例：stub 发起一次 RPC）</span>
+<span class="ann">#include</span> &lt;grpcpp/grpcpp.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+<span class="ann">#include</span> <span class="str">"helloworld.grpc.pb.h"</span>
+
+<span class="kw">using</span> <span class="kw">namespace</span> helloworld;
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+  <span class="kw">auto</span> <span class="param">channel</span> = <span class="fn">grpc::CreateChannel</span>(<span class="str">"localhost:50051"</span>,
+                                  <span class="fn">grpc::InsecureChannelCredentials</span>());
+  <span class="kw">auto</span> <span class="param">stub</span> = <span class="type">Greeter</span>::<span class="fn">NewStub</span>(channel);       <span class="cmt">// 造桩</span>
+
+  <span class="type">HelloRequest</span> <span class="param">request</span>;
+  request.<span class="fn">set_name</span>(<span class="str">"world"</span>);                  <span class="cmt">// 填参数</span>
+  <span class="type">HelloReply</span> <span class="param">reply</span>;
+  <span class="type">grpc::ClientContext</span> <span class="param">context</span>;                <span class="cmt">// 一次调用的"档案袋"</span>
+
+  <span class="type">grpc::Status</span> <span class="param">status</span> = stub-&gt;<span class="fn">SayHello</span>(&amp;context, request, &amp;reply);
+  <span class="kw">if</span> (status.<span class="fn">ok</span>()) {
+    std::cout &lt;&lt; <span class="str">"Greeter received: "</span> &lt;&lt; reply.<span class="fn">message</span>() &lt;&lt; std::endl;
+  } <span class="kw">else</span> {
+    std::cout &lt;&lt; <span class="str">"RPC failed: "</span> &lt;&lt; status.<span class="fn">error_message</span>() &lt;&lt; std::endl;
+  }
+  <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 素材笔记：examples/cpp/helloworld 下直接 make（Makefile 先跑 protoc）</span>
+<span class="fn">cd</span> examples/cpp/helloworld
+make
+
+<span class="cmt"># 终端 1：启动服务器</span>
+./greeter_server
+<span class="cmt"># Server listening on 0.0.0.0:50051</span>
+
+<span class="cmt"># 终端 2：启动客户端</span>
+./greeter_client
+<span class="cmt"># Greeter received: Hello world</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p><code>grpc::InsecureChannelCredentials()</code> 是明文不加密的通道，只适合学习和内网调试。生产环境要换成 TLS：服务器 <code>grpc::SslServerCredentials(...)</code>，客户端 <code>grpc::SslCredentials(...)</code>——那又是另一章的故事了。</p>
+  </div>
+
+  <!-- ========== 10.7 同步之外：异步调用与 CompletionQueue ========== -->
+  <h2>10.7 同步之外：异步调用与 CompletionQueue</h2>
+
+  <p>10.6 的写法是<strong>同步调用</strong>——说人话：打电话，拨出去就占线等着，对方不接就一直等。代码简单，但高并发时大量线程都在\"干等\"，浪费资源。另一种是<strong>异步调用</strong>——说人话：发短信，发完该干嘛干嘛，收到回执再处理，一个线程就能同时伺候成千上万个请求。gRPC 的异步 API 核心是 <strong>CompletionQueue</strong>（完成队列）——说人话：一个\"结果回执信箱\"，完成的调用以\"标记（tag）\"投递进来，你不断取件处理。信箱这头一个线程循环取件即可。</p>
+
+  <p>服务端异步要继承生成的另一个基类 <code>Greeter::AsyncService</code>，并用 <code>builder.AddCompletionQueue()</code> 建信箱。每个请求由一个 <code>CallData</code> 对象管理，跑一个三态状态机：<strong>CREATE</strong>（请求槽位就位）→ <strong>PROCESS</strong>（处理业务、发响应）→ <strong>FINISH</strong>（响应发完，销毁自己，再挂一个新槽位）。骨架来自官方异步示例（完整可运行版在官方仓库 greeter_async_server.cc）：</p>
+
+  <pre><code><span class="cmt">// 服务端异步骨架（官方 greeter_async_server.cc 压缩版）</span>
+<span class="kw">class</span> <span class="type">CallData</span> {
+ <span class="kw">public</span>:
+  <span class="fn">CallData</span>(<span class="type">Greeter::AsyncService</span>* <span class="param">service</span>,
+           <span class="type">grpc::ServerCompletionQueue</span>* <span class="param">cq</span>)
+      : service_(service), cq_(cq), responder_(&amp;ctx_), status_(CREATE) {
+    <span class="fn">Proceed</span>();            <span class="cmt">// 构造时就"挂号"一个请求槽位</span>
+  }
+
+  <span class="kw">void</span> <span class="fn">Proceed</span>() {
+    <span class="kw">if</span> (status_ == <span class="param">CREATE</span>) {   <span class="cmt">// 新请求到达 → 去处理</span>
+      status_ = <span class="param">PROCESS</span>;
+      service_-&gt;<span class="fn">RequestSayHello</span>(&amp;ctx_, &amp;request_, &amp;responder_, cq_, cq_, <span class="kw">this</span>);
+    } <span class="kw">else</span> <span class="kw">if</span> (status_ == <span class="param">PROCESS</span>) { <span class="cmt">// 处理完 → 发响应</span>
+      reply_.<span class="fn">set_message</span>(<span class="str">"Hello "</span> + request_.<span class="fn">name</span>());
+      status_ = <span class="param">FINISH</span>;
+      responder_.<span class="fn">Finish</span>(reply_, <span class="type">grpc::Status</span>::<span class="param">OK</span>, <span class="kw">this</span>);
+    } <span class="kw">else</span> {                 <span class="cmt">// FINISH：发完 → 销毁，挂新槽位</span>
+      <span class="kw">delete</span> <span class="kw">this</span>;
+      <span class="kw">new</span> <span class="type">CallData</span>(service_, cq_);
+    }
+  }
+  <span class="cmt">// 成员：ctx_、request_、reply_、responder_、status_（三态）</span>
+};
+
+<span class="kw">void</span> <span class="fn">HandleRpcs</span>() {            <span class="cmt">// 信箱循环：取件 → 让对应的 CallData 干活</span>
+  <span class="kw">new</span> <span class="type">CallData</span>(&amp;service_, cq_.<span class="fn">get</span>());
+  <span class="kw">void</span>* <span class="param">tag</span>; <span class="kw">bool</span> <span class="param">ok</span>;
+  <span class="kw">while</span> (<span class="kw">true</span>) {
+    <span class="fn">GPR_ASSERT</span>(cq_-&gt;<span class="fn">Next</span>(&amp;tag, &amp;ok));   <span class="cmt">// 阻塞等"回执"</span>
+    <span class="fn">GPR_ASSERT</span>(ok);
+    <span class="kw">static_cast</span>&lt;<span class="type">CallData</span>*&gt;(tag)-&gt;<span class="fn">Proceed</span>();
+  }
+}</code></pre>
+
+  <p>客户端异步的思路一样：不再\"阻塞等结果\"，而是把请求<strong>挂号</strong>到队列上、挂一个回执标记，之后随时来取。新版生成器的方法叫 <code>PrepareAsyncSayHello</code>（老版本叫 <code>AsyncSayHello</code>），返回的 <code>ClientAsyncResponseReader</code> 就是这张\"挂号单\"：</p>
+
+  <pre><code><span class="cmt">// 客户端异步骨架（官方 greeter_async_client.cc 压缩版）</span>
+<span class="type">grpc::CompletionQueue</span> <span class="param">cq</span>;
+<span class="type">std::unique_ptr</span>&lt;<span class="type">grpc::ClientAsyncResponseReader</span>&lt;<span class="type">HelloReply</span>&gt;&gt; <span class="param">rpc</span>(
+    stub-&gt;<span class="fn">PrepareAsyncSayHello</span>(&amp;context, request, &amp;cq)); <span class="cmt">// 挂号</span>
+rpc-&gt;<span class="fn">StartCall</span>();                            <span class="cmt">// 开跑</span>
+rpc-&gt;<span class="fn">Finish</span>(&amp;reply, &amp;status, (<span class="kw">void</span>*)<span class="num">1</span>);   <span class="cmt">// 挂回执：完成时投递 tag=1</span>
+
+<span class="kw">void</span>* <span class="param">got_tag</span>; <span class="kw">bool</span> <span class="param">ok</span> = <span class="kw">false</span>;
+cq.<span class="fn">Next</span>(&amp;got_tag, &amp;ok);                 <span class="cmt">// 阻塞等回执（可放到别处等）</span>
+<span class="kw">if</span> (ok &amp;&amp; got_tag == (<span class="kw">void</span>*)<span class="num">1</span> &amp;&amp; status.<span class="fn">ok</span>()) {
+  std::cout &lt;&lt; <span class="str">"Greeter received: "</span> &lt;&lt; reply.<span class="fn">message</span>() &lt;&lt; std::endl;
+}</code></pre>
+
+  <p>到这里，gRPC 的完整链路已经画完：<strong>.proto 定契约 → protoc 生成代码 → 服务端覆写 Service 实现业务 → 客户端用 stub 发起调用 → 同步还是异步，取决于你的并发模型。</strong>这一章我们走通了\"一问一答\"的一元 RPC，四种 RPC 类型、TLS、负载均衡都留给了未来。第 11 章我们换个风格，认识通用库 POCO——一个把网络、JSON、线程全部包圆的\"瑞士军刀\"。</p>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>异步代码最难的其实不是 API，而是\"状态机思维\"：每个请求的生命周期被拆成若干个回调（tag 回执），你必须自己记住\"这个请求走到哪一步了\"。建议先把 10.6 的同步版跑熟，再对照官方 greeter_async_server.cc / greeter_async_client.cc 逐行啃异步版——两版对比，状态机脉络一下就清晰了。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话说人话分别解释：RPC、stub、protobuf。再回答：一个 .proto 文件里，<code>syntax</code>、<code>message</code>、<code>service</code> 各定义了什么东西？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 10.1 的\"本地替身\"比喻和 10.3 的\"契约\"比喻。三个关键词分别对应：调用方式、客户端视角的代理、数据格式。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>RPC：让程序像调用本地函数一样调用远程服务的机制，网络细节被框架藏起来；stub：客户端这边的\"远程函数替身\"，你调它，它负责打包请求、发送、接收、解包；protobuf：Google 的二进制序列化格式，把结构化数据压成紧凑字节流。.proto 里 <code>syntax</code> 声明用哪版语法（proto3），<code>message</code> 定义数据结构（字段与编号），<code>service</code> 定义接口（一组 RPC 方法，声明请求与响应类型）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：给 Greeter 加个方法 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>官方 quickstart 的经典练习：在 greeter.proto 里给 <code>Greeter</code> 服务加一个 <code>SayHelloAgain</code> 方法（请求响应类型与 SayHello 相同），重新生成代码，在服务端实现它，客户端调用它，最终输出 <code>Greeter received: Hello again world</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三步走：① 改 .proto 加 <code>rpc SayHelloAgain (HelloRequest) returns (HelloReply) {}</code>；② 重新跑 10.4 的两条 protoc 命令（或直接 <code>make</code>，Makefile 检测到 .proto 变了会重跑）；③ 服务端类里加同名 override，客户端里加同名调用。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>.proto 里加：<code>rpc SayHelloAgain (HelloRequest) returns (HelloReply) {}</code>。服务端 <code>GreeterServiceImpl</code> 加：<code>Status SayHelloAgain(ServerContext* context, const HelloRequest* request, HelloReply* reply) override { reply-&gt;set_message("Hello again " + request-&gt;name()); return Status::OK; }</code>。客户端再调一次 <code>SayHelloAgain</code> 并打印。价值：改接口 = 改 .proto + 重新生成 + 两端各补一段代码——这就是\"契约驱动开发\"的威力。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：从零写一个计算服务 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>不依赖官方示例，自己写一个 Calculator 服务：.proto 定义 <code>CalcRequest</code>（<code>int32 a = 1; int32 b = 2;</code>）与 <code>CalcReply</code>（<code>int32 result = 1;</code>），服务 <code>Calculator</code> 提供 <code>Add</code> 方法。走完整流程：写 .proto → protoc 生成 → 写服务端（监听 50052 端口）→ 写客户端 → 验证 3 + 4 返回 7。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>把 10.3 的 greeter.proto 和 10.6 的两份 .cc 当模板改：包名、类名、方法名全部换成自己的；protoc 输入换成 calculator.proto；端口用 50052 别撞车。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>calculator.proto：<code>syntax = "proto3"; package calc; service Calculator { rpc Add (CalcRequest) returns (CalcReply) {} } message CalcRequest { int32 a = 1; int32 b = 2; } message CalcReply { int32 result = 1; }</code>。生成命令：<code>protoc -I . --cpp_out=. calculator.proto</code> 与 <code>protoc -I . --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` calculator.proto</code>。服务端实现 <code>Status Add(ServerContext* ctx, const CalcRequest* req, CalcReply* reply) override { reply-&gt;set_result(req-&gt;a() + req-&gt;b()); return Status::OK; }</code>，监听 <code>0.0.0.0:50052</code>。客户端 <code>stub-&gt;Add(&amp;context, req, &amp;reply)</code>，打印 <code>reply.result()</code> 应为 7。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：异步并发改造 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>基于 10.7 的异步客户端骨架，一次发起 3 个 SayHello 请求（分别用 tag 1、2、3 挂号），然后统一从 CompletionQueue 里收 3 个回执，验证每个回执的 tag 和结果一一对应。这模拟了\"一个线程管理大量并发请求\"的真实场景。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>3 个请求各建一个 <code>ClientContext</code> 和 <code>HelloRequest</code>（名字不同），各自 <code>PrepareAsyncSayHello</code> + <code>StartCall</code> + <code>Finish</code>，然后循环 3 次 <code>cq.Next(&amp;tag, &amp;ok)</code>，用 <code>tag</code> 区分是哪个请求的回应。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心是每个请求独立挂号：<code>rpc1-&gt;Finish(&amp;reply1, &amp;status1, (void*)1)</code>、<code>rpc2-&gt;Finish(&amp;reply2, &amp;status2, (void*)2)</code>、<code>rpc3-&gt;Finish(&amp;reply3, &amp;status3, (void*)3)</code>，然后 <code>for (int i = 0; i &lt; 3; i++) { cq.Next(&amp;tag, &amp;ok); if (ok) 按 tag 打印对应 reply; }</code>——回执到达顺序可能与发起顺序不同，这正是异步的本质：不保证完成次序，用 tag 标识归属。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

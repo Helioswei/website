@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第12章：文档与代码分析：Doxygen - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter12.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第12章：文档与代码分析：Doxygen - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter12.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="12" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第12章：文档与代码分析：Doxygen</h1>
+  <p class="chapter-subtitle">写代码时顺手写注释，一条命令让 Doxygen 把它们变成漂亮的 API 文档；再请出 Graphviz，把「谁调用了谁」画成一张图</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「排除所有不可能，剩下的即使再离奇，也是真相。当你盯着文档里那张画不出来的调用图，别急着怀疑工具——先确认 dot 装没装、HAVE_DOT 开没开、函数有没有真的被解析。一步一步排除，答案自己会跳出来。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 12.1 零基础铺垫：为什么代码需要"注释即文档" ========== -->
+  <h2>12.1 零基础铺垫：为什么代码需要「注释即文档」</h2>
+
+  <p>先看一个每个项目都会踩的坑。<strong>手写文档跟不上代码</strong>：接口改了、参数变了、行为换了，`docs/` 目录里那份一个月前写的说明文档纹丝不动。等到新人照着旧文档写代码，编译一跑全是错误，回头一查——文档是上个季度写的。问题出在哪？<strong>代码和文档是两份信息，而人只记得维护代码。</strong>信息一旦分成两份，就会漂移，这是软件工程里最经典的腐烂方式。</p>
+
+  <p>解决办法就是本章的主角思路——<strong>注释即文档（comment-as-documentation）</strong>：把「这份 API 是干什么的、参数是什么、返回什么」直接写进代码注释里，让工具从注释里<strong>自动生成</strong>文档。这样做的好处是信息只有一份（代码里的注释），改代码时顺手就改了注释，文档永远和代码同源。这正是 DRY 原则——Don't Repeat Yourself，说人话就是<strong>「同一份信息只写一遍，绝不复制两份」</strong>。下面这个「错误示范」就是信息两份、各说各话的典型：</p>
+
+  <pre><code><span class="cmt">/* docs/usage.md —— 三个月前手写的文档，已经没人记得更新 */</span>
+<span class="fn">add</span>(a, b)：返回 a 加 b。
+注意：<span class="fn">add</span> 只接受 int，传 float 会被截断。
+
+<span class="cmt">/* math.h —— 现在的真实代码，早就改成了 double 版本 */</span>
+<span class="type">double</span> <span class="fn">add</span>(<span class="type">double</span> a, <span class="type">double</span> b);
+<span class="cmt">// 旧文档还停在 int，照着它写的人全被坑了</span></code></pre>
+
+  <p>如果改用「注释即文档」，同样一个函数长这样——描述、参数、返回值全在代码里，Doxygen 会把它们整理成文档页面。函数旁边就是它的说明书，想不同步都难：</p>
+
+  <pre><code><span class="cmt">/**</span>
+<span class="cmt"> * \brief 返回 a 与 b 的和</span>
+<span class="cmt"> * \param a 第一个加数</span>
+<span class="cmt"> * \param b 第二个加数</span>
+<span class="cmt"> * \return 两个参数相加的结果</span>
+<span class="cmt"> */</span>
+<span class="type">double</span> <span class="fn">add</span>(<span class="type">double</span> a, <span class="type">double</span> b);</code></pre>
+
+  <p>当然，光有注释还不够——几百个函数散落在几十个文件里，手工把它们整理成带索引、带跳转、带类层次的手册，同样是重复劳动。所以我们需要一个<strong>文档生成工具</strong>：说人话就是<strong>「把代码注释自动整理成一份结构化 API 手册的程序」</strong>。本章的主角 Doxygen 就是干这个的。</p>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>注释也是要维护的代码。判断一份注释该不该写，就一个问题：它描述的「行为」能不能直接从代码签名里看出来？`add(a, b)` 的 `\brief` 能写「把两个数加起来」，但「为什么要这么加」「边界情况怎么处理」这些签名看不出来的信息，才值得写进文档注释。</p>
+  </div>
+
+  <!-- ========== 12.2 Doxygen 是什么：从注释自动生成 API 文档 ========== -->
+  <h2>12.2 Doxygen 是什么：从注释自动生成 API 文档</h2>
+
+  <p><strong>Doxygen 是一款文档生成工具，它从代码中提取出相应的文档，并组织、输出成各种漂亮的文档（如 HTML、PDF、RTF 等）</strong>——这是真实使用者的原话，也正是它的官方定位。Doxygen 是开源的，支持 C/C++、Objective-C、C#、PHP、Python、Java、Fortran、D、VHDL 等多种语言，跨平台运行（Mac OS、Linux、Windows 都有版本）。对 C++ 程序员来说，它是事实上的标准文档工具——你去看任何一个成熟 C++ 开源库（第 11 章的 POCO 就是典型），官网上的 API 参考几乎都是 Doxygen 生成的。</p>
+
+  <p>Doxygen 值得专门学的理由有三个。第一，<strong>注释即文档</strong>：程序员在写代码时直接内嵌文档，再也不需要为某个功能单独写文档，最大程度保持文档和代码的统一性（12.1 节刚论证过）。第二，<strong>输出丰富</strong>：默认生成网页版 HTML 文档，也可以生成 LaTeX（再编译成 PDF）、RTF、XML、man 手册等格式。第三，<strong>门槛低</strong>：Doxygen 从 1.8 版本开始支持 Markdown 语法，也支持内嵌部分 HTML 标签，注释里写「# 标题」「**加粗**」就能出排版效果，甚至可以用它生成一个静态网站。</p>
+
+  <table>
+    <tr><th>输出格式</th><th>说明</th><th>怎么打开</th></tr>
+    <tr><td>HTML</td><td>网页版文档，最常用</td><td>浏览器打开 html/index.html</td></tr>
+    <tr><td>LaTeX</td><td>TeX 源文件</td><td>进 latex/ 目录 make 后得到 PDF</td></tr>
+    <tr><td>RTF</td><td>富文本格式</td><td>Word / WPS 直接打开</td></tr>
+    <tr><td>XML / man</td><td>结构化数据 / 终端手册页</td><td>供其他工具和终端 man 使用</td></tr>
+  </table>
+
+  <p>安装很简单：Linux 发行版一般自带包（Ubuntu/Debian 用 apt），macOS 可以用 Homebrew，Windows 则到官网 doxygen.nl 下载安装包（exe 一路下一步，和素材笔记里的操作一致）。装好后用 <code>doxygen --help</code> 验证——这是官方手册确认的用法，会打印一屏命令行说明：</p>
+
+  <pre><code><span class="cmt"># Ubuntu / Debian：一条命令装好 doxygen</span>
+sudo apt-get update
+sudo apt-get install doxygen
+
+<span class="cmt"># macOS（Homebrew）</span>
+brew install doxygen
+
+<span class="cmt"># Windows：到 doxygen.nl 官网下载安装包，exe 一路下一步即可</span></code></pre>
+
+  <pre><code><span class="cmt"># 先确认装好了：--help 会打印用法说明</span>
+doxygen --help
+
+<span class="cmt"># 官方手册的标准四步走：写注释 -&gt; 生成配置模板 -&gt; 改配置 -&gt; 生成文档</span>
+<span class="fn">doxygen</span> -g        <span class="cmt"># 第 2 步：生成 Doxyfile 配置模板（12.4 节详讲）</span>
+<span class="fn">doxygen</span> Doxyfile  <span class="cmt"># 第 4 步：按配置生成文档（12.6 节详讲）</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：Doxygen 仍在活跃维护，本章撰写时官网手册已由 1.18.0 生成，配置项和命令都以当前版本为准；如果你用的版本较旧，个别新配置项可能不存在，但本章讲的 <code>\brief</code>、<code>EXTRACT_ALL</code>、<code>HAVE_DOT</code> 这些核心内容从 1.8 时代至今一直稳定。</p>
+  </div>
+
+  <!-- ========== 12.3 注释规范：特殊注释块与 \brief / \param / \return ========== -->
+  <h2>12.3 注释规范：特殊注释块与 \brief / \param / \return</h2>
+
+  <p>要让 Doxygen 识别你的注释，注释必须是<strong>特殊注释块</strong>——说人话就是<strong>「用特定记号开头、Doxygen 认识的那种注释」</strong>。C++ 里最常用的是 Javadoc 风格的块注释 <code>/** ... */</code>（两个星号开头，12.1 节已经见过）；Qt 风格则用 <code>/*! ... */</code>。把特殊注释块放在类、函数、变量<strong>声明的前面</strong>，Doxygen 就会把这块注释当成对应实体的文档。</p>
+
+  <p>注释块里能写普通文字（支持 Markdown），也能写<strong>特殊命令</strong>——以反斜杠 <code>\</code> 或 at 符 <code>@</code> 开头（两种写法等价）。最常用的三个命令：<code>\brief</code> 后面跟一句话简短描述，它会出现在类列表、函数签名旁边等摘要位置；<code>\param</code> 描述一个函数参数，可带 <code>[in]</code>/<code>[out]</code> 方向标记；<code>\return</code> 描述返回值。下面是一份完整头文件的注释写法：</p>
+
+  <pre><code><span class="cmt">// calculator.h —— 完整的 Doxygen 注释示例</span>
+<span class="cmt">/**</span>
+<span class="cmt"> * \brief 一个简单的整数计算器</span>
+<span class="cmt"> *</span>
+<span class="cmt"> * 提供最基础的加减法，更多功能后续版本再加入。</span>
+<span class="cmt"> * 空行会分段，这里就是第二段（详细描述）。</span>
+<span class="cmt"> */</span>
+<span class="kw">class</span> <span class="type">Calculator</span> {
+<span class="kw">public</span>:
+    <span class="cmt">/**</span>
+    <span class="cmt">     * \brief 执行一次加法运算</span>
+    <span class="cmt">     * \param[in] a 第一个加数</span>
+    <span class="cmt">     * \param[in] b 第二个加数</span>
+    <span class="cmt">     * \return a + b 的结果</span>
+    <span class="cmt">     */</span>
+    <span class="type">int</span> <span class="fn">add</span>(<span class="type">int</span> a, <span class="type">int</span> b) {
+        <span class="kw">return</span> a + b;
+    }
+
+    <span class="cmt">/** \brief 返回最近一次运算结果 */</span>
+    <span class="ann">[[nodiscard]]</span> <span class="type">int</span> <span class="fn">lastResult</span>() <span class="kw">const</span>;
+
+    <span class="cmt">/** \brief 把当前结果清零 */</span>
+    <span class="type">void</span> <span class="fn">reset</span>();
+};</code></pre>
+
+  <p>还有一个非常实用的命令 <code>\code ... \endcode</code>：它把注释里的一块文字标记为<strong>代码示例</strong>，Doxygen 会像解析源文件一样给它做语法高亮，还会自动把示例里出现的类名、函数名变成指向文档的链接——读者点一下就能跳到对应 API。可以用 <code>\code{.cpp}</code> 显式指定语言：</p>
+
+  <pre><code><span class="cmt">/**</span>
+<span class="cmt"> * \brief 把 vector 中所有元素累加</span>
+<span class="cmt"> *</span>
+<span class="cmt"> * 用法示例：</span>
+<span class="cmt"> * \code{.cpp}</span>
+<span class="cmt"> * std::vector&lt;int&gt; v = {1, 2, 3};</span>
+<span class="cmt"> * int total = sum_all(v);   // total == 6</span>
+<span class="cmt"> * \endcode</span>
+<span class="cmt"> *</span>
+<span class="cmt"> * \param v 待累加的向量</span>
+<span class="cmt"> * \return 所有元素之和；空向量返回 0</span>
+<span class="cmt"> */</span>
+<span class="type">int</span> <span class="fn">sum_all</span>(<span class="kw">const</span> std::vector&lt;<span class="type">int</span>&gt;&amp; v);</code></pre>
+
+  <p>命令还有很多，但新手掌握下面这一桌就够日常使用了。注意 <code>\param</code> 有个贴心行为：如果函数声明里根本没有你写的那个参数名，Doxygen 会给出警告——这等于让工具帮你检查注释和签名是否一致，正是 12.1 节「排除不可能」的第一步。</p>
+
+  <table>
+    <tr><th>命令</th><th>作用</th></tr>
+    <tr><td><code>\brief</code> 一句话</td><td>简短描述，出现在列表页和函数签名旁边</td></tr>
+    <tr><td><code>\param[in]</code> 名字 说明</td><td>描述一个函数参数，方向标记可省略</td></tr>
+    <tr><td><code>\return</code> 说明</td><td>描述返回值</td></tr>
+    <tr><td><code>\code</code> ... <code>\endcode</code></td><td>在注释里嵌入代码示例，自动高亮并加链接</td></tr>
+    <tr><td><code>\note</code> 说明</td><td>一条备注</td></tr>
+    <tr><td><code>\warning</code> 说明</td><td>一条警告</td></tr>
+    <tr><td><code>\sa</code> 名字</td><td>「参见」，指向相关的函数或类</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>命令用 <code>\</code> 还是 <code>@</code> 开头完全等价（<code>@brief</code> 和 <code>\brief</code> 一样）。写注释时如果觉得反斜杠在代码里扎眼，就用 <code>@</code>——很多团队约定用 <code>@</code> 来避免和 C++ 字符串转义混淆。</p>
+  </div>
+
+  <!-- ========== 12.4 Doxyfile 配置：doxygen -g 与关键配置项 ========== -->
+  <h2>12.4 Doxyfile 配置：doxygen -g 与关键配置项</h2>
+
+  <p>Doxygen 的行为完全由一个配置文件控制，默认叫 <code>Doxyfile</code>——说人话就是<strong>「一份告诉 Doxygen『项目叫什么、源码在哪、输出什么』的清单」</strong>。它的格式和 Makefile 很像：一行一个 <code>配置项 = 值</code>，<code>#</code> 开头是注释。从零手写这份清单不现实（完整模板有几百行），所以官方提供了生成器：在项目根目录执行 <code>doxygen -g</code>，Doxygen 会生成一份带详细注释的 Doxyfile 模板；如果当前目录已有 Doxyfile，它会自动把旧文件改名为 <code>Doxyfile.bak</code> 再生成，不会覆盖你的劳动成果。</p>
+
+  <pre><code><span class="cmt"># 生成配置模板（在项目根目录执行）</span>
+<span class="fn">doxygen</span> -g
+
+<span class="cmt"># 如果 Doxyfile 已存在，会被自动改名为 Doxyfile.bak</span>
+<span class="fn">ls</span> Doxyfile*</code></pre>
+
+  <p>模板里每一项旁边都有英文说明，绝大多数保持默认即可。真正需要动手改的，通常就是下面几个<strong>关键配置项</strong>。<code>PROJECT_NAME</code> 是显示在文档标题里的项目名；<code>OUTPUT_DIRECTORY</code> 指定输出目录（生成的所有东西都放在它下面）；<code>INPUT</code> 指定要分析的源码目录或文件，留空则分析当前目录；<code>RECURSIVE</code> 设为 YES 后递归扫描子目录（对应素材里 DoxyWizard 的「Scan recursively」选项）。一个典型的小项目配置长这样：</p>
+
+  <pre><code><span class="cmt"># Doxyfile（关键片段）：其余保持模板默认</span>
+<span class="fn">PROJECT_NAME</span>     <span class="op">=</span> <span class="str">"my-cpp-app"</span>
+<span class="fn">OUTPUT_DIRECTORY</span> <span class="op">=</span> doc
+<span class="fn">EXTRACT_ALL</span>      <span class="op">=</span> <span class="param">YES</span>
+<span class="fn">GENERATE_HTML</span>    <span class="op">=</span> <span class="param">YES</span>
+<span class="fn">GENERATE_LATEX</span>   <span class="op">=</span> <span class="param">NO</span>
+<span class="fn">INPUT</span>            <span class="op">=</span> src
+<span class="fn">RECURSIVE</span>        <span class="op">=</span> <span class="param">YES</span></code></pre>
+
+  <p>两个容易困惑的开关单独说明。第一，<code>EXTRACT_ALL</code>：默认 NO 时，只有写了特殊注释块的实体才会进文档；设为 YES 后，Doxygen 会<strong>假装所有实体都有注释</strong>，没写注释的类、函数也会被收进文档——这对「给老项目补文档」特别有用，先全量生成再逐个补注释。代价是它会关闭「有成员未写文档」的警告，没注释这件事被掩盖了。第二，<code>GENERATE_HTML</code> 默认就是 YES（网页版是主输出），而 <code>GENERATE_LATEX</code> 默认居然也是 YES——不想要 PDF 的话记得显式关掉，否则每次都会白生成一堆 latex 文件。</p>
+
+  <table>
+    <tr><th>配置项</th><th>作用</th><th>默认值</th></tr>
+    <tr><td>PROJECT_NAME</td><td>文档标题里的项目名</td><td>My Project</td></tr>
+    <tr><td>OUTPUT_DIRECTORY</td><td>输出根目录（html/ 等生成在它下面）</td><td>当前目录</td></tr>
+    <tr><td>EXTRACT_ALL</td><td>没写注释的成员也收进文档</td><td>NO</td></tr>
+    <tr><td>GENERATE_HTML</td><td>生成网页版文档</td><td>YES</td></tr>
+    <tr><td>GENERATE_LATEX</td><td>生成 LaTeX 源（可编成 PDF）</td><td>YES</td></tr>
+    <tr><td>INPUT</td><td>要分析的源码文件或目录</td><td>当前目录</td></tr>
+    <tr><td>RECURSIVE</td><td>是否递归扫描 INPUT 的子目录</td><td>NO</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>不想碰命令行也没关系：Doxygen 自带图形前端 <code>doxywizard</code>（Windows 安装后叫 DoxyWizard，素材笔记里用的就是它）。它的 Wizard 页面分 Project / Mode / Output / Diagrams 四步，勾选「Scan recursively」就等价于 <code>RECURSIVE = YES</code>；Expert 页面能改任意配置项。改完点 Run 页面里的「Run doxygen」按钮即可。GUI 和 Doxyfile 是同一套配置，只是编辑方式不同。</p>
+  </div>
+
+  <!-- ========== 12.5 集成 Graphviz：HAVE_DOT 与函数调用图 ========== -->
+  <h2>12.5 集成 Graphviz：HAVE_DOT 与函数调用图</h2>
+
+  <p>前几节生成的文档都是「文字版」——类列表、函数签名、参数说明。但分析一个陌生项目时，文字远不如一张图直观：<strong>调用图</strong>说人话就是<strong>「一张有向图，箭头表示『谁调用了谁』」</strong>，一眼就能看出 main 函数是怎么一层层调用到业务逻辑的。Doxygen 自己不会画图，它把这个活外包给了 <strong>Graphviz</strong>。Graphviz 是一个开源的图片可视化软件：它使用一种特定的 DSL（领域特定语言，说人话就是<strong>「为画图这类专门问题设计的小型脚本语言」</strong>）dot 作为脚本语言，然后用<strong>布局引擎</strong>（负责自动决定节点位置、画箭头的模块）解析脚本并完成自动布局，最后导出成 PNG、SVG、PDF 等格式。Doxygen 负责分析代码、产出「谁调用谁」的关系，Graphviz 负责把它画出来——两家各干各的，配合默契。</p>
+
+  <p>第一步先把 Graphviz 装上。Linux 下同样是 apt 一条命令；装完后用 <code>dot -V</code> 确认（-V 打印版本号）。为了理解 Doxygen 让 dot 干的活，可以先亲手写一个 dot 脚本体验一下：脚本里 <code>digraph</code> 声明一张有向图，每个节点是一个函数名，<code>a -&gt; b</code> 表示「a 调用了 b」，分号结尾；然后用 <code>dot -Tsvg</code> 指定输出格式、<code>-o</code> 指定输出文件，布局引擎会自动把节点排好：</p>
+
+  <pre><code><span class="cmt"># 安装 Graphviz（提供 dot 工具）</span>
+sudo apt-get install graphviz
+
+<span class="cmt"># 确认 dot 可用：-V 打印版本号</span>
+<span class="fn">dot</span> -V</code></pre>
+
+  <pre><code><span class="cmt"># call.dot：用 dot DSL 描述一张「谁调用谁」的有向图</span>
+<span class="kw">digraph</span> calls {
+    <span class="fn">main</span> <span class="op">-&gt;</span> <span class="fn">parse_args</span>;
+    <span class="fn">main</span> <span class="op">-&gt;</span> <span class="fn">run</span>;
+    <span class="fn">run</span> <span class="op">-&gt;</span> <span class="fn">handle_request</span>;
+    <span class="fn">run</span> <span class="op">-&gt;</span> <span class="fn">write_log</span>;
+}
+
+<span class="cmt"># 让布局引擎自动排版，导出成 SVG 图片</span>
+<span class="fn">dot</span> -Tsvg call.dot <span class="op">-o</span> call.svg</code></pre>
+
+  <p>第二步是让 Doxygen 调用 dot。Doxyfile 里把 <code>HAVE_DOT</code> 设为 YES——这是总开关，含义就是「让 Doxygen 假设 dot 工具可用、开始用它画图」（官方手册原话）；<code>DOT_PATH</code> 可以显式指定 dot 的位置，留空则从系统的 PATH 环境变量里找（素材笔记里 Windows 用户勾选 HAVE_DOT 并把 DOT_PATH 指向 Graphviz 的 bin 目录，正是这个意思）。然后打开两张图的开关：<code>CALL_GRAPH</code> 为每个函数画「它调用了谁」的调用图，<code>CALLER_GRAPH</code> 再画「谁调用了它」的被调图。注意官方手册的提醒：这两项<strong>会显著增加生成时间</strong>，代码库大的时候建议只在需要的函数上用 <code>\callgraph</code> 命令单独开，而不是全局全开。</p>
+
+  <pre><code><span class="cmt"># Doxyfile：打开 dot 相关开关（都在同一个配置区）</span>
+<span class="fn">HAVE_DOT</span>         <span class="op">=</span> <span class="param">YES</span>   <span class="cmt"># 总开关：让 Doxygen 调用 dot 画图</span>
+<span class="fn">CALL_GRAPH</span>       <span class="op">=</span> <span class="param">YES</span>   <span class="cmt"># 每个函数画一张「它调用了谁」的图</span>
+<span class="fn">CALLER_GRAPH</span>     <span class="op">=</span> <span class="param">NO</span>    <span class="cmt"># 被调图全开很慢，按需开</span>
+<span class="fn">DOT_IMAGE_FORMAT</span> <span class="op">=</span> svg   <span class="cmt"># 图导出为 SVG（默认 png）</span>
+<span class="fn">MAX_DOT_GRAPH_DEPTH</span> <span class="op">=</span> <span class="num">3</span>  <span class="cmt"># 图最多画 3 层，防止图太大、生成太慢</span></code></pre>
+
+  <table>
+    <tr><th>配置项</th><th>画什么</th><th>箭头含义</th></tr>
+    <tr><td>CALL_GRAPH</td><td>调用图：这个函数调用了谁</td><td>从调用者指向被调用者</td></tr>
+    <tr><td>CALLER_GRAPH</td><td>被调图：谁调用了这个函数</td><td>从调用者指向被调用者</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：调用图不是万能的——官方手册明确说，图的完整性和正确性取决于 Doxygen 的代码解析器，它并不完美（比如通过函数指针、虚函数的间接调用就画不出来）。而且图里的节点是有上限的，<code>DOT_GRAPH_MAX_NODES</code> 和 <code>MAX_DOT_GRAPH_DEPTH</code> 控制图的大小；节点太多会被截断，被截断的节点在图上会用红框标出。所以调用图是「分析代码的线索」，不是「代码行为的完整证明」。</p>
+  </div>
+
+  <!-- ========== 12.6 生成与阅读：doxygen 命令与 HTML 文档导航 ========== -->
+  <h2>12.6 生成与阅读：doxygen 命令与 HTML 文档导航</h2>
+
+  <p>配置改完，生成就一条命令的事：<code>doxygen Doxyfile</code>（不带参数直接运行 <code>doxygen</code> 也行，它会自动找当前目录的 Doxyfile；找不到就用默认配置）。跑完后，如果没设 OUTPUT_DIRECTORY，输出就在当前目录：<code>html/</code> 是网页版文档，<code>latex/</code> 是 LaTeX 源，XML、RTF、man 等目录按你开的开关生成。整个流程和官方手册的四步完全一致：写注释 → <code>doxygen -g</code> 生成模板 → 编辑配置 → <code>doxygen</code> 生成。</p>
+
+  <pre><code><span class="cmt"># 按 Doxyfile 生成文档</span>
+<span class="fn">doxygen</span> Doxyfile
+
+<span class="cmt"># 生成的网页文档在 html/ 目录，入口是 index.html</span>
+<span class="fn">ls</span> html/index.html html/annotated.html</code></pre>
+
+  <pre><code><span class="cmt"># macOS：直接打开主页面</span>
+<span class="fn">open</span> html/index.html
+
+<span class="cmt"># Linux 桌面环境：</span>
+xdg-open html/index.html</code></pre>
+
+  <p>生成的文档怎么逛？记住几个固定页面就够了。<strong>index.html</strong> 是主页面，顶部是项目名和简介；<strong>annotated.html</strong> 是<strong>类列表</strong>（所有类的清单，按名字排序，类名旁边的灰色小字就是 <code>\brief</code> 那句摘要）；<strong>files.html</strong> 是<strong>文件列表</strong>（每个源文件一个页面，带行号）；<strong>hierarchy.html</strong> 是类继承关系的文字版。点进任意一个类，页面上是它的成员函数清单，每个函数名可跳转到详情页——<strong>函数详情页</strong>就是重点了：顶部是签名，接着是 <code>\brief</code> 详细描述、<code>\param</code> 参数表、<code>\return</code> 返回值，然后是调用图。如果你开了 <code>CALL_GRAPH</code>，这里就嵌着那张「谁调用了谁」的图。</p>
+
+  <table>
+    <tr><th>页面</th><th>内容</th></tr>
+    <tr><td>index.html</td><td>主页面：项目简介、模块入口</td></tr>
+    <tr><td>annotated.html</td><td>类列表：所有类的清单</td></tr>
+    <tr><td>files.html</td><td>文件列表：所有源文件（带行号）</td></tr>
+    <tr><td>hierarchy.html</td><td>类继承关系（文字版）</td></tr>
+    <tr><td>函数详情页</td><td>签名、参数表、返回值、调用图/被调图</td></tr>
+  </table>
+
+  <p>看懂图上各种颜色也很有用：白色方框是类或函数，深蓝色箭头是「包含/继承/调用」关系；如果某个节点带<strong>红色边框</strong>，说明它还有更多箭头没画出来（图被截断了）。Doxygen 默认还会生成一个 <strong>legend（图例）</strong>页面——说人话就是<strong>「一张解释图里每种颜色和线型含义的说明页」</strong>，第一次看图拿不准颜色含义时，点图下方的图例链接即可。生成 HTML 文档后用浏览器打开，基本就是你在网上见过的那些开源库 API 参考的样子。</p>
+
+  <!-- ========== 12.7 排查实战：排除不可能 ========== -->
+  <h2>12.7 排查实战：排除不可能</h2>
+
+  <p>文档生成这件事，症状往往就那么几种，但原因组合起来却不少。福尔摩斯的方法论在这里特别好用：<strong>别猜，列出所有可能，一个一个排除</strong>。最常见的症状是「html 生成了，但函数页里没有调用图」。把所有可能的原因摊开：① dot 没装或不在 PATH；② HAVE_DOT 还是 NO；③ CALL_GRAPH 是 NO（那只有写了 <code>\callgraph</code> 的函数才有图）；④ 函数之间根本没有互相调用（孤零零一个函数当然没图）；⑤ 图被深度/节点数限制截断了。逐个排除，剩下的就是真相。</p>
+
+  <pre><code><span class="cmt"># 症状：文档生成了，但函数页里没有调用图</span>
+<span class="cmt"># 第 1 步：dot 到底装没装、在不在 PATH？</span>
+<span class="fn">which</span> dot
+<span class="fn">dot</span> -V
+
+<span class="cmt"># 第 2 步：Doxyfile 里的开关到底开没开？（grep 只看关键行）</span>
+grep -E <span class="str">"HAVE_DOT|CALL_GRAPH|CALLER_GRAPH"</span> Doxyfile
+
+<span class="cmt"># 第 3 步：确认源码真的被解析了（INPUT / RECURSIVE 对不对）</span>
+grep -E <span class="str">"^(INPUT|RECURSIVE)"</span> Doxyfile</code></pre>
+
+  <p>第二类高频症状是「类根本没出现在文档里」。按排除法走：先看这个类有没有写特殊注释块（<code>/** */</code>）——EXTRACT_ALL 是 NO 时，没注释的类不进文档；再看 INPUT 和 RECURSIVE——源码在子目录而 INPUT 只指了根目录、RECURSIVE 又是 NO，子目录的代码就整个被漏掉了；最后看 EXTRACT_PRIVATE——默认私有成员不进文档，想看私有成员要单独开。第三类症状是「生成太慢」：十有八九是 CALL_GRAPH/CALLER_GRAPH 全开导致每个函数都要画图，按 12.5 的建议改成按函数用 <code>\callgraph</code> 或调大深度限制即可。</p>
+
+  <pre><code><span class="cmt"># 一个「能出图」的完整 Doxyfile 关键片段（对照检查用）</span>
+<span class="fn">PROJECT_NAME</span>     <span class="op">=</span> <span class="str">"my-cpp-app"</span>
+<span class="fn">OUTPUT_DIRECTORY</span> <span class="op">=</span> doc
+<span class="fn">EXTRACT_ALL</span>      <span class="op">=</span> <span class="param">YES</span>
+<span class="fn">INPUT</span>            <span class="op">=</span> src
+<span class="fn">RECURSIVE</span>        <span class="op">=</span> <span class="param">YES</span>
+<span class="fn">HAVE_DOT</span>         <span class="op">=</span> <span class="param">YES</span>
+<span class="fn">CALL_GRAPH</span>       <span class="op">=</span> <span class="param">YES</span>
+<span class="fn">CALLER_GRAPH</span>     <span class="op">=</span> <span class="param">NO</span>    <span class="cmt"># 被调图全开很慢，按需开</span></code></pre>
+
+  <p>还有一个细节值得记住：<code>HAVE_DOT</code> 是 NO 时，Doxygen 会<strong>静默跳过</strong>所有 dot 图，既不报错也不警告——这正是「排除不可能」要小心的坑：没图 ≠ 出错了，可能只是开关没开。同理，<code>EXTRACT_ALL = NO</code> 且注释写错了格式（比如用了普通 <code>/* */</code> 而不是 <code>/** */</code>），类也会悄悄消失。排查时按「环境 → 配置 → 源码」的顺序走，每一步都有命令能验证（<code>which dot</code>、<code>grep</code>、看控制台警告），排除掉所有不可能的，剩下的就是真相。</p>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>口诀：<strong>先环境，后配置，再源码。</strong>dot 没装，后面全白搭；HAVE_DOT 没开，图必然没有；注释写错格式，类必然消失。每一步都能用一条命令验证，绝不靠猜。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>① Doxygen 和 Graphviz 在这个流程里各自负责什么？② 为什么说「注释即文档」能避免文档过期？③ 只想给某一个函数画调用图、不想全局开 CALL_GRAPH，注释里该写什么命令、前提是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>① 一个负责从注释生成文档，一个负责画图；② 想想 12.1 节「信息分成两份就会漂移」；③ 12.3 的命令表里有类似命令，前提看 12.5 的总开关。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① Doxygen 负责解析代码、从特殊注释块提取文档并排版成 HTML/PDF/RTF 等；Graphviz 的 dot 工具负责把「谁调用谁」的关系画成图——调用图实际是 Doxygen 分析出关系后调用 dot 渲染出来的。② 注释即文档让信息只有一份（代码里的注释），改代码时顺手改注释，不存在「代码改了、文档没改」的两份信息漂移。③ 在该函数的注释块里写 <code>\callgraph</code> 命令，前提是 Doxyfile 里 <code>HAVE_DOT = YES</code>——<code>\callgraph</code> 会无视 CALL_GRAPH 的值单独给这个函数生成调用图。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读懂 Doxyfile <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材笔记里用 DoxyWizard 做了三件事：勾选「Scan recursively」、勾选 HAVE_DOT、把 DOT_PATH 指向 Graphviz 的 bin 目录。请回答：① 这三步在命令行 Doxyfile 里分别对应哪三个配置项？② 只想生成 HTML、不想要 LaTeX/PDF，改哪个配置项？③ EXTRACT_ALL 设为 YES 有什么代价？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>① 12.4 表格里有两个，12.5 有一个；② 看 12.4 表格里默认值是 YES 的那一项；③ 回想 12.4 里「假装全都有注释」的解释。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 分别对应 <code>RECURSIVE = YES</code>（递归扫描子目录）、<code>HAVE_DOT = YES</code>（总开关）、<code>DOT_PATH</code>（指定 dot 位置；留空则从 PATH 找，Windows 下常显式指到 Graphviz 的 bin 目录）。② 改 <code>GENERATE_LATEX = NO</code>（默认 YES，不想要 PDF 必须显式关掉）。③ 代价是 Doxygen 会「假装所有实体都有注释」：没写注释的类、函数也会收进文档，同时关闭「有成员未写文档」的警告——文档看起来全了，但「这段代码其实没人写过注释」的事实被掩盖了。对老项目先全量生成再补注释是它的正确用法。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：动手写注释 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>给下面这个函数补一份完整的 Doxygen 注释：要求包含 <code>\brief</code>、<code>\param</code>、<code>\return</code>，并用 <code>\code{.cpp}</code> ... <code>\endcode</code> 加一个用法示例块。函数声明：<code>double average(const std::vector&lt;double&gt;&amp; v);</code></p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>照抄 12.3 节 <code>sum_all</code> 的模板：特殊注释块 <code>/** */</code> 放在声明前面；示例块里写一段「构造一个 vector 再调用 average」的代码；别忘了空向量这种边界情况可以在 <code>\return</code> 里说明。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <pre><code><span class="cmt">/**</span>
+<span class="cmt"> * \brief 计算一组数的平均值</span>
+<span class="cmt"> *</span>
+<span class="cmt"> * 用法示例：</span>
+<span class="cmt"> * \code{.cpp}</span>
+<span class="cmt"> * std::vector&lt;double&gt; xs = {1.0, 2.0, 3.0};</span>
+<span class="cmt"> * double m = average(xs);   // m == 2.0</span>
+<span class="cmt"> * \endcode</span>
+<span class="cmt"> *</span>
+<span class="cmt"> * \param v 输入数据</span>
+<span class="cmt"> * \return 平均值；v 为空时返回 0</span>
+<span class="cmt"> */</span>
+<span class="type">double</span> <span class="fn">average</span>(<span class="kw">const</span> std::vector&lt;<span class="type">double</span>&gt;&amp; v);</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：排除不可能 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你执行了 <code>doxygen Doxyfile</code>，html 目录正常生成，每个函数详情页都完整，但<strong>任何一张调用图都没有</strong>，控制台也没有任何报错。请用福尔摩斯排除法：① 列出至少 4 个可能的检查点；② 按可能性从高到低排序；③ 指出哪一个是最可能的原因，并说明为什么 Doxygen 不报错。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按「环境 → 配置 → 源码」顺序想：dot 在不在 → HAVE_DOT 开没开 → CALL_GRAPH 开没开 → 代码里到底有没有互相调用。12.7 最后一节专门讲过一个「静默跳过」的坑。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 检查点：a. dot 是否安装且在 PATH（<code>which dot</code> / <code>dot -V</code>）；b. Doxyfile 里 <code>HAVE_DOT</code> 是否为 YES；c. <code>CALL_GRAPH</code> 是否 YES（或相关函数注释里有没有 <code>\callgraph</code>）；d. 源码里这些函数是否真的互相调用（单一函数、无调用关系的项目无图可画）；e. <code>INPUT</code>/<code>RECURSIVE</code> 是否覆盖了源码；f. 图是否被 <code>DOT_GRAPH_MAX_NODES</code>/<code>MAX_DOT_GRAPH_DEPTH</code> 截断（被截断会有红框节点）。② 按可能性排序：HAVE_DOT=NO（或 dot 不在 PATH）→ CALL_GRAPH=NO → 函数间无调用关系 → INPUT/RECURSIVE 漏了源码 → 图被截断。③ 最可能：<code>HAVE_DOT</code> 是 NO 或注释掉了，同时 dot 不在 PATH。因为 Doxygen 在 HAVE_DOT=NO 时<strong>静默跳过</strong>所有 dot 图——不报错、不警告，所以「一切正常却没有图」恰恰是它的典型症状；「环境 → 配置 → 源码」三步排查走完，答案就浮出水面了。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

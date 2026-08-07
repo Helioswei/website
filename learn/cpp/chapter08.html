@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第8章：REST 服务：pistache 实战 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter08.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第8章：REST 服务：pistache 实战 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter08.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="8" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：REST 服务：pistache 实战</h1>
+  <p class="chapter-subtitle">把 C++ 程序变成一台能收发请求的服务器——用 pistache 摆好这盘 REST 的棋</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「用兵之道，在于算无遗策。写一个网络服务也一样：请求从哪里进来、参数怎么取、错误怎么回、服务怎么收场——把这些都提前想清楚，代码自然四平八稳。这一章，我们借 pistache 这盘棋，把 REST 服务的每一步都摆给你看。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 零基础铺垫：REST 是什么，为什么 C++ 需要框架 ========== -->
+  <h2>8.1 零基础铺垫：REST 是什么，为什么 C++ 需要框架</h2>
+
+  <p><strong>REST（Representational State Transfer，表述性状态转移）是一种设计网络接口的风格</strong>——说人话：它不是一种协议，而是一套约定，规定"程序之间该怎么礼貌地互相请求数据"。核心思想是把服务器上的东西都看作<strong>资源（resource）</strong>——一个用户、一篇文章、一台设备都是资源，每个资源有一个地址（URL）；而操作资源的方式，就是 HTTP 自带的几个<strong>方法（method）</strong>。REST 这个词是计算机科学家 Roy Fielding 在 2000 年的博士论文里提出的，如今绝大多数 Web API 都遵循这套风格。</p>
+
+  <p>HTTP 方法有十来个，REST 常用的就四个：<strong>GET</strong>（读取资源）、<strong>POST</strong>（新建资源）、<strong>PUT</strong>（整体更新资源）、<strong>DELETE</strong>（删除资源）——正好对应程序里的"查、增、改、删"。这样设计的好处是：<strong>URL 负责"说清楚操作哪个资源"，方法负责"说清楚干什么"</strong>，两者一组合，接口的语义就明确了。比如 <code>GET /users/42</code> 读用户 42，<code>DELETE /users/42</code> 删掉用户 42，一看便知，不需要额外解释。下面这张表是 REST 服务的"四字兵法"：</p>
+
+  <table>
+    <tr><th>HTTP 方法</th><th>操作</th><th>说人话</th><th>例子</th></tr>
+    <tr><td>GET</td><td>读取资源</td><td>查</td><td>看用户列表、看某条记录</td></tr>
+    <tr><td>POST</td><td>新建资源</td><td>增</td><td>注册新用户、发一条新消息</td></tr>
+    <tr><td>PUT</td><td>整体更新资源</td><td>改</td><td>把用户资料整个换掉</td></tr>
+    <tr><td>DELETE</td><td>删除资源</td><td>删</td><td>注销账号、删掉一条记录</td></tr>
+  </table>
+
+  <p>那问题来了：<strong>C++ 为什么需要框架来做这件事？</strong>因为"接收 HTTP 请求"这件事远比看起来复杂。一个请求到了服务器，程序要解析请求行（方法、URL、协议版本）、解析各种请求头（Content-Type、Cookie……）、读取请求体、处理 URL 编码；响应时又要拼状态行、拼响应头、算好内容长度；这还只是"单个请求"。真实场景里同时有几百个连接进来，你得处理并发；连接超时了要清理；服务要能优雅关闭……这些底层细节自己写一遍，工作量不亚于写半个操作系统。下面的"错误示范"只演示了第一步——解析请求行——你就知道有多琐碎了。</p>
+
+  <pre><code><span class="cmt"># 客户端视角：用 curl 发 HTTP 请求（REST 的调用方式）</span>
+<span class="cmt"># GET：读取资源 —— 查用户 42</span>
+curl http://127.0.0.1:9080/users/42
+
+<span class="cmt"># POST：新建资源 —— 注册一个用户（数据放在请求体里）</span>
+curl -X POST -H <span class="str">"Content-Type: application/json"</span> \
+     -d <span class="str">'{"name":"孔明","alive":false}'</span> http://127.0.0.1:9080/users
+
+<span class="cmt"># PUT：整体更新 —— 把用户 42 的资料整个换掉</span>
+curl -X PUT -d <span class="str">'{"name":"卧龙"}'</span> http://127.0.0.1:9080/users/42
+
+<span class="cmt"># DELETE：删除资源 —— 注销用户 42</span>
+curl -X DELETE http://127.0.0.1:9080/users/42</code></pre>
+
+  <pre><code><span class="cmt">// 错误示范：不借助框架，手写 HTTP 服务的第一步就得自己解析请求行</span>
+<span class="type">std::string</span> <span class="param">line</span> <span class="op">=</span> <span class="str">"GET /users/42 HTTP/1.1"</span>;
+<span class="kw">auto</span> <span class="param">p1</span> <span class="op">=</span> line.find(<span class="str">' '</span>);
+<span class="type">std::string</span> <span class="param">method</span> <span class="op">=</span> line.substr(<span class="num">0</span>, p1);          <span class="cmt">// "GET"</span>
+<span class="kw">auto</span> <span class="param">p2</span> <span class="op">=</span> line.find(<span class="str">' '</span>, p1 <span class="op">+</span> <span class="num">1</span>);
+<span class="type">std::string</span> <span class="param">path</span> <span class="op">=</span> line.substr(p1 <span class="op">+</span> <span class="num">1</span>, p2 <span class="op">-</span> p1 <span class="op">-</span> <span class="num">1</span>); <span class="cmt">// "/users/42"</span>
+<span class="cmt">// 这才拆完第一行。后面还有请求头、请求体、URL 编码、粘包、超时……</span>
+<span class="cmt">// 更别说并发：来一个连接开一个线程？线程池？服务怎么优雅关闭？</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>如果你已经忘了第 6 章的 jsoncpp——没关系，本章 8.6 会用到它来拼 JSON 响应，用到时我会点明对应的小节。这两章是天然的搭档：jsoncpp 负责"数据的模样"，pistache 负责"数据的运输"。</p>
+  </div>
+
+  <!-- ========== 8.2 pistache 是什么：一个为 C++ 而生的 REST 框架 ========== -->
+  <h2>8.2 pistache 是什么：一个为 C++ 而生的 REST 框架</h2>
+
+  <p><strong>pistache 是一个用 C++ 写的 HTTP 与 REST 框架</strong>——说人话：它把你上节看到的那些底层活（解析请求、管理连接、并发调度）都包好了，你只需要声明"哪个 URL 对应哪段业务代码"。pistache 最初由开发者 Mathieu Stefani 创建（GitHub 昵称 octal），代码以 Apache License 2.0 开源，官方定位是"modern and elegant"（现代、优雅）：纯 C++17 编写，API 清晰，支持 Linux、macOS、Windows 和 BSD。素材笔记里作者对比了多个 C++ REST 库后选择了 pistache，理由是它在对比中性能表现突出。</p>
+
+  <p>有一个地址细节值得注意，也是本章素材与官网的唯一分歧点：<strong>素材笔记（2020 年）clone 的是 <code>https://github.com/oktal/pistache.git</code></strong>——这是作者个人账号下的旧地址；如今项目已迁到 <strong>pistacheio 组织</strong>名下，官方仓库地址是 <code>https://github.com/pistacheio/pistache</code>。历史原因很简单：开源项目成长后，通常会从个人账号搬到组织账号，方便多人共同维护。老地址在 GitHub 上会重定向到新地址，但教学和日常使用请认准新地址。</p>
+
+  <p>pistache 的依赖也值得一提：它本身不重复造轮子，SSL 加密依赖 OpenSSL，性能关键路径用到了 libevent，构建时还能选择是否开启这些功能（对应构建选项 <code>PISTACHE_USE_SSL</code> 等，8.3 会看到）。仓库里的 <code>examples/</code> 目录放着官方示例（比如 <code>rest_server.cc</code> 就是带路由的 REST 服务），是学习 API 的第一手资料。项目至今还没到 1.0 版本，官方 README 的说法是"unstable but not unusable"——不稳定但不难用，大部分代码已经达到生产可用级别，用来学习完全没问题。</p>
+
+  <pre><code><span class="cmt"># 官方仓库地址（pistacheio 组织，现在维护的地址）</span>
+git clone https://github.com/pistacheio/pistache.git
+<span class="fn">cd</span> pistache
+
+<span class="cmt"># 历史说明：2020 年素材笔记里 clone 的是旧地址</span>
+<span class="cmt"># git clone https://github.com/oktal/pistache.git  （作者个人账号）</span>
+<span class="cmt"># 项目迁到 pistacheio 组织后，官方新地址如上，认准新的</span></code></pre>
+
+  <pre><code><span class="cmt"># clone 之后，仓库里的关键目录长这样：</span>
+include/pistache/   <span class="cmt"># 头文件：http.h  endpoint.h  router.h  http_defs.h ...</span>
+src/                <span class="cmt"># 库的实现源码</span>
+examples/           <span class="cmt"># 官方示例，rest_server.cc 是带路由的 REST 服务</span>
+tests/              <span class="cmt"># 单元测试</span>
+subprojects/        <span class="cmt"># 构建时可能用到的第三方依赖（由构建系统处理）</span>
+
+<span class="cmt"># 主要第三方依赖：OpenSSL（SSL 支持）、libevent（网络事件循环）等</span>
+<span class="cmt"># 构建选项 -DPISTACHE_USE_SSL=true 就是开启 OpenSSL 支持（见 8.3）</span></code></pre>
+
+  <!-- ========== 8.3 编译安装：clone + submodule + CMake 构建 ========== -->
+  <h2>8.3 编译安装：clone + submodule + CMake 构建</h2>
+
+  <p>pistache 需要自己编译安装，素材笔记记录了一次完整的踩坑过程，命令可以直接照抄。第一个坑是<strong>编译器版本</strong>：当时的系统 GCC 还是 4.8（只支持到 C++11），而 pistache 需要支持 C++14 的编译器，所以笔记里先通过源码编译把 GCC 升级到了 5.1.0。由于系统里同时存在多个 GCC，直接用 <code>g++</code> 可能还是老版本，需要用环境变量把编译器显式指到新装的版本——这正是第 4 章讲过的 <code>CC</code> / <code>CXX</code> 环境变量。如今 pistache 主线已经是纯 C++17，编译器要求随之上调（GCC 7 及以上稳妥），但"用环境变量固定编译器"的思路完全不变。</p>
+
+  <p>第二个坑是<strong>依赖不全</strong>：pistache 构建需要 curl 的开发头文件，笔记里用 <code>yum install curl-devel -y</code> 补齐；CMake 版本也不能太老（笔记要求 3.18 以上）。第三个坑是<strong>第三方子模块</strong>：素材时代 clone 之后还要执行 <code>git submodule update --init</code> 拉取仓库里引用的其他 git 仓库——<strong>子模块（submodule）</strong>说人话就是"一个 git 仓库里挂着另一个 git 仓库的引用"，拉下来才能编。现在的 pistacheio 仓库已改为由构建系统处理第三方依赖（<code>subprojects/</code> 目录），这步通常可以跳过；但了解它，遇到老版本或老教程时不至于发懵。</p>
+
+  <pre><code><span class="cmt"># 素材笔记：CentOS 环境，先装 curl 开发包（pistache 依赖它）</span>
+sudo yum install curl-devel -y
+
+<span class="cmt"># 当年系统 GCC 4.8 只支持 C++11，素材里源码编译升级到 GCC 5.1.0（支持 C++14）</span>
+<span class="cmt"># 多版本并存时，用环境变量把默认编译器指到新装的版本（第 4 章的技能）：</span>
+<span class="kw">export</span> CC<span class="op">=</span>/usr/local/bin/gcc
+<span class="kw">export</span> CXX<span class="op">=</span>/usr/local/bin/g++
+g++ --version   <span class="cmt"># 确认显示 gcc version 5.1.0 或更高</span>
+
+<span class="cmt"># CMake 也要够新（素材要求 &gt;= 3.18），cmake.org 下载安装三部曲即可</span>
+cmake --version</code></pre>
+
+  <pre><code><span class="cmt"># 克隆 + 第三方子模块（素材原样；新仓库通常可省略第二步）</span>
+git clone https://github.com/pistacheio/pistache.git
+<span class="fn">cd</span> pistache
+git submodule update --init</code></pre>
+
+  <pre><code><span class="cmt"># 素材笔记的完整构建流程（2020 年实测通过，命令原样保留）</span>
+mkdir build <span class="op">&amp;&amp;</span> <span class="fn">cd</span> build
+cmake -G <span class="str">"Unix Makefiles"</span> -DCMAKE_BUILD_TYPE=Release \
+      -DPISTACHE_BUILD_EXAMPLES=true \
+      -DPISTACHE_BUILD_TESTS=true \
+      -DPISTACHE_BUILD_DOCS=false \
+      -DPISTACHE_USE_SSL=true \
+      -DCMAKE_INSTALL_PREFIX=/usr/local/pistache ..
+make -j <span class="num">4</span>
+sudo make install
+
+<span class="cmt"># 验证安装结果：头文件与库文件都在 /usr/local/pistache 下</span>
+ls /usr/local/pistache/include/pistache/
+<span class="cmt"># 应看到 http.h  endpoint.h  router.h  http_defs.h ...</span>
+ls /usr/local/pistache/lib/
+<span class="cmt"># 应看到 libpistache.so（动态库）和 libpistache.a（静态库）</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：cmake 配置里的几个 <code>PISTACHE_*</code> 开关各有用途——<code>PISTACHE_BUILD_EXAMPLES=true</code> 会连官方示例一起编译（强烈建议开着，示例是最好的学习材料），<code>PISTACHE_BUILD_TESTS=true</code> 编译单元测试，<code>PISTACHE_BUILD_DOCS=false</code> 跳过文档生成（省时间），<code>PISTACHE_USE_SSL=true</code> 开启 HTTPS 支持（需要系统里有 OpenSSL）。如果你的系统没有 OpenSSL 开发包，把最后一个关掉也能编过。</p>
+  </div>
+
+  <!-- ========== 8.4 核心 API：Endpoint / Router / Code，跑起第一个服务 ========== -->
+  <h2>8.4 核心 API：Endpoint / Router / Code，跑起第一个服务</h2>
+
+  <p>装好之后，我们来认识 pistache 的四个核心角色。<strong>Http::Endpoint（端点）</strong>是服务器的"门面"：它负责绑定地址和端口、启动监听、管理线程池。流程固定三步：<code>init()</code> 初始化（可传选项，比如线程数）→ <code>setHandler()</code> 挂上处理器 → <code>serve()</code> 开始服务。这里的<strong>端口（port）</strong>说人话就是"服务器大门上的编号"，客户端靠 IP 找到机器、靠端口找到服务，9080 是 pistache 示例里的常用端口。绑定用的 <code>Address(Ipv4::any(), Port(9080))</code> 表示"监听本机所有 IPv4 地址的 9080 端口"。</p>
+
+  <p>第二个角色是<strong>Rest::Router（路由器）</strong>——说人话就是一张"URL 分发表"：注册时告诉它"哪个路径用哪个函数处理"，请求进来它自动分发。<code>router.get("/hello", handler)</code> 注册 GET 方法，<code>router.post(...)</code>、<code>router.put(...)</code>、<code>router.del(...)</code> 同理；官方也提供等价的 <code>Routes::Get(router, ...)</code> 系列自由函数。第三个角色是<strong>处理器（handler）</strong>：一段接收请求、返回响应的函数，签名固定为 <code>void(const Rest::Request&amp;, Http::ResponseWriter)</code>——请求信息在第一个参数里读，用第二个参数 <code>response.send(...)</code> 把结果发回去。第四个角色是 <strong>Http::Code</strong>：HTTP 状态码的枚举，<code>Http::Code::Ok</code> 就是 200（成功），常见还有 <code>Created</code>（201 创建成功）、<code>Bad_Request</code>（400 请求不合法）、<code>Not_Found</code>（404 找不到）、<code>Internal_Server_Error</code>（500 服务器内部错误）——这些是 <code>http_defs.h</code> 里的真实定义，全部与标准状态码一一对应。</p>
+
+  <p>下面是最小的 REST 服务：只注册一个 <code>GET /hello</code> 路由，用 lambda 当处理器。注意 lambda 的形参 <code>request</code> 这里用不到，可以省略名字（类型保留）。</p>
+
+  <pre><code><span class="cmt">// hello_router.cpp：用 Router 注册路由的最小 REST 服务</span>
+<span class="ann">#include</span> &lt;pistache/endpoint.h&gt;
+<span class="ann">#include</span> &lt;pistache/http.h&gt;
+<span class="ann">#include</span> &lt;pistache/router.h&gt;
+
+<span class="kw">using</span> <span class="kw">namespace</span> Pistache;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// 1. 建 Router：路由表，负责把 URL 分发给对应的处理函数</span>
+    Rest::Router <span class="param">router</span>;
+
+    <span class="cmt">// 2. 注册路由：GET /hello → 返回一段文本</span>
+    router.<span class="fn">get</span>(<span class="str">"/hello"</span>,
+              [](<span class="kw">const</span> Rest::Request<span class="op">&amp;</span>, Http::ResponseWriter <span class="param">response</span>) {
+                  response.<span class="fn">send</span>(Http::Code::Ok, <span class="str">"Hello, REST!"</span>);
+              });
+
+    <span class="cmt">// 3. 创建服务器端点（Endpoint），绑定本机所有 IPv4 地址的 9080 端口</span>
+    Http::Endpoint <span class="param">endpoint</span>(Address(Ipv4::any(), Port(<span class="num">9080</span>)));
+
+    <span class="cmt">// 4. 初始化（2 个线程）→ 挂上路由处理器 → 开始服务</span>
+    <span class="kw">auto</span> <span class="param">opts</span> <span class="op">=</span> Http::Endpoint::options().<span class="fn">threads</span>(<span class="num">2</span>);
+    endpoint.<span class="fn">init</span>(opts);
+    endpoint.<span class="fn">setHandler</span>(router.<span class="fn">handler</span>());
+    endpoint.<span class="fn">serve</span>();
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译链接：-I 指向安装的头文件目录，-L/-lpistache 指向库</span>
+g++ -std=c++17 -I/usr/local/pistache/include hello_router.cpp \
+    -L/usr/local/pistache/lib -lpistache -o hello_router
+
+<span class="cmt"># 后台启动，然后用 curl 验证（&amp; 让程序在后台跑）</span>
+./hello_router <span class="op">&amp;</span>
+curl http://127.0.0.1:9080/hello
+<span class="cmt"># 输出：Hello, REST!</span></code></pre>
+
+  <pre><code><span class="cmt">// 更简单的官方写法：listenAndServe —— 不需要 Router，适合超小服务</span>
+<span class="ann">#include</span> &lt;pistache/endpoint.h&gt;
+<span class="ann">#include</span> &lt;pistache/http.h&gt;
+
+<span class="kw">using</span> <span class="kw">namespace</span> Pistache;
+
+<span class="kw">struct</span> <span class="type">HelloHandler</span> : <span class="kw">public</span> Http::Handler {
+    HTTP_PROTOTYPE(HelloHandler)   <span class="cmt">// 必需的宏：让框架能构造这个处理器</span>
+
+    <span class="kw">void</span> <span class="fn">onRequest</span>(<span class="kw">const</span> Http::Request<span class="op">&amp;</span>, Http::ResponseWriter <span class="param">response</span>) <span class="kw">override</span> {
+        response.<span class="fn">send</span>(Http::Code::Ok, <span class="str">"Hello, World!"</span>);
+    }
+};
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    Http::<span class="fn">listenAndServe</span>&lt;HelloHandler&gt;(<span class="str">"*:9080"</span>);
+}</code></pre>
+
+  <p>两种写法对比：<code>Router</code> 版适合"一个服务很多接口"的场景，URL 分发清晰；<code>listenAndServe</code> 版适合只有一个响应逻辑的极简场景。日常开发绝大多数用 Router 版——因为它天然支持多路由、路径参数（下一节的主角）和 404 兜底。</p>
+
+  <!-- ========== 8.5 路由进阶：路径参数 :id 与 query 查询参数 ========== -->
+  <h2>8.5 路由进阶：路径参数 :id 与 query 查询参数</h2>
+
+  <p>真实接口很少是写死的路径，<code>/users/42</code> 里的 <code>42</code> 是运行时才决定的。pistache 用<strong>路径参数（path parameter）</strong>解决：注册时在路径里写 <code>:id</code> 这样的占位符，匹配时把 URL 对应位置的值取出来。取用方法是 <code>request.param(":id").as&lt;std::string&gt;()</code>——占位符名字要和注册时一致，<code>as&lt;T&gt;()</code> 把参数转成想要的类型（字符串、整数都行）。另一种传参方式是<strong>查询参数（query parameter）</strong>，就是 URL 里 <code>?</code> 后面的 <code>key=value</code> 对（如 <code>/search?q=pistache</code>），用 <code>request.query().get("q")</code> 读取——它返回 <code>std::optional&lt;std::string&gt;</code>，先判断有没有值再解引用，避免拿到空值。</p>
+
+  <p>还有一个常用的兜底：<code>router.addNotFoundHandler(...)</code> 注册一个处理器，当所有路由都没匹配上时返回 404——否则客户端会收到一个笼统的默认错误。把这三样凑一起，就是一个像模像样的用户查询服务：<code>/users/:id</code> 查单个用户，<code>/search?q=...</code> 搜索，其余路径一律 404。</p>
+
+  <pre><code><span class="cmt">// users.cpp：路径参数 :id + 查询参数 ?q= 的完整示例</span>
+<span class="ann">#include</span> &lt;pistache/endpoint.h&gt;
+<span class="ann">#include</span> &lt;pistache/http.h&gt;
+<span class="ann">#include</span> &lt;pistache/router.h&gt;
+<span class="ann">#include</span> &lt;string&gt;
+
+<span class="kw">using</span> <span class="kw">namespace</span> Pistache;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    Rest::Router <span class="param">router</span>;
+
+    <span class="cmt">// 路径参数：:id 会匹配 /users/42 里的 42</span>
+    router.<span class="fn">get</span>(<span class="str">"/users/:id"</span>,
+              [](<span class="kw">const</span> Rest::Request<span class="op">&amp;</span> <span class="param">request</span>,
+                 Http::ResponseWriter <span class="param">response</span>) {
+                  <span class="type">std::string</span> <span class="param">id</span> <span class="op">=</span>
+                      request.<span class="fn">param</span>(<span class="str">":id"</span>).<span class="fn">as</span>&lt;<span class="type">std::string</span>&gt;();
+                  response.<span class="fn">send</span>(Http::Code::Ok, <span class="str">"user id = "</span> <span class="op">+</span> id);
+              });
+
+    <span class="cmt">// 查询参数：/search?q=pistache 里的 q（&amp; 连接多个参数）</span>
+    router.<span class="fn">get</span>(<span class="str">"/search"</span>,
+              [](<span class="kw">const</span> Rest::Request<span class="op">&amp;</span> <span class="param">request</span>,
+                 Http::ResponseWriter <span class="param">response</span>) {
+                  <span class="kw">auto</span> <span class="param">q</span> <span class="op">=</span> request.<span class="fn">query</span>().<span class="fn">get</span>(<span class="str">"q"</span>); <span class="cmt">// std::optional&lt;std::string&gt;</span>
+                  <span class="kw">if</span> (q) {
+                      response.<span class="fn">send</span>(Http::Code::Ok, <span class="str">"search: "</span> <span class="op">+</span> *q);
+                  } <span class="kw">else</span> {
+                      response.<span class="fn">send</span>(Http::Code::Bad_Request, <span class="str">"missing q"</span>);
+                  }
+              });
+
+    <span class="cmt">// 兜底：所有路由都没匹配上 → 404</span>
+    router.<span class="fn">addNotFoundHandler</span>(
+        [](<span class="kw">const</span> Rest::Request<span class="op">&amp;</span>, Http::ResponseWriter <span class="param">response</span>) {
+            response.<span class="fn">send</span>(Http::Code::Not_Found, <span class="str">"no such route"</span>);
+        });
+
+    Http::Endpoint <span class="param">endpoint</span>(Address(Ipv4::any(), Port(<span class="num">9080</span>)));
+    endpoint.<span class="fn">init</span>(Http::Endpoint::options().<span class="fn">threads</span>(<span class="num">2</span>));
+    endpoint.<span class="fn">setHandler</span>(router.<span class="fn">handler</span>());
+    endpoint.<span class="fn">serve</span>();
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译并后台启动</span>
+g++ -std=c++17 -I/usr/local/pistache/include users.cpp \
+    -L/usr/local/pistache/lib -lpistache -o users
+./users <span class="op">&amp;</span>
+
+<span class="cmt"># 路径参数生效</span>
+curl http://127.0.0.1:9080/users/42
+<span class="cmt"># 输出：user id = 42</span>
+
+<span class="cmt"># 查询参数生效（URL 里有 ? 和 &amp;，用双引号包住防止 shell 误解）</span>
+curl <span class="str">"http://127.0.0.1:9080/search?q=pistache"</span>
+<span class="cmt"># 输出：search: pistache</span>
+
+<span class="cmt"># 没匹配到的路径 → 404</span>
+curl -i http://127.0.0.1:9080/whatever
+<span class="cmt"># 响应行：HTTP/1.1 404 Not Found</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>路径参数和查询参数怎么选？经验法则：<strong>路径参数用来"指出是哪个资源"（名词），查询参数用来"描述怎么处理"（形容词）</strong>。<code>/users/42</code> 点名用户 42；<code>/users?page=2</code> 说"用户列表，看第 2 页"。分不清时想想 REST 的本意——URL 描述资源，方法描述动作。</p>
+  </div>
+
+  <!-- ========== 8.6 返回 JSON：pistache 与 jsoncpp 联手 ========== -->
+  <h2>8.6 返回 JSON：pistache 与 jsoncpp 联手</h2>
+
+  <p>文本响应只是热身，真实 REST 服务几乎都返回 <strong>JSON</strong>——第 6 章学过的那种轻量级数据交换格式。组合拳是：<strong>jsoncpp 负责把 C++ 数据变成 JSON 字符串，pistache 负责把字符串作为响应体发出去</strong>。要让客户端正确解析，还要告诉它响应体是什么类型——这靠响应头 <strong>Content-Type</strong>（内容类型）字段，值为 <code>application/json</code>。<strong>MIME 类型</strong>说人话就是"互联网上给文件/内容贴的标签"，<code>application/json</code> 表示"这是一段 JSON"。pistache 里用 <code>MIME(Application, Json)</code> 这个宏直接生成这个值，配合 <code>response.send(code, body, mime)</code> 的第三个参数一起发。</p>
+
+  <p>第 6 章学过的 jsoncpp 序列化在这里原样复用：<code>Json::Value</code> 搭树 → <code>Json::StreamWriterBuilder</code> → <code>Json::writeString(builder, root)</code> 一行出字符串。有一个第 6 章踩过的坑必须再提醒：<strong>jsoncpp 序列化对象时，键名按字母顺序输出，与插入顺序无关</strong>——所以你在代码里先写 <code>root["id"]</code> 再写 <code>root["name"]</code>，客户端看到的可能是 <code>{"id":...,"name":...}</code> 或别的字母序。这不是 bug，解析 JSON 的一方本就不该依赖键序。下面的例子把 8.5 的查询服务升级成 JSON 版：</p>
+
+  <pre><code><span class="cmt">// json_api.cpp：pistache + jsoncpp，返回 application/json</span>
+<span class="ann">#include</span> &lt;pistache/endpoint.h&gt;
+<span class="ann">#include</span> &lt;pistache/http.h&gt;
+<span class="ann">#include</span> &lt;pistache/router.h&gt;
+<span class="ann">#include</span> &lt;json/json.h&gt;   <span class="cmt">// 第 6 章的 jsoncpp</span>
+
+<span class="kw">using</span> <span class="kw">namespace</span> Pistache;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    Rest::Router <span class="param">router</span>;
+
+    <span class="cmt">// GET /api/user → 返回一个 JSON 对象</span>
+    router.<span class="fn">get</span>(<span class="str">"/api/user"</span>,
+              [](<span class="kw">const</span> Rest::Request<span class="op">&amp;</span>, Http::ResponseWriter <span class="param">response</span>) {
+                  Json::Value <span class="param">root</span>;
+                  root[<span class="str">"id"</span>]    <span class="op">=</span> <span class="num">42</span>;
+                  root[<span class="str">"name"</span>]  <span class="op">=</span> <span class="str">"孔明"</span>;
+                  root[<span class="str">"alive"</span>] <span class="op">=</span> <span class="kw">false</span>;
+
+                  Json::StreamWriterBuilder <span class="param">builder</span>;
+                  <span class="type">std::string</span> <span class="param">body</span> <span class="op">=</span> Json::<span class="fn">writeString</span>(builder, root);
+
+                  <span class="cmt">// 第三个参数声明内容类型：application/json</span>
+                  response.<span class="fn">send</span>(Http::Code::Ok, body, MIME(Application, Json));
+              });
+
+    Http::Endpoint <span class="param">endpoint</span>(Address(Ipv4::any(), Port(<span class="num">9080</span>)));
+    endpoint.<span class="fn">init</span>(Http::Endpoint::options().<span class="fn">threads</span>(<span class="num">2</span>));
+    endpoint.<span class="fn">setHandler</span>(router.<span class="fn">handler</span>());
+    endpoint.<span class="fn">serve</span>();
+}</code></pre>
+
+  <pre><code><span class="cmt">// 片段：POST /api/user —— 从请求体里读 JSON（接着上面的文件写）</span>
+<span class="ann">#include</span> &lt;sstream&gt;   <span class="cmt">// std::istringstream</span>
+
+router.<span class="fn">post</span>(<span class="str">"/api/user"</span>,
+          [](<span class="kw">const</span> Rest::Request<span class="op">&amp;</span> <span class="param">request</span>,
+             Http::ResponseWriter <span class="param">response</span>) {
+              <span class="cmt">// request.body() 拿到请求体原始文本</span>
+              Json::CharReaderBuilder <span class="param">readerBuilder</span>;
+              Json::Value <span class="param">root</span>;
+              <span class="type">std::string</span> <span class="param">errs</span>;
+              <span class="type">std::istringstream</span> <span class="param">iss</span>(request.<span class="fn">body</span>());
+
+              <span class="kw">if</span> (!Json::<span class="fn">parseFromStream</span>(readerBuilder, iss, <span class="op">&amp;</span>root, <span class="op">&amp;</span>errs)) {
+                  response.<span class="fn">send</span>(Http::Code::Bad_Request, <span class="str">"bad json: "</span> <span class="op">+</span> errs);
+                  <span class="kw">return</span>;
+              }
+              <span class="type">std::string</span> <span class="param">name</span> <span class="op">=</span> root.<span class="fn">get</span>(<span class="str">"name"</span>, <span class="str">""</span>).<span class="fn">asString</span>();
+              response.<span class="fn">send</span>(Http::Code::Created, <span class="str">"created: "</span> <span class="op">+</span> name);
+          });</code></pre>
+
+  <pre><code><span class="cmt"># 编译、启动、验证（-i 显示响应头，能看到 Content-Type）</span>
+g++ -std=c++17 -I/usr/local/pistache/include json_api.cpp \
+    -L/usr/local/pistache/lib -lpistache -o json_api
+./json_api <span class="op">&amp;</span>
+
+curl -i http://127.0.0.1:9080/api/user
+<span class="cmt"># HTTP/1.1 200 OK</span>
+<span class="cmt"># Content-Type: application/json</span>
+<span class="cmt"># ...</span>
+<span class="cmt"># {"alive":false,"id":42,"name":"孔明"}   ← 键按字母序输出，不是 bug</span>
+
+<span class="cmt"># POST：客户端把 JSON 放在请求体里发过来</span>
+curl -i -X POST -H <span class="str">"Content-Type: application/json"</span> \
+     -d <span class="str">'{"name":"司马懿"}'</span> http://127.0.0.1:9080/api/user
+<span class="cmt"># HTTP/1.1 201 Created</span>
+<span class="cmt"># created: 司马懿</span></code></pre>
+
+  <p>至此，一条完整的 REST 链路已经打通：客户端用 curl（或浏览器、别的程序）发 HTTP 请求 → pistache 解析请求、按路由分发给你的处理器 → 处理器里用 jsoncpp 拼装或解析 JSON → pistache 带着正确的状态码和 Content-Type 把响应发回去。这四件事串起来，就是一个能对外提供服务的 C++ 后端了。</p>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>想换一种写法设置 Content-Type？也可以不用 <code>send</code> 的第三个参数，而是先操作响应头：<code>response.headers().add&lt;Http::Header::ContentType&gt;(MIME(Application, Json));</code> 再 <code>response.send(Http::Code::Ok, body);</code>。两种方式等价，官方示例里两种都见得到，选顺手的那种即可。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话说人话分别解释：REST、资源（resource）、HTTP 方法。再回答：在 REST 约定里，PUT 和 POST 通常各管什么事？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 8.1 的"四字兵法"表：查、增、改、删分别对应谁？资源在 URL 里，方法在请求里，合起来构成完整语义。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>REST：一种设计网络接口的风格，把服务器上的数据看作资源，用 HTTP 方法操作它们；资源：服务器上可以被寻址和操作的数据对象（用户、文章、设备……），每个资源有 URL；HTTP 方法：对资源执行的动作（GET 读取、POST 新建、PUT 整体更新、DELETE 删除）。PUT 管"改"（把资源整个换成新状态），POST 管"增"（新建一个资源）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：加两个路由 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 8.4 的 <code>hello_router.cpp</code> 基础上，给 Router 加上：① <code>GET /greet/:name</code>，返回 <code>hello, &lt;name&gt;</code>；② <code>GET /greet</code>，从查询参数 <code>?name=xxx</code> 读名字，没传则返回 400。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>路径参数用 <code>request.param(":name").as&lt;std::string&gt;()</code>；查询参数用 <code>request.query().get("name")</code>，先判断 <code>if (q)</code> 再解引用 <code>*q</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>router.get("/greet/:name", [](const Rest::Request&amp; req, Http::ResponseWriter res){ res.send(Http::Code::Ok, "hello, " + req.param(":name").as&lt;std::string&gt;()); });</code> ② <code>router.get("/greet", [](const Rest::Request&amp; req, Http::ResponseWriter res){ auto q = req.query().get("name"); if (q) res.send(Http::Code::Ok, "hello, " + *q); else res.send(Http::Code::Bad_Request, "missing name"); });</code> 两个路由路径不同（一个带 <code>:name</code> 一个不带），可以共存。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：POST JSON 收尾 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>把 8.6 的 POST 片段补完整：<code>POST /api/user</code> 接收 JSON，若解析失败返回 400 和错误信息；若成功但 JSON 里没有 <code>name</code> 字段，返回 400；成功则返回 201。再用 curl 分别测三种情况。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>字段是否存在用 <code>root.isMember("name")</code>（第 6 章学的）；解析失败检查 <code>parseFromStream</code> 的返回值；201 用 <code>Http::Code::Created</code>。curl 测 400 时故意发 <code>-d '{"name":'</code> 这种残缺 JSON。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心逻辑：解析失败 <code>response.send(Http::Code::Bad_Request, "bad json: " + errs)</code>；<code>if (!root.isMember("name")) response.send(Http::Code::Bad_Request, "name required")</code>；都过了再 <code>response.send(Http::Code::Created, "created: " + root["name"].asString())</code>。测试：残缺 JSON → 400；<code>-d '{"age":1}'</code> → 400（缺 name）；<code>-d '{"name":"郭嘉"}'</code> → 201。注意 <code>root["name"].asString()</code> 前先用 <code>isMember</code> 或 <code>get("name", "")</code> 兜底，避免读到空值。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：内存用户表 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>综合小项目：用 <code>std::map&lt;std::string, std::string&gt;</code> 当内存数据库，实现三个接口：<code>GET /users</code> 返回全部用户的 JSON 数组；<code>POST /users</code> 从 body 读 <code>{"name":...}</code> 新增；<code>DELETE /users/:id</code> 按 id 删除（不存在返回 404）。跑通后用 curl 完整走一遍增、查、删。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>JSON 数组用 <code>Json::Value arr(Json::arrayValue); arr.append(item);</code> 构造（第 6 章：数组顺序有保证）；删除用 <code>router.del(...)</code>；<code>map.erase(id)</code> 返回删除个数，为 0 就是 404。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心骨架：<code>std::map&lt;std::string, std::string&gt; users;</code>（id → name）。GET 遍历 map 把每对塞进 <code>Json::Value</code> 对象再 <code>append</code> 到数组，<code>send(Http::Code::Ok, body, MIME(Application, Json))</code>。POST 解析 body 后 <code>users[id] = name</code>，id 可用计数器生成，返回 201。DELETE 用 <code>router.del("/users/:id", ...)</code>，<code>auto n = users.erase(id); if (n == 0) send(Not_Found, "no such user"); else send(Ok, "deleted");</code>。这个"map 当数据库"的模式就是真实项目中内存缓存的雏形。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

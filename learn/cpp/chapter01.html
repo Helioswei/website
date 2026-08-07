@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第1章：C++ 生态与开发环境全景 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter01.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第1章：C++ 生态与开发环境全景 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter01.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="1" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第1章：C++ 生态与开发环境全景</h1>
+  <p class="chapter-subtitle">在写第一行代码之前，先把"代码是怎么变成程序"的整条链路看清——从编辑器到编译器，从构建到调试</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「如果你不能把一个概念讲给大一新生听，你就还没有真正理解它。这一章我们不急着背语法，而是回到最底层：C++ 到底是什么、它凭什么快、一条 C++ 工程从源码到跑起来要经过哪些环节。把这张地图画清楚，后面十五章的每一块拼图你都知道该放哪儿。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 1.1 零基础铺垫：为什么学 C++ ========== -->
+  <h2>1.1 零基础铺垫：为什么学 C++</h2>
+
+  <p>用第一性原理问一个问题：<strong>程序员的本质工作是什么？</strong>是让机器按照人的意志工作。而机器（CPU）只认识一种语言——<strong>机器码</strong>，也就是一串串代表"加、减、跳转、读写内存"的二进制指令。所有编程语言本质上都是"写给人看、再翻译给机器听"的中间媒介。区别只在于：<strong>翻译得早还是晚、翻译后离机器有多近</strong>。C++ 的选择是：尽量早地翻译成机器码，并且把内存、指针这些底层控制权交给你——代价是你要对它们负责。</p>
+
+  <p>那为什么偏偏学 C++？四个字：<strong>性能与控制力</strong>。看看它统治的领域就明白了：<strong>游戏引擎</strong>（Unreal、Unity 底层都是 C++，一帧画面要在几毫秒内算完）、<strong>高频交易</strong>（每秒千万笔订单，延迟差一个微秒就亏钱）、<strong>嵌入式设备</strong>（单片机内存只有几 KB，容不得半点浪费）、<strong>操作系统与基础设施</strong>（Linux 内核虽是 C，但 Chromium 浏览器、MySQL 数据库、TensorFlow 底层、无数中间件都是 C++）。这些场景的共同点：<strong>要么拼速度，要么拼资源，要么两者都拼</strong>。Python 写起来舒服，但它的"舒服"是拿运行速度换的；C++ 恰好相反。</p>
+
+  <p>顺带认识一下 C++ 的出身：它由 Bjarne Stroustrup 于 1979 年在贝尔实验室开始设计，最初叫"C with Classes"（带类的 C），1983 年改名为 C++，1998 年正式成为 ISO 国际标准（编号 ISO/IEC 14882:1998）。它和 C 是"表亲"：C++ 兼容绝大部分 C 代码，同时引入了<strong>类</strong>（class，把数据和操作数据的函数打包在一起的结构）、<strong>模板</strong>（template，让代码不写死类型、按需生成）、<strong>异常</strong>（exception，错误处理机制）等现代特性。用一句话概括：<strong>C++ 是一门既能让程序员贴近硬件、又能用高级抽象组织大型工程的编译型语言</strong>。</p>
+
+  <table>
+    <tr><th>应用领域</th><th>为什么选 C++</th><th>典型代表</th></tr>
+    <tr><td>游戏与图形</td><td>实时渲染要求每帧毫秒级算完，性能是生命线</td><td>Unreal Engine、Unity</td></tr>
+    <tr><td>系统软件</td><td>需要直接操作内存、线程、系统调用</td><td>Chromium、MySQL、Linux 工具链</td></tr>
+    <tr><td>嵌入式/物联网</td><td>资源（内存/CPU/电量）极度受限，必须精打细算</td><td>智能家电、汽车 ECU、无人机飞控</td></tr>
+    <tr><td>金融与科学计算</td><td>低延迟交易、大规模数值模拟对性能极致敏感</td><td>高频交易系统、量化平台</td></tr>
+  </table>
+
+  <p>下面这个程序就是 C++ 世界的"Hello World"——先混个脸熟，看不懂没关系，1.2 节会拆解它怎么变成可执行文件：</p>
+
+  <pre><code><span class="cmt">// hello.cpp —— 你的第一个 C++ 程序</span>
+<span class="cmt">// #include 是预处理指令：把指定头文件的内容"粘贴"进来</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>   <span class="cmt">// iostream 提供了 std::cout 等输入输出设施</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {                <span class="cmt">// 程序的入口函数，操作系统从这里开始执行</span>
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"Hello, C++ World!"</span> <span class="op">&lt;&lt;</span> std::endl;  <span class="cmt">// 向屏幕输出一行</span>
+    <span class="kw">return</span> <span class="num">0</span>;               <span class="cmt">// 返回 0 表示"正常结束"</span>
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译：把 hello.cpp 翻译成可执行文件 hello（-o 指定输出文件名）</span>
+g++ hello.cpp -o hello
+
+<span class="cmt"># 运行：让 CPU 执行刚才生成的机器码</span>
+./hello
+<span class="cmt"># 输出：Hello, C++ World!</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>先别急着纠结语法。这一章的每一节都在回答一个"为什么"，语法细节从第 2 章开始逐块补。记住这句话：<strong>语法是地图上的地名，工具链才是路网</strong>——先认路，再记地名。</p>
+  </div>
+
+  <!-- ========== 1.2 编译型与解释型：本质区别 ========== -->
+  <h2>1.2 编译型与解释型：本质区别</h2>
+
+  <p>编程语言按"翻译方式"分两大类。<strong>编译型语言</strong>（compiled language）：先用一个叫<strong>编译器</strong>（compiler）的程序把整份源码一次性翻译成机器码，生成一个独立的可执行文件，之后每次运行都不再需要源码和编译器。C、C++、Rust、Go 都是编译型。<strong>解释型语言</strong>（interpreted language）：没有"提前翻译"这一步，运行时由一个<strong>解释器</strong>（interpreter）逐行读取源码、边翻译边执行。Python、Ruby、JavaScript 都是解释型。一句话说人话：<strong>编译型是"翻译好整本书再上台演讲"，解释型是"拿着稿子边看边念"</strong>。</p>
+
+  <p>这个区别带来三个直接后果。第一，<strong>速度</strong>：编译型程序跑的是 CPU 直接执行的机器码，解释型程序每跑一行都要先"翻译"一次，通常慢几十倍甚至上百倍——这就是 C++ 敢碰游戏引擎、解释型语言不敢碰的根本原因。第二，<strong>分发</strong>：编译型交付的是编译好的可执行文件（Windows 的 .exe、Linux 的 ELF、macOS 的 Mach-O），用户拿到就能跑，不暴露源码；解释型通常要连源码一起分发（Python 的 .py），运行环境里必须装好解释器。第三，<strong>调试体验</strong>：解释型出错时能报出"第几行出错"，因为解释器手里就有源码；编译型出错时错误发生在编译阶段（编译错误）或运行阶段（运行错误），定位要靠调试器。</p>
+
+  <p>还有一类"中间派"值得知道：<strong>字节码 + 虚拟机</strong>（如 Java、C#）。它们先把源码编译成一种平台无关的中间码（字节码，bytecode），运行时再由<strong>虚拟机</strong>（VM）解释或即时编译（JIT，Just-In-Time）成机器码。性能介于纯编译型和纯解释型之间，好处是"一次编译、处处运行"。C++ 不采用这套方案，它追求的是<strong>零抽象成本</strong>：你写的东西，最终生成的机器码里几乎没有多余的运行时开销。</p>
+
+  <table>
+    <tr><th>维度</th><th>编译型（C++）</th><th>解释型（Python）</th></tr>
+    <tr><td>翻译时机</td><td>运行前一次性翻译成机器码</td><td>运行时逐行翻译</td></tr>
+    <tr><td>执行速度</td><td>快（直接执行机器码）</td><td>慢（每行都要翻译开销）</td></tr>
+    <tr><td>交付物</td><td>可执行文件（.exe / ELF / Mach-O）</td><td>源码 + 解释器</td></tr>
+    <tr><td>出错定位</td><td>编译错误先拦一道，运行错误靠调试器</td><td>解释器直接报行号</td></tr>
+    <tr><td>典型代表</td><td>C、C++、Rust、Go</td><td>Python、Ruby、JavaScript</td></tr>
+  </table>
+
+  <p>同样的"Hello World"，解释型语言写起来短得多，但代价藏在看不见的地方——每次运行都要重新翻译一遍：</p>
+
+  <pre><code><span class="cmt"># hello.py —— Python 版本，解释执行</span>
+<span class="fn">print</span>(<span class="str">"Hello, C++ World!"</span>)
+
+<span class="cmt"># 直接运行，不需要先"编译"：</span>
+<span class="cmt"># python3 hello.py</span></code></pre>
+
+  <p>C++ 的编译并不是一步完成的，它内部可以拆成四个阶段，每个阶段产出一个中间产物。理解这条流水线，是理解后面所有构建问题的基础：</p>
+
+  <pre><code><span class="cmt"># 阶段一：预处理 —— 展开 #include、#define 等预处理指令，产出 .i 文件</span>
+g++ -E hello.cpp -o hello.i
+
+<span class="cmt"># 阶段二：编译 —— 把 C++ 源码翻译成汇编语言，产出 .s 文件</span>
+g++ -S hello.i -o hello.s
+
+<span class="cmt"># 阶段三：汇编 —— 把汇编语言翻译成机器码目标文件，产出 .o 文件</span>
+g++ -c hello.s -o hello.o
+
+<span class="cmt"># 阶段四：链接 —— 把目标文件与标准库拼装成可执行文件</span>
+g++ hello.o -o hello
+
+<span class="cmt"># 一条命令等价于以上四步（g++ 内部自动完成整个过程）</span>
+g++ hello.cpp -o hello</code></pre>
+
+  <p>第四步<strong>链接</strong>（link）值得单独说一句：它负责把你自己写的代码和<strong>标准库</strong>（C++ 自带的功能代码，比如 std::cout 的实现）拼在一起，还要处理"引用关系"。链接涉及<strong>静态库</strong>（.a，编译时直接塞进可执行文件）和<strong>动态库</strong>（.so，运行时才加载）的区分，这是第 13 章的主题，现在先记住：<strong>编译报错多半是你语法写错了，链接报错多半是你引用了一个不存在的函数或没连上对应的库</strong>。</p>
+
+  <!-- ========== 1.3 一条 C++ 工程的生命周期：工具链全景 ========== -->
+  <h2>1.3 一条 C++ 工程的生命周期：工具链全景</h2>
+
+  <p>所谓<strong>工具链</strong>（toolchain），就是把源码变成可运行程序所需的整套工具的集合。真实世界里的 C++ 工程，几乎不会只靠"一个 g++ 命令"打天下——尤其是当工程有几十个源文件、依赖十几个第三方库、还要自动跑测试的时候。一条工程从诞生到上线，大致经过六个环节：<strong>编辑 → 编译 → 构建 → 包管理 → 测试 → 调试</strong>。这一节先把全景画出来，后面 15 章就是逐个环节深入。</p>
+
+  <p>六个环节的"话事人"分别是：<strong>编辑器/IDE</strong>（写代码的地方，IDE 是集成开发环境，把编辑、编译、调试打包在一个界面里，比如 VS Code、Visual Studio）、<strong>编译器</strong>（GCC、Clang、MSVC，负责翻译）、<strong>构建系统</strong>（构建系统是"自动决定编译什么、按什么顺序编译"的工具，最知名的是 CMake 和 Make）、<strong>包管理器</strong>（负责下载、编译、配置第三方库，比如 vcpkg、Conan）、<strong>测试框架</strong>（写自动化测试，比如 GoogleTest/gtest）、<strong>调试器</strong>（程序跑挂了或结果不对时，逐行观察程序内部状态，比如 GDB）。注意编译器和构建系统是两回事：<strong>编译器是"翻译官"，构建系统是"包工头"</strong>——包工头调度翻译官干活。</p>
+
+  <table>
+    <tr><th>环节</th><th>它解决什么问题</th><th>代表工具</th><th>本书章节</th></tr>
+    <tr><td>编辑</td><td>书写与组织源码</td><td>VS Code、Vim、Visual Studio</td><td>贯穿全书</td></tr>
+    <tr><td>编译</td><td>源码 → 机器码</td><td>GCC / Clang / MSVC</td><td>第 3、4 章</td></tr>
+    <tr><td>构建</td><td>调度编译、管理依赖顺序</td><td>CMake、Make、Ninja</td><td>第 2 章</td></tr>
+    <tr><td>包管理</td><td>第三方库的下载/编译/配置</td><td>vcpkg、Conan</td><td>第 5 章</td></tr>
+    <tr><td>测试</td><td>自动化验证代码正确性</td><td>GoogleTest、Catch2</td><td>第 9 章</td></tr>
+    <tr><td>调试</td><td>定位运行期错误、观察程序状态</td><td>GDB、lldb</td><td>第 14 章</td></tr>
+  </table>
+
+  <p>先把"最小闭环"跑通——哪怕不用任何高级工具，一条 C++ 工程的生命周期就是这样：</p>
+
+  <pre><code><span class="cmt"># 1. 编辑：用任何文本编辑器写源码</span>
+<span class="fn">vim</span> main.cpp
+
+<span class="cmt"># 2. 编译：g++ 把源码变成可执行文件</span>
+g++ main.cpp -o app
+
+<span class="cmt"># 3. 运行：看结果</span>
+./app
+
+<span class="cmt"># 4. 出了问题？加 -g 保留调试信息，用 gdb 逐步排查（1.6 节详讲）</span>
+g++ -g main.cpp -o app
+gdb ./app</code></pre>
+
+  <p>当工程变大，你就会发现"手写 g++ 命令"不可行了：50 个源文件要编 50 次、还要按依赖顺序来。这时候 CMake 登场——它用一个描述文件（CMakeLists.txt）声明"这个工程有哪些源文件、要什么标准、依赖哪些库"，然后自动替你生成编译命令。一个典型工程的目录布局长这样：</p>
+
+  <pre><code><span class="cmt"># 一个最小 CMake 工程的典型布局</span>
+hello/
+├── CMakeLists.txt    <span class="cmt"># 构建描述文件：告诉 CMake 怎么编这个工程</span>
+└── main.cpp          <span class="cmt"># 源码</span>
+
+<span class="cmt"># 编译两步走：先 configure（读 CMakeLists.txt 生成构建文件），再 build（真正编译）</span>
+cmake -S . -B build
+cmake --build build</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>如果你现在只觉得"cmake -S . -B build"是一串神秘咒语，完全正常。把它当公式先记下来，第 2 章会把它拆成 CMake 的三大件（target / property / command）讲透。学习工具链的诀窍是：<strong>先会用，再理解</strong>。</p>
+  </div>
+
+  <!-- ========== 1.4 编译器三巨头与主流平台现状 ========== -->
+  <h2>1.4 编译器三巨头与主流平台现状</h2>
+
+  <p>C++ 编译器主要有三家，记住它们的名字和血缘：<strong>GCC</strong>（GNU Compiler Collection，GNU 编译器套件），开源界的老牌王者，Linux 各发行版的默认编译器，调用 C++ 编译时用 <code>g++</code> 命令；<strong>Clang</strong>，属于 LLVM 项目，设计上更年轻、报错信息更友好，macOS 上 Xcode 自带的 Apple Clang 就是它的一个分支；<strong>MSVC</strong>（Microsoft Visual C++），微软出品，随 Visual Studio 分发，Windows 上的事实标准。三家都实现了同一份 C++ 标准，但命令行用法有差异，尤其是标准参数的写法：GCC/Clang 用 <code>-std=c++17</code> 这样的"短横线"风格，MSVC 用 <code>/std:c++17</code> 这样的"斜杠"风格。</p>
+
+  <p>再看主流平台现状，这也是你以后大概率会遇到的三套环境：<strong>Linux</strong>：默认编译器是 GCC（多数发行版），Clang 也可用，配 CMake + vcpkg 是当下最主流的组合；<strong>macOS</strong>：系统自带 Xcode Command Line Tools，提供的是 Apple Clang（注意 macOS 上敲 <code>g++</code> 往往只是个指向 clang++ 的替身），想用真正的 GCC 可以用 Homebrew 安装；<strong>Windows</strong>：Visual Studio + MSVC 是官方主推路线，也可以在 Windows 上装 WSL（Windows Subsystem for Linux）跑 Linux 工具链，或用 MinGW 把 GCC 移植到 Windows。</p>
+
+  <p>好消息是：<strong>同一份 C++ 源码在这三套平台上基本都能编译</strong>——这正是标准化的价值。会出问题的通常是平台相关的部分（路径分隔符、系统 API、动态库后缀名 .so / .dylib / .dll），这些坑会在后续章节逐个踩到。</p>
+
+  <table>
+    <tr><th>平台</th><th>默认编译器</th><th>编译命令</th><th>标准参数写法</th></tr>
+    <tr><td>Linux</td><td>GCC（g++）</td><td><code>g++ main.cpp -o app</code></td><td><code>-std=c++17</code></td></tr>
+    <tr><td>macOS</td><td>Apple Clang（clang++）</td><td><code>clang++ main.cpp -o app</code></td><td><code>-std=c++17</code></td></tr>
+    <tr><td>Windows</td><td>MSVC（cl.exe）</td><td><code>cl /EHsc main.cpp</code></td><td><code>/std:c++17</code></td></tr>
+  </table>
+
+  <p>先看 Linux 上的实际操作——第一步永远是确认机器上有什么：</p>
+
+  <pre><code><span class="cmt"># 查看编译器版本（顺带确认是否已安装）</span>
+g++ --version
+clang++ --version
+
+<span class="cmt"># Ubuntu/Debian 一键装齐：build-essential 包含 g++、make 等基础工具</span>
+sudo apt update <span class="op">&amp;&amp;</span> sudo apt install build-essential
+
+<span class="cmt"># 指定 C++17 标准编译（GCC/Clang 用 -std= 前缀）</span>
+g++ -std=c++17 hello.cpp -o hello</code></pre>
+
+  <p>macOS 的关键差异是：系统只自带 clang++，<code>g++</code> 这个名字通常指向它，别指望能直接用上 Linux 的 GCC：</p>
+
+  <pre><code><span class="cmt"># macOS：先装 Xcode Command Line Tools（弹出图形界面，点安装即可）</span>
+xcode-select --install
+
+<span class="cmt"># 确认编译器身份（注意显示的是 Apple clang 版本）</span>
+clang++ --version
+
+<span class="cmt"># 编译：macOS 上统一用 clang++</span>
+clang++ -std=c++20 hello.cpp -o hello
+./hello</code></pre>
+
+  <p>Windows 上则要借助 Visual Studio 提供的专用命令行环境——普通终端里是敲不出 <code>cl</code> 的：</p>
+
+  <pre><code><span class="cmt"># Windows：打开「Developer Command Prompt for VS」（开发者命令提示符）后：</span>
+<span class="cmt"># 查看 MSVC 版本</span>
+cl
+
+<span class="cmt"># 编译：/EHsc 启用 C++ 异常处理，/std:c++17 指定标准（MSVC 用斜杠风格）</span>
+cl /EHsc /std:c++17 hello.cpp
+
+<span class="cmt"># 产物是 hello.exe，直接运行</span>
+hello.exe</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>-std=c++17</code> 和 <code>/std:c++17</code> 只差一个字符（短横线 vs 斜杠），但互不通用——GCC 不认斜杠写法，MSVC 不认短横线写法。跨平台工程里这些参数通常由 CMake 统一管理（在 CMakeLists.txt 里写 <code>set(CMAKE_CXX_STANDARD 17)</code>，CMake 会自动为各家编译器生成正确的参数），这也是为什么要学 CMake。</p>
+  </div>
+
+  <!-- ========== 1.5 构建系统与包管理：CMake 与 vcpkg ========== -->
+  <h2>1.5 构建系统与包管理：CMake 与 vcpkg</h2>
+
+  <p><strong>构建系统</strong>（build system）解决的是"编译的调度问题"。单个文件用一条 g++ 命令搞定，但真实工程动辄几十上百个源文件：谁先编？谁依赖谁？改了一个文件，哪些要重编、哪些可以复用上次的结果？手工管理必然崩溃，所以有了构建系统。C++ 生态里最流行的是 <strong>CMake</strong>（Cross-platform Make，跨平台构建工具）：它不直接编译，而是<strong>读取一份声明式的 CMakeLists.txt，生成对应平台的构建文件，再调用编译器干活</strong>。一句话说人话：<strong>CMake 是"包工头"，g++ 是"砌墙工人"</strong>。</p>
+
+  <p>另一个重要角色是<strong>包管理器</strong>（package manager）。C++ 的第三方库（JSON 解析、网络、日志……）大多以源码形式发布，拿到手不能直接用，要先编译、还要配置头文件路径和库路径——这就是第 5 章主角 <strong>vcpkg</strong> 的用武之地：它是微软开源的跨平台 C++ 库管理器，一条命令帮你完成"下载、编译、安装"三步。为什么 C++ 库不能像 Python 的 pip 那样"装完就用"？因为 C++ 库要按你的平台、位数、链接方式（静态/动态）现场编译，组合多达十几种——这是 C++ 生态特有的复杂度，也是它"难上手"的名声来源之一。</p>
+
+  <table>
+    <tr><th>CMake 关键指令</th><th>作用</th></tr>
+    <tr><td><code>cmake_minimum_required(VERSION 3.16)</code></td><td>声明所需的最低 CMake 版本</td></tr>
+    <tr><td><code>project(hello CXX)</code></td><td>声明工程名与语言（CXX 即 C++）</td></tr>
+    <tr><td><code>add_executable(hello main.cpp)</code></td><td>定义"可执行文件"这个目标及其源文件</td></tr>
+    <tr><td><code>set(CMAKE_CXX_STANDARD 17)</code></td><td>要求按 C++17 标准编译（跨平台自动转换参数）</td></tr>
+    <tr><td><code>target_link_libraries(hello PRIVATE jsoncpp)</code></td><td>给目标链接第三方库</td></tr>
+  </table>
+
+  <p>一个最小 CMake 工程的全部内容，就是下面这份文件加两条命令——务必亲手敲一遍：</p>
+
+  <pre><code><span class="cmt"># CMakeLists.txt —— 放在工程根目录</span>
+<span class="fn">cmake_minimum_required</span>(<span class="type">VERSION</span> <span class="num">3.16</span>)
+<span class="fn">project</span>(hello <span class="type">CXX</span>)
+
+<span class="cmt"># 要求编译器按 C++17 标准编译</span>
+<span class="fn">set</span>(<span class="param">CMAKE_CXX_STANDARD</span> <span class="num">17</span>)
+
+<span class="cmt"># 从 main.cpp 生成可执行文件 hello</span>
+<span class="fn">add_executable</span>(<span class="param">hello</span> <span class="param">main.cpp</span>)</code></pre>
+
+  <pre><code><span class="cmt"># configure：读取 CMakeLists.txt，在 build/ 目录生成构建文件（-S 指定源码目录，-B 指定构建目录）</span>
+cmake -S . -B build
+
+<span class="cmt"># build：真正调用 g++ 编译并链接</span>
+cmake --build build
+
+<span class="cmt"># 运行产物在 build/ 目录下</span>
+./build/hello</code></pre>
+
+  <p>vcpkg 的用法同样直接——clone 它的仓库、跑引导脚本、然后 install 就完事。注意 <code>:x64-linux</code> 这种后缀叫 <strong>triplet</strong>（三元组），是 vcpkg 里"目标平台配置"的名字，第 5 章会专门讲：</p>
+
+  <pre><code><span class="cmt"># 1. 获取 vcpkg 源码仓库</span>
+git clone https://github.com/microsoft/vcpkg
+<span class="fn">cd</span> vcpkg
+
+<span class="cmt"># 2. 运行引导脚本，编译出 vcpkg 可执行文件</span>
+./bootstrap-vcpkg.sh
+
+<span class="cmt"># 3. 安装库：jsoncpp:x64-linux 表示"64 位 Linux 的 jsoncpp"</span>
+./vcpkg install jsoncpp:x64-linux
+
+<span class="cmt"># 4. 让 CMake 找到它：配置时传入 vcpkg 的 CMake 工具链文件</span>
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>这一节的两个工具是本教程的"左膀右臂"：CMake 管"怎么编"，vcpkg 管"用什么编"。第 2 章攻 CMake 三大件，第 5 章攻 vcpkg 清单模式。现在只要记住它们各自解决什么问题，就算过关。</p>
+  </div>
+
+  <!-- ========== 1.6 测试与调试：gtest 与 GDB ========== -->
+  <h2>1.6 测试与调试：gtest 与 GDB</h2>
+
+  <p>代码写完能编译、能运行，只是起点——<strong>它真的对吗？</strong>工业界用两类工具回答这个问题。<strong>测试</strong>（testing）是"主动出击"：写一小段代码，断言"输入 1 和 2 时函数应该返回 3"，然后让程序自动检查，这叫<strong>单元测试</strong>（unit test，针对函数/类的最小功能单元做验证）。C++ 最流行的测试框架是 <strong>GoogleTest</strong>（简称 gtest，Google 开源），核心是一个宏 <code>TEST(套件名, 用例名)</code> 加一堆断言宏（<code>EXPECT_EQ</code>、<code>EXPECT_TRUE</code>、<code>ASSERT_EQ</code> 等）。第 9 章会完整展开，这里先看它长什么样：</p>
+
+  <p><strong>调试</strong>（debugging）则是"事后破案"：程序崩溃了、结果不对了，你用<strong>调试器</strong>（debugger）让程序暂停在某一行，逐行观察变量值，找出凶手。<strong>GDB</strong>（GNU Debugger）是 Linux 上的老牌调试器，配套命令 <code>lldb</code> 是 macOS/Xcode 的主力。调试的前提是编译时加 <code>-g</code> 选项，把源码行号等信息保留进可执行文件——不加 <code>-g</code>，GDB 只能看到一堆地址，看不到源码。</p>
+
+  <table>
+    <tr><th>维度</th><th>单元测试（gtest）</th><th>调试（GDB）</th></tr>
+    <tr><td>时机</td><td>开发中持续运行，防止回归</td><td>出问题时临时介入</td></tr>
+    <tr><td>方式</td><td>自动化断言，一次性跑几百个用例</td><td>交互式断点、单步、观察变量</td></tr>
+    <tr><td>回答的问题</td><td>"行为是否符合预期"</td><td>"程序内部到底发生了什么"</td></tr>
+    <tr><td>依赖</td><td>链接 gtest 库</td><td>编译加 <code>-g</code></td></tr>
+  </table>
+
+  <p>先看 gtest 的最小用例——注意宏的名字起得很像自然语言，这是它好上手的原因：</p>
+
+  <pre><code><span class="cmt">// test_math.cpp —— 用 gtest 给 add 函数写单元测试</span>
+<span class="kw">#include</span> <span class="type">&lt;gtest/gtest.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">add</span>(<span class="kw">int</span> a, <span class="kw">int</span> b) { <span class="kw">return</span> a + b; }
+
+<span class="cmt">// TEST(测试套件名, 测试用例名)：定义一个测试用例</span>
+<span class="fn">TEST</span>(MathTest, Add) {
+    <span class="fn">EXPECT_EQ</span>(<span class="fn">add</span>(<span class="num">1</span>, <span class="num">2</span>), <span class="num">3</span>);    <span class="cmt">// 断言：add(1,2) 应该等于 3</span>
+    <span class="fn">EXPECT_EQ</span>(<span class="fn">add</span>(-<span class="num">1</span>, <span class="num">1</span>), <span class="num">0</span>);
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译并链接 gtest（-lgtest 是 gtest 库，-lgtest_main 提供现成的 main 函数）</span>
+g++ -std=c++17 test_math.cpp -lgtest -lgtest_main -o test_math
+
+<span class="cmt"># 运行测试</span>
+./test_math
+<span class="cmt"># 输出以 [  PASSED  ] 结尾表示全部通过；断言失败会明确打印哪一行不满足</span></code></pre>
+
+  <p>再看 GDB 的典型会话——它的核心心法只有一句：<strong>在可疑的地方停住，然后一步步看</strong>。下面这些命令是 GDB 最常用的七板斧，全部真实可用：</p>
+
+  <pre><code><span class="cmt"># 编译时加 -g，保留调试信息（不优化，方便逐行观察）</span>
+g++ -g hello.cpp -o hello
+
+<span class="cmt"># 进入 gdb 交互界面</span>
+gdb ./hello
+
+<span class="cmt"># 在 (gdb) 提示符下输入：</span>
+(gdb) <span class="fn">break</span> main      <span class="cmt"># 在 main 函数入口下断点（程序运行到这里会暂停）</span>
+(gdb) <span class="fn">run</span>            <span class="cmt"># 开始运行，自动停在断点处</span>
+(gdb) <span class="fn">next</span>           <span class="cmt"># 单步执行：执行当前行，但不进入函数内部</span>
+(gdb) <span class="fn">step</span>           <span class="cmt"># 单步进入：如果当前行是函数调用，会进入函数内部</span>
+(gdb) <span class="fn">print</span> x        <span class="cmt"># 打印变量 x 的当前值</span>
+(gdb) <span class="fn">bt</span>             <span class="cmt"># backtrace：查看当前的函数调用栈（谁调了谁）</span>
+(gdb) <span class="fn">quit</span>          <span class="cmt"># 退出 gdb</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>调试的第一原则：<strong>别猜，去看</strong>。很多新手遇到 bug 靠"加 print 输出"瞎试，而调试器的价值恰恰在于你不需要改代码就能观察任意变量。第 14 章会把断点、监视点、core dump 全部讲透。</p>
+  </div>
+
+  <!-- ========== 1.7 C++ 标准演进与生态展望 ========== -->
+  <h2>1.7 C++ 标准演进与生态展望</h2>
+
+  <p>最后一块拼图：<strong>C++ 标准</strong>是什么？它是 ISO 发布的官方语言规范（编号 ISO/IEC 14882），规定了"语言该有什么语法、标准库该有什么功能"。编译器按标准实现，所以你写的代码要遵循哪个版本的规则，由编译参数决定（<code>-std=c++17</code> 就是"按 C++17 的规则来"）。C++ 的演进节奏是"三年一小修、十年一大改"：1998 年首个标准 <strong>C++98</strong>（语言定型），2003 年小修 <strong>C++03</strong>，然后沉淀了八年，2011 年迎来划时代的 <strong>C++11</strong>——它引入了 <code>auto</code>（自动类型推导）、lambda（匿名函数）、智能指针、移动语义等一大批特性，直接改变了人们写 C++ 的方式，史称"现代 C++"的起点。之后的 <strong>C++14</strong>（2014，小修）、<strong>C++17</strong>（2017，结构化绑定、if constexpr、std::filesystem 文件系统库）、<strong>C++20</strong>（2020，concepts 概念、协程、ranges 范围库、三向比较运算符 <code>&lt;=&gt;</code>）一路加码，<strong>C++23</strong>（2023）则带来了 <code>std::print</code> 等实用性改进。</p>
+
+  <p>看懂演进有个第一性原理视角：<strong>标准每次更新的方向，都是"让常见写法更短、更安全、更不容易错"</strong>。C++11 之前，程序员要手写指针管理、手动 new/delete，稍不留神就内存泄漏；C++11 的智能指针让"内存自动释放"成为默认。C++11 之前遍历容器要写冗长的迭代器循环；C++11 的 range-for 一行搞定。下面这段代码展示了同一个函数在 C++98 和 C++11 两代的写法差距——右边明显更接近"人话"：</p>
+
+  <table>
+    <tr><th>版本</th><th>年份</th><th>标志性特性</th><th>一句话价值</th></tr>
+    <tr><td>C++98</td><td>1998</td><td>STL（标准模板库）、模板、异常</td><td>语言与标准库首次定型</td></tr>
+    <tr><td>C++03</td><td>2003</td><td>小修，无重大新特性</td><td>修正缺陷</td></tr>
+    <tr><td>C++11</td><td>2011</td><td>auto、lambda、智能指针、移动语义、range-for</td><td>"现代 C++"的起点</td></tr>
+    <tr><td>C++14</td><td>2014</td><td>泛型 lambda、函数返回类型推导、二进制字面量</td><td>打磨 C++11 的体验</td></tr>
+    <tr><td>C++17</td><td>2017</td><td>结构化绑定、if constexpr、std::filesystem、std::optional</td><td>写起来更像"现代语言"</td></tr>
+    <tr><td>C++20</td><td>2020</td><td>concepts、协程、ranges、三向比较 &lt;=&gt;</td><td>最大的功能增量版本</td></tr>
+    <tr><td>C++23</td><td>2023</td><td>std::print、std::expected</td><td>实用主义改进</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// 同一个"对 vector 求和"的函数，两个年代的不同写法：</span>
+
+<span class="cmt">// C++98 风格：类型写满、下标/迭代器遍历</span>
+<span class="kw">int</span> <span class="fn">sum98</span>(<span class="kw">const</span> std::vector&lt;<span class="kw">int</span>&gt;&amp; v) {
+    <span class="kw">int</span> total = <span class="num">0</span>;
+    <span class="kw">for</span> (std::vector&lt;<span class="kw">int</span>&gt;::const_iterator it = v.begin(); it != v.end(); ++it)
+        total += *it;
+    <span class="kw">return</span> total;
+}
+
+<span class="cmt">// C++11 之后：auto 自动推导类型，range-for 直接遍历元素</span>
+<span class="kw">int</span> <span class="fn">sum11</span>(<span class="kw">const</span> std::vector&lt;<span class="kw">int</span>&gt;&amp; v) {
+    <span class="kw">int</span> total = <span class="num">0</span>;
+    <span class="kw">for</span> (<span class="kw">auto</span> x : v) total += x;   <span class="cmt">// x 的类型由编译器自动推导</span>
+    <span class="kw">return</span> total;
+}</code></pre>
+
+  <p>再看几个"现代 C++"的招牌特性长什么样——认识它们，你读别人代码时会少很多问号（注意这些片段只是语法速览，不要求现在全会）：</p>
+
+  <pre><code><span class="cmt">// C++11：智能指针 unique_ptr —— 离开作用域自动释放内存，告别手动 delete</span>
+<span class="kw">#include</span> <span class="type">&lt;memory&gt;</span>
+std::unique_ptr&lt;Foo&gt; p(<span class="kw">new</span> Foo());
+
+<span class="cmt">// C++14：泛型 lambda —— 参数类型由调用处推导</span>
+<span class="kw">auto</span> twice = [](<span class="kw">auto</span> x) { <span class="kw">return</span> x * <span class="num">2</span>; };
+
+<span class="cmt">// C++17：属性 [[nodiscard]] —— 提醒调用者：这个函数的返回值不能忽略</span>
+<span class="ann">[[nodiscard]]</span> <span class="kw">int</span> <span class="fn">get_code</span>() { <span class="kw">return</span> <span class="num">42</span>; }
+
+<span class="cmt">// C++17：if constexpr —— 在编译期就决定走哪个分支（条件必须是编译期常量）</span>
+<span class="kw">template</span> &lt;<span class="kw">typename</span> T&gt; std::string <span class="fn">describe</span>(<span class="kw">const</span> T&amp;) {
+    <span class="kw">if constexpr</span> (std::is_integral_v&lt;T&gt;) { <span class="kw">return</span> std::string(<span class="str">"整数类型"</span>); }
+    <span class="kw">else</span>                                { <span class="kw">return</span> std::string(<span class="str">"其他类型"</span>); }
+}
+
+<span class="cmt">// C++20：concepts —— 约束模板参数必须满足某个要求，报错信息更友好</span>
+<span class="kw">template</span> &lt;<span class="kw">typename</span> T&gt; <span class="kw">concept</span> Numeric = std::is_arithmetic_v&lt;T&gt;;
+<span class="kw">template</span> &lt;Numeric T&gt; T <span class="fn">square</span>(T x) { <span class="kw">return</span> x * x; }</code></pre>
+
+  <p>最后说说"该用哪个标准"的现状：截至本章写作时，主流编译器对新标准的支持已经相当完整——GCC 11 起默认按 C++17 编译，GCC 13 对 C++20/23 的支持已趋成熟；Clang 与 MSVC（Visual Studio 2022）同样紧跟。<strong>实战建议：新工程用 C++17 起步最稳</strong>（教程后续章节都基于 C++17），尝鲜 C++20/23 时确认一下编译器版本即可。16 章之后，第 16 章会带你把整条工具链重新串一遍，从源码到部署做个全景收尾。现在，地图已经画完，该动手了。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念连线 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边的概念与右边最贴切的解释配对：① 编译器；② 链接；③ 解释器；④ 构建系统。候选解释：A. 边读源码边执行；B. 把整份源码翻译成机器码；C. 调度"编译什么、按什么顺序编"；D. 把目标文件与库拼成可执行文件。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 1.2 节的四阶段流水线与 1.3 节的"包工头"比喻。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 编译器 → B（一次性翻译成机器码）；② 链接 → D（拼装目标文件与库）；③ 解释器 → A（边读边执行）；④ 构建系统 → C（调度编译顺序）。注意链接是编译流程的最后一步，而构建系统是"管编译器"的上层调度者。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令识别 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>说出下面每条命令的产物分别是什么文件：(a) <code>g++ -E hello.cpp -o hello.i</code>；(b) <code>g++ -S hello.i -o hello.s</code>；(c) <code>g++ -c hello.s -o hello.o</code>；(d) <code>g++ hello.o -o hello</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对应 1.2 节的编译四阶段：预处理 → 编译 → 汇编 → 链接。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 预处理后的文件 <code>hello.i</code>（头文件已被展开）；(b) 汇编语言文件 <code>hello.s</code>；(c) 机器码目标文件 <code>hello.o</code>；(d) 可执行文件 <code>hello</code>。合起来就是 <code>g++ hello.cpp -o hello</code> 一条命令干完的事。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：为什么是 C++ <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>游戏引擎、嵌入式设备、高频交易系统三个场景都偏爱 C++。请用"编译型 vs 解释型"的差异，解释为什么它们不能用 Python 这类解释型语言。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>从执行速度、资源占用、交付形态三个角度想：解释型语言每行都要翻译，且需要运行时环境。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>三者共同点是"对速度和资源极度敏感"：游戏要毫秒级渲染、嵌入式内存以 KB 计、高频交易延迟差一个微秒就亏损。解释型语言运行时逐行翻译，执行速度慢几十倍，且必须携带解释器/运行时，资源占用大。编译型 C++ 直接生成机器码、无运行时解释开销，还能精细控制内存，因此成为这些场景的首选。这正是 1.2 节"翻译时机"差异带来的直接后果。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：跑通最小闭环 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>动手实操，完成三次递进：① 用文本编辑器写 hello.cpp，用 <code>g++</code> 编译运行；② 加 <code>-g</code> 重新编译，用 <code>gdb</code> 在 <code>main</code> 下断点，用 <code>next</code> 单步、<code>print</code> 观察变量、<code>bt</code> 看调用栈；③ 写一个最小 CMakeLists.txt，用 <code>cmake -S . -B build &amp;&amp; cmake --build build</code> 编译并在 build/ 下运行。把每条命令和输出记录下来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>命令都在本章出现过：编译见 1.1（<code>g++ hello.cpp -o hello</code>）、GDB 见 1.6（<code>break main</code> / <code>run</code> / <code>next</code> / <code>print</code>）、CMake 见 1.5（CMakeLists.txt 三行 + 两条命令）。Linux 上若提示没有 g++，先 <code>sudo apt install build-essential</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>g++ hello.cpp -o hello &amp;&amp; ./hello</code>；② <code>g++ -g hello.cpp -o hello &amp;&amp; gdb ./hello</code>，然后在 (gdb) 提示符依次输入 <code>break main</code>、<code>run</code>、<code>next</code>、<code>print x</code>（若程序里有变量 x）、<code>bt</code>、<code>quit</code>；③ 工程目录放三行 CMakeLists.txt（cmake_minimum_required / project / add_executable），执行 <code>cmake -S . -B build</code> 生成构建文件，<code>cmake --build build</code> 编译，最后 <code>./build/hello</code>。三关全过，你就拥有了本章的全部技能点。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第4章：环境变量与多版本 GCC 切换 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter04.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第4章：环境变量与多版本 GCC 切换 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter04.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="4" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：环境变量与多版本 GCC 切换</h1>
+  <p class="chapter-subtitle">编译器说「找不到头文件」、程序说「打不开共享库」、构建系统悄悄用了旧版 GCC——每个报错背后都有真凶，而线索，都藏在一个叫「环境变量」的东西里</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「案发现场不会说谎。头文件找不到、库加载失败、编译器版本不对——这些报错看起来各有各的说法，但它们指向同一个事实：<strong>程序在按它看到的线索找东西，而线索是环境变量给的</strong>。别急着改代码，先跟我一起把现场看一遍：变量从哪来、传给谁、什么时候生效。真相只有一个，查清楚了，一个 export 就能破案。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 环境变量是什么：藏在进程里的全局配置 ========== -->
+  <h2>4.1 环境变量是什么：藏在进程里的全局配置</h2>
+
+  <p>先给环境变量（environment variable）下个定义，说人话：<strong>环境变量就是操作系统给每个进程附带的一块「键值对记事板」</strong>——上面写着一行行「名字=值」，比如 <code>PATH=/usr/local/bin:/usr/bin</code>。进程启动时，操作系统把这块记事板原样塞给它；进程里的程序（包括编译器、链接器、动态加载器）随时可以翻开这块记事板，按名字查值，来决定自己该去哪找文件、该用什么配置。这就是它叫「环境」变量的原因：<strong>它描述的是这个进程所处的环境</strong>，而不是程序内部的某个局部变量。</p>
+
+  <p>第二个关键机制是<strong>继承</strong>：每个新进程都会从启动它的父进程那里<strong>复制一份</strong>环境变量记事板。你在终端敲一条命令，终端 shell 就把自己那份复制给这条命令对应的进程；你在 C++ 程序里用 <code>system()</code> 或 <code>fork()</code> 启动子进程，子进程同样拿到你这份的副本。注意是「复制」——子进程改了记事板，父进程完全不知道。这一条是理解后面所有「为什么不生效」问题的地基：<strong>改环境变量，影响的永远只是「从改动那一刻之后启动的子孙进程」</strong>。先学会看这块记事板：</p>
+
+  <pre><code><span class="cmt"># 查看单个环境变量的值</span>
+<span class="fn">echo</span> <span class="param">$PATH</span>
+<span class="cmt"># /usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/home/helios/.local/bin</span>
+
+<span class="cmt"># printenv 也可以，只打印你要的那个变量</span>
+<span class="fn">printenv</span> <span class="param">PATH</span></code></pre>
+
+  <pre><code><span class="cmt"># 查看全部环境变量（env 和 printenv 等价，set 会连 shell 变量一起列）</span>
+<span class="fn">env</span>
+<span class="fn">printenv</span>
+<span class="fn">set</span></code></pre>
+
+  <pre><code><span class="cmt"># 继承演示：子进程复制父进程的记事板</span>
+<span class="kw">export</span> <span class="param">TRACK</span>=<span class="str">"cpp"</span>
+<span class="fn">bash</span> -c <span class="str">'echo $TRACK'</span>   <span class="cmt"># 子 bash 能看到，输出 cpp</span>
+<span class="kw">exit</span>                        <span class="cmt"># 回到原来的 shell</span></code></pre>
+
+  <p>对 C++ 开发者来说，环境变量之所以绕不开，是因为<strong>整个工具链都在读这块记事板</strong>：编译器读它找头文件和库（<code>C_INCLUDE_PATH</code>、<code>LIBRARY_PATH</code>），构建系统读它决定用哪个编译器（<code>CC</code>、<code>CXX</code>），运行时的动态加载器读它找动态库（<code>LD_LIBRARY_PATH</code>），shell 读它找命令（<code>PATH</code>）。第 2 章我们见识过「库」是别人写好的代码合集，第 3 章亲手编译安装了 GCC——现在这些工具要协同工作了，环境变量就是它们之间传递信息的「公共黑板」。本章就围绕这块黑板展开：先认全变量，再学会让它们按你的意愿生效。</p>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>区分两个容易混淆的概念：<strong>shell 变量</strong>（如 <code>a=1</code>）只在当前 shell 里存在，子进程看不到；<strong>环境变量</strong>是经过 <code>export</code> 的变量，会被复制给子进程。真相只有一个判断标准：<code>export</code> 没？没 export，子进程一律看不见。</p>
+  </div>
+
+  <!-- ========== 4.2 四大搜索路径变量：头文件、链接、运行三阶段 ========== -->
+  <h2>4.2 四大搜索路径变量：编译、链接、运行各管一段</h2>
+
+  <p>把一个 C++ 源文件变成能跑的程序，要经过三个阶段，每个阶段都要「找文件」，而且找的是不同的文件、用的是不同的变量。先看全貌：<strong>编译期</strong>，编译器要找到 <code>#include</code> 的头文件；<strong>链接期</strong>，链接器要找到库文件（.a / .so）；<strong>运行期</strong>，动态加载器要找到动态库（.so）把它装进内存。三个阶段的「找文件」是三个完全不同的程序干的，所以三个阶段的搜索路径也由三组不同的环境变量控制：</p>
+
+  <pre><code><span class="cmt"># 三阶段全景图（记住这张图，后面排错全靠它）</span>
+<span class="fn">main.cpp</span>（源代码）
+   │
+   ▼  ① 编译期：找 #include 的头文件
+   │      C_INCLUDE_PATH    （C 头文件，等价于 -I 参数）
+   │      CPLUS_INCLUDE_PATH（C++ 头文件，等价于 -I 参数）
+<span class="fn">main.o</span>（目标文件）
+   │
+   ▼  ② 链接期：找库文件
+   │      LIBRARY_PATH（等价于 -L 参数）
+<span class="fn">app</span>（可执行文件）
+   │
+   ▼  ③ 运行期：找动态库 .so
+   │      LD_LIBRARY_PATH（动态链接器 ld.so 读取）
+<span class="fn">./app</span>（跑起来）</code></pre>
+
+  <p>逐个认。<strong><code>C_INCLUDE_PATH</code></strong>：C 语言头文件的搜索路径，编译 .c 文件时，<code>#include "xxx.h"</code> 在当前目录找不到时，编译器就会按这个变量列出的目录挨个找。<strong><code>CPLUS_INCLUDE_PATH</code></strong> 是它的 C++ 孪生兄弟，编译 .cpp 文件时生效——注意 C++ 程序普遍用的是它，而不是 C_INCLUDE_PATH。这两个变量解决的是「<code>#include &lt;json/json.h&gt;</code> 报 fatal error: 没有那个文件或目录」这类编译期报错：</p>
+
+  <pre><code><span class="cmt"># 编译期：让 gcc/g++ 额外去 /opt/include 找头文件（真实配置写法）</span>
+<span class="kw">export</span> <span class="param">C_INCLUDE_PATH</span>=<span class="str">/opt/include</span>
+<span class="kw">export</span> <span class="param">CPLUS_INCLUDE_PATH</span>=<span class="str">/opt/include</span>
+
+<span class="cmt"># 验证：-H 让 gcc 打印头文件搜索过程，看它去哪找了</span>
+<span class="fn">gcc</span> -H main.c</code></pre>
+
+  <p>接下来是链接期与运行期这对「双胞胎」，最容易搞混，也是本章最重要的区分。<strong><code>LIBRARY_PATH</code></strong> 是<strong>链接期</strong>的库搜索路径：链接器要把 <code>-ljsoncpp</code> 之类的库名解析成具体的 <code>libjsoncpp.a</code> 或 <code>libjsoncpp.so</code> 文件，就去这个变量列出的目录找——它解决的是「<code>ld: cannot find -ljsoncpp</code>」这类链接期报错。<strong><code>LD_LIBRARY_PATH</code></strong> 是<strong>运行期</strong>的动态库搜索路径：可执行文件已经生成，运行那一刻，动态链接器 ld.so（动态链接器，负责在程序启动时把 .so 加载进内存的程序）按它列出的目录找 .so——它解决的是「<code>error while loading shared libraries: libjsoncpp.so: cannot open shared object file</code>」这类运行期报错。一句话记牢：<strong>链接期用 LIBRARY_PATH，运行期用 LD_LIBRARY_PATH，一个管「造」一个管「跑」，少一个都不行</strong>：</p>
+
+  <pre><code><span class="cmt"># 链接期：让链接器去 /opt/lib 找库文件（libjsoncpp.so / libjsoncpp.a）</span>
+<span class="kw">export</span> <span class="param">LIBRARY_PATH</span>=<span class="str">/opt/lib</span>
+
+<span class="cmt"># 运行期：让动态链接器去 /opt/lib 找动态库</span>
+<span class="kw">export</span> <span class="param">LD_LIBRARY_PATH</span>=<span class="str">/opt/lib</span>
+
+<span class="cmt"># 多个路径用冒号分隔，按从左到右的顺序搜索</span>
+<span class="kw">export</span> <span class="param">LD_LIBRARY_PATH</span>=<span class="str">/opt/lib:/usr/local/lib</span>:<span class="param">$LD_LIBRARY_PATH</span></code></pre>
+
+  <table>
+    <tr><th>变量</th><th>作用阶段</th><th>找什么</th><th>谁在读</th><th>等价命令行参数</th></tr>
+    <tr><td><code>C_INCLUDE_PATH</code></td><td>编译期</td><td>C 头文件（.h）</td><td>gcc</td><td><code>-I</code></td></tr>
+    <tr><td><code>CPLUS_INCLUDE_PATH</code></td><td>编译期</td><td>C++ 头文件（.h/.hpp）</td><td>g++</td><td><code>-I</code></td></tr>
+    <tr><td><code>LIBRARY_PATH</code></td><td>链接期</td><td>库文件（.a / .so）</td><td>链接器 ld</td><td><code>-L</code></td></tr>
+    <tr><td><code>LD_LIBRARY_PATH</code></td><td>运行期</td><td>动态库（.so）</td><td>动态链接器 ld.so</td><td><code>-Wl,-rpath</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>环境变量是「全局兜底」，命令行参数是「精准指定」，而且<strong>命令行参数优先级更高</strong>：gcc 会先看 <code>-I</code>/<code>-L</code> 参数，再看对应的环境变量。所以排错时先检查 CMakeLists.txt 或 Makefile 里有没有写死 <code>-I</code>/<code>-L</code>——如果有，光改环境变量可能根本不生效，因为命令行参数已经「先声夺人」了。</p>
+  </div>
+
+  <!-- ========== 4.3 CC / CXX / PATH：构建系统怎么找到编译器 ========== -->
+  <h2>4.3 CC / CXX / PATH：让构建系统找到「对的」编译器</h2>
+
+  <p>机器上装了多个 GCC（比如第 3 章源码装到 <code>/usr/local</code> 的 GCC 5.1，和系统自带的 GCC 4.8.5），构建系统该怎么知道你<strong>想用哪一个</strong>？答案是两个约定俗成的变量：<strong><code>CC</code></strong>（C 编译器路径）和 <strong><code>CXX</code></strong>（C++ 编译器路径）。它们是 C/C++ 构建世界的「老规矩」：make、configure 脚本、CMake 在探测编译器时，都会参考这两个变量。把第 3 章编译安装的 GCC 5.1 指给构建系统，就是这么几行（这也是素材笔记里真实用过的配置）：</p>
+
+  <pre><code><span class="cmt"># 显式指定编译器：/usr/local 下是第 3 章自己编译安装的 GCC 5.1</span>
+<span class="kw">export</span> <span class="param">CC</span>=<span class="str">/usr/local/bin/gcc</span>
+<span class="kw">export</span> <span class="param">CXX</span>=<span class="str">/usr/local/bin/g++</span>
+
+<span class="cmt"># 验证：gcc -v 会打印实际路径（configured with: 上方会显示完整路径）</span>
+<span class="fn">gcc</span> --version
+<span class="fn">g++</span> --version</code></pre>
+
+  <pre><code><span class="cmt"># CMake 里对应的正规写法：用 -D 指定编译器（比环境变量更明确）</span>
+<span class="fn">cmake</span> -S . -B build \
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc \
+      -DCMAKE_CXX_COMPILER=/usr/local/bin/g++</code></pre>
+
+  <p>但这里有个连环问题：你明明 export 了 <code>CXX=/usr/local/bin/g++</code>，为什么在终端敲 <code>g++</code>，跑的还是系统旧版？因为终端找命令靠的是另一个变量——<strong><code>PATH</code></strong>。说人话：<strong>PATH 是 shell 的「命令搜索清单」</strong>，里面用冒号列了一串目录。你敲 <code>g++</code> 时，shell 按 PATH 里目录的<strong>从左到右顺序</strong>逐个找，找到第一个 <code>g++</code> 就用它。系统默认 PATH 里 <code>/usr/bin</code> 排在前面，而旧版 g++ 恰恰躺在 <code>/usr/bin/g++</code>——所以不管你 export 了什么 CXX，敲命令找的还是它。要验证「真相」：</p>
+
+  <pre><code><span class="cmt"># 看 PATH 的搜索顺序（哪个目录在前，哪个优先）</span>
+<span class="fn">echo</span> <span class="param">$PATH</span>
+<span class="cmt"># /usr/local/bin:/usr/bin:...（/usr/local/bin 在前，才会优先用新装的）</span>
+
+<span class="cmt"># which 告诉你「敲 g++ 实际会执行哪一个」——真相在这里</span>
+<span class="fn">which</span> g++
+<span class="cmt"># /usr/bin/g++   ← 系统旧版，不是你想用的 /usr/local/bin/g++</span>
+
+<span class="cmt"># type -a 把 PATH 里所有同名的命令全部列出来</span>
+<span class="fn">type</span> -a gcc
+<span class="cmt"># gcc is /usr/bin/gcc</span>
+<span class="cmt"># gcc is /usr/local/bin/gcc</span></code></pre>
+
+  <p>所以想让「敲 g++ 就用新版」，得把新版所在目录插到 PATH 最前面：<code>export PATH=/usr/local/bin:$PATH</code>。注意是「<strong>插到前面</strong>」——放在 <code>$PATH</code> 后面就永远抢不过 /usr/bin。这两个变量（CC/CXX 管「构建系统用谁」，PATH 管「shell 找谁」）各管一摊，第 4.4 节讲完生效机制后，4.5 节会给出完整的多版本共存方案。</p>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>CMake 探测编译器的优先级，真相是：<strong>缓存/命令行 <code>-DCMAKE_CXX_COMPILER</code> 最高</strong>，其次才是环境变量 <code>CXX</code>，最后才是系统默认。所以如果你明明 export 了 CXX，CMake 却还是用旧版——先检查 build 目录的 <code>CMakeCache.txt</code> 里是不是已经缓存了旧编译器路径，删掉 build 目录重新配置（第 2 章的招）往往就好了。</p>
+  </div>
+
+  <!-- ========== 4.4 export 与生效范围：临时 vs 永久 ========== -->
+  <h2>4.4 export 与生效范围：临时生效 vs 永久生效</h2>
+
+  <p>现在到了「为什么改了不生效」的破案环节。环境变量的修改有<strong>两种生命周期</strong>。第一种是<strong>临时生效</strong>：在终端里敲 <code>export FOO=bar</code>，它立刻在当前 shell 生效，并且只对「从这个 shell 启动的子进程」有效——你关掉这个终端窗口，一切归零；同一个终端里另开一个子 shell，继承的也是改动之后的值。这种方式的优点是不污染系统，缺点是换个终端就没了：</p>
+
+  <pre><code><span class="cmt"># 临时生效：只对当前 shell 及其子进程有效，关终端即失效</span>
+<span class="kw">export</span> <span class="param">MYLIB</span>=<span class="str">/opt/mylib</span>
+<span class="fn">echo</span> <span class="param">$MYLIB</span>                    <span class="cmt"># /opt/mylib</span>
+
+<span class="cmt"># 新开一个子 shell 试试：能继承到</span>
+<span class="fn">bash</span> -c <span class="str">'echo $MYLIB'</span>            <span class="cmt"># /opt/mylib</span>
+
+<span class="cmt"># 但！关掉这个终端、重新开一个：$MYLIB 是空的</span>
+<span class="cmt"># 因为新终端是新进程，记事板是全新的</span></code></pre>
+
+  <p>第二种是<strong>永久生效</strong>：把 export 写进 shell 的启动配置文件，让每个新终端启动时自动执行一遍。bash 的配置文件中，最常用的是 <code>~/.bashrc</code>（每次打开交互式终端都会读）和 <code>~/.bash_profile</code>（登录 shell 才读）。写完<strong>不会立刻生效</strong>——当前这个终端是启动时读的，已经读过了；要让改动落地，要么重开终端，要么手动 <code>source ~/.bashrc</code>（source 的意思就是「把这个文件在当前 shell 里执行一遍」）。「改完不生效」这个新手第一坑，九成是忘了这一步：</p>
+
+  <pre><code><span class="cmt"># 永久生效第一步：把 export 写进 ~/.bashrc（追加一行）</span>
+<span class="fn">echo</span> <span class="str">'export MYLIB=/opt/mylib'</span> <span class="op">&gt;&gt;</span> ~/.bashrc
+
+<span class="cmt"># 第二步：让当前终端立即生效（或干脆重开一个终端）</span>
+<span class="fn">source</span> ~/.bashrc
+<span class="fn">echo</span> <span class="param">$MYLIB</span>                    <span class="cmt"># /opt/mylib</span></code></pre>
+
+  <pre><code><span class="cmt"># 排查「为什么不生效」的标准三连：</span>
+<span class="cmt"># ① 写对文件了吗？（~/.bashrc 只管交互终端）</span>
+<span class="fn">grep</span> MYLIB ~/.bashrc
+
+<span class="cmt"># ② source 了吗 / 重开终端了吗？</span>
+<span class="fn">source</span> ~/.bashrc
+
+<span class="cmt"># ③ 变量值里有没有引用问题？（单引号不展开 $，双引号会展开）</span>
+<span class="kw">export</span> <span class="param">MYLIB</span>=<span class="str">"$HOME/mylib"</span>   <span class="cmt"># 双引号：$HOME 会展开成 /home/helios</span>
+<span class="kw">export</span> <span class="param">MYLIB</span>=<span class="str">'$HOME/mylib'</span>   <span class="cmt"># 单引号：字面量就是 $HOME/mylib</span></code></pre>
+
+  <p>还有两个容易踩的细节。一是<strong>追加 vs 覆盖</strong>：改 PATH 这类「本来就有一长串」的变量，几乎永远要用 <code>$PATH</code> 把旧值接回来（<code>export PATH=/usr/local/bin:$PATH</code>），直接 <code>export PATH=/usr/local/bin</code> 等于把系统命令全弄丢，连 ls 都找不到了。二是<strong>全系统 vs 当前用户</strong>：只想给自己用就写 <code>~/.bashrc</code>；想让机器上所有用户都生效，写 <code>/etc/profile</code> 或 <code>/etc/environment</code>（需要 root 权限，动手前三思）。日常开发，写自己的 <code>~/.bashrc</code> 就够了。</p>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>export PATH=/usr/local/bin</code> 这种写法是危险的——它把 PATH 整个覆盖了。改 PATH 必须带上旧值：<code>export PATH=/usr/local/bin:$PATH</code>。万一已经写坏导致 ls、vim 全失效：临时补救用绝对路径执行命令（<code>/usr/bin/ls</code>），然后赶紧把 PATH 改回来。</p>
+  </div>
+
+  <!-- ========== 4.5 多版本 GCC 共存三方案 ========== -->
+  <h2>4.5 多版本 GCC 共存：绝对路径 / 软链接 / SCL 三方案</h2>
+
+  <p>为什么非要折腾多版本共存？因为 C++11/14/17 的特性（auto、lambda、智能指针……）需要足够新的编译器，而生产服务器（典型如 CentOS 7）自带的 GCC 4.8.5 太老：它对 C++11 的支持不完整（比如 <code>&lt;regex&gt;</code> 长期不可用），更别提 C++14/17。但直接卸载重装系统 GCC 又很危险——yum、内核模块、一堆系统工具都依赖它。真相是：<strong>新版本和系统版本完全可以共存，关键是让它们「各就各位、按需切换」</strong>。有三种方案，从简到繁：</p>
+
+  <p><strong>方案一：直接用绝对路径，零配置零风险</strong>。第 3 章源码安装的 GCC 5.1 在 <code>/usr/local/bin/gcc</code>，系统旧版在 <code>/usr/bin/gcc</code>，两者互不干扰。想用新版，编译时直接敲全路径；想让 CMake 用新版，用 <code>-D</code> 指定。这是最干净的做法，不碰任何环境变量——前提是代码里真的用了只有新版才支持的特性，比如下面这段 C++11 的 lambda 与 <code>auto</code>，GCC 4.8.5 编起来就未必顺畅：</p>
+
+  <pre><code><span class="cmt">// lambda.cpp：C++11 特性演示（GCC 5.1 完整支持）</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>vector<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>algorithm<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+  std::vector&lt;<span class="kw">int</span>&gt; nums = {<span class="num">3</span>, <span class="num">1</span>, <span class="num">4</span>, <span class="num">1</span>, <span class="num">5</span>};
+  <span class="kw">auto</span> cnt = std::count_if(nums.<span class="fn">begin</span>(), nums.<span class="fn">end</span>(),
+                          [](<span class="kw">int</span> x) { <span class="kw">return</span> x <span class="op">&gt;</span> <span class="num">2</span>; });
+  std::cout <span class="op">&lt;&lt;</span> <span class="str">"大于 2 的个数: "</span> <span class="op">&lt;&lt;</span> cnt <span class="op">&lt;&lt;</span> std::endl;
+  <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 方案一：绝对路径，指哪打哪（第 3 章装好的 GCC 5.1 完整支持 C++11）</span>
+<span class="fn">/usr/local/bin/g++</span> -std=<span class="ann">c++11</span> lambda.cpp -o app
+<span class="fn">./app</span>
+<span class="cmt"># 大于 2 的个数: 3</span>
+
+<span class="cmt"># CMake 工程：-D 指定编译器，效果等同 CC/CXX 但更明确</span>
+<span class="fn">cmake</span> -S . -B build \
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc \
+      -DCMAKE_CXX_COMPILER=/usr/local/bin/g++</code></pre>
+
+  <p><strong>方案二：软链接切换，让「默认」变成新版</strong>。软链接（symlink）就是一个指向别的文件的「快捷方式」——把 <code>/usr/bin/g++</code> 这个入口重新指到新版，那么所有不带路径敲 <code>g++</code> 的地方都用新版。用 <code>ln -sf</code> 创建/覆盖软链接（-s 表示软链接，-f 表示已存在就覆盖）。<strong>但强烈建议先把旧版备份</strong>，并且想清楚：改的是系统公共入口，yum 等系统组件可能因此出问题。RHEL/CentOS 还提供 <code>alternatives</code> 机制（Debian/Ubuntu 对应 <code>update-alternatives</code>）做受管理的切换，比裸 ln 安全，但 CentOS 7 的 gcc 默认不在它的管理列表里，需要先注册——日常个人开发，用下面的手动方式就够：</p>
+
+  <pre><code><span class="cmt"># 方案二：软链接切换（动手前先备份旧版！）</span>
+<span class="fn">sudo</span> mv /usr/bin/gcc /usr/bin/gcc.orig      <span class="cmt"># 备份</span>
+<span class="fn">sudo</span> mv /usr/bin/g++ /usr/bin/g++.orig
+<span class="fn">sudo</span> ln -sf /usr/local/bin/gcc /usr/bin/gcc  <span class="cmt"># 让系统默认指向新版</span>
+<span class="fn">sudo</span> ln -sf /usr/local/bin/g++ /usr/bin/g++
+
+<span class="cmt"># 验证：which 和 --version 都指向新版才算成功</span>
+<span class="fn">which</span> g++ <span class="op">&amp;&amp;</span> <span class="fn">g++</span> --version</code></pre>
+
+  <pre><code><span class="cmt"># 想切回去？把备份还原即可</span>
+<span class="fn">sudo</span> mv /usr/bin/gcc.orig /usr/bin/gcc
+<span class="fn">sudo</span> mv /usr/bin/g++.orig /usr/bin/g++</code></pre>
+
+  <p><strong>方案三：SCL 软件集（Software Collections）——Red Hat 官方的「环境隔离」方案</strong>，也是素材笔记里真实走过的流程。SCL 的思路和方案一、二都不同：它把新版工具链装在独立的目录（<code>/opt/rh/devtoolset-7/</code>）里，然后通过 <code>scl enable</code> 命令<strong>临时改环境变量</strong>（主要是 PATH 和 LD_LIBRARY_PATH），让「当前这个 shell 及其子进程」看到新版——退出即恢复，系统完全不被污染。这正是 4.1 节「环境变量只影响子孙进程」机制的绝佳应用。完整流程（CentOS 7 实测）：</p>
+
+  <pre><code><span class="cmt"># 方案三：SCL 软件集升级 GCC（CentOS 7 实测流程）</span>
+<span class="cmt"># ① 安装 SCL 软件源（centos-release-scl 提供 sclo-rh 仓库）</span>
+<span class="fn">yum</span> install centos-release-scl scl-utils-build
+
+<span class="cmt"># ② 列出可用的 devtoolset 集合</span>
+<span class="fn">yum</span> list all --enablerepo=<span class="str">'centos-sclo-rh'</span> <span class="op">|</span> <span class="fn">grep</span> devtoolset</code></pre>
+
+  <pre><code><span class="cmt"># ③ 安装 devtoolset-7 的 gcc 与 g++（GCC 7，完整支持 C++11/14）</span>
+<span class="fn">yum</span> install devtoolset-7-gcc devtoolset-7-gcc-c++
+
+<span class="cmt"># ④ 切换：进入 devtoolset-7 环境（仅对当前环境生效）</span>
+<span class="fn">scl</span> enable devtoolset-7 bash
+<span class="fn">gcc</span> -v    <span class="cmt"># 此刻是 GCC 7.x</span>
+
+<span class="cmt"># ⑤ 退出环境，回到系统默认</span>
+<span class="kw">exit</span>
+<span class="fn">gcc</span> -v    <span class="cmt"># 又变回 4.8.5，系统毫发无损</span></code></pre>
+
+  <p><code>scl enable devtoolset-7 bash</code> 这一行值得拆开看：它做了三件事——在 PATH 最前面插入 <code>/opt/rh/devtoolset-7/root/usr/bin</code>（所以敲 gcc 就是新版）、设置对应的 LD_LIBRARY_PATH（新版 g++ 的动态库也在那）、然后<strong>启动一个新的 bash</strong>。你在新 bash 里编译、运行，用的是 GCC 7；敲 <code>exit</code> 退出这个 bash，一切还原。想一劳永逸也可以把 <code>source /opt/rh/devtoolset-7/enable</code> 写进 <code>~/.bashrc</code>——但那就失去「按需切换」的意义了，日常推荐还是临时 enable。三方案对比：</p>
+
+  <table>
+    <tr><th>方案</th><th>原理</th><th>影响范围</th><th>适合场景</th></tr>
+    <tr><td>① 绝对路径</td><td>直接调用 /usr/local/bin 下的新版</td><td>仅当前命令</td><td>单文件编译、临时验证，最安全</td></tr>
+    <tr><td>② 软链接</td><td>把 /usr/bin/g++ 入口指向新版</td><td>全系统默认</td><td>确定让所有构建都用新版（有风险）</td></tr>
+    <tr><td>③ SCL</td><td>scl enable 临时改 PATH 等变量</td><td>当前 shell 会话</td><td>多版本按需切换，Red Hat 系推荐</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>SCL 的 devtoolset 不止 7 一个版本：devtoolset-6、devtoolset-7、devtoolset-8、devtoolset-9、devtoolset-10、devtoolset-11 都有（<code>yum list all --enablerepo='centos-sclo-rh' | grep devtoolset</code> 能看到全部）。想要 C++17 的 <code>std::filesystem</code>，选 devtoolset-8 及以上；CentOS 7 上最高可用的基本是 devtoolset-11（GCC 11）。选版本的原则只有一个：够用就行，别追新。</p>
+  </div>
+
+  <!-- ========== 4.6 排错实战：PATH 优先级与两大经典坑 ========== -->
+  <h2>4.6 排错实战：三个经典案发现场</h2>
+
+  <p><strong>案发现场一：改了环境变量，程序还是老样子。</strong>破案思路（4.4 节已铺垫）：先确认改的是不是「当前 shell 正在用的那份记事板」——export 完立刻在当前终端测试没问题，但 IDE、构建服务、新终端可能读的是另一份配置；再确认写对了文件（<code>~/.bashrc</code> vs <code>~/.bash_profile</code>）；最后用 <code>which</code>/<code>type -a</code> 验证「实际用的是哪个」而不是「我以为用的是哪个」。真相只有一个判断标准：<strong>让程序把它看到的路径打出来</strong>——<code>echo $PATH</code>、<code>gcc -v</code>、CMake 配置输出里的 <code>The CXX compiler identification is ...</code>，全是破案线索：</p>
+
+  <pre><code><span class="cmt"># 案发现场一的标准取证流程</span>
+<span class="fn">echo</span> <span class="param">$PATH</span>          <span class="cmt"># PATH 顺序对吗？新版目录在 /usr/bin 前面吗？</span>
+<span class="fn">which</span> gcc            <span class="cmt"># 敲 gcc 实际执行谁？</span>
+<span class="fn">type</span> -a gcc          <span class="cmt"># 所有候选都在哪？</span>
+<span class="fn">gcc</span> -v 2&gt;<span class="op">&amp;</span><span class="num">1</span> <span class="op">|</span> <span class="fn">grep</span> -i configure   <span class="cmt"># 编译器真实路径在 configured with 上方</span></code></pre>
+
+  <p><strong>案发现场二（C++ 新手必踩）：编译链接全通过，运行时报「cannot open shared object file」。</strong>典型场景：用了 <code>-ljsoncpp</code> 链接成功（说明 LIBRARY_PATH 或 -L 生效了），生成 ./app，一运行却报 <code>error while loading shared libraries: libjsoncpp.so.25: cannot open shared object file: No such file or directory</code>。为什么？因为<strong>链接期和运行期是两个程序、两份配置</strong>：链接器知道库在哪（链接期变量管着），但运行时的动态链接器 ld.so 不知道（它只认 LD_LIBRARY_PATH 等运行期配置）。修法：把动态库目录补进 LD_LIBRARY_PATH，或者编译时用 <code>-Wl,-rpath</code> 把路径「焊死」进可执行文件；用 <code>ldd ./app</code> 看可执行文件到底缺哪些 .so：</p>
+
+  <pre><code><span class="cmt"># 案发现场二：链接成功、运行失败</span>
+<span class="fn">./app</span>
+<span class="cmt"># error while loading shared libraries: libjsoncpp.so.25:</span>
+<span class="cmt"># cannot open shared object file: No such file or directory</span>
+
+<span class="cmt"># 取证：ldd 列出 ./app 需要的全部动态库，带 not found 的就是凶手</span>
+<span class="fn">ldd</span> ./app
+<span class="cmt"># libjsoncpp.so.25 =&gt; not found   ← 就是它</span>
+
+<span class="cmt"># 破案：告诉动态链接器库在哪</span>
+<span class="kw">export</span> <span class="param">LD_LIBRARY_PATH</span>=<span class="str">/opt/lib</span>:<span class="param">$LD_LIBRARY_PATH</span>
+<span class="fn">./app</span>   <span class="cmt"># 正常了</span></code></pre>
+
+  <pre><code><span class="cmt"># 另一个解法：编译时用 -Wl,-rpath 把库路径写进可执行文件</span>
+<span class="cmt"># 这样不用设 LD_LIBRARY_PATH 也能跑（路径跟随程序走）</span>
+<span class="fn">g++</span> main.cpp -L/opt/lib -ljsoncpp -Wl,-rpath,/opt/lib -o app</code></pre>
+
+  <p><strong>案发现场三：PATH 顺序导致的「幽灵版本」。</strong>明明装了新版，<code>gcc --version</code> 却还是旧版——十有八九是 PATH 里旧版目录排在前面（<code>/usr/bin</code> 在前，<code>/usr/local/bin</code> 在后），shell 按顺序先撞上了旧版。破案用 <code>which</code>（只报第一个命中）和 <code>type -a</code>（全列出来）；修复就是 4.4 节那招：<code>export PATH=/usr/local/bin:$PATH</code>，新版目录插到最前面。另外提醒一句：改了 PATH 后，<strong>已经在跑的进程（比如 IDE 的构建任务、后台服务）不会自动感知</strong>——它们的环境在启动那一刻就固定了，必须重启它们，这是 4.1 节「继承」机制的必然推论：</p>
+
+  <pre><code><span class="cmt"># 案发现场三：PATH 顺序不对，新版永远轮不到</span>
+<span class="fn">echo</span> <span class="param">$PATH</span>
+<span class="cmt"># /usr/bin:/usr/local/bin:...  ← /usr/bin 在前，旧版 gcc 抢先了</span>
+
+<span class="cmt"># 修复：把新版目录插到最前面</span>
+<span class="kw">export</span> <span class="param">PATH</span>=<span class="str">/usr/local/bin</span>:<span class="param">$PATH</span>
+<span class="fn">which</span> gcc    <span class="cmt"># 现在指向 /usr/local/bin/gcc</span></code></pre>
+
+  <p>把三起案件串起来，你会发现柯南的老话依然成立：<strong>每个报错背后都有一条真实的「查找路径」，环境变量决定了这条路径长什么样</strong>。编译期查 <code>echo $CPLUS_INCLUDE_PATH</code>、链接期查 <code>echo $LIBRARY_PATH</code>、运行期查 <code>ldd ./app</code> + <code>echo $LD_LIBRARY_PATH</code>、编译器版本查 <code>which gcc</code> + <code>gcc -v</code>——按图索骥，没有破不了的案。下一章我们带着这套「按图索骥」的功夫去学 vcpkg，你会发现包管理工具干的事，本质上就是替你把这张「查找路径图」画好、配齐。</p>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>LD_LIBRARY_PATH</code> 是排查利器，但别滥用——它影响的是<strong>所有</strong>程序（包括系统命令）的动态库查找，设得太宽可能让某个程序加载到错误的 .so 版本（经典事故：设了指向旧版库的 LD_LIBRARY_PATH，导致 ls、vim 全部报错）。优先用 <code>-Wl,-rpath</code> 把路径写进自己的可执行文件；<code>LD_LIBRARY_PATH</code> 留给临时验证和确实需要的场景。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念四连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>环境变量</code>、<code>PATH</code>、<code>export</code>、<code>SCL（Software Collections）</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个概念对应「记事板 / 搜索清单 / 传递开关 / 隔离箱子」四个角色。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>环境变量：操作系统给每个进程附带的键值对「记事板」，程序按名字查值来决定去哪找文件、用什么配置；PATH：shell 的「命令搜索清单」，按冒号分隔的目录顺序找命令，先到先得；export：把 shell 变量标记为可继承，让子进程也能看到它；SCL：Red Hat 的软件集机制，把新版工具链装在独立目录，用 <code>scl enable</code> 临时改环境变量实现按需切换，退出即还原。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：阶段配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把四个变量 <code>C_INCLUDE_PATH</code>、<code>CPLUS_INCLUDE_PATH</code>、<code>LIBRARY_PATH</code>、<code>LD_LIBRARY_PATH</code> 分别配到正确的阶段：编译期找头文件（C）/ 编译期找头文件（C++）/ 链接期找库 / 运行期找动态库。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 4.2 节的三阶段全景图：头文件 → 目标文件 → 可执行文件 → 跑起来，每个箭头对应一个变量。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>C_INCLUDE_PATH</code> → 编译期找 C 头文件；<code>CPLUS_INCLUDE_PATH</code> → 编译期找 C++ 头文件；<code>LIBRARY_PATH</code> → 链接期找库文件；<code>LD_LIBRARY_PATH</code> → 运行期找动态库。记忆口诀：INCLUDE 管编译、LIBRARY 管链接、LD_LIBRARY 管运行（LD 指动态链接器 ld.so）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：场景修复 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你把 jsoncpp 的动态库装到了 <code>/opt/lib</code>，头文件在 <code>/opt/include</code>。依次遇到三个报错，请分别写出用环境变量的修法：(a) 编译报 <code>fatal error: json/json.h: No such file or directory</code>；(b) 链接报 <code>cannot find -ljsoncpp</code>；(c) 编译链接都过了，运行 <code>./app</code> 报 <code>cannot open shared object file</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(a) 是编译期头文件问题；(b) 是链接期库问题；(c) 是运行期动态库问题——三个不同阶段的变量，别用混。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>export CPLUS_INCLUDE_PATH=/opt/include</code>（C++ 程序用 CPLUS_INCLUDE_PATH，C 程序用 C_INCLUDE_PATH）；(b) <code>export LIBRARY_PATH=/opt/lib</code>；(c) <code>export LD_LIBRARY_PATH=/opt/lib</code>。注意 (c) 不能靠前两个变量解决——链接器和动态链接器各看各的，这是 4.6 节案发现场二的核心教训。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：SCL 实战切换 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在 CentOS 7（或任何有 yum 的 RHEL 系）上实操：① <code>yum install centos-release-scl scl-utils-build</code> 装源；② 用 <code>yum list all --enablerepo='centos-sclo-rh' | grep devtoolset</code> 看看有哪些版本；③ 装 <code>devtoolset-7-gcc devtoolset-7-gcc-c++</code>；④ <code>scl enable devtoolset-7 bash</code> 后写一个用 lambda + auto 的 C++11 程序编译运行；⑤ <code>exit</code> 退出后再编译同一个程序，观察报错——记录 ④⑤ 两个环境下 <code>gcc -v</code> 的输出差异，并解释为什么同一个源码在两个环境里命运不同。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>④⑤ 的差异根源在 PATH：<code>scl enable</code> 把 <code>/opt/rh/devtoolset-7/root/usr/bin</code> 插到了 PATH 最前面（用 <code>echo $PATH</code> 对比两个环境验证）；旧 GCC 4.8.5 对 C++11 支持不完整，lambda 的某些写法可能直接编不过。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>④ 环境里 <code>gcc -v</code> 显示 GCC 7.x（完整支持 C++11），lambda/auto 程序编译运行正常；⑤ <code>exit</code> 后 PATH 还原，<code>gcc -v</code> 回到 4.8.5，同一份源码可能报 C++11 特性不支持（比如 <code>&lt;regex&gt;</code> 相关代码）或能编但警告。本质：SCL 不装不卸任何东西，只通过环境变量（PATH/LD_LIBRARY_PATH）改变「当前 shell 看到的编译器」——这正是 4.1 节「环境变量只影响子孙进程」机制的实战印证。若机器上没有 yum，可改用方案一（绝对路径 <code>/usr/local/bin/g++</code>）做同样的对比实验。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

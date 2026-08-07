@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第15章：性能分析入门 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter15.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第15章：性能分析入门 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter15.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="15" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：性能分析入门</h1>
+  <p class="chapter-subtitle">程序慢在哪里？不靠猜，靠数据——用 gprof 与 perf 给程序做一次全面体检</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「善战者，先胜而后求战。优化亦然：先测得数据、再动刀改码，让每一次修改都有据可依，而不是凭感觉猜热点。运筹帷幄之中，决胜千里之外——这一章，我们学会先看全局，再落子。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 性能分析是什么 ========== -->
+  <h2>15.1 性能分析是什么：不靠猜，靠数据</h2>
+
+  <p>先回答最朴素的问题：<strong>性能分析（profiling）是什么？</strong>说人话，性能分析就是<strong>用工具测量程序运行时的真实行为，找出时间都花在了哪里</strong>。它回答的不是"你觉得哪里慢"，而是"数据说哪里慢"：哪个函数占用了最多执行时间（这叫<strong>热点（hot spot）</strong>，也就是程序里最"烧时间"的那段代码）、它被谁调用、调用了多少次、CPU 周期和内存访问的效率如何。做这件事的工具叫 <strong>profiler</strong>（性能分析器），你可以把它理解成给程序做体检的医生——本章的两位主角 gprof 和 perf 都是 profiler。</p>
+
+  <p>为什么"不靠猜"这么重要？因为人对程序性能的直觉经常是错的：编译器优化（第 3 章讲过 -O2/-O3）会大幅改变代码的真实行为，CPU 缓存与分支预测这些硬件机制更是反直觉，标准库内部的实现你根本看不见。第 13 章讲过"链接器单遍扫描"这种隐藏规则，性能领域类似的隐藏规则只多不少。诸葛亮用兵讲究"知己知彼"，优化程序也一样——<strong>先测量，后优化；先定位热点，再动手改码</strong>。这一条被称为优化第一法则，我们 15.2 会展开讲。</p>
+
+  <p>性能分析要回答三个层次的问题：<strong>时间花在哪</strong>（热点函数）、<strong>时间怎么被花掉的</strong>（调用关系：谁调了谁）、<strong>资源用得怎么样</strong>（CPU 周期数、指令数、缓存未命中、内存分配）。手工计时只能回答"总共花了多久"，而 profiler 能把这三层都挖出来。下面先建立一个"被测程序"：一个计算密集的简单程序，本章所有工具都会拿它当实验对象。</p>
+
+  <pre><code><span class="cmt"># 先感受一下"测量"：time 命令给出程序运行的三种时间（Linux/macOS 都有）</span>
+time ./app
+<span class="cmt"># real    0m1.094s     ← 墙钟时间：从开始到结束的真实流逝时间</span>
+<span class="cmt"># user    0m1.091s     ← 用户态 CPU 时间：程序自己的代码花的时间</span>
+<span class="cmt"># sys     0m0.003s     ← 内核态 CPU 时间：系统调用等内核代劳的时间</span></code></pre>
+
+  <pre><code><span class="cmt">// app.cpp —— 本章的被测程序：计算密集循环（巴塞尔问题的级数求和，逼近 π²/6）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">double</span> <span class="fn">compute</span>(<span class="kw">int</span> <span class="param">n</span>) {
+    <span class="kw">double</span> sum <span class="op">=</span> <span class="num">0.0</span>;
+    <span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="num">1</span>; i <span class="op">&lt;=</span> n; <span class="op">++</span>i) {
+        sum <span class="op">+=</span> <span class="num">1.0</span> <span class="op">/</span> i <span class="op">/</span> i;   <span class="cmt">// 纯 CPU 计算，热点一目了然</span>
+    }
+    <span class="kw">return</span> sum;
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">double</span> r <span class="op">=</span> <span class="fn">compute</span>(<span class="num">20000000</span>);
+    std::<span class="fn">printf</span>(<span class="str">"result = %.10f\n"</span>, r);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>把"测量"想象成斥候侦察：<strong>斥候带回的情报决定作战方案，测量的数据决定优化方案</strong>。连敌人（瓶颈）在哪都不知道就冲锋（乱改代码），是兵家大忌。本章所有命令的第一动作都是"测"，而不是"改"。</p>
+  </div>
+
+  <!-- ========== 15.2 为什么需要 profiler ========== -->
+  <h2>15.2 为什么需要 profiler：先测量后优化与 90/10 法则</h2>
+
+  <p>计算机界有一条流传极广的告诫，出自计算机科学家高德纳（Donald Knuth）1974 年的论文：<strong>"过早的优化是万恶之源"</strong>（premature optimization is the root of all evil）。这句话常被误解成"别优化"，它真正的意思是：<strong>别在不知道热点在哪的时候盲目优化</strong>——因为你十有八九在优化不重要的代码，还把代码改得更难读。正确的顺序永远是：先测量出热点，再针对热点优化。这就是<strong>先测量后优化</strong>（measure, don't guess）。</p>
+
+  <p>为什么热点这么集中？这里有一条经验法则叫<strong>90/10 法则</strong>：大量实测统计表明，<strong>程序大约 90% 的执行时间花在 10% 的代码上</strong>（与经济学里"80/20 法则"同理）。也就是说，一个程序通常只有一小撮函数真正决定性能——把力气花在这 10% 上，收益立竿见影；在其余 90% 的代码上精雕细琢，优化得再好也几乎感觉不到。profiler 的价值就在于此：它用数据帮你把这"10%"圈出来。</p>
+
+  <p>那手工打点计时（printf 记时间）够不够？不够。手工计时只能回答"整体花了多久"，甚至能回答"某段花了多久"，但回答不了三个关键问题：<strong>哪个函数最烧时间？它被调了多少次？时间是被谁带出来的？</strong>而且手工打点会污染被测代码、容易漏掉隐蔽路径。profiler 分两大流派解决这些问题：<strong>插桩式（instrumentation）</strong>在编译时往每个函数入口埋"记录仪"，精确统计调用次数（代表：gprof）；<strong>采样式（sampling）</strong>按固定频率给程序"拍快照"，看快照落在哪个函数（代表：perf）。两者 15.4、15.5 会分别登场。</p>
+
+  <pre><code><span class="cmt"># 优化的标准工作流：四步循环，每一步都建立在数据之上</span>
+<span class="cmt"># 第一步：测量基线 —— 程序现在到底有多慢？</span>
+time ./app
+
+<span class="cmt"># 第二步：定位热点 —— profiler 报告说时间花在哪？</span>
+gprof ./app gmon.out <span class="op">&gt;</span> report.txt
+perf report
+
+<span class="cmt"># 第三步：只改热点 —— 围绕热点做最小改动</span>
+<span class="cmt">#   （例如：把字符串拼接改为先 reserve，或把 O(n²) 算法换成 O(n log n)）</span>
+
+<span class="cmt"># 第四步：复测对比 —— 改动前后同一把尺子量，数据说话</span>
+time ./app    <span class="cmt"># 比基线快了吗？快多少？</span></code></pre>
+
+  <pre><code><span class="cmt">// 手工打点计时的朴素做法：只能测整体，测不出"哪个函数"</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;ctime&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    clock_t t0 <span class="op">=</span> <span class="fn">clock</span>();
+    <span class="kw">double</span> r <span class="op">=</span> <span class="fn">compute</span>(<span class="num">20000000</span>);
+    clock_t t1 <span class="op">=</span> <span class="fn">clock</span>();
+    std::<span class="fn">printf</span>(<span class="str">"result = %.10f, %.3f s\n"</span>,
+            r, <span class="kw">double</span>(t1 <span class="op">-</span> t0) <span class="op">/</span> CLOCKS_PER_SEC);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt">// 局限：只看到整段耗时；哪个函数最慢、被调几次，一概不知</span>
+<span class="cmt">// ——这正是 profiler 的用武之地。</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>90/10 法则的实战含义：<strong>优化是"掐尖"的艺术，不是"摊大饼"</strong>。报告里排第一的热点，优化它一天顶得上优化其余全部一个月。所以拿到 profiler 报告，先看榜首，再看调用次数异常的"小函数被狂调"——后者往往才是隐藏的深水区。</p>
+  </div>
+
+  <!-- ========== 15.3 手工计时入门 ========== -->
+  <h2>15.3 手工计时：chrono 与 clock_gettime</h2>
+
+  <p>在正式引入 profiler 之前，先把"手工计时"这门基本功练扎实——它是 benchmark（基准测试，用统一标准反复测量性能）的最小单位，第 9 章 gtest 集成也可以拿它做轻量基准。C++11 标准库提供了 <strong>std::chrono</strong> 时间工具，核心是三类东西：<strong>时钟（clock）</strong>、<strong>时间点（time_point）</strong>和<strong>时长（duration）</strong>。时钟里最常用的是 <strong>steady_clock（单调时钟）</strong>——它保证时间只往前走、绝不回拨，专门用来测耗时；另一个 <strong>system_clock</strong> 是墙上时钟（显示"现在几点"用的），可能被用户或 NTP 校时跳变，测耗时不可靠。</p>
+
+  <p>用法三步：取开始时间点 → 跑被测代码 → 取结束时间点并求差，再用 <code>duration_cast</code> 把差值转成毫秒/微秒。另一个选择是 POSIX 的 <strong>clock_gettime</strong> 函数（头文件 <code>&lt;time.h&gt;</code>）：它更底层、精度更高（纳秒级），<code>CLOCK_MONOTONIC</code> 同样是"只往前走"的单调时钟。注意在老式 Linux 系统上链接它需要加 <code>-lrt</code>（新版 glibc 已并入 libc，不用加）。两条路效果等价，chrono 是标准 C++ 的跨平台写法，clock_gettime 更贴近系统底层。</p>
+
+  <p>手工计时有三个坑：<strong>一是别用 system_clock 测耗时</strong>（理由如上）；<strong>二是别只跑一次就下结论</strong>——机器负载、频率波动都是噪声，多跑几次取最短或平均才稳；<strong>三是小心编译器把测量代码"优化没了"</strong>——计算结果若没被使用，开启优化的编译器可能把整个循环删掉（死代码消除，dead code elimination），测出趋近于零的假时间。对策是给结果一个"不敢删"的去处，比如写进 <code>volatile</code> 变量。</p>
+
+  <pre><code><span class="cmt">// 用 std::chrono 计时：steady_clock + duration_cast</span>
+<span class="kw">#include</span> <span class="type">&lt;chrono&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">auto</span> t0 <span class="op">=</span> std::chrono::steady_clock::<span class="fn">now</span>();
+
+    <span class="kw">double</span> r <span class="op">=</span> <span class="fn">compute</span>(<span class="num">20000000</span>);   <span class="cmt">// 被测代码</span>
+
+    <span class="kw">auto</span> t1 <span class="op">=</span> std::chrono::steady_clock::<span class="fn">now</span>();
+    <span class="kw">auto</span> ms <span class="op">=</span> std::chrono::duration_cast<span class="op">&lt;</span>std::chrono::milliseconds<span class="op">&gt;</span>(t1 <span class="op">-</span> t0);
+    std::<span class="fn">printf</span>(<span class="str">"result = %.10f, 耗时 %lld ms\n"</span>, r, ms.<span class="fn">count</span>());
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// 用 clock_gettime 计时：POSIX 底层接口，纳秒精度</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;time.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">struct</span> timespec ts0, ts1;
+    <span class="fn">clock_gettime</span>(CLOCK_MONOTONIC, <span class="op">&amp;</span>ts0);
+
+    <span class="kw">double</span> r <span class="op">=</span> <span class="fn">compute</span>(<span class="num">20000000</span>);
+
+    <span class="fn">clock_gettime</span>(CLOCK_MONOTONIC, <span class="op">&amp;</span>ts1);
+    <span class="kw">long</span> ms <span class="op">=</span> (ts1.tv_sec <span class="op">-</span> ts0.tv_sec) <span class="op">*</span> <span class="num">1000</span>
+            <span class="op">+</span> (ts1.tv_nsec <span class="op">-</span> ts0.tv_nsec) <span class="op">/</span> <span class="num">1000000</span>;
+    std::<span class="fn">printf</span>(<span class="str">"result = %.10f, 耗时 %ld ms\n"</span>, r, ms);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 老式 Linux（glibc &lt; 2.17）需要 -lrt：</span>
+g++ app.cpp <span class="op">-</span>lrt <span class="op">-</span>o app</code></pre>
+
+  <pre><code><span class="cmt">// 防"测量被优化掉"（死代码消除）：结果写进 volatile，编译器不敢删循环</span>
+<span class="kw">double</span> r <span class="op">=</span> <span class="fn">compute</span>(<span class="num">20000000</span>);
+<span class="kw">volatile</span> <span class="kw">double</span> sink <span class="op">=</span> r;   <span class="cmt">// 结果"被使用"，计算无法被优化掉</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>手工计时好比"目测敌营远近"，profiler 好比"派出斥候画出完整军情图"。<strong>手工计时适合快速验证"优化有没有效"，profiler 适合回答"该优化哪里"</strong>——两者配合，就是完整的先测量后优化。</p>
+  </div>
+
+  <!-- ========== 15.4 gprof ========== -->
+  <h2>15.4 gprof：GNU 插桩式分析器</h2>
+
+  <p><strong>gprof 是什么？</strong>它是 GNU 官方提供的性能分析工具（GNU profiler），采用<strong>插桩式（instrumentation）</strong>方案：编译时用 <code>-pg</code> 选项，编译器会在每个函数入口插入一小段记账代码（mcount），程序运行时这些"记录仪"精确统计每个函数被调用的次数；同时内核以固定频率采样（默认约 100 Hz，即每 0.01 秒一次），估算每个函数占用多少时间。整个流程分三步，和官方手册《GNU gprof》写的完全一致：<strong>① 用 -pg 编译链接；② 正常运行程序生成 gmon.out；③ 用 gprof 分析 gmon.out 出报告</strong>。</p>
+
+  <p>第二步有个关键细节：<strong>gmon.out 是程序正常退出时（从 main 返回或调用 exit）才写出来的</strong>，写在程序的工作目录里；如果用 <code>_exit</code> 直接退出或程序被信号打死，数据不会落盘。第三步默认读取可执行文件 <code>a.out</code> 和 <code>gmon.out</code>，所以我们通常写全：<code>gprof ./app gmon.out</code>。gprof 报告默认包含两部分：<strong>平面剖析（flat profile）</strong>——一张表列出每个函数占用的时间百分比、累计时间、自身时间、调用次数，按耗时从高到低排序，找热点看它就够了；<strong>调用图（call graph）</strong>——展示谁调了谁、每个函数的时间有多少是自己花的、有多少是"子函数"花的。</p>
+
+  <p>读平面剖析表只需盯住三列：<strong>% time</strong>（该函数占总时间百分比，榜首就是热点）、<strong>self seconds</strong>（函数自己花的秒数，不含子函数）、<strong>calls</strong>（被调用次数）。官方手册还提醒两件事：一是结果有统计误差——采样周期是 0.01 秒时，小于这个量级的时间差不可信（手册原话"Statistical Sampling Error"）；二是 <code>-g</code> 选项配合才能做行级分析，而开优化（-O2）后函数可能被内联，调用次数会失真。所以做 gprof 分析时，<code>-O0</code> 或 <code>-O2</code> 各有取舍：要精确的调用次数就用低优化，要贴近线上行为就用正常优化。</p>
+
+  <pre><code><span class="cmt"># 三步走：编译（-pg 插桩，-g 便于行级分析）→ 运行（生成 gmon.out）→ 分析</span>
+g++ <span class="op">-</span>pg <span class="op">-</span>g app.cpp <span class="op">-</span>o app
+
+./app
+<span class="cmt"># result = 1.6449340578</span>
+ls <span class="op">-</span>l gmon.out
+<span class="cmt"># -rw-r--r-- 1 user user 19040 ... gmon.out   ← 程序退出时自动生成的剖面数据</span>
+
+<span class="cmt"># 分析：gprof 可执行文件 数据文件，输出重定向到文件慢慢看</span>
+gprof ./app gmon.out <span class="op">&gt;</span> report.txt
+<span class="cmt"># 只想看核心表、不要长篇解释，加 -b（brief）：</span>
+gprof <span class="op">-</span>b ./app gmon.out</code></pre>
+
+  <pre><code><span class="cmt"># 平面剖析（flat profile）节选：数字因机器而异，看结构与含义</span>
+Flat profile:
+
+Each sample counts as <span class="num">0.01</span> seconds.
+  <span class="op">%</span>   cumulative   self              self     total
+ time   seconds   seconds    calls  ms/call  ms/call  name
+<span class="num">96.15</span>      <span class="num">0.25</span>     <span class="num">0.25</span>        <span class="num">1</span>   250.00   250.00  compute(int)
+ <span class="num">3.85</span>      <span class="num">0.26</span>     <span class="num">0.01</span>        <span class="num">1</span>    10.00    10.00  main
+
+<span class="cmt"># 读法：compute(int) 占 96.15% 总时间、自身 0.25 秒、只被调用 1 次——热点就是它。</span></code></pre>
+
+  <pre><code><span class="cmt"># 调用图（call graph）节选：谁调了谁、时间怎么传播</span>
+index <span class="op">%</span> time    self  children    called     name
+                 <span class="num">0.00</span>     <span class="num">0.25</span>        <span class="num">1</span>/<span class="num">1</span>           main [2]
+[<span class="num">1</span>]     <span class="num">96.2</span>     <span class="num">0.00</span>     <span class="num">0.25</span>        <span class="num">1</span>         compute(int) [1]
+-----------------------------------------------
+[<span class="num">2</span>]    <span class="num">100.0</span>     <span class="num">0.01</span>     <span class="num">0.25</span>        <span class="num">1</span>             main [2]
+                 <span class="num">0.00</span>     <span class="num">0.25</span>        <span class="num">1</span>/<span class="num">1</span>           compute(int) [1]
+
+<span class="cmt"># 读法：main 调了 compute 1 次；compute 的 0.25 秒全部由 main "带出来"。</span>
+<span class="cmt"># children 巨大而 self 很小的函数是"指挥者"——时间花在它调的子函数里。</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：gprof 是插桩 + 采样混合方案，报告有两点固有局限——① 采样间隔决定了时间分辨率：每样本 0.01 秒时，耗时低于此量级的变化测不准；② 开启 -O2/-O3 后函数可能被内联，调用次数与符号归属会"变形"。需要函数级精确数据时用低优化编译，需要贴近真实运行表现时用正常优化，二者都是合法用法，明白差异即可。</p>
+  </div>
+
+  <!-- ========== 15.5 perf 与 perf stat ========== -->
+  <h2>15.5 perf 与 perf stat：程序的性能概要</h2>
+
+  <p><strong>perf 是什么？</strong>它是 Linux 内核自带的性能分析工具（官方叫法：Linux profiling with performance counters），基于 CPU 内置的<strong>性能计数器（performance counter）</strong>——这是 CPU 硬件里专门记录 cycles（时钟周期）、instructions（指令数）等事件的计数器，读取开销极小，所以 perf 的采样几乎不影响被测程序。几乎每个 Linux 发行版都自带 perf（包名通常是 <code>linux-tools</code> 或 <code>perf</code>），macOS 没有 perf，这是 Linux 专属工具。perf 家族核心成员：<strong>perf stat</strong>（整体概要）、<strong>perf record / perf report</strong>（采样热点）、<strong>perf top</strong>（实时热点）、<strong>perf list</strong>（列出可用事件）。</p>
+
+  <p><strong>perf stat</strong> 的职责是"跑一次命令，给出整体性能概要"：默认输出 task-clock（程序占用的 CPU 时间）、context-switches（上下文切换次数）、page-faults（缺页次数）、cycles（CPU 周期）、instructions（指令数）、branches（分支指令）、branch-misses（分支预测失败）以及 time elapsed（墙钟时间）。其中最有信息量的是 <strong>IPC（instructions per cycle，每周期指令数）</strong>，perf 会直接算给你看（insn per cycle）：IPC 接近 1 说明 CPU 基本满载干活，IPC 很低（比如 0.1）说明 CPU 大量时间在"空转"等内存——这是典型的缓存不友好信号（15.7 会讲）。cache-misses（缓存未命中）默认不显示，加 <code>-d</code> 才会带出 cache-references / cache-misses 一组。</p>
+
+  <p>事件可以手动指定：<code>perf stat -e cycles:u,instructions:u ./app</code> 只统计用户态（<code>:u</code>）的周期与指令，<code>:k</code> 是内核态；机器支持哪些事件用 <code>perf list</code> 查看。还有一个权限细节：硬件计数器受内核参数 <code>kernel.perf_event_paranoid</code> 管控，某些系统上普通用户测硬件事件会被拒，加 sudo 或调低 paranoid 值即可；虚拟机里没有 PMU 支持时硬件事件可能测不到，这也是正常的。</p>
+
+  <pre><code><span class="cmt"># perf stat：跑一次程序，输出整体性能概要（数字因机器而异）</span>
+perf stat ./app
+<span class="cmt"># Performance counter stats for './app':</span>
+<span class="cmt">#</span>
+<span class="cmt">#            1.094237      task-clock (msec)      #    1.000 CPUs utilized</span>
+<span class="cmt">#                   0      context-switches       #    0.000 K/sec</span>
+<span class="cmt">#                 107      page-faults            #    0.098 M/sec</span>
+<span class="cmt">#       4,371,904,318      cycles                 #    3.995 GHz</span>
+<span class="cmt">#       6,982,110,553      instructions           #    1.60  insn per cycle</span>
+<span class="cmt">#         839,414,602      branches               #  767.147 M/sec</span>
+<span class="cmt">#           2,605,447      branch-misses          #    0.31% of all branches</span>
+<span class="cmt">#</span>
+<span class="cmt">#       1.094680519 seconds time elapsed</span>
+<span class="cmt">#</span>
+<span class="cmt"># 读法：IPC 1.60 说明 CPU 利用率不错；branch-misses 仅 0.31%，分支预测很顺。</span></code></pre>
+
+  <pre><code><span class="cmt"># 指定事件：只统计用户态周期与指令（:u = user，:k = kernel）</span>
+perf stat <span class="op">-</span>e cycles:u,instructions:u ./app
+
+<span class="cmt"># 加 -d：多出一组缓存相关计数（cache-references / cache-misses）</span>
+perf stat <span class="op">-</span>d ./app
+
+<span class="cmt"># 看看这台机器支持哪些事件（cache / branch / 软件事件等）</span>
+perf list <span class="op">|</span> <span class="fn">grep</span> cache
+<span class="cmt">#   cache-references OR LLC-loads:u ...</span>
+<span class="cmt">#   cache-misses OR LLC-load-misses:u ...</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>把 perf stat 当"开局先看军粮"：<strong>它不问"哪里慢"，只问"整体状态如何"</strong>。IPC 低 → 大概率在等内存（查缓存）；branch-misses 高 → 分支预测被乱序数据打爆；page-faults 多 → 频繁触碰新内存页。先有整体判断，再决定用 record 深入哪一层，这就是运筹帷幄的顺序。</p>
+  </div>
+
+  <!-- ========== 15.6 perf record 与 perf report ========== -->
+  <h2>15.6 perf record 与 perf report：采样热点与火焰图</h2>
+
+  <p><strong>perf record</strong> 是采样式分析的主力：它按固定频率（默认每秒数千次，可用 <code>-F</code> 调整）周期性"拍快照"——每次快照记下 CPU 此刻正在执行哪个地址，也就是哪个函数。程序跑完后，采样数据写进当前目录的 <strong>perf.data</strong> 文件。采样的好处是几乎不干扰程序：不开插桩、不改编译选项，直接对线上/现成的二进制就能用。然后 <strong>perf report</strong> 读取 perf.data，按"采样点落在哪个函数"聚合成一张热点表：Overhead（该函数占总采样的百分比）、Command（进程名）、Shared Object（属于哪个库/可执行文件）、Symbol（函数符号）。榜首就是热点函数——和 gprof 的 flat profile 殊途同归，但 perf 不用重新编译。</p>
+
+  <p>光看函数还不够，还要知道<strong>热点是怎么被调进来的</strong>——加 <code>-g</code> 让 perf record 同时抓<strong>调用栈（call stack）</strong>。有了调用栈，就能画出<strong>火焰图（flame graph）</strong>：把每次采样到的完整调用栈自底向上堆叠，横轴宽度代表该路径占的采样比例，越宽越热，一眼看出"热点是被哪条调用链带上来的"。配套脚本来自 Brendan Gregg 开源的 FlameGraph 项目，经典流水线：<code>perf record -g</code> → <code>perf script</code> 导出文本 → <code>stackcollapse-perf.pl</code> 折叠 → <code>flamegraph.pl</code> 生成 SVG，浏览器打开即可交互查看。</p>
+
+  <p>另一个高频场景是<strong>实时观察</strong>：<code>perf top</code> 类似系统监视器 <code>top</code>，但它按 CPU 采样实时显示当前最热的函数，不用跑完整个程序——适合盯一个正在运行的进程（比如线上服务）当下在忙什么。perf 家族到这里就齐了：stat 看整体，record/report 看热点，top 看实时，list 查事件。它们回答的始终是同一个问题：数据说，时间到底花在哪？</p>
+
+  <pre><code><span class="cmt"># 采样 5 秒并写 perf.data（-F 99 表示每秒采样 99 次，可自行调整）</span>
+perf record <span class="op">-</span>F <span class="num">99</span> ./app
+<span class="cmt"># [ perf record: Woken up 1 times to write data ]</span>
+<span class="cmt"># [ perf record: Captured and wrote 0.019 MB perf.data (2006 samples) ]</span>
+
+<span class="cmt"># 分析：进入交互界面，按占比排序的热点表</span>
+perf report
+<span class="cmt"># Overhead  Command  Shared Object      Symbol</span>
+<span class="cmt"># ........ .......  .................  ..............................</span>
+<span class="cmt">#    95.21%  app      app                [.] compute(int)</span>
+<span class="cmt">#     4.32%  app      app                [.] main</span>
+<span class="cmt">#     0.47%  app      libc-2.31.so       [.] __printf</span>
+<span class="cmt">#</span>
+<span class="cmt"># 读法：95.21% 的采样落在 compute(int)，与 gprof 结论互相印证；[.] 用户态、[k] 内核态符号。</span></code></pre>
+
+  <pre><code><span class="cmt"># 抓调用栈（-g）→ 导出文本 → 折叠 → 生成火焰图 SVG</span>
+perf record <span class="op">-</span>g ./app
+perf script <span class="op">&gt;</span> out.perf
+stackcollapse-perf.pl out.perf <span class="op">&gt;</span> out.folded
+flamegraph.pl out.folded <span class="op">&gt;</span> flamegraph.svg
+
+<span class="cmt"># 脚本来自 Brendan Gregg 的 FlameGraph 项目；</span>
+<span class="cmt"># 浏览器打开 flamegraph.svg：横轴宽度 = 采样占比，纵轴 = 调用栈深度。</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>gprof 与 perf 的关系，好比"校场点兵"与"沙场观战"：<strong>gprof 需要提前给部队插上旗（-pg 重编译），换来精确的调用次数；perf 不动部队就能在旁观察（直接采样现成程序），换来低干扰的真实数据</strong>。生产环境没法重编译时用 perf，开发期想要精确调用计数时用 gprof——两把尺子都备着。</p>
+  </div>
+
+  <!-- ========== 15.7 常见瓶颈类型与优化优先级 ========== -->
+  <h2>15.7 常见瓶颈类型与优化优先级</h2>
+
+  <p>拿到 profiler 报告后，热点函数通常能归入四类常见瓶颈，先认类型再对症下药：<strong>① CPU 密集</strong>——函数里是大量计算/循环，IPC 高、纯消耗算力，对策是改进算法或减少冗余计算；<strong>② 内存分配</strong>——频繁 new/delete 或字符串反复增长触发重新分配，perf stat 里 page-faults 偏高，对策是复用对象、预先 reserve；<strong>③ IO 等待</strong>——磁盘/网络读写把线程卡住，程序在"等"而不是"算"，对策是异步化、批量 IO、缓存结果；<strong>④ 缓存不友好</strong>——内存访问模式跳跃，导致<strong>缓存未命中（cache miss，CPU 要的数据不在缓存里、必须去内存取）</strong>高发，IPC 因此被拉低，对策是让访问尽量连续（局部性）。perf stat 的 IPC、cache-misses、page-faults 正是识别这些类型的"化验单"。</p>
+
+  <p>优化优先级只有一条铁律：<strong>先算法，后微优化</strong>。O(n²) 换成 O(n log n) 是数量级的胜利，任何微优化都追不上；微优化（少一次拷贝、循环展开、内联）只是在算法定型后挤最后几个百分点。诸葛亮用兵讲究"先定谋略，再修器械"——谋略是算法，器械是微优化。编译器选项也是性价比极高的一步：<code>-O0</code>（不优化，调试用）、<code>-O1/-O2</code>（常规优化，生产默认）、<code>-O3</code>（更激进，含向量化），同样的代码从 <code>-O0</code> 换成 <code>-O2</code> 往往快一个数量级——所以测性能必须用与线上一致的优化等级。</p>
+
+  <p>C++ 特有的高频问题——<strong>不必要的拷贝</strong>——值得单独说。传参用值（<code>std::string s</code>）会把整个字符串复制一份；改成 <code>const std::string&amp; s</code> 就只传引用。字符串用 <code>+=</code> 反复增长时，内部缓冲区不够会触发"重新分配 + 整体拷贝"，是经典的 O(n²) 陷阱（15.1 的 app.cpp 若改成拼字符串就会踩中）；先 <code>reserve</code> 预估容量能一次性避免大量重分配。这些在 profiler 报告里往往表现为 <code>std::__cxx11::basic_string...</code> 这类 libstdc++ 内部符号霸榜——看到它，就明白是拷贝/分配在作祟。</p>
+
+  <p>最后补上 <strong>benchmark 思想</strong>：优化是否有效的唯一裁判是"同一把尺子复测"。第 9 章的 gtest 不提供基准框架，但可以拿 15.3 的 chrono 计时在 TEST 里做"冒烟基准"（只打印耗时供人工对比，不写死性能断言）；正式基准可选用 Google Benchmark 库（github.com/google/benchmark），它自动处理多次运行与统计噪声。性能优化是工程习惯：每次改动后重跑 time / perf stat，把数字记进实验笔记，让优化"有账可查"。</p>
+
+  <pre><code><span class="cmt">// 缓存不友好 vs 友好：同一块数据，两种遍历顺序</span>
+<span class="kw">#include</span> <span class="type">&lt;vector&gt;</span>
+
+<span class="kw">const</span> <span class="kw">int</span> N <span class="op">=</span> <span class="num">4096</span>;
+std::vector&lt;<span class="kw">double</span>&gt; a(N <span class="op">*</span> N);   <span class="cmt">// 一维平铺模拟二维数组（行主序）</span>
+
+<span class="kw">double</span> <span class="fn">sum_row_major</span>() {   <span class="cmt">// 按行：内存连续访问，缓存命中率高</span>
+    <span class="kw">double</span> s <span class="op">=</span> <span class="num">0.0</span>;
+    <span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="num">0</span>; i <span class="op">&lt;</span> N; <span class="op">++</span>i)
+        <span class="kw">for</span> (<span class="kw">int</span> j <span class="op">=</span> <span class="num">0</span>; j <span class="op">&lt;</span> N; <span class="op">++</span>j)
+            s <span class="op">+=</span> a[i <span class="op">*</span> N <span class="op">+</span> j];
+    <span class="kw">return</span> s;
+}
+
+<span class="kw">double</span> <span class="fn">sum_col_major</span>() {   <span class="cmt">// 按列：每步跳 N 个元素，缓存行反复作废</span>
+    <span class="kw">double</span> s <span class="op">=</span> <span class="num">0.0</span>;
+    <span class="kw">for</span> (<span class="kw">int</span> j <span class="op">=</span> <span class="num">0</span>; j <span class="op">&lt;</span> N; <span class="op">++</span>j)
+        <span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="num">0</span>; i <span class="op">&lt;</span> N; <span class="op">++</span>i)
+            s <span class="op">+=</span> a[i <span class="op">*</span> N <span class="op">+</span> j];
+    <span class="kw">return</span> s;
+}
+
+<span class="cmt">// 实测（-O2）：按行遍历明显更快；用 perf stat -d 对比，cache-misses 一高一低</span></code></pre>
+
+  <pre><code><span class="cmt">// 避免不必要的拷贝：值传递 vs 引用；字符串先 reserve 再增长</span>
+<span class="kw">#include</span> <span class="type">&lt;string&gt;</span>
+
+<span class="cmt">// 差：按值传，每次调用整体拷贝一份字符串</span>
+<span class="kw">void</span> <span class="fn">log_line</span>(std::string <span class="param">s</span>);
+
+<span class="cmt">// 好：const 引用，只传"地址"不拷贝；只读不改就加 const</span>
+<span class="kw">void</span> <span class="fn">log_line</span>(<span class="kw">const</span> std::string<span class="op">&amp;</span> <span class="param">s</span>);
+
+<span class="cmt">// 字符串反复 += 前先 reserve，避免反复"重新分配 + 整体拷贝"</span>
+std::string s;
+s.<span class="fn">reserve</span>(<span class="num">1000000</span>);                    <span class="cmt">// 一次性预留容量</span>
+<span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="num">0</span>; i <span class="op">&lt;</span> <span class="num">100000</span>; <span class="op">++</span>i)
+    s <span class="op">+=</span> std::<span class="fn">to_string</span>(i);</code></pre>
+
+  <pre><code><span class="cmt"># 编译器优化等级对比：同样的代码，-O0 与 -O2 常常差一个数量级</span>
+g++ <span class="op">-</span>O0 app.cpp <span class="op">-</span>o app_O0
+g++ <span class="op">-</span>O2 app.cpp <span class="op">-</span>o app_O2
+g++ <span class="op">-</span>O3 app.cpp <span class="op">-</span>o app_O3
+
+time ./app_O0
+time ./app_O2
+time ./app_O3
+
+<span class="cmt"># 复测是唯一裁判：优化前后用同一把尺子（time / perf stat）对比，</span>
+<span class="cmt"># 把数字记进实验笔记——"快了多少"要有数据背书，而不是"感觉快了"。</span></code></pre>
+
+  <pre><code><span class="cmt">// 第 9 章 gtest 的延伸：用 chrono 在 TEST 里做"冒烟基准"（只打印，不断言性能）</span>
+<span class="kw">#include</span> <span class="type">&lt;gtest/gtest.h&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;chrono&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;string&gt;</span>
+
+TEST(BenchmarkSmoke, BuildString) {
+    <span class="kw">auto</span> t0 <span class="op">=</span> std::chrono::steady_clock::<span class="fn">now</span>();
+    std::string s;
+    s.<span class="fn">reserve</span>(<span class="num">1000000</span>);
+    <span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="num">0</span>; i <span class="op">&lt;</span> <span class="num">100000</span>; <span class="op">++</span>i)
+        s <span class="op">+=</span> std::<span class="fn">to_string</span>(i);
+    <span class="kw">auto</span> ms <span class="op">=</span> std::chrono::duration_cast<span class="op">&lt;</span>std::chrono::milliseconds<span class="op">&gt;</span>(
+        std::chrono::steady_clock::<span class="fn">now</span>() <span class="op">-</span> t0).<span class="fn">count</span>();
+    std::<span class="fn">printf</span>(<span class="str">"build string: %lld ms\n"</span>, ms);
+    EXPECT_GT(s.<span class="fn">size</span>(), <span class="num">0u</span>);   <span class="cmt">// 断言只管正确性，耗时仅供人工对比</span>
+}</code></pre>
+
+  <table>
+    <tr><th>瓶颈类型</th><th>典型信号（profiler 报告里看什么）</th><th>对策方向</th></tr>
+    <tr><td>CPU 密集</td><td>热点函数 self 时间高、IPC 接近 1</td><td>改进算法、减少冗余计算、-O2/-O3</td></tr>
+    <tr><td>内存分配</td><td>page-faults 高、std::string/vector 符号霸榜</td><td>reserve、对象池、复用缓冲区</td></tr>
+    <tr><td>IO 等待</td><td>程序总时间远大于 CPU 时间、阻塞调用多</td><td>异步 IO、批量读写、缓存结果</td></tr>
+    <tr><td>缓存不友好</td><td>IPC 低、cache-misses 高</td><td>连续内存访问、调整遍历顺序、数据布局</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>把 15.4～15.7 连成一条完整的作战线：<strong>gprof/perf stat 看全局 → perf record/perf report 锁热点 → 按瓶颈类型选对策 → 优化后复测对比</strong>。性能分析不是一次性的动作，而是每次改动都要走的流程。数据在手，优化才能运筹帷幄；没有数据就动手，那是盲人摸象。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>性能分析（profiling）</code>、<code>热点</code>、<code>插桩式 profiler</code>、<code>采样式 profiler</code>。再回答：90/10 法则对优化策略有什么指导意义？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个概念对应"测量程序行为 / 最烧时间的代码 / 埋记录仪 / 拍快照"；90/10 法则想想"力气花在哪 10% 上"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>性能分析：用工具测量程序运行时的真实行为，找出时间花在哪；热点：占用执行时间最多的那段代码；插桩式 profiler：编译时在函数入口埋计数代码，精确统计调用次数（代表 gprof）；采样式 profiler：按固定频率给程序拍快照，看快照落在哪个函数（代表 perf）。90/10 法则说程序约 90% 的执行时间花在 10% 的代码上，因此优化应集中火力在 profiler 报告榜首的热点上——先定位那 10%，再动手。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>为每个需求选一条命令：(a) 看程序整体跑了多久（三种时间）；(b) 用 gprof 分析 gmon.out 并输出到 report.txt；(c) 用 -pg 编译 app.cpp 以便 gprof 分析；(d) 跑一次程序并输出整体性能概要；(e) 采样并生成 perf.data；(f) 读取 perf.data 显示热点表。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>六个候选：time、g++ -pg -g、gprof、perf stat、perf record、perf report。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>time ./app</code>；(b) <code>gprof ./app gmon.out &gt; report.txt</code>；(c) <code>g++ -pg -g app.cpp -o app</code>；(d) <code>perf stat ./app</code>；(e) <code>perf record ./app</code>；(f) <code>perf report</code>。补充：加 <code>-g</code> 让 perf record 抓调用栈，加 <code>-d</code> 让 perf stat 多输出缓存计数。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：读报告定方案 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>perf stat 输出如下（示意）：<code>instructions 6.98e9</code>、<code>cycles 4.37e9</code>、<code>insn per cycle 1.60</code>、<code>cache-misses 512,000,000</code>、<code>branch-misses 0.31%</code>。请回答：① IPC 高还是低？说明什么？② cache-misses 偏高时程序大概率属于哪类瓶颈、下一步用哪个 perf 命令确认？③ 优化顺序上应该先动算法还是先动微优化，为什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>IPC=1.60 不算低；cache-misses 高要往内存访问模式想；优化顺序想想 15.7 的铁律。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① IPC 1.60 属于中等偏上，说明 CPU 大部分周期在有效执行指令，纯算力没有明显浪费；② cache-misses 高（5 亿次量级）说明内存访问效率差，属于"缓存不友好"类瓶颈，下一步用 <code>perf record -g ./app</code> 抓调用栈、看热点函数里哪些循环在跳跃访问内存，也可用 <code>perf stat -d</code> 对比 cache-references/cache-misses 比例确认；③ 先算法后微优化——O(n²) 换 O(n log n) 是数量级提升，微优化只能挤几个百分点，顺序反了等于在错误的战场上消耗兵力。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：完整走一遍性能分析流程 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用本章的 app.cpp 完整做一遍：① <code>time ./app</code> 记录基线；② <code>g++ -pg -g</code> 编译，运行生成 gmon.out，用 <code>gprof -b ./app gmon.out</code> 看 flat profile 并指出热点函数；③ <code>perf stat -d ./app</code> 记录整体概要，再用 <code>perf record -g</code> + <code>perf report</code> 验证热点与 gprof 结论一致；④ 把 compute 的循环体改成 15.7 的字符串拼接版（或把 <code>1.0 / i / i</code> 换成更贵的计算），复测对比，验证"改动前后同一把尺子"；⑤ 把每一步命令、输出关键行、结论记成实验笔记。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 15.4 → 15.5 → 15.6 → 15.2 四步工作流的顺序走；对比时保持相同的优化等级（都 -O0 或都 -O2），否则对比无效。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>time ./app</code> 记下 real 时间；② <code>g++ -pg -g app.cpp -o app &amp;&amp; ./app</code> 生成 gmon.out（正常退出才落盘），<code>gprof -b ./app gmon.out</code>，榜首应为 compute(int)，占 95% 以上；③ <code>perf stat -d ./app</code> 看计数，<code>perf record -g ./app &amp;&amp; perf report</code>，Overhead 榜首同为 compute(int)——两把尺子结论一致；④ 改动后按同样优化等级重编，再跑 <code>time</code> 与 <code>perf stat</code> 对比 baseline；⑤ 笔记记录命令原文、输出关键行、前后数字——这就是"有账可查"的优化习惯。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

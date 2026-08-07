@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第3章：编译器与工具链：GCC 源码安装 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter03.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第3章：编译器与工具链：GCC 源码安装 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter03.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="3" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：编译器与工具链：GCC 源码安装</h1>
+  <p class="chapter-subtitle">编译器是把 C++ 源码翻译成机器码的"翻译官"；当系统自带的翻译官太老、听不懂新标准时，你需要亲手从源码再培养一位</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案如拆机。再离奇的案子，也不过是案发、取证、推理、定案几个环节——总有一环出了岔子。GCC 装不上也是一样：下载、依赖、配置、编译、安装，五个环节里必有一环出了问题。我不信巧合，只信把每个环节单独拎出来查个水落石出。这一章，随我把这条链路一节一节拆开看。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 零基础铺垫：GCC 是什么 ========== -->
+  <h2>3.1 零基础铺垫：GCC 是什么：把 C++ 翻译成机器码的编译器家族</h2>
+
+  <p>先回答一个最基本的问题：<strong>什么是编译器（compiler）？</strong>说人话，编译器就是一个"翻译官"——把人类能读懂的源码（比如 C++）翻译成 CPU 能直接执行的机器码。第 1 章讲过，C++ 是编译型语言：写好的 <code>.cpp</code> 文件必须先经过编译，生成可执行文件，才能运行。而这个"翻译"动作的执行者，就是本章的主角 <strong>GCC</strong>。</p>
+
+  <p><strong>GCC</strong> 全称 <strong>GNU Compiler Collection</strong>（GNU 编译器集合），是 GNU 项目（GNU 是 "GNU's Not Unix" 的递归缩写，一个致力于自由软件的操作系统项目）的核心成果之一，由自由软件基金会（FSF）维护，1987 年发布第一个版本。它最初只支持 C 语言，名字叫 GNU C Compiler，后来逐渐加入 C++、Fortran、Go、Ada 等多种语言的支持，名字也随之改成了"编译器集合"。你常用的 <code>gcc</code> 和 <code>g++</code>，其实都是这一个编译器家族的成员：<code>gcc</code> 按 C 语言规则编译 <code>.c</code> 文件，<code>g++</code> 按 C++ 规则编译 <code>.cpp</code> 文件，并且链接时会自动带上 C++ 标准库 libstdc++。</p>
+
+  <p>用系统分析的方法看，一个编译器的内部可以分成三段流水线：<strong>前端</strong>负责"读源码"——做词法、语法分析，把源码变成一种统一的中间表示（GCC 里叫 GIMPLE）；<strong>中端</strong>负责"做优化"——在中间表示上做各种优化（死代码消除、内联、循环优化等），这部分与具体语言和硬件都无关；<strong>后端</strong>负责"生成机器码"——把优化后的中间表示翻译成某个 CPU 架构的汇编。正因为三段分离，GCC 才能做到"多种语言前端 + 多种架构后端"的排列组合：加一种新语言只写前端，支持一种新 CPU 只写后端。</p>
+
+  <table>
+    <tr><th>命令</th><th>角色</th><th>说人话</th></tr>
+    <tr><td><code>gcc</code></td><td>C 语言前端驱动</td><td>编译 C 源码</td></tr>
+    <tr><td><code>g++</code></td><td>C++ 语言前端驱动</td><td>编译 C++ 源码，链接时自动带 libstdc++</td></tr>
+    <tr><td><code>gfortran</code></td><td>Fortran 前端驱动</td><td>编译 Fortran 源码</td></tr>
+    <tr><td><code>as</code> / <code>ld</code></td><td>汇编器 / 链接器</td><td>来自 binutils 包，负责汇编与链接</td></tr>
+    <tr><td><code>libstdc++</code></td><td>C++ 标准库</td><td>C++ 程序运行时要依赖的标准库实现</td></tr>
+  </table>
+
+  <p>为什么你通常感觉不到"工具链"的存在？因为 <code>g++</code> 一条命令把预处理、编译、汇编、链接四步全包了。但搞清楚这几步，是后面排查一切编译问题的前提——报错发生在哪一步，问题就出在哪一类东西上。</p>
+
+  <pre><code><span class="cmt"># 用 g++ 编译 C++ 程序：一条命令完成 预处理→编译→汇编→链接</span>
+g++ hello.cpp -o hello
+
+<span class="cmt"># 用 gcc 也能编译 C++ 文件，但链接时必须手动加 -lstdc++</span>
+gcc hello.cpp -o hello -lstdc++</code></pre>
+
+  <pre><code><span class="cmt"># 查看 GCC 家族成员版本（-v 会打印完整的编译配置与版本号）</span>
+gcc --version
+g++ --version
+
+<span class="cmt"># 工具链的其他成员来自 binutils 包</span>
+as --version
+ld --version</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>想亲眼看看"一条 g++ 命令背后发生了什么"，执行 <code>g++ -v hello.cpp -o hello</code>——它会把调用的 cc1plus（编译器本体）、as（汇编器）、collect2/ld（链接器）一行行打印出来。这就是系统分析的起点：<strong>先看清环节，再谈定位问题</strong>。</p>
+  </div>
+
+  <!-- ========== 3.2 GCC 版本与 C++ 标准支持对照 ========== -->
+  <h2>3.2 GCC 版本与 C++ 标准支持对照</h2>
+
+  <p>C++ 不是一成不变的语言，它由 ISO 标准化组织维护，标准编号为 ISO/IEC 14882，大约每三年发布一个新版本：C++98（1998 年）、C++11（2011 年）、C++14（2014 年）、C++17（2017 年）、C++20（2020 年）。每发布一个新标准，编译器都要花上几年才能把它完整实现——<strong>所以"编译器版本够不够新"直接决定了你能不能用上新语法</strong>。</p>
+
+  <p>GCC 对 C++ 各标准的支持进度，记住下面四个里程碑就够用了：<strong>GCC 4.8</strong>（2013 年）起完整支持 <strong>C++11</strong>；<strong>GCC 5.1</strong>（2015 年）是首个完整支持 <strong>C++14</strong> 语言特性的版本；<strong>GCC 7</strong>（2017 年）引入 <strong>C++17</strong>（GCC 8 补全剩余特性）；<strong>GCC 10</strong>（2020 年）提供 <strong>-std=c++20</strong> 选项，支持 C++20 的大部分特性。还有一个容易踩的坑：<strong>默认模式永远落后于最新标准</strong>——GCC 5 的默认模式仍是 gnu++98，GCC 6 起默认 gnu++14，直到 GCC 11 才把默认改为 gnu++17。也就是说，就算你装的是新 GCC，不写 <code>-std=</code> 选项，它也只会按旧标准编译你的代码。</p>
+
+  <table>
+    <tr><th>GCC 版本</th><th>发布年</th><th>完整支持的标准</th><th>开启选项</th></tr>
+    <tr><td>GCC 4.8.1</td><td>2013</td><td>C++11</td><td><code>-std=c++11</code></td></tr>
+    <tr><td>GCC 5.1</td><td>2015</td><td>C++14</td><td><code>-std=c++14</code></td></tr>
+    <tr><td>GCC 7</td><td>2017</td><td>C++17</td><td><code>-std=c++17</code></td></tr>
+    <tr><td>GCC 10</td><td>2020</td><td>C++20（大部分）</td><td><code>-std=c++20</code></td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 编译时用 -std= 显式指定标准（gnu++14 表示"带 GNU 扩展的 C++14"）</span>
+g++ -std=c++14 hello.cpp -o hello
+g++ -std=c++17 hello.cpp -o hello
+g++ -std=c++20 hello.cpp -o hello
+
+<span class="cmt"># 看看当前 GCC 默认按什么标准编译（GCC 5 默认 gnu++98）</span>
+g++ -dumpspecs | <span class="fn">grep</span> -o <span class="str">"std=gnu++[0-9]*"</span> | <span class="fn">head</span> -<span class="num">1</span></code></pre>
+
+  <pre><code><span class="cmt">// __cplusplus 宏：编译期告诉你当前按哪个标准编译</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// C++11 输出 201103L，C++14 输出 201402L，C++17 输出 201703L</span>
+    std::cout <span class="op">&lt;&lt;</span> __cplusplus <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>日常排查时记住一句口诀：<strong>看到新语法报语法错误，先查两件事——编译器版本够不够新、-std= 有没有写对</strong>。比如在 GCC 4.8 上编译 C++14 代码，会直接报 <code>cc1plus: error: unrecognized command line option '-std=c++14'</code>——问题一目了然：不是代码错了，是"翻译官"太老。</p>
+
+  <div class="warning">
+    <p><strong>注意</strong>：判断"我的 GCC 支持哪个标准"，权威依据是 gcc.gnu.org 上每个版本的发布说明（Release Series Changes）和 libstdc++ 的标准支持状态页。网上流传的"版本号对照表"偶尔会有偏差，涉及关键决策时以官网为准。</p>
+  </div>
+
+  <!-- ========== 3.3 为什么有时必须源码安装 ========== -->
+  <h2>3.3 为什么有时必须源码安装</h2>
+
+  <p>大多数 Linux 发行版都自带 GCC，直接 <code>sudo yum install gcc gcc-c++</code> 或 <code>sudo apt install build-essential</code> 就能用。但系统自带的编译器有一个先天局限：<strong>版本由发行版决定，且普遍偏旧</strong>。CentOS 7 自带的是 GCC 4.8.5（只完整支持 C++11），Ubuntu 16.04 自带 GCC 5.4；而不少第三方库为了提高性能、简化代码，都要求较新的编译器——比如 POCO 这类现代 C++ 库，新版本就明确要求支持 C++14 甚至 C++17 的编译器。这就是本章素材记录的原始动机："对于一些源码的编译如 poco 库，需要的 GCC 的版本要求比较高，所以需要源码编译 GCC"。</p>
+
+  <p>什么时候必须走源码安装？三种典型场景：第一，<strong>要用新标准</strong>——发行版只提供老编译器，而你的项目想用 C++17/C++20；第二，<strong>要特定版本</strong>——某个库或工具链要求精确的 GCC 版本（编译器版本影响 ABI 兼容性，混用不同版本编译的库可能链接失败）；第三，<strong>发行版仓库里根本没有</strong>——某些精简系统或特殊发行版不提供 GCC 包。相比之下，用 apt/yum 装的是发行版"定制过"的版本，胜在快、有依赖管理，但版本选择几乎没有余地。</p>
+
+  <table>
+    <tr><th>维度</th><th>包管理器安装（apt/yum）</th><th>源码安装</th></tr>
+    <tr><td>版本选择</td><td>发行版打包的固定版本</td><td>任意版本，精确可控</td></tr>
+    <tr><td>安装位置</td><td>系统目录（/usr/bin）</td><td>--prefix 自定义（如 /usr/local 或 /opt/gcc-5.1.0）</td></tr>
+    <tr><td>耗时</td><td>几分钟</td><td>编译几十分钟到几小时</td></tr>
+    <tr><td>升级维护</td><td>包管理器自动处理</td><td>自己重新编译安装</td></tr>
+    <tr><td>适合场景</td><td>日常开发、无版本要求</td><td>新标准、特定版本、多版本共存</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 看看系统自带的 GCC 是哪个版本（CentOS 7 上是 4.8.5）</span>
+gcc --version
+<span class="cmt"># gcc (GCC) 4.8.5 20150623 (Red Hat 4.8.5-44)</span>
+
+<span class="cmt"># 想用 C++14？老编译器直接拒绝：</span>
+g++ -std=c++14 test.cpp
+<span class="cmt"># cc1plus: error: unrecognized command line option '-std=c++14'</span></code></pre>
+
+  <pre><code><span class="cmt"># 源码安装 GCC 前，先确认"能编译编译器的编译器"存在（自举 bootstrap）</span>
+gcc --version          <span class="cmt"># 需要一套可用的工具链来编译新 GCC</span>
+make --version         <span class="cmt"># GNU make</span>
+bison --version        <span class="cmt"># 生成语法分析器（可选但建议）</span>
+
+<span class="cmt"># CentOS / RHEL 上一次性装齐基础开发工具</span>
+sudo yum groupinstall <span class="str">"Development Tools"</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>源码安装 GCC 有个著名的"鸡生蛋"问题：编译 GCC 需要编译器。解法是<strong>自举（bootstrap）</strong>——先用系统里已有的老 GCC 把新 GCC 的 C 部分编译出来（第一阶段），再用这个新编译器把新 GCC 完整地再编译一遍（第二阶段）。所以系统里有一个能用的 gcc 是前提，哪怕它很老。第 4 章我们还会见到不编译源码、直接用 devtoolset/SCL 切换 GCC 版本的方案。</p>
+  </div>
+
+  <!-- ========== 3.4 第一步：下载源码与准备依赖 ========== -->
+  <h2>3.4 第一步：下载源码与准备依赖</h2>
+
+  <p>GCC 的所有版本都发布在 GNU 官方 FTP 上：<code>https://ftp.gnu.org/gnu/gcc/</code>（入口页是 gcc.gnu.org 的 Releases 页面）。国内网络访问 ftp.gnu.org 可能较慢，可以改用清华 TUNA 镜像 <code>https://mirrors.tuna.tsinghua.edu.cn/gnu/gcc/</code>，文件内容完全一致。本章素材下载的是 <strong>gcc-5.1.0</strong>——这是首个完整支持 C++14 的版本，2020 年那会儿用它来编译对 C++14 有要求的 POCO 库正合适。</p>
+
+  <p>源码解压后先别急着 configure，GCC 编译自己需要三个数学库：<strong>GMP</strong>（GNU Multiple Precision Arithmetic Library，任意精度整数/有理数运算库）、<strong>MPFR</strong>（基于 GMP 的多精度浮点运算库，保证正确舍入）、<strong>MPC</strong>（基于 GMP 和 MPFR 的复数运算库）。GCC 的前端在编译期做高精度常量运算（比如折叠 constexpr 浮点表达式）时会用到它们。GCC 5.1 对版本的要求是：<strong>GMP 4.2+、MPFR 2.4.0+、MPC 0.8.0+</strong>——不满足时 configure 会直接报错。</p>
+
+  <pre><code><span class="cmt"># 从 GNU 官方 FTP 下载并解压（国内可换 TUNA 镜像，见上方提示）</span>
+wget https://ftp.gnu.org/gnu/gcc/gcc-5.1.0/gcc-5.1.0.tar.bz2
+tar xjf gcc-5.1.0.tar.bz2
+<span class="fn">cd</span> gcc-5.1.0</code></pre>
+
+  <p>最简单的依赖准备方式，是运行源码树里自带的脚本 <code>./contrib/download_prerequisites</code>——它自动从 <code>ftp://gcc.gnu.org/pub/gcc/infrastructure/</code> 下载 GCC 官方测试过的依赖版本（在 5.1.0 里是 gmp-4.3.2、mpfr-2.4.2、mpc-0.8.1，以及用于 Graphite 循环优化的 isl-0.14），解压到源码树内并创建 <code>gmp</code>、<code>mpfr</code>、<code>mpc</code> 软链接，顶层 configure 会自动识别它们，无需手动安装到系统。</p>
+
+  <pre><code><span class="cmt"># 一键下载并安放全部依赖（素材中的真实命令，在源码目录内执行）</span>
+./contrib/download_prerequisites
+
+<span class="cmt"># 脚本会创建如下软链接，configure 阶段自动识别：</span>
+<span class="cmt"># gmp -> gmp-4.3.2   mpfr -> mpfr-2.4.2   mpc -> mpc-0.8.1</span></code></pre>
+
+  <p>如果不想用脚本，也可以手动下载更新的依赖版本、逐个编译安装（素材里就是这么做的，用的是当时较新的 gmp-6.1.0 / mpfr-3.1.4 / mpc-1.0.3，默认安装到 /usr/local）：</p>
+
+  <pre><code><span class="cmt"># 备选方案：手动下载依赖（官方基础设施目录）</span>
+wget ftp://gcc.gnu.org/pub/gcc/infrastructure/gmp-6.1.0.tar.bz2
+wget ftp://gcc.gnu.org/pub/gcc/infrastructure/mpfr-3.1.4.tar.bz2
+wget ftp://gcc.gnu.org/pub/gcc/infrastructure/mpc-1.0.3.tar.gz
+
+<span class="cmt"># 依次解压、configure、编译、安装（先 gmp，再 mpfr，最后 mpc）</span>
+tar xjf gmp-6.1.0.tar.bz2
+<span class="fn">cd</span> gmp-6.1.0
+./configure
+make <span class="op">&amp;&amp;</span> sudo make install
+<span class="fn">cd</span> ..
+
+<span class="cmt"># mpfr、mpc 同样操作，顺序不能乱：mpc 依赖 gmp 和 mpfr</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：手动编译 gmp 时如果报 <code>error: No usable m4 in $PATH or /usr/5bin</code>，说明系统缺 m4（一个宏处理工具），装上即可：<code>sudo yum install m4</code>（Debian/Ubuntu 用 <code>sudo apt install m4</code>）。这是素材里真实遇到过的坑。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>还有第三条路：直接用系统的包管理器装依赖开发包——CentOS 上 <code>yum install gmp-devel mpfr-devel libmpc-devel</code>，Ubuntu 上 <code>apt install libgmp-dev libmpfr-dev libmpc-dev</code>。装到系统路径后，GCC 的 configure 也能找到它们。缺点是这个方案依赖系统仓库里这些库的版本够新，CentOS 7 仓库里的版本就偏旧，所以素材里才选了手动编译较新版本。</p>
+  </div>
+
+  <!-- ========== 3.5 第二步：configure ========== -->
+  <h2>3.5 第二步：configure：探测环境、生成构建配置</h2>
+
+  <p><code>configure</code> 是一个由 autoconf 工具生成的可执行脚本（几乎所有 GNU 软件的源码树里都有），它的职责是<strong>探测当前系统的环境</strong>：有没有可用的编译器、各依赖库装在哪、头文件在不在、CPU 是什么架构，然后把结果写进生成的 <code>Makefile</code> 和 <code>config.h</code>。换句话说，<code>configure</code> 负责回答"这台机器上怎么编译"，<code>make</code> 负责回答"按这个方案编译"。同一个源码包，在千奇百怪的 Linux 环境里都能编译成功，靠的就是这一层探测。</p>
+
+  <p>GCC 的 configure 参数很多，日常够用的就这几个：<code>--prefix</code> 指定安装目录（默认 <code>/usr/local</code>，多版本共存时改成 <code>/opt/gcc-5.1.0</code> 之类的独立目录）；<code>--enable-languages=c,c++</code> 只编译 C 和 C++ 两个前端（默认会编全部语言，白白多花几十分钟）；<code>--enable-checking=release</code> 控制编译器内部一致性检查的强度（release 是性能与安全之间的折中，默认是 yes）；<code>--disable-multilib</code> 禁止生成 32 位变体——64 位系统上如果没装 32 位库，多库支持会导致链接阶段报错，直接关掉最省心。</p>
+
+  <pre><code><span class="cmt"># 素材中的真实配置命令（在 gcc-5.1.0 源码目录内执行）</span>
+./configure --enable-checking=release --enable-languages=c,c++ --disable-multilib</code></pre>
+
+  <pre><code><span class="cmt"># 多版本共存时，用 --prefix 把新 GCC 装到独立目录</span>
+./configure --prefix=/opt/gcc-5.1.0 \
+    --enable-languages=c,c++ \
+    --enable-checking=release \
+    --disable-multilib
+
+<span class="cmt"># 依赖装到非标准位置时，用 --with-* 指明路径（按需）</span>
+<span class="cmt"># ./configure --with-gmp=/usr/local --with-mpfr=/usr/local --with-mpc=/usr/local</span></code></pre>
+
+  <p>还有一个推荐做法：<strong>out-of-tree 构建</strong>——在源码目录外单独建一个 build 目录，从那里调用源码树里的 configure。这样编译产生的海量中间文件全部落在 build 目录里，源码目录始终保持干净，想重来就删掉 build 目录，源码毫发无损。</p>
+
+  <pre><code><span class="cmt"># 推荐：源码目录外构建（用 ../configure 引用源码树）</span>
+mkdir build
+<span class="fn">cd</span> build
+../configure --enable-checking=release --enable-languages=c,c++ --disable-multilib</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：configure 阶段最常见的报错是依赖缺失——如果看到 <code>error: Building GCC requires GMP 4.2+, MPFR 2.4.0+ and MPC 0.8.0+</code> 或 <code>configure: error: gmp.h not found</code>，说明依赖三件套还没就绪。回到 3.4 节把 <code>./contrib/download_prerequisites</code> 跑一遍即可。记住狄仁杰的排查法：<strong>报错出现的位置 = 出问题的环节</strong>，configure 阶段报错，问题几乎都在依赖。</p>
+  </div>
+
+  <!-- ========== 3.6 第三步：编译、安装与验证 ========== -->
+  <h2>3.6 第三步：编译、安装与验证</h2>
+
+  <p>configure 顺利通过后，真正的重头戏来了。<code>make</code> 默认是单线程编译，GCC 这种体量的项目会慢到怀疑人生，所以一定要并行：<code>make -j$(nproc)</code>（nproc 输出 CPU 核数，让编译任务铺满所有核）。默认配置下 make 会执行<strong>三阶段自举</strong>：第一阶段用系统老编译器编译出新 GCC；第二阶段用这个新 GCC 重新编译自己；第三阶段再编译一次并与第二阶段的结果比对，确保编译器"自我一致"。整个过程在八核机器上通常要 30 分钟到 1 小时以上，期间风扇狂转是正常现象。</p>
+
+  <p>编译完成后 <code>make install</code> 把产物安装到 <code>--prefix</code> 指定的目录（默认 <code>/usr/local</code>）：可执行文件进 <code>/usr/local/bin</code>（gcc、g++、gfortran 等），库文件进 <code>/usr/local/lib64</code>（libstdc++.so.6 就在这里），C++ 标准库头文件进 <code>/usr/local/include/c++/5.1.0</code>。安装完成后用 <code>gcc -v</code> 或 <code>gcc --version</code> 验证版本——素材里的真实输出是 <code>gcc version 5.1.0 (GCC)</code>。</p>
+
+  <pre><code><span class="cmt"># 并行编译：-j 后面跟并行任务数，$(nproc) 自动取 CPU 核数</span>
+make -j$(nproc)
+
+<span class="cmt"># 编译通过后安装（默认装到 /usr/local，需 root 权限）</span>
+sudo make install</code></pre>
+
+  <pre><code><span class="cmt"># 验证版本（素材中的真实输出）</span>
+gcc -v
+<span class="cmt"># gcc version 5.1.0 (GCC)</span>
+gcc --version
+<span class="cmt"># gcc (GCC) 5.1.0</span>
+g++ --version
+
+<span class="cmt"># 小实验：编译一个需要 C++14 的程序，确认新编译器真的能用</span>
+g++ -std=c++14 hello.cpp -o hello &amp;&amp; ./hello</code></pre>
+
+  <p>验证通过，但还有最后一道坎：<strong>新编译器的库，系统找不找得到</strong>。新 GCC 的 libstdc++ 装在 <code>/usr/local/lib64</code>，而系统里其他程序（以及后续编译出的程序）默认去 <code>/usr/lib64</code> 找库——版本对不上时，运行程序会报 <code>libstdc++.so.6: version 'GLIBCXX_3.4.21' not found</code>。素材里的处理办法是把新库复制到系统库目录（需要 root）：</p>
+
+  <pre><code><span class="cmt"># 素材中的真实处理：把新 libstdc++ 复制到系统库目录</span>
+cp -vf /usr/local/lib64/libstdc++.* /usr/lib64/
+
+<span class="cmt"># 不想动系统目录的话，用环境变量指路（仅对当前 shell 生效）</span>
+export LD_LIBRARY_PATH=/usr/local/lib64:<span class="param">$LD_LIBRARY_PATH</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>make 阶段报错也别慌，先看错误信息里"缺什么"。缺头文件（如 <code>gmp.h: No such file</code>）说明依赖没就绪；缺工具（如 m4、bison）就装工具；报 <code>internal compiler error</code> 且发生在优化环节，往往是内存不足或磁盘写满。每一步报错都对应一个明确环节——这就是系统分析的价值。</p>
+  </div>
+
+  <!-- ========== 3.7 常见坑与多版本共存 ========== -->
+  <h2>3.7 常见坑与多版本共存</h2>
+
+  <p>把源码安装整条链路跑通之后，还有一批高频问题值得提前打预防针。下面这张表汇总了最常见的报错、原因和解决方向——建议收藏，遇到问题先对号入座，再动手。</p>
+
+  <table>
+    <tr><th>报错现象</th><th>原因</th><th>解决</th></tr>
+    <tr><td><code>configure: error: gmp.h not found</code> / Building GCC requires GMP…</td><td>GMP/MPFR/MPC 依赖未就绪</td><td>跑 <code>./contrib/download_prerequisites</code> 或装 dev 包</td></tr>
+    <tr><td><code>error: No usable m4 in $PATH or /usr/5bin</code></td><td>系统缺 m4 宏处理工具</td><td><code>yum install m4</code> / <code>apt install m4</code></td></tr>
+    <tr><td><code>libstdc++.so.6: version 'GLIBCXX_3.4.21' not found</code></td><td>运行时用了系统旧版 libstdc++</td><td>复制新库到 /usr/lib64 或设置 LD_LIBRARY_PATH</td></tr>
+    <tr><td><code>/usr/bin/ld: cannot find -lstdc++</code></td><td>链接器没找到新标准库</td><td>确认安装路径，必要时加 <code>-L/usr/local/lib64</code></td></tr>
+    <tr><td>make 中途被 kill / internal compiler error</td><td>内存或磁盘不足</td><td>降低 <code>-j</code> 并行度，清理磁盘空间</td></tr>
+  </table>
+
+  <p>第二个高频主题是<strong>多版本共存</strong>。生产环境里常见的诉求是"系统默认 GCC 不动，新 GCC 供特定项目用"。做法很简单：新版本用 <code>--prefix=/opt/gcc-5.1.0</code> 装到独立目录，然后通过 <strong>PATH 环境变量</strong>控制"哪个 gcc 生效"。PATH 是 shell 查找命令时依次扫描的目录列表，<strong>排在前面的目录优先</strong>——把新 GCC 的 bin 目录放在 PATH 最前面，<code>gcc</code> 就指向新版本；去掉它，又回到系统版本。改完 PATH 记得 <code>hash -r</code> 清除 shell 的命令路径缓存，并用 <code>which gcc</code> 确认当前生效的是谁。</p>
+
+  <pre><code><span class="cmt"># 把新 GCC 放到 PATH 最前面（当前 shell 立即生效）</span>
+export PATH=/opt/gcc-5.1.0/bin:<span class="param">$PATH</span>
+
+<span class="cmt"># 确认当前生效的 gcc 到底是哪个（输出 /opt/gcc-5.1.0/bin/gcc）</span>
+which gcc
+
+<span class="cmt"># 写进 ~/.bashrc 永久生效，然后刷新；hash -r 清除旧路径缓存</span>
+<span class="fn">echo</span> <span class="str">'export PATH=/opt/gcc-5.1.0/bin:$PATH'</span> &gt;&gt; ~/.bashrc
+source ~/.bashrc
+hash -r</code></pre>
+
+  <pre><code><span class="cmt"># 排查"新 gcc 编译的程序跑不起来"的完整流程</span>
+<span class="cmt"># 1. 看可执行文件依赖了哪些动态库</span>
+ldd ./app | <span class="fn">grep</span> stdc++
+<span class="cmt">#   libstdc++.so.6 =&gt; /usr/lib64/libstdc++.so.6  ← 找到旧库了</span>
+
+<span class="cmt"># 2. 确认新库的版本符号是否满足要求</span>
+strings /usr/local/lib64/libstdc++.so.6 | <span class="fn">grep</span> GLIBCXX_3.4.21
+
+<span class="cmt"># 3. 让运行时找到新库（二选一）：复制到系统目录，或设 LD_LIBRARY_PATH</span>
+export LD_LIBRARY_PATH=/usr/local/lib64:<span class="param">$LD_LIBRARY_PATH</span></code></pre>
+
+  <p>最后一个提醒关于 <strong>ABI 兼容性</strong>（ABI 是 Application Binary Interface，说人话就是"编译好的二进制之间互相调用的约定"）。GCC 5 起 libstdc++ 默认启用新的 C++11 ABI（可用宏 <code>_GLIBCXX_USE_CXX11_ABI</code> 查看，默认值为 1），这是 GCC 5 发布说明里明确标注的重大变更：用新编译器编译的库和用老编译器编译的库，std::string 等类型的内部布局不同，混链可能出问题。如果你的项目要链接一批用老 ABI 编译的第三方库，可以给新编译加 <code>-D_GLIBCXX_USE_CXX11_ABI=0</code> 切回旧 ABI——但整个项目的所有编译单元必须保持一致。</p>
+
+  <pre><code><span class="cmt"># 查看当前编译器默认的 ABI 模式（1 = 新 C++11 ABI，0 = 旧 ABI）</span>
+g++ -dM -E -x c++ /dev/null | <span class="fn">grep</span> _GLIBCXX_USE_CXX11_ABI
+<span class="cmt"># #define _GLIBCXX_USE_CXX11_ABI 1</span>
+
+<span class="cmt"># 需要兼容旧 ABI 库时，统一加这个宏再编译</span>
+g++ -std=c++14 -D_GLIBCXX_USE_CXX11_ABI=<span class="num">0</span> app.cpp -o app</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>回顾本章的排查心法：<strong>把链路拆成环节，报错在哪环，问题就在哪环</strong>——下载失败看网络与镜像，configure 报错看依赖，make 报错看工具与资源，运行报错看库路径与 ABI。GCC 源码安装看似步骤多，其实每个环节都能独立验证，这正是系统分析最典型的用法。下一章我们继续沿用这套方法，讲环境变量与多版本 GCC 的切换管理。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>编译器</code>、<code>GCC</code>、<code>gcc 与 g++ 的区别</code>。再回答：为什么 GCC 5.1 已经支持 C++14，编译时还得写 <code>-std=c++14</code>？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 3.1 的"翻译官"比喻、3.2 的"默认模式永远落后"这个坑。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>编译器：把源码翻译成机器码的程序；GCC：GNU Compiler Collection，GNU 项目的多语言编译器家族；gcc 按 C 规则编译 .c 文件，g++ 按 C++ 规则编译 .cpp 文件并自动链接 libstdc++。因为 GCC 5 的默认模式仍是 gnu++98，新标准必须用 <code>-std=c++14</code> 显式开启（GCC 6 起默认 gnu++14，GCC 11 起默认 gnu++17）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把"下载 / 依赖准备 / 环境探测 / 编译 / 安装 / 验证"六个环节分别对应到一条命令（或一组命令）：<code>make</code>、<code>./configure ...</code>、<code>wget https://ftp.gnu.org/gnu/gcc/gcc-5.1.0/gcc-5.1.0.tar.bz2</code>、<code>./contrib/download_prerequisites</code>、<code>make install</code>、<code>gcc -v</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 3.4 → 3.5 → 3.6 的顺序走一遍就出来了。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>下载：<code>wget ...gcc-5.1.0.tar.bz2</code> + <code>tar xjf</code>；依赖准备：<code>./contrib/download_prerequisites</code>；环境探测：<code>./configure --enable-checking=release --enable-languages=c,c++ --disable-multilib</code>；编译：<code>make -j$(nproc)</code>；安装：<code>make install</code>；验证：<code>gcc -v</code>（应输出 gcc version 5.1.0）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：情景设计 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你的服务器是 CentOS 7（自带 gcc 4.8.5），要编译一个要求 C++14 的 POCO 库。写出完整的行动方案：从下载到验证，并说明如何避免影响系统原有的 gcc。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>把 3.4～3.7 串起来；"不影响系统 gcc"的关键是 --prefix 和 PATH。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>wget https://ftp.gnu.org/gnu/gcc/gcc-5.1.0/gcc-5.1.0.tar.bz2 && tar xjf</code> 并 <code>cd gcc-5.1.0</code>；② <code>./contrib/download_prerequisites</code> 准备 GMP/MPFR/MPC；③ <code>./configure --prefix=/opt/gcc-5.1.0 --enable-languages=c,c++ --enable-checking=release --disable-multilib</code>；④ <code>make -j$(nproc) && sudo make install</code>；⑤ 验证 <code>/opt/gcc-5.1.0/bin/gcc -v</code>；⑥ 编译 POCO 时把 <code>/opt/gcc-5.1.0/bin</code> 放 PATH 最前面（临时 export 或写 ~/.bashrc）。因为装到了 /opt 独立目录，系统自带的 /usr/bin/gcc 完全不受影响，随时可以切换。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：实战排障 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>实操环境（或虚拟机）里完成：源码安装 GCC 5.1.0 到 <code>/opt/gcc-5.1.0</code>，编译一个 C++14 程序并运行。然后故意制造并排查两个故障：① 程序运行时报 <code>libstdc++.so.6: version 'GLIBCXX_3.4.21' not found</code>；② <code>gcc --version</code> 显示的还是系统老版本。分别写出排查命令与解决步骤。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>故障①用 <code>ldd</code> 看库路径、用 LD_LIBRARY_PATH 或复制库解决；故障②用 <code>which gcc</code> 和 <code>hash -r</code> 排查 PATH 与命令缓存。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 先 <code>ldd ./app | grep stdc++</code> 确认链接到 /usr/lib64 的旧库，然后 <code>cp -vf /usr/local/lib64/libstdc++.* /usr/lib64/</code>（root），或 <code>export LD_LIBRARY_PATH=/usr/local/lib64:$LD_LIBRARY_PATH</code>；② <code>which gcc</code> 若输出 /usr/bin/gcc，说明 PATH 里新目录没生效——执行 <code>export PATH=/opt/gcc-5.1.0/bin:$PATH</code>（并写入 ~/.bashrc），再 <code>hash -r</code> 清除缓存后重试 <code>gcc --version</code>。记下每一步的报错原文和解决命令，这就是你的排障笔记。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

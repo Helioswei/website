@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第14章：调试实战：GDB 与断点 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter14.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第14章：调试实战：GDB 与断点 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter14.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="14" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第14章：调试实战：GDB 与断点</h1>
+  <p class="chapter-subtitle">程序不会说谎，说谎的是我们的猜测。学会让程序当场开口——断点、单步、看变量、翻调用栈，证据在手，bug 无处遁形</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案靠证据，不靠猜测。程序出错时，最有说服力的证据就是它停下那一刻的内部状态：变量是什么值、执行到哪一行、是谁一层层把它调进来的。GDB 就是我的惊堂木——一拍（断点），程序当场停住，把真相一五一十交代清楚。铁面无私：不冤枉一行好代码，也不放过一个坏变量。这一章，带你们练就一双只看证据的眼睛。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 14.1 调试是什么：先看证据再断案 ========== -->
+  <h2>14.1 调试是什么：程序出错，先看证据再断案</h2>
+
+  <p>先给<strong>调试（debugging）</strong>下个定义，说人话：<strong>调试就是在程序运行时观察它的内部状态，用证据定位错误根源的过程</strong>——程序跑出来的结果不对，我们不猜、不改、不碰运气，而是让程序停下来，看看它此刻内部到底发生了什么：变量是什么值、执行到了哪一行、是谁调用了谁。程序里的错误叫 <strong>bug</strong>（缺陷），把 bug 找出来修掉的过程就叫调试。程序行为其实有三层：<strong>你想要的</strong>、<strong>你写出来的</strong>、<strong>机器实际执行的</strong>——三层一旦不一致，bug 就诞生了。编译器只能替你抓语法错误；逻辑错误（结果不对、崩溃、卡死）机器不会告诉你错在哪，只能靠调试自己去看。</p>
+
+  <p>新手最常见的调试方式，是"拍脑袋加 printf"：哪里不对，就在哪里打印一行，跑一遍看看输出。这招不是不能用，但有三条硬伤。第一，<strong>要改代码、要重新编译</strong>——加一行打印就得重新编一次，循环往复，改一处跑一次；第二，<strong>看不到完整调用栈</strong>——printf 只能告诉你"我在这里打了个点"，却告诉不了你"这个函数是谁调进来的、调用链长什么样"，而很多 bug 的根源恰恰在调用者那边；第三，<strong>看完了还得记得删</strong>——打印代码忘了清理，就污染了源码，还可能因为输出缓冲（没刷新）而漏看关键信息。包青天办案子讲究铁面无私：<strong>不凭感觉，凭证据</strong>。printf 是"猜个地方、贴个条、碰运气"，GDB 是"让程序随时停下，把现场原封不动交出来"。下面的"一号卷宗" buggy.cpp 贯穿本章，先认识它：</p>
+
+  <pre><code><span class="cmt">// buggy.cpp —— 本章的「一号卷宗」：一个求和程序，藏着两个 bug 等着断案</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;vector&gt;</span>
+
+<span class="kw">int</span> <span class="fn">divide</span>(<span class="kw">int</span> a, <span class="kw">int</span> b) {
+    <span class="kw">return</span> a <span class="op">/</span> b;
+}
+
+<span class="kw">int</span> <span class="fn">square</span>(<span class="kw">int</span> x) {
+    <span class="kw">return</span> x <span class="op">*</span> x;
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    std::vector&lt;<span class="kw">int</span>&gt; nums = {<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>};
+    <span class="kw">int</span> sum = <span class="num">1</span>;                  <span class="cmt">// bug ①：初始值应为 0（笔误）</span>
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i <span class="op">&lt;</span> nums.<span class="fn">size</span>(); i<span class="op">++</span>) {
+        sum <span class="op">+=</span> nums[i];
+    }
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"sum = "</span> <span class="op">&lt;&lt;</span> sum <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">int</span> s = <span class="fn">square</span>(<span class="num">4</span>);
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"s = "</span> <span class="op">&lt;&lt;</span> s <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">int</span> q = <span class="fn">divide</span>(<span class="num">10</span>, <span class="num">0</span>);      <span class="cmt">// bug ②：除零（整数除零触发 SIGFPE）</span>
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"q = "</span> <span class="op">&lt;&lt;</span> q <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># printf 式排查：怀疑 sum 不对？加一行打印 → 重新编译 → 跑 → 看输出</span>
+<span class="cmt">// 改代码：在循环里塞一行</span>
+printf(<span class="str">"i=%d sum=%d\n"</span>, i, sum);   <span class="cmt">// 还得记得 #include &lt;cstdio&gt;</span>
+
+<span class="cmt"># 重新编译，再跑一遍</span>
+g++ buggy.cpp -o buggy <span class="op">&amp;&amp;</span> ./buggy
+<span class="cmt"># i=0 sum=1    ← 咦，sum 一开始就是 1？</span>
+<span class="cmt"># i=1 sum=2</span>
+<span class="cmt"># i=2 sum=4</span>
+<span class="cmt"># ...</span>
+
+<span class="cmt"># 看完还得记得把 printf 那行删掉，再编一次，再跑一次验证</span>
+<span class="cmt"># 一改、一编、一跑、一删、再编、再跑 —— 六个动作，只为看一个变量</span></code></pre>
+
+  <pre><code><span class="cmt"># GDB 式排查：不改一行代码，断点一贴、跑起来，当场审问</span>
+(gdb) <span class="fn">break</span> <span class="num">17</span>          <span class="cmt"># 在 sum += nums[i] 那一行贴暂停符（第 17 行）</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:17</span>
+<span class="cmt"># 17        sum += nums[i];</span>
+(gdb) <span class="fn">print</span> sum
+<span class="cmt"># $1 = 1          ← 铁证：sum 的初值就错了，根本不用跑完整个循环</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>铁面无私的第一条纪律：<strong>先取证，后下结论</strong>。看到结果不对，别急着改代码，先问三个问题：执行到哪一行了？关键变量是什么值？是谁把它调进来的？——这三个问题的答案，GDB 在程序停下的那一刻就能全部给出，而 printf 给不全。</p>
+  </div>
+
+  <!-- ========== 14.2 GDB 是什么：入场证 -g 与启动方式 ========== -->
+  <h2>14.2 GDB 是什么：入场证 -g 与三种启动方式</h2>
+
+  <p><strong>GDB（GNU Debugger，GNU 调试器）是 GNU 项目出品的命令行调试器</strong>——和第 3 章亲手编译的 GCC 出自同一家族，1986 年诞生，活到今天仍是 Linux 上调试 C/C++ 的事实标准，也支持 Rust、Go 等语言。说人话：<strong>GDB 是一个"能让程序随时暂停、任你翻看内部状态"的交互式工具</strong>。它有官方文档（sourceware.org 的 Debugging with GDB），本章所有命令都能在"Breakpoints"、"Continuing and Stepping"等章节查到原文。它没有图形界面，一切靠敲命令——这正是它的优势：可脚本化、可在任何服务器上远程调试，而且命令风格几十年稳定不变。</p>
+
+  <p>要进 GDB 这个"衙门"，程序得先办一张入场证：编译时加 <strong><code>-g</code></strong> 选项。<code>-g</code> 告诉编译器在可执行文件里写入<strong>调试信息（debug info）</strong>——说人话就是一张"源码地图"：哪一行对应哪条机器指令、变量叫什么名字、是什么类型。没有这张地图，GDB 只能看到一堆内存地址和汇编指令，看不到行号、也看不到变量名，等于审案没有卷宗。所以调试用的程序，编译命令通常是 <code>g++ -g buggy.cpp -o buggy</code>；再配合 <code>-O0</code>（关闭优化）效果最好——优化器会把变量"搬家"甚至"消失"，行号也会错位，让取证失真。发布给用户的版本可以不带 <code>-g</code>（减小体积），但调试版一定要带。</p>
+
+  <p>启动 GDB 有三种常见姿势（官方文档 "Invoking GDB" 一节的原文用法）：<strong>① <code>gdb ./buggy</code></strong>——最常用，启动后停在提示符 <code>(gdb)</code> 等命令；<strong>② <code>gdb ./buggy core</code></strong>——带上程序名和<strong>core dump</strong>（崩溃转储，说人话就是程序崩溃瞬间内存的"现场快照"文件）一起启动，事后分析一次已发生的崩溃；<strong>③ <code>gdb ./buggy -p 1234</code></strong>——附加（attach）到一个正在运行的进程（PID 1234）上，实时侦察一个"活着"的程序。退出用 <code>quit</code>（简写 <code>q</code>）。下面看卷宗怎么进：</p>
+
+  <pre><code><span class="cmt"># 编译调试版：-g 写入调试信息，-O0 关优化（调试期黄金组合）</span>
+g++ <span class="ann">-g</span> <span class="ann">-O0</span> buggy.cpp -o buggy
+
+<span class="cmt"># 启动 GDB，进入交互式提示符 (gdb)</span>
+gdb ./buggy
+<span class="cmt"># GNU gdb (GDB) 12.1</span>
+<span class="cmt"># Copyright (C) 2022 Free Software Foundation, Inc.</span>
+<span class="cmt"># ...</span>
+<span class="cmt"># Reading symbols from ./buggy...</span>
+(gdb) <span class="fn">quit</span></code></pre>
+
+  <pre><code><span class="cmt"># 反面教材：忘了 -g，GDB 也能启动，但明说「没有调试符号」</span>
+g++ buggy.cpp -o buggy_nosym
+gdb ./buggy_nosym
+<span class="cmt"># Reading symbols from ./buggy_nosym...</span>
+<span class="cmt"># (no debugging symbols found)...done.   ← 没有源码地图，行号变量名全瞎</span>
+(gdb) <span class="fn">break</span> <span class="num">17</span>
+<span class="cmt"># No line 17 in file "buggy.cpp".      ← 断点都贴不了，因为根本不知道行号</span>
+(gdb) <span class="fn">quit</span></code></pre>
+
+  <pre><code><span class="cmt"># 官方文档的三种启动姿势（Invoking GDB 一节）：</span>
+gdb ./buggy            <span class="cmt"># ① 只带程序：正常交互调试</span>
+gdb ./buggy core       <span class="cmt"># ② 程序 + core 崩溃转储：事后分析一次崩溃</span>
+gdb ./buggy -p 1234    <span class="cmt"># ③ 附加到运行中的进程（PID 1234）</span>
+
+<span class="cmt"># 不想看开头那一大段版权说明？加 -q 安静模式：</span>
+gdb -q ./buggy</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>看到 <code>(no debugging symbols found)</code> 别慌，这不是程序坏了，是卷宗没带——回编译命令补上 <code>-g</code> 重新编译即可。铁面无私的规矩：<strong>证据不全（没有调试信息），就先补齐证据再断案</strong>。</p>
+  </div>
+
+  <!-- ========== 14.3 断点三兄弟：break / 条件断点 / watch ========== -->
+  <h2>14.3 断点三兄弟：break / 条件断点 / watch</h2>
+
+  <p><strong>断点（breakpoint）</strong>说人话就是"贴在源码某一行上的暂停符"：程序执行到那一行就自动停住，等你检查现场。设断点用 <code>break</code>（简写 <code>b</code>），两种最常用的写法：<strong>按行号</strong> <code>break 17</code>（在当前源码文件第 17 行停）和<strong>按函数名</strong> <code>break divide</code>（一进 divide 函数就停——官方文档原话：按行号、函数名或精确地址指定停止位置）。GDB 会给每个断点编一个从 1 开始的编号；<code>info breakpoints</code> 列出全部断点及状态，<code>delete 2</code> 删除、<code>disable 2</code> / <code>enable 2</code> 临时停用/启用。这是断点"老大"：管的是"在哪停"。</p>
+
+  <p>断点"老二"是<strong>条件断点</strong>：<code>break 17 if i == 3</code>——只有当条件成立时才停，条件不成立就悄悄放行。官方文档明确说：每个断点都可以附加条件，用来精细控制是否停止。典型场景是循环：循环要跑一万次，你只关心第 100 次那一瞬间的状态，用条件断点一次到位，不用手动按一万次 <code>continue</code>。这是对付"偶发于特定迭代"的 bug 的利器。</p>
+
+  <p>断点"老三"是 <strong>watch（变量监视）</strong>：<code>watch sum</code> 不盯位置、专盯变量——<strong>只要 sum 的值一变，程序立刻停住</strong>，并打印 Old value（旧值）和 New value（新值）。官方文档把它叫作 watchpoint，说人话是"数据断点"（data breakpoint），因为它是靠 CPU 的硬件支持实现的（所以也叫硬件断点）。老大老二问"停在哪一行"，老三回答"这个变量是谁改的、改成了什么"——追查"变量被意外修改"这类案件，它是唯一的目击证人。三兄弟合体破案：</p>
+
+  <pre><code><span class="cmt"># 老大：按行号 + 按函数名设两个断点，看看全部断点清单</span>
+(gdb) <span class="fn">break</span> <span class="num">16</span>
+<span class="cmt"># Breakpoint 1 at 0x401156: file buggy.cpp, line 16.</span>
+(gdb) <span class="fn">break</span> divide
+<span class="cmt"># Breakpoint 2 at 0x40113a: file buggy.cpp, line 5.</span>
+(gdb) <span class="fn">info</span> breakpoints
+<span class="cmt"># Num     Type           Disp Enb Address            What</span>
+<span class="cmt"># 1       breakpoint     keep y   0x0000000000401156 in main at buggy.cpp:16</span>
+<span class="cmt"># 2       breakpoint     keep y   0x000000000040113a in divide at buggy.cpp:5</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/buggy</span>
+<span class="cmt">#</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:16</span>
+<span class="cmt"># 16    for (int i = 0; i &lt; nums.size(); i++) {</span>
+<span class="cmt"># ← 程序自动停住了，第 16 行还没执行，等你审问</span></code></pre>
+
+  <pre><code><span class="cmt"># 老二：条件断点 —— 循环里只想看 i == 3 的那一次</span>
+(gdb) <span class="fn">break</span> <span class="num">17</span> <span class="kw">if</span> i <span class="op">==</span> <span class="num">3</span>
+<span class="cmt"># Breakpoint 3 at 0x40115c: file buggy.cpp, line 17.</span>
+<span class="cmt">#         breakpoint already hit 1 time</span>
+(gdb) <span class="fn">continue</span>
+<span class="cmt"># Continuing.</span>
+<span class="cmt">#</span>
+<span class="cmt"># Breakpoint 3, main () at buggy.cpp:17</span>
+<span class="cmt"># 17        sum += nums[i];</span>
+(gdb) <span class="fn">print</span> i
+<span class="cmt"># $1 = 3              ← 只停 i == 3 这一次，前面的 0、1、2 都放行了</span>
+(gdb) <span class="fn">print</span> sum
+<span class="cmt"># $2 = 7              ← 1 + 1 + 2 + 3 = 7，sum 从 1 起步的罪行一目了然</span></code></pre>
+
+  <pre><code><span class="cmt"># 老三：watch —— 谁动了 sum？值一变就停</span>
+(gdb) <span class="fn">watch</span> sum
+<span class="cmt"># Hardware watchpoint 1: sum</span>
+(gdb) <span class="fn">continue</span>
+<span class="cmt"># Continuing.</span>
+<span class="cmt">#</span>
+<span class="cmt"># Hardware watchpoint 1: sum</span>
+<span class="cmt">#</span>
+<span class="cmt"># Old value = 1</span>
+<span class="cmt"># New value = 2</span>
+<span class="cmt"># main () at buggy.cpp:17</span>
+<span class="cmt"># 17        sum += nums[i];     ← 停在第 17 行：sum 就是在这里从 1 变成 2 的</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>三个断点怎么选？记住分工：<strong>想知道"到没到某行"用 break；想知道"某条件出现的那次"用 break if；想知道"谁改了变量"用 watch</strong>。审案时先想清楚要问什么问题，再选对应的工具——工具选对了，一次就能停到关键现场。</p>
+  </div>
+
+  <!-- ========== 14.4 运行控制：run / next / step / finish ========== -->
+  <h2>14.4 运行控制：run / continue / next / step / finish</h2>
+
+  <p>断点只是闸门，程序怎么走，靠运行控制命令。四个核心命令：<strong><code>run</code></strong>（开始运行，撞到第一个断点停下；也可以带参数 <code>run a.txt b.txt</code>，等价于先 <code>set args</code> 再跑）、<strong><code>continue</code></strong>（继续运行，直到下一个断点或程序结束）、<strong><code>next</code></strong>（执行下一行，遇到函数调用<strong>整个跨过去</strong>，不进入函数内部）、<strong><code>step</code></strong>（执行下一行，遇到函数调用就<strong>钻进函数内部</strong>一行行走）。还有一个 <code>finish</code>：<strong>跑完当前这个函数，回到它的调用者</strong>——钻进函数里看了两眼，不想一行行走完，就让它一口气跑完。一个细节必须记住：<strong>程序停在第 N 行，表示第 N 行"即将执行"、还没有执行</strong>——你要看的变量，此刻还是执行前的值。</p>
+
+  <p>本章最重要的区别就是 <strong>next vs step</strong>。说人话：next 是"跨过"，把整个函数调用当成一步跳过去——适合你只想看主流程、不关心函数内部细节的时候；step 是"钻进"，跟着调用进到函数体里——适合你怀疑 bug 藏在某个函数里、要进去逐行检查的时候。用错了会怎样？该进不进，bug 藏的函数内部永远看不到；不该进乱进，一头扎进标准库内部（那里面有成千上万行），反而迷失方向。口诀：<strong>主流程用 next，怀疑对象用 step</strong>。</p>
+
+  <p>实战中三者配合：断点设在 main 里 → <code>next</code> 一路看主流程 → 走到怀疑的函数调用那一行 → 换 <code>step</code> 钻进去 → 里面看够了，<code>finish</code> 一口气跑完当前函数、弹回调用者。下面用卷宗演示：先 next 跨过循环，再 step 钻进 square，再用 finish 弹回来。</p>
+
+  <pre><code><span class="cmt"># next：跨过 —— 停在 for 循环头，一行行走，不进任何函数</span>
+(gdb) <span class="fn">break</span> <span class="num">16</span>
+<span class="cmt"># Breakpoint 1 at 0x401156: file buggy.cpp, line 16.</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/buggy</span>
+<span class="cmt">#</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:16</span>
+<span class="cmt"># 16    for (int i = 0; i &lt; nums.size(); i++) {</span>
+(gdb) <span class="fn">next</span>
+<span class="cmt"># 17        sum += nums[i];</span>
+(gdb) <span class="fn">print</span> i
+<span class="cmt"># $1 = 0</span>
+(gdb) <span class="fn">print</span> sum
+<span class="cmt"># $2 = 1              ← sum 的第一笔账就从 1 开始记，不是 0！</span>
+(gdb) <span class="fn">next</span>
+<span class="cmt"># 16    for (int i = 0; i &lt; nums.size(); i++) {</span>
+(gdb) <span class="fn">print</span> sum
+<span class="cmt"># $3 = 2              ← 加完 nums[0]=1，sum = 2；正确的应该等于 1</span></code></pre>
+
+  <pre><code><span class="cmt"># step：钻进 —— 同样的场景，遇到 square 函数调用，直接跟进去</span>
+(gdb) <span class="fn">break</span> <span class="num">20</span>
+<span class="cmt"># Breakpoint 1 at 0x40116b: file buggy.cpp, line 20.</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/buggy</span>
+<span class="cmt"># sum = 16            ← bug ① 的后果：正确答案 15，它算出 16</span>
+<span class="cmt">#</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:20</span>
+<span class="cmt"># 20    int s = square(4);</span>
+(gdb) <span class="fn">step</span>
+<span class="cmt"># square (x=4) at buggy.cpp:10</span>
+<span class="cmt"># 10        return x * x;    ← 进来了！现在站在 square 函数内部</span>
+(gdb) <span class="fn">print</span> x
+<span class="cmt"># $1 = 4</span>
+(gdb) <span class="fn">step</span>
+<span class="cmt"># main () at buggy.cpp:21   ← 执行完 return，弹回 main</span>
+<span class="cmt"># 21    std::cout &lt;&lt; "s = " &lt;&lt; s &lt;&lt; std::endl;</span></code></pre>
+
+  <pre><code><span class="cmt"># finish：一口气跑完当前函数 —— 钻进 square 后不想一行行走，直接弹回</span>
+(gdb) <span class="fn">break</span> <span class="num">20</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:20</span>
+<span class="cmt"># 20    int s = square(4);</span>
+(gdb) <span class="fn">step</span>
+<span class="cmt"># square (x=4) at buggy.cpp:10</span>
+<span class="cmt"># 10        return x * x;</span>
+(gdb) <span class="fn">finish</span>
+<span class="cmt"># Run till exit from #0  square (x=4) at buggy.cpp:10</span>
+<span class="cmt"># main () at buggy.cpp:21</span>
+<span class="cmt"># 21    std::cout &lt;&lt; "s = " &lt;&lt; s &lt;&lt; std::endl;</span>
+<span class="cmt"># Value returned is $1 = 16   ← 顺带告诉你：这个函数返回了 16</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>铁面无私的追问术：停在 <code>int s = square(4);</code> 这一行时，<code>print s</code> 是<strong>看不到</strong> s 的——因为这一行还没执行，s 还没被赋值。想确认"跨过这一步之后 s 是什么"，就 <code>next</code> 一步再 <code>print s</code>。记住"停住 = 未执行"，能避免大量"咦怎么没有值"的困惑。</p>
+  </div>
+
+  <!-- ========== 14.5 查看状态：print / backtrace / frame / info locals ========== -->
+  <h2>14.5 查看状态：print / backtrace / frame / info locals</h2>
+
+  <p>程序停住了，接下来是审问环节——<strong><code>print</code></strong>（简写 <code>p</code>）打印变量或表达式的值：<code>print sum</code>、<code>print nums[i]</code>、甚至 <code>print sum + nums[i]</code> 这种现场求值的表达式都可以——GDB 会当场算给你看，这叫<strong>表达式求值</strong>（官方文档 "Examining Data" 一节的核心功能）。每一条 print 的结果带一个 <code>$1</code>、<code>$2</code> 这样的编号，方便你引用之前的输出。回到一号卷宗：14.4 里我们已经看到 sum 的第一笔账从 1 记起，这里再补一刀——把循环里每一步的现场都翻出来，bug ①（<code>int sum = 1;</code> 应为 <code>0</code>）的罪行就彻底钉死了：</p>
+
+  <pre><code><span class="cmt"># 审问 bug ①：把 sum 的"作案过程"一步步翻出来</span>
+(gdb) <span class="fn">break</span> <span class="num">17</span>
+<span class="cmt"># Breakpoint 1 at 0x40115c: file buggy.cpp, line 17.</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:17</span>
+<span class="cmt"># 17        sum += nums[i];</span>
+(gdb) <span class="fn">print</span> sum
+<span class="cmt"># $1 = 1              ← 第一次加之前，sum 已经是 1 了（正确应为 0）</span>
+(gdb) <span class="fn">print</span> nums[i]
+<span class="cmt"># $2 = 1</span>
+(gdb) <span class="fn">print</span> sum <span class="op">+</span> nums[i]
+<span class="cmt"># $3 = 2              ← 现场求值：加完这一步应该是 2，可"应该"是 1</span>
+(gdb) <span class="fn">print</span> i <span class="op">==</span> <span class="num">0</span>
+<span class="cmt"># $4 = true           ← 表达式还能算比较，返回 true/false</span></code></pre>
+
+  <p>光看变量还不够，更要看<strong>调用栈（call stack）</strong>——说人话就是"程序此刻站在哪一层，是谁一层层把它调进来的完整链条"。命令是 <code>backtrace</code>（简写 <code>bt</code>）：每一帧（frame，调用栈上的一层，对应一个正在执行的函数）一行，<code>#0</code> 是最内层（当前停住的函数），越往下越靠外。官方文档的说法是：backtrace 打印整个调用链。为什么调用栈重要？因为<strong>很多 bug 不在"出事的那一行"，而在把它叫进来的人</strong>——函数内部只是执行了命令，下命令的可能是调用者。要切换视角看某一帧的现场，用 <code>frame N</code>（简写 <code>f</code>）；<code>frame</code> 不带参数显示当前帧；<code>info locals</code> 列出当前帧的全部局部变量，<code>info args</code> 列出函数参数。现在审 bug ②——除零案：</p>
+
+  <pre><code><span class="cmt"># 审问 bug ②：整数除零。程序跑到 divide 时当场崩掉，GDB 自动接管现场</span>
+(gdb) <span class="fn">break</span> <span class="num">22</span>
+<span class="cmt"># Breakpoint 1 at 0x401174: file buggy.cpp, line 22.</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/buggy</span>
+<span class="cmt"># sum = 16</span>
+<span class="cmt"># s = 16</span>
+<span class="cmt">#</span>
+<span class="cmt"># Breakpoint 1, main () at buggy.cpp:22</span>
+<span class="cmt"># 22    int q = divide(10, 0);</span>
+(gdb) <span class="fn">continue</span>
+<span class="cmt"># Continuing.</span>
+<span class="cmt">#</span>
+<span class="cmt"># Program received signal SIGFPE, Arithmetic exception.</span>
+<span class="cmt"># 0x000000000040113a in divide (a=10, b=0) at buggy.cpp:6</span>
+<span class="cmt"># 6        return a / b;        ← 现场：崩在 divide 里，b = 0</span>
+(gdb) <span class="fn">print</span> b
+<span class="cmt"># $1 = 0               ← 铁证：除以 0</span>
+(gdb) <span class="fn">info</span> args
+<span class="cmt"># a = 10</span>
+<span class="cmt"># b = 0</span>
+(gdb) <span class="fn">bt</span>
+<span class="cmt"># #0  divide (a=10, b=0) at buggy.cpp:6</span>
+<span class="cmt"># #1  0x0000000000401174 in main () at buggy.cpp:22</span>
+<span class="cmt"># ← 看 #1：是 main 第 22 行把 (10, 0) 传进来的 —— 凶手在调用者！</span></code></pre>
+
+  <pre><code><span class="cmt"># 顺着调用栈往上翻：frame 1 切到 main 的视角，看它当时的现场</span>
+(gdb) <span class="fn">frame</span> <span class="num">1</span>
+<span class="cmt"># #1  0x0000000000401174 in main () at buggy.cpp:22</span>
+<span class="cmt"># 22    int q = divide(10, 0);</span>
+(gdb) <span class="fn">info</span> locals
+<span class="cmt"># nums = std::vector of length 5, capacity 5 = {1, 2, 3, 4, 5}</span>
+<span class="cmt"># sum = 16</span>
+<span class="cmt"># s = 16</span>
+<span class="cmt"># ← main 这边一切正常（q 还没赋值，因为 divide 崩在赋值之前）</span>
+(gdb) <span class="fn">frame</span>
+<span class="cmt"># #0  divide (a=10, b=0) at buggy.cpp:6   ← 不带参数：显示当前帧</span>
+<span class="cmt"># 6        return a / b;</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>崩溃时铁面无私的第一反应不是改代码，而是 <code>bt</code>——<strong>先看整条调用链，再决定审哪一层</strong>。崩在最内层（#0），但往往只是"执行者"；顺着 #1、#2 往上翻，才能找到"下令者"。除零案里 divide 只是照章办事，真正该改的是 main 里传进来的 0。</p>
+  </div>
+
+  <!-- ========== 14.6 实战一：segfault 崩溃现场与 core dump ========== -->
+  <h2>14.6 实战一：段错误崩溃——segfault 现场与 core dump</h2>
+
+  <p><strong>段错误（segmentation fault，简称 segfault）</strong>是 C/C++ 新手最常撞的崩溃，说人话就是<strong>程序访问了不属于自己的内存，被操作系统一枪毙命</strong>。常见诱因：空指针解引用（对 nullptr 取地址操作）、数组越界（下标跑出边界，比如 <code>nums[nums.size()]</code>）、野指针（指针指向的内存已释放）、无限递归导致栈溢出。最气人的是，程序直接崩掉时往往只留下一行 <code>Segmentation fault (core dumped)</code>，<strong>没有行号、没有变量、没有任何线索</strong>——靠猜等于大海捞针。看看二号卷宗 crash.cpp，一个典型的空指针案：</p>
+
+  <pre><code><span class="cmt">// crash.cpp —— 二号卷宗：空指针案</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+
+<span class="kw">void</span> <span class="fn">write_name</span>(<span class="kw">char</span>* <span class="param">buf</span>) {
+    buf[<span class="num">0</span>] = <span class="str">'B'</span>;     <span class="cmt">// buf 是空指针，往空地址写 → 段错误</span>
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">char</span>* name = <span class="kw">nullptr</span>;
+    <span class="fn">write_name</span>(name);
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"name = "</span> <span class="op">&lt;&lt;</span> name <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 直接跑：就一行冷冰冰的报错，什么线索都没有</span>
+g++ <span class="ann">-g</span> <span class="ann">-O0</span> crash.cpp -o crash
+./crash
+<span class="cmt"># Segmentation fault (core dumped)</span></code></pre>
+
+  <pre><code><span class="cmt"># 同样的崩溃，放进 GDB 审：程序死掉的瞬间，现场被完整扣下</span>
+gdb -q ./crash
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/crash</span>
+<span class="cmt">#</span>
+<span class="cmt"># Program received signal SIGSEGV, Segmentation fault.</span>
+<span class="cmt"># 0x0000000000401156 in write_name (buf=0x0) at crash.cpp:5</span>
+<span class="cmt"># 5        buf[0] = 'B';    ← 崩在这里！buf 是 0x0（空指针）</span>
+(gdb) <span class="fn">print</span> buf
+<span class="cmt"># $1 = 0x0               ← 铁证：写操作的目标地址是空</span>
+(gdb) <span class="fn">bt</span>
+<span class="cmt"># #0  0x0000000000401156 in write_name (buf=0x0) at crash.cpp:5</span>
+<span class="cmt"># #1  0x0000000000401157 in main () at crash.cpp:10</span>
+<span class="cmt"># #2  0x00007ffff7a2d555 in __libc_start_main () from /lib64/libc.so.6</span>
+<span class="cmt"># #3  0x0000000000401059 in _start ()</span>
+<span class="cmt"># ← 看 #1：是 main 第 10 行调 write_name 时把空指针传了进去</span>
+(gdb) <span class="fn">frame</span> <span class="num">1</span>
+<span class="cmt"># #1  0x0000000000401157 in main () at crash.cpp:10</span>
+<span class="cmt"># 10    write_name(name);</span>
+(gdb) <span class="fn">print</span> name
+<span class="cmt"># $2 = 0x0               ← 凶手在 main：name 本身就是空指针，还传给了别人</span></code></pre>
+
+  <pre><code><span class="cmt"># core dump 事后分析：崩的时候没开 GDB？没关系，现场被存成了文件</span>
+<span class="cmt"># 先打开 core 生成开关（默认可能是关闭的）：</span>
+ulimit -c unlimited
+./crash
+<span class="cmt"># Segmentation fault (core dumped)</span>
+
+<span class="cmt"># 现场文件 core 就在当前目录，带上它再审一次：</span>
+ls -lh core*
+<span class="cmt"># -rw------- 1 user user 204K core</span>
+gdb -q ./crash core
+<span class="cmt"># Core was generated by `./crash'.</span>
+<span class="cmt"># Program terminated with signal SIGSEGV, Segmentation fault.</span>
+<span class="cmt"># #0  0x0000000000401156 in write_name (buf=0x0) at crash.cpp:5</span>
+<span class="cmt"># 5        buf[0] = 'B';</span>
+(gdb) <span class="fn">bt</span>
+<span class="cmt"># #0  write_name (buf=0x0) at crash.cpp:5</span>
+<span class="cmt"># #1  0x0000000000401157 in main () at crash.cpp:10</span>
+<span class="cmt"># ← 崩溃现场的每一帧、每个变量值，和当场审一模一样</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：空指针解引用、数组越界在 C++ 里属于<strong>未定义行为（UB）</strong>——程序可能崩、可能输出垃圾、也可能"碰巧正常"，全看运气。GDB 能帮你找到崩溃的那一行，但<strong>根因必须修</strong>：该判空判空、该检查下标检查下标。用 GDB 找到凶手之后不改代码，下次换个机器可能就不是 segfault 而是静默的错误结果——那更难抓。</p>
+  </div>
+
+  <!-- ========== 14.7 实战二：死循环、常用技巧与命令速查 ========== -->
+  <h2>14.7 实战二：死循环——Ctrl+C 中断、list / display / set args 与命令速查</h2>
+
+  <p>第三种典型故障是<strong>死循环（infinite loop）</strong>：程序不崩不报错，就是卡住不动、CPU 飙到 100%。这种案子怎么破？看三号卷宗 hang.cpp——一个"猜数字"循环，每次 <code>guess += 2</code>，永远碰不到奇数 43，于是永远转圈。破案手法很直接：<strong>程序在 GDB 里跑起来后，按 Ctrl+C</strong>——它会发送一个 <strong>SIGINT</strong>（中断信号），GDB 立刻接管，把程序停在"当前正在执行的那一行"，而那一行恰恰就是死循环所在的位置。然后用 <code>bt</code> 看它在哪个函数里转，用 <code>print</code> 看循环条件涉及的变量——当场就能看出"永远不成立"的原因：</p>
+
+  <pre><code><span class="cmt">// hang.cpp —— 三号卷宗：死循环案</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> target = <span class="num">43</span>;
+    <span class="kw">int</span> guess = <span class="num">0</span>;
+    <span class="kw">while</span> (guess <span class="op">!=</span> target) {
+        guess <span class="op">+=</span> <span class="num">2</span>;      <span class="cmt">// 每次都加 2，永远碰不到奇数 43</span>
+    }
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"found: "</span> <span class="op">&lt;&lt;</span> guess <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 死循环破案：程序跑起来 → Ctrl+C 打断 → 停在现场 → 看变量</span>
+gdb -q ./hang
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/hang</span>
+<span class="cmt"># ^C</span>
+<span class="cmt"># Program received signal SIGINT, Interrupt.</span>
+<span class="cmt"># 0x0000000000401152 in main () at hang.cpp:7</span>
+<span class="cmt"># 7    while (guess != target) {   ← 就停在这行，死循环现场</span>
+(gdb) <span class="fn">bt</span>
+<span class="cmt"># #0  0x0000000000401152 in main () at hang.cpp:7</span>
+<span class="cmt"># #1  0x00007ffff7a2d555 in __libc_start_main () from /lib64/libc.so.6</span>
+(gdb) <span class="fn">print</span> guess
+<span class="cmt"># $1 = 44</span>
+(gdb) <span class="fn">print</span> target
+<span class="cmt"># $2 = 43              ← 铁证：guess 从 0 到 44，全是偶数，永远不等于 43</span>
+<span class="cmt"># 结论：+2 永远跳过奇数 —— 要么步长改 1，要么 target 改成偶数</span></code></pre>
+
+  <p>再补几个日常高频的实用技巧。第一个是 <code>list</code>（简写 <code>l</code>）：不打断程序也能查看源码，<code>list</code> 显示当前位置附近，<code>list 1, 12</code> 显示指定行范围——适合程序还没跑、想先熟悉代码的时候。第二个是 <code>display</code>：<strong>让某个变量在每次停住时自动打印</strong>，不用每次都手动 <code>print</code>——审循环时盯着三五个变量，用 display 一次性挂上，之后每次停下它们自己报数，省事且不会漏看。第三个是 <code>set args</code>：给"下次 run"预设命令行参数（程序用 <code>argc/argv</code> 接收），<code>show args</code> 查看当前预设——程序要从命令行读输入文件时尤其常用。还有 <code>help</code> 命令：<code>help break</code> 之类，随时查某个命令的官方说明；想带界面调试，可以用 <code>gdb -tui</code> 打开文本界面，上面是源码窗口、下面是命令窗口。</p>
+
+  <pre><code><span class="cmt"># list：看源码上下文（程序没跑也能看）</span>
+(gdb) <span class="fn">list</span> <span class="num">1</span>, <span class="num">12</span>
+<span class="cmt"># 1    // hang.cpp —— 三号卷宗：死循环案</span>
+<span class="cmt"># 2    #include &lt;iostream&gt;</span>
+<span class="cmt"># 3</span>
+<span class="cmt"># 4    int main() {</span>
+<span class="cmt"># 5        int target = 43;</span>
+<span class="cmt"># 6        int guess = 0;</span>
+<span class="cmt"># 7        while (guess != target) {</span>
+<span class="cmt"># 8            guess += 2;</span>
+<span class="cmt"># 9        }</span>
+<span class="cmt"># 10    std::cout &lt;&lt; "found: " &lt;&lt; guess &lt;&lt; std::endl;</span>
+<span class="cmt"># 11    return 0;</span>
+<span class="cmt"># 12    }</span></code></pre>
+
+  <pre><code><span class="cmt"># display：挂上自动显示，之后每次停住都自动报数，不用反复 print</span>
+(gdb) <span class="fn">display</span> guess
+<span class="cmt"># 1: guess = 44</span>
+(gdb) <span class="fn">display</span> target
+<span class="cmt"># 2: target = 43</span>
+(gdb) <span class="fn">continue</span>
+<span class="cmt"># Continuing.</span>
+<span class="cmt"># ^C</span>
+<span class="cmt"># Program received signal SIGINT, Interrupt.</span>
+<span class="cmt"># main () at hang.cpp:7</span>
+<span class="cmt"># 7    while (guess != target) {</span>
+<span class="cmt"># 1: guess = 48      ← 不用敲命令，它自己报数</span>
+<span class="cmt"># 2: target = 43</span></code></pre>
+
+  <pre><code><span class="cmt"># set args：给程序预设命令行参数（比如要读 input.txt 输出到 output.txt）</span>
+(gdb) <span class="fn">set</span> args input.txt output.txt
+(gdb) <span class="fn">show</span> args
+<span class="cmt"># Argument list to give program being debugged when it is started is "input.txt output.txt".</span>
+(gdb) <span class="fn">run</span>
+<span class="cmt"># Starting program: /home/user/app input.txt output.txt</span>
+<span class="cmt"># ← run 时自动带上参数；或者偷懒直接 run input.txt output.txt 也行</span></code></pre>
+
+  <table>
+    <tr><th>命令</th><th>简写</th><th>作用</th><th>说人话</th></tr>
+    <tr><td><code>break 行号 / 函数名</code></td><td><code>b</code></td><td>设断点</td><td>在源码某行贴暂停符</td></tr>
+    <tr><td><code>break 行号 if 条件</code></td><td><code>b ... if</code></td><td>条件断点</td><td>条件成立才停</td></tr>
+    <tr><td><code>watch 变量</code></td><td>—</td><td>数据断点</td><td>变量值一变就停</td></tr>
+    <tr><td><code>run [参数]</code></td><td><code>r</code></td><td>开始运行</td><td>起跑</td></tr>
+    <tr><td><code>continue</code></td><td><code>c</code></td><td>继续运行</td><td>跑到下一个断点</td></tr>
+    <tr><td><code>next</code></td><td><code>n</code></td><td>单步（跨过）</td><td>不钻进函数</td></tr>
+    <tr><td><code>step</code></td><td><code>s</code></td><td>单步（进入）</td><td>钻进函数内部</td></tr>
+    <tr><td><code>finish</code></td><td>—</td><td>跑完当前函数</td><td>一口气跑完，弹回调用者</td></tr>
+    <tr><td><code>print 变量/表达式</code></td><td><code>p</code></td><td>打印值</td><td>看变量、现场求值</td></tr>
+    <tr><td><code>backtrace</code></td><td><code>bt</code></td><td>打印调用栈</td><td>谁把我调进来的</td></tr>
+    <tr><td><code>frame N</code></td><td><code>f</code></td><td>切换帧</td><td>换视角看调用者</td></tr>
+    <tr><td><code>info locals / args</code></td><td>—</td><td>列局部变量/参数</td><td>当前帧的全部家底</td></tr>
+    <tr><td><code>list</code></td><td><code>l</code></td><td>显示源码</td><td>看代码上下文</td></tr>
+    <tr><td><code>display 变量</code></td><td>—</td><td>自动显示</td><td>每次停住都报数</td></tr>
+    <tr><td><code>set args 参数</code></td><td>—</td><td>预设运行参数</td><td>给 run 传参</td></tr>
+    <tr><td><code>quit</code></td><td><code>q</code></td><td>退出</td><td>收工</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>把铁面无私的调试流程固化成四步：<strong>① 复现</strong>（让 bug 稳定重现，不能复现的案子没法审）→ <strong>② 暂停</strong>（断点或崩溃自动停，死循环就 Ctrl+C）→ <strong>③ 取证</strong>（print 变量、bt 翻调用栈、frame 换视角）→ <strong>④ 修复验证</strong>（改代码、重编译、再跑一遍确认证据消失）。每一案都走完四步，你的调试就会从"碰运气"变成"按流程断案"。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>断点</code>、<code>调用栈</code>、<code>core dump</code>。再回答：<code>next</code> 和 <code>step</code> 的区别是什么？什么场景该用哪个？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个概念对应「暂停符 / 谁调谁的链条 / 崩溃现场快照」；next vs step 想想"跨过"和"钻进"两个动作。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>断点：贴在源码某一行上的"暂停符"，程序执行到就自动停住；调用栈：程序当前这一层函数是谁一层层调进来的完整链条（backtrace 打印）；core dump：程序崩溃瞬间内存的现场快照文件，事后可用 <code>gdb ./app core</code> 分析。next 是"单步跨过"：把函数调用整体当成一步执行，不进入函数内部，适合只看主流程；step 是"单步进入"：遇到函数调用就钻进函数体逐行执行，适合怀疑 bug 藏在某个函数内部时。口诀：主流程用 next，怀疑对象用 step。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>为每个需求选一条 GDB 命令：(a) 在第 17 行设断点；(b) 只在 i 等于 5 时停在第 17 行；(c) 变量 counter 每次变化都停住；(d) 打印当前所有局部变量；(e) 查看是谁调用了当前函数；(f) 钻进下一个被调用的函数；(g) 跑完当前函数回到调用者；(h) 给程序预设参数 "a.txt b.txt"。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>八个需求对应八条命令：break、break if、watch、info locals、bt、step、finish、set args——都在 14.7 的命令速查表里。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>break 17</code>；(b) <code>break 17 if i == 5</code>；(c) <code>watch counter</code>；(d) <code>info locals</code>；(e) <code>backtrace</code>（简写 <code>bt</code>，看 #1、#2 就是调用者）；(f) <code>step</code>；(g) <code>finish</code>；(h) <code>set args a.txt b.txt</code>（之后 <code>run</code> 自动带上）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：场景辨析 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>程序 crash.cpp 运行时报 <code>Segmentation fault (core dumped)</code>，没有行号。请写出完整的 GDB 破案步骤（从编译到定位凶手），并回答：为什么崩溃现场 <code>bt</code> 的输出里 #0 是 <code>write_name (buf=0x0) at crash.cpp:5</code>，而真正的"凶手"却在 main 里？如果崩的时候没开 GDB，事后又该怎么分析？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 14.6 的流程走：-g 重编译 → gdb 启动 → run → 看 SIGSEGV 停在哪 → bt → frame 往上翻；事后分析想 14.2 的启动姿势②和 ulimit -c。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>步骤：① 确认用 <code>g++ -g -O0 crash.cpp -o crash</code> 重新编译（带调试信息）；② <code>gdb -q ./crash</code> 启动；③ <code>run</code>，程序崩溃瞬间 GDB 打印 <code>Program received signal SIGSEGV, Segmentation fault.</code> 并停在 <code>write_name (buf=0x0) at crash.cpp:5</code>；④ <code>print buf</code> 确认 buf 是空指针 0x0；⑤ <code>bt</code> 看调用栈：#0 是 write_name（执行者），#1 是 <code>main () at crash.cpp:10</code>（下令者）；⑥ <code>frame 1</code> 切到 main，<code>print name</code> 看到 <code>name = 0x0</code>——凶手是 main 把空指针传给了 write_name。为什么 #0 不是凶手：<strong>#0 只是"最后一个执行动作"的地方，崩溃的根因在数据的来处</strong>——write_name 只是照章执行写操作，是 main 给了它一个空指针。这是"执行者 vs 下令者"的经典区别，所以崩了先 bt、再顺着栈往上翻。事后分析：先 <code>ulimit -c unlimited</code> 让系统生成 core 文件，再用 <code>gdb ./crash core</code> 打开，效果和当场审一模一样（<code>Core was generated by \`./crash'.</code> + 相同的 bt）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：动手审完三个卷宗 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在 Linux 上把本章三个卷宗完整走一遍：① 写出 buggy.cpp（14.1 的源码），用 <code>-g -O0</code> 编译，进 GDB 用 <code>break 17</code> + <code>print sum</code> 破 bug ①（sum 初值 1），再用条件断点 <code>break 17 if i == 3</code> 和 <code>watch sum</code> 各验证一次；② 继续 <code>run</code> 到 <code>divide(10, 0)</code>，观察 SIGFPE 现场，用 <code>bt</code> + <code>frame 1</code> 确认"凶手在 main"，然后修复两处 bug 重新编译运行，确认输出 <code>sum = 15</code>、<code>s = 16</code>；③ 写 crash.cpp 复现段错误，先 <code>ulimit -c unlimited</code> 生成 core，再分别用"当场审"和"事后审 core"两种方式 <code>bt</code> 定位空指针；④ 写 hang.cpp 复现死循环，Ctrl+C 打断后 <code>bt</code> + <code>print guess/target</code> 说明死因。把每一步的命令、GDB 输出原文和结论记成实验笔记。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 14.3 → 14.5 → 14.6 → 14.7 的顺序走；GDB 输出要复制原文——报错原文和断点输出就是最好的证据，别凭印象写。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>g++ -g -O0 buggy.cpp -o buggy</code> 后 <code>gdb -q ./buggy</code>；<code>break 17</code> + <code>run</code> 停在 <code>sum += nums[i];</code>，<code>print sum</code> 得 1（应为 0）——bug ① 破案；<code>break 17 if i == 3</code> 后 <code>continue</code>，停在 i==3 时 sum=7；<code>watch sum</code> 后 <code>continue</code>，看到 <code>Old value = 1 / New value = 2</code>。② <code>break 22</code> + <code>run</code> + <code>continue</code>，得到 <code>Program received signal SIGFPE, Arithmetic exception.</code>，<code>bt</code> 显示 <code>#0 divide (a=10, b=0)</code>、<code>#1 main () at buggy.cpp:22</code>，<code>frame 1</code> 确认 main 传了 0；修复：<code>int sum = 0;</code> 且 <code>divide(10, 2)</code>（或给 divide 加除零检查），重编运行输出 <code>sum = 15</code>、<code>s = 16</code>。③ <code>ulimit -c unlimited</code> 后 <code>./crash</code> 得 <code>Segmentation fault (core dumped)</code>；当场审：<code>gdb -q ./crash</code> → <code>run</code> → SIGSEGV 停在 <code>write_name (buf=0x0) at crash.cpp:5</code>；事后审：<code>gdb -q ./crash core</code> → 同样停住 → <code>bt</code> 看到 #1 main 传了空指针。④ <code>gdb -q ./hang</code> → <code>run</code> → Ctrl+C → <code>bt</code> 停在 hang.cpp:7 → <code>print guess</code> = 44、<code>print target</code> = 43——偶数永远碰不到奇数 43，把步长改成 1 或把 target 改成偶数即修复。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

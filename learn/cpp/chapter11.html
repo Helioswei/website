@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第11章：通用库：POCO 集成 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter11.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第11章：通用库：POCO 集成 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter11.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="11" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：通用库：POCO 集成</h1>
+  <p class="chapter-subtitle">网络、JSON、数据库，一次打包——跟着狄仁杰把 POCO 这套 C++ 综合类库从源码编译到第一个程序完整走一遍</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案先看全局：一个库有哪些模块、每个模块依赖什么、头文件装在哪、链接库装在哪——把整条链路拆开看清了再动手，configure 一次就能过。这一章，我们像查案一样，把 POCO 从下载、编译到接上 MySQL 的每一环都摆上桌面。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 11.1 零基础铺垫：为什么 C++ 需要通用库 ========== -->
+  <h2>11.1 零基础铺垫：为什么 C++ 需要通用库</h2>
+
+  <p>前几章我们装过 jsoncpp、spdlog，都是解决单个问题的小库；这一章要上一个"全家桶"。<strong>通用库（general-purpose library）说人话：把网络、JSON、数据库、日志、配置文件这些几乎每个程序都要用的能力，预先写好、打包成一套互相配合的库</strong>。为什么需要它？因为 C++ 标准库只管语言地基——容器、算法、字符串、文件流——而 HTTP 客户端、JSON 解析、MySQL 连接这些"通用能力"全都不在标准库里。第 6 章已经验证过：JSON 得靠库；网络和数据库同样如此。如果每个项目都从零手写一遍网络层，等于每家餐厅都自己种小麦，既不现实也养不起。</p>
+
+  <p>不用通用库的代价有多大？我们只看一个最简单的动作——"向服务器发一个 HTTP GET 请求"。你要自己拼请求行、处理各种状态码、解析响应头、处理连接断开……第 6 章手动解析 JSON 的教训还热乎着，网络协议比 JSON 只难不简单。下面的"错误示范"只展示了冰山一角，真实的手写实现动辄几百行还到处是边界 bug：</p>
+
+  <pre><code><span class="cmt">// 示意：想手写一个 HTTP GET，第一关就劝退——</span>
+<span class="cmt">// 请求行、请求头、空行、Host 头，一个都不能错</span>
+<span class="type">int</span> sock = <span class="fn">socket</span>(AF_INET, SOCK_STREAM, <span class="num">0</span>);
+<span class="cmt">// connect() 到 80 端口……（此处省略十几行地址结构体代码）</span>
+std::string req = <span class="str">"GET /json HTTP/1.1\r\n"</span>
+                + <span class="str">"Host: example.com\r\n"</span>
+                + <span class="str">"Connection: close\r\n\r\n"</span>;
+<span class="fn">send</span>(sock, req.c_str(), req.size(), <span class="num">0</span>);
+<span class="cmt">// recv() 循环收数据、解析状态行、解析响应头……（再省略五十行）</span>
+<span class="cmt">// 遇到 301 重定向？分块传输？连接被服务器关闭？自己扛吧</span></code></pre>
+
+  <p>同样的活，交给 POCO 之后长这样——连服务器、发请求、收响应，每步一行。差别不只是"行数少"，而是<strong>正确性不用自己操心</strong>：协议细节、错误处理、跨平台差异，全在库内部消化掉了：</p>
+
+  <pre><code><span class="cmt">// 同一个 GET 请求，POCO 版（完整可运行代码见 11.6 节）</span>
+Poco::Net::HTTPClientSession session(<span class="str">"example.com"</span>);   <span class="cmt">// 连上服务器</span>
+Poco::Net::HTTPRequest req(Poco::Net::HTTPRequest::HTTP_GET,
+    <span class="str">"/"</span>, Poco::Net::HTTPMessage::HTTP_1_1);             <span class="cmt">// 构造请求</span>
+session.<span class="fn">sendRequest</span>(req);                               <span class="cmt">// 发出请求</span>
+Poco::Net::HTTPResponse res;
+std::istream&amp; body = session.<span class="fn">receiveResponse</span>(res);        <span class="cmt">// 收响应</span></code></pre>
+
+  <p>用通用库之后，这段"劝退代码"会缩成一个类、三行调用——这正是 11.6 节第一个 POCO 程序的样子。而且通用库的价值不只是省代码：它把<strong>跨平台</strong>也一并解决了。同一个 <code>Poco::Net::HTTPClientSession</code>，在 Linux、macOS、Windows 上行为一致，底下的 socket 差异全被库消化。这一章的主角 POCO，就是 C++ 生态里最有名的综合类库之一，官方定位是"构建网络和互联网应用的跨平台 C++ 类库"。</p>
+
+  <!-- ========== 11.2 POCO 是什么：把常用能力打包的综合类库 ========== -->
+  <h2>11.2 POCO 是什么：把常用能力打包的综合类库</h2>
+
+  <p><strong>POCO（Portable Components）是一套开源的 C++ 综合类库</strong>——说人话：它把网络、JSON、XML、数据库、日志、进程线程等常用能力按主题拆成一个个独立模块，你用哪块就编译哪块，像搭积木一样按需组合。它托管在 <code>github.com/pocoproject/poco</code>，采用 Boost Software License 1.0（BSL-1.0）许可，可以自由商用。POCO 只发布源码，没有官方二进制包（官网明确说明），所以"自己编译"是每个 POCO 用户的必修课——这也正是本章的核心实战。它的模块化设计很符合狄仁杰的系统分析方法：先看清整个系统由哪些部分组成、各自管什么。</p>
+
+  <p>先看 POCO 的模块地图。记住一条主线：<strong>Foundation 是地基，其他所有模块都站在它上面</strong>。地基提供字符串、文件、日志、线程、时间这些最基础的能力；Net 负责网络；JSON 和 XML 负责数据交换格式；Data 是数据库的统一访问层，下面再接 MySQL、SQLite 等具体连接器：</p>
+
+  <table>
+    <tr><th>模块</th><th>管什么（说人话）</th><th>典型类</th></tr>
+    <tr><td>Foundation</td><td>地基：字符串、文件、日志、线程、时间</td><td><code>Poco::Logger</code>、<code>Poco::File</code></td></tr>
+    <tr><td>Util</td><td>应用程序框架：命令行参数、配置文件</td><td><code>Poco::Util::Application</code></td></tr>
+    <tr><td>Net</td><td>网络：Socket、HTTP 客户端与服务器</td><td><code>Poco::Net::HTTPClientSession</code></td></tr>
+    <tr><td>JSON</td><td>JSON 解析与生成</td><td><code>Poco::JSON::Parser</code></td></tr>
+    <tr><td>XML</td><td>XML 解析（DOM/SAX 两种方式）</td><td><code>Poco::XML::Document</code></td></tr>
+    <tr><td>Data</td><td>数据库统一访问层，不关心具体数据库</td><td><code>Poco::Data::Session</code></td></tr>
+    <tr><td>Data/MySQL</td><td>MySQL 连接器：让 Data 能连 MySQL</td><td><code>Poco::Data::MySQL::Connector</code></td></tr>
+    <tr><td>Crypto / NetSSL</td><td>加密与 HTTPS（依赖 OpenSSL）</td><td><code>Poco::Net::SSLManager</code></td></tr>
+  </table>
+
+  <p>POCO 的源码目录结构也按模块分得很清楚，每个模块一个顶层目录，各自带着 <code>include/</code>（头文件）、<code>src/</code>（源码）和 <code>samples/</code>（示例）。想快速上手一个模块，先翻它的 samples 是最快的路：</p>
+
+  <pre><code><span class="cmt"># POCO 源码根目录（节选）：一个模块一个目录</span>
+Foundation/   <span class="cmt"># 地基模块</span>
+XML/          <span class="cmt"># XML 解析</span>
+JSON/         <span class="cmt"># JSON 解析与生成</span>
+Net/          <span class="cmt"># 网络与 HTTP</span>
+Util/         <span class="cmt"># 应用程序框架</span>
+Data/         <span class="cmt"># 数据库抽象层</span>
+  MySQL/      <span class="cmt">#    ├─ MySQL 连接器</span>
+  SQLite/     <span class="cmt">#    └─ SQLite 连接器</span>
+Crypto/       <span class="cmt"># 加密（需 OpenSSL）</span>
+NetSSL_OpenSSL/ <span class="cmt"># HTTPS（需 OpenSSL）</span></code></pre>
+
+  <p>随手写个最小程序感受一下 Foundation 的日志能力——这是 POCO 里最简单的模块之一，一行代码就能往控制台输出带级别的日志。后面所有模块的代码风格都和它一致：类名带 <code>Poco::</code> 前缀，头文件在 <code>Poco/</code> 目录下：</p>
+
+  <pre><code><span class="cmt">// foundation_demo.cpp：体验 Foundation 的日志</span>
+<span class="ann">#include</span> &lt;Poco/Logger.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    Poco::Logger&amp; logger = Poco::Logger::<span class="fn">get</span>(<span class="str">"main"</span>);
+    logger.information(<span class="str">"POCO 就绪"</span>);   <span class="cmt">// 信息级日志</span>
+    logger.warning(<span class="str">"这只是个演示"</span>);     <span class="cmt">// 警告级日志</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 11.3 源码编译：configure 参数逐项拆解 ========== -->
+  <h2>11.3 源码编译：configure 参数逐项拆解</h2>
+
+  <p>素材笔记记录了在 CentOS 上从源码编译 POCO 的真实全过程，我们按"下载 → 装依赖 → configure → make"四步走。第一步下载：POCO 托管在 GitHub，国内直连 clone 经常很慢，素材里的做法是<strong>先把仓库 fork 到 Gitee（码云）再 clone 加速</strong>——这是国内拉 GitHub 大仓库的通用技巧。第二步装依赖：编译至少需要 <code>gcc-c++</code>（C++ 编译器）和 <code>make</code>（构建工具），<code>openssl-devel</code> 是给 Crypto/NetSSL 模块准备的开发头文件：</p>
+
+  <pre><code><span class="cmt"># 第 1 步：下载源码（fork 到码云后 clone，加快下载速度）</span>
+git clone https://gitee.com/helioswei/poco.git
+<span class="fn">cd</span> poco
+
+<span class="cmt"># 第 2 步：编译环境准备（CentOS 用 yum）</span>
+yum install gcc-c++ make openssl-devel</code></pre>
+
+  <p>第三步 configure 之前，有一个前置条件：<strong>POCO 从 1.10 版本起要求 C++14 编译器（GCC 5、Clang 3.4、Visual C++ 2015 起步）</strong>，而素材环境的 CentOS 自带 GCC 是 4.8.5，不满足要求。所以笔记里明确写着"需要提前安装 GCC 5.1.0 来支持 C++14"——这正是第 3 章我们亲手从源码编译的那个 GCC！第 3 章的劳动在这里派上了用场：GCC 5.1 是第一个完整支持 C++14 的 GCC 版本，把它的 <code>bin/</code> 加进 PATH 后，就可以开始配置了。素材里的 configure 命令是真实操作记录，逐项拆解如下：</p>
+
+  <table>
+    <tr><th>参数</th><th>作用（说人话）</th></tr>
+    <tr><td><code>--shared</code></td><td>编译成动态库（.so），程序运行时才加载</td></tr>
+    <tr><td><code>--prefix=/usr/local/poco</code></td><td>安装目录，头文件装到 include/，库装到 lib/</td></tr>
+    <tr><td><code>--cflags=-std=c++14</code></td><td>给编译器加参数，显式启用 C++14 标准</td></tr>
+    <tr><td><code>--include-path=/usr/include/mysql/</code></td><td>额外头文件搜索路径，指向 MySQL 头文件</td></tr>
+    <tr><td><code>--library-path=/usr/lib64/mysql/</code></td><td>额外库搜索路径，指向 MySQL 客户端库</td></tr>
+    <tr><td><code>--omit=Data/ODBC,MongoDB,PDF</code></td><td>不编译列出的组件；其余默认组件照常编译</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 第 3 步：configure——素材笔记里的真实命令（逐字保留）</span>
+./configure --shared --prefix=/usr/local/poco --cflags=-std=c++14 --include-path=/usr/include/mysql/ --library-path=/usr/lib64/mysql/ --omit=Data/ODBC,MongoDB,PDF
+
+<span class="cmt"># 第 4 步：编译并安装（-j4 用 4 个核并行加速）</span>
+make -j4
+make install</code></pre>
+
+  <p>这里藏着一个关键知识点：<strong>POCO 的默认构建并不包含 Data/MySQL 连接器</strong>，因为连接器依赖 MySQL 官方客户端库，不是人人都有。configure 通过 <code>--omit</code> 参数指定"不编译哪些组件"，默认的 omit 清单里恰好排除了 Data/MySQL。素材命令把 omit 清单改写为只有 <code>Data/ODBC,MongoDB,PDF</code> 三项，等于把 Data/MySQL 从"被排除"名单里放了出来——再加上 <code>--include-path</code> 和 <code>--library-path</code> 给它指路，MySQL 连接器就能编译成功。这也解释了为什么素材里要先装 mysql-devel：没有 MySQL 的头文件和库，放出来也编不过。另外注意，configure 并没有"开启 MySQL"的专用开关；新版还提供了更专门的 <code>--mysql-include=</code> 和 <code>--mysql-lib=</code> 参数，作用和通用路径参数一样，只是更明确。</p>
+
+  <!-- ========== 11.4 与 MySQL 集成：从 mysql-devel 到 Data/MySQL ========== -->
+  <h2>11.4 与 MySQL 集成：从 mysql-devel 到 Data/MySQL</h2>
+
+  <p>现在把"接上 MySQL"这条链路完整走一遍。先回答一个朴素的问题：<strong>为什么编译 POCO 需要先装 mysql-devel？</strong>因为 POCO 的 Data/MySQL 连接器并不是自己从头实现 MySQL 协议，而是调用 MySQL 官方客户端库 libmysqlclient——编译连接器时需要 <code>mysql.h</code> 头文件（告诉编译器"有哪些函数可以调用"），链接时需要 <code>libmysqlclient.so</code>（告诉链接器"这些函数实现在哪"）。素材笔记的原话是："安装 mysql 时没有头文件，所以我们需要安装头文件"。<code>mysql-devel</code> 这个包就是专门提供开发用的头文件和库的，光装 mysql 服务端是不带的：</p>
+
+  <pre><code><span class="cmt"># 第 1 步：安装 MySQL 开发包（提供头文件和客户端库）</span>
+yum install mysql-devel
+
+<span class="cmt"># 第 2 步：configure 时用路径参数给它"指路"（素材真实命令的关键片段）</span>
+./configure --include-path=/usr/include/mysql/ \
+            --library-path=/usr/lib64/mysql/ \
+            --omit=Data/ODBC,MongoDB,PDF
+
+<span class="cmt"># 第 3 步：编译完成后，检查产物——应该能看到 MySQL 连接器库</span>
+make -j4
+ls lib/ | grep -i mysql
+<span class="cmt"># 输出示例：libPocoDataMySQL.so</span></code></pre>
+
+  <p>链路的关键是顺序：<strong>先有 mysql-devel（原料），configure 才能指路（定位原料），make 才能产出 libPocoDataMySQL.so（成品）</strong>。如果漏装 mysql-devel，configure 本身不会报错，但 make 到 Data/MySQL 时会因为找不到 mysql.h 直接失败——这种"配置通过、编译失败"的现象，正是系统分析要抓的典型断点：问题不在编译，在更早的原料环节。</p>
+
+  <p>库编好了，代码里怎么用？三步：<strong>注册连接器 → 创建会话 → 执行 SQL</strong>。连接器要先通过 <code>registerConnector()</code> 告诉 Data 模块"我有 MySQL 这个连接类型"，然后 <code>Poco::Data::Session</code> 就能用连接串连上数据库。连接串是分号分隔的键值对，格式为 <code>host=...;user=...;password=...;db=...</code>：</p>
+
+  <pre><code><span class="cmt">// mysql_demo.cpp：连上 MySQL，插入一行再查出来</span>
+<span class="ann">#include</span> &lt;Poco/Data/MySQL/Connector.h&gt;
+<span class="ann">#include</span> &lt;Poco/Data/Session.h&gt;
+<span class="ann">#include</span> &lt;Poco/Data/Statement.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// 第 1 步：注册 MySQL 连接器（必须，否则 Session 不认识 "MySQL"）</span>
+    Poco::Data::MySQL::Connector::<span class="fn">registerConnector</span>();
+
+    <span class="cmt">// 第 2 步：创建会话，连接串格式 host/user/password/db</span>
+    Poco::Data::Session session(<span class="str">"MySQL"</span>,
+        <span class="str">"host=127.0.0.1;user=root;password=123456;db=test"</span>);
+
+    <span class="cmt">// 第 3 步：执行 SQL——? 是占位符，use() 绑定参数，now 立即执行</span>
+    std::string name = <span class="str">"狄仁杰"</span>;
+    session &lt;&lt; <span class="str">"INSERT INTO users(name) VALUES(?)"</span>,
+        Poco::Data::Keywords::use(name), Poco::Data::Keywords::now;
+
+    <span class="cmt">// 查询：into() 把结果列装进变量，execute() 真正执行</span>
+    std::string got;
+    Poco::Data::Statement select(session);
+    select &lt;&lt; <span class="str">"SELECT name FROM users"</span>, Poco::Data::Keywords::into(got);
+    select.<span class="fn">execute</span>();
+    std::cout &lt;&lt; <span class="str">"查到的名字："</span> &lt;&lt; got &lt;&lt; std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>连接串里的 <code>?</code> 占位符 + <code>use()</code> 绑定，是数据库编程的标准姿势——它比把字符串直接拼进 SQL 安全得多，能防 SQL 注入。以后接任何数据库（SQLite、PostgreSQL），代码骨架都一样，只是连接串和注册的连接器不同，这就是"统一访问层"的意义。</p>
+  </div>
+
+  <!-- ========== 11.5 现代集成方式：vcpkg 与 CMake ========== -->
+  <h2>11.5 现代集成方式：vcpkg 与 CMake</h2>
+
+  <p>源码编译适合老环境、定制需求（比如必须用某个老 GCC、要改编译参数）；但对日常开发来说，第 5 章铺好的 vcpkg 才是省心之路。一条命令装好 POCO，连 MySQL 支持也只要在特性（feature）里点名。vcpkg 的 poco 端口把可选能力拆成了特性，<code>mysql</code> 特性会自动带上 Data 模块和 libmysql 依赖——注意 vcpkg 默认特性集并不包含 mysql，需要显式指定：</p>
+
+  <pre><code><span class="cmt"># 基础安装（Foundation/Net/JSON/XML/Util 等核心模块）</span>
+./vcpkg/vcpkg install poco
+
+<span class="cmt"># 带上 MySQL 连接器（会自动拉取 libmysql 依赖）</span>
+./vcpkg/vcpkg install poco[mysql]
+
+<span class="cmt"># 显式指定 64 位 Linux 平台</span>
+./vcpkg/vcpkg install poco[mysql]:x64-linux</code></pre>
+
+  <p>装好之后，CMake 工程里用 <code>find_package(Poco REQUIRED COMPONENTS ...)</code> 按需声明要哪些模块，链接目标写作 <code>Poco::模块名</code>。vcpkg 安装时打印的提示里会列出它支持的组件名，照抄即可。下面这个 CMakeLists.txt 用到了 Foundation、Net、JSON 三个组件——正好对应 11.6 节第一个程序的需求：</p>
+
+  <pre><code><span class="cmt"># CMakeLists.txt：找到 POCO 并链接 Net/JSON/Foundation</span>
+<span class="fn">cmake_minimum_required</span>(<span class="type">VERSION</span> <span class="num">3.15</span>)
+<span class="fn">project</span>(poco_demo <span class="type">CXX</span>)
+
+<span class="fn">find_package</span>(Poco <span class="kw">REQUIRED</span> <span class="kw">COMPONENTS</span> Foundation Net JSON)
+<span class="fn">add_executable</span>(poco_demo main.cpp)
+<span class="fn">target_link_libraries</span>(poco_demo <span class="kw">PRIVATE</span>
+    Poco::Foundation Poco::Net Poco::JSON)</code></pre>
+
+  <p>如果走的是 11.3 节源码编译路线（装在 <code>/usr/local/poco</code>），CMake 找不到 Poco 时用 <code>CMAKE_PREFIX_PATH</code> 指一下安装目录；不用 CMake 的话，也可以直接用 g++ 手动链接。注意编译要加 <code>-std=c++14</code>（POCO 的要求），运行时还要让系统找到动态库：</p>
+
+  <pre><code><span class="cmt"># 源码编译路线：告诉 CMake POCO 装在哪</span>
+cmake -B build -DCMAKE_PREFIX_PATH=/usr/local/poco
+cmake --build build
+
+<span class="cmt"># 或者不用 CMake，g++ 手动链接（-lPocoNet 等按需取用）</span>
+g++ -std=c++14 main.cpp -I/usr/local/poco/include \
+    -L/usr/local/poco/lib -lPocoNet -lPocoJSON -lPocoFoundation \
+    -Wl,-rpath,/usr/local/poco/lib -o pocodemo
+<span class="cmt"># -Wl,-rpath 把库路径写进程序，运行时不用手动设 LD_LIBRARY_PATH</span></code></pre>
+
+  <!-- ========== 11.6 第一个 POCO 程序：HTTP 客户端与 JSON 解析 ========== -->
+  <h2>11.6 第一个 POCO 程序：HTTP 客户端与 JSON 解析</h2>
+
+  <p>万事俱备，写第一个真正干活的 POCO 程序。先呼应一下第 6 章：jsoncpp 里 JSON 文档是 <code>Json::Value</code> 树；POCO 里对应的是 <code>Poco::JSON::Object::Ptr</code>——智能指针管理的 JSON 对象，解析入口是 <code>Poco::JSON::Parser</code>。API 名字不同，但"文本 → 树 → 取值"的思路一模一样，第 6 章学的技能直接平移：</p>
+
+  <pre><code><span class="cmt">// json_demo.cpp：用 Poco::JSON 解析字符串（呼应第 6 章）</span>
+<span class="ann">#include</span> &lt;Poco/JSON/Parser.h&gt;
+<span class="ann">#include</span> &lt;Poco/JSON/Object.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    std::string text =
+        <span class="str">R"({"name":"狄仁杰","age":47,"skill":"系统分析"})"</span>;
+
+    Poco::JSON::Parser parser;                          <span class="cmt">// 解析器</span>
+    Poco::Dynamic::Var result = parser.<span class="fn">parse</span>(text);  <span class="cmt">// 文本 → 动态值</span>
+    Poco::JSON::Object::Ptr obj =
+        result.<span class="fn">extract</span>&lt;Poco::JSON::Object::Ptr&gt;();   <span class="cmt">// 转成 JSON 对象</span>
+
+    std::cout &lt;&lt; obj-&gt;<span class="fn">getValue</span>&lt;std::string&gt;(<span class="str">"name"</span>) &lt;&lt; std::endl;  <span class="cmt">// 狄仁杰</span>
+    std::cout &lt;&lt; obj-&gt;<span class="fn">getValue</span>&lt;<span class="type">int</span>&gt;(<span class="str">"age"</span>) &lt;&lt; std::endl;         <span class="cmt">// 47</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>再把 11.1 节开头那个"劝退的手写 HTTP"用 POCO 重写一遍——这也是全章的收官程序：<strong>连服务器 → 发请求 → 收响应</strong>三步，各对应一个类。收到响应后，正文是一段 JSON，我们顺手用上面的 Poco::JSON 把它解析出来，Net 和 JSON 两个模块就这样第一次联手了：</p>
+
+  <pre><code><span class="cmt">// http_demo.cpp：HTTP GET + JSON 解析，Net 与 JSON 模块联手</span>
+<span class="ann">#include</span> &lt;Poco/Net/HTTPClientSession.h&gt;
+<span class="ann">#include</span> &lt;Poco/Net/HTTPRequest.h&gt;
+<span class="ann">#include</span> &lt;Poco/Net/HTTPResponse.h&gt;
+<span class="ann">#include</span> &lt;Poco/JSON/Parser.h&gt;
+<span class="ann">#include</span> &lt;Poco/StreamCopier.h&gt;
+<span class="ann">#include</span> &lt;iostream&gt;
+
+<span class="type">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// 第 1 步：连上服务器（默认 80 端口）</span>
+    Poco::Net::HTTPClientSession session(<span class="str">"httpbin.org"</span>);
+
+    <span class="cmt">// 第 2 步：构造并发出 GET 请求</span>
+    Poco::Net::HTTPRequest req(Poco::Net::HTTPRequest::HTTP_GET,
+        <span class="str">"/json"</span>, Poco::Net::HTTPMessage::HTTP_1_1);
+    session.<span class="fn">sendRequest</span>(req);
+
+    <span class="cmt">// 第 3 步：接收响应，打印状态码</span>
+    Poco::Net::HTTPResponse res;
+    std::istream&amp; body = session.<span class="fn">receiveResponse</span>(res);
+    std::cout &lt;&lt; res.<span class="fn">getStatus</span>() &lt;&lt; <span class="str">" "</span> &lt;&lt; res.<span class="fn">getReason</span>() &lt;&lt; std::endl;
+
+    <span class="cmt">// 响应正文整个拷进字符串，再用 Poco::JSON 解析</span>
+    std::string text;
+    Poco::StreamCopier::<span class="fn">copyToString</span>(body, text);
+    Poco::JSON::Parser parser;
+    Poco::Dynamic::Var v = parser.<span class="fn">parse</span>(text);
+    std::cout &lt;&lt; <span class="str">"响应体开头： "</span> &lt;&lt; text.substr(<span class="num">0</span>, <span class="num">60</span>) &lt;&lt; <span class="str">"..."</span> &lt;&lt; std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>httpbin.org</code> 是公网测试服务，运行上面的程序需要联网；如果请求失败，换成你自己搭的服务器地址即可，代码骨架完全不用改。另外 <code>receiveResponse</code> 返回的是响应体输入流，必须先读完再复用 session 发下一个请求——HTTP 连接是"一问一答"的。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>POCO 的模块地图里，Foundation 和其他模块是什么关系？Net、JSON、Data 各自管什么？为什么说"POCO 只发布源码，没有官方二进制包"这件事，让"自己编译"成了每个 POCO 用户的必修课？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 11.2 的模块地图表格和"Foundation 是地基"这条主线；再想想 11.3 开头官网对发布方式的说明。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>Foundation 是地基模块，提供字符串、文件、日志、线程等最基础能力，其他所有模块（Net/JSON/Data/Util…）都依赖它；Net 管网络与 HTTP，JSON 管 JSON 解析生成，Data 是数据库统一访问层。因为 POCO 官方只发布源码、不提供二进制包，用户必须自己编译才能使用，所以 configure/make 这套流程是 POCO 集成的基本功。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读懂 configure <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材里的 configure 命令是：<code>./configure --shared --prefix=/usr/local/poco --cflags=-std=c++14 --include-path=/usr/include/mysql/ --library-path=/usr/lib64/mysql/ --omit=Data/ODBC,MongoDB,PDF</code>。请回答：① 如果不装 mysql-devel，make 时会在哪个模块失败、为什么？② 想把 Data/MySQL 也排除掉，命令该怎么改？③ <code>--cflags=-std=c++14</code> 为什么必须有（提示：POCO 的编译器要求）？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>① 从"原料 → 定位 → 成品"的链路想；② omit 清单是"不编译列表"；③ 回看 11.3 关于 POCO 1.10 起 C++14 要求的那段。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 会在 Data/MySQL 模块失败：mysql-devel 提供连接器编译所需的 mysql.h 头文件，没装它就找不到头文件，make 到 Data/MySQL 时报错（configure 阶段不检查，所以是"配置通过、编译失败"）。② 把 MySQL 加进 omit 清单即可：<code>--omit=Data/ODBC,Data/MySQL,MongoDB,PDF</code>。③ POCO 1.10 起要求 C++14 编译器，CentOS 默认 GCC 4.8.5 不满足，必须用支持 C++14 的编译器（如第 3 章装的 GCC 5.1.0）并通过 <code>--cflags=-std=c++14</code> 显式启用标准。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：JSON 平移 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把第 6 章 jsoncpp 的"读配置"程序翻译成 POCO 版本：解析字符串 <code>{"server":{"host":"127.0.0.1","port":8080}}</code>，取出 <code>server.port</code> 打印。提示：<code>getValue</code> 只能取当前层，嵌套对象要先 <code>getObject("server")</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>Parser.parse → extract&lt;Object::Ptr&gt; → obj-&gt;getObject("server") 得到子对象指针，再在子对象上 getValue&lt;int&gt;("port")。别忘检查子对象是否为 null。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <pre><code>Poco::JSON::Parser parser;
+Poco::Dynamic::Var v = parser.<span class="fn">parse</span>(
+    <span class="str">R"({"server":{"host":"127.0.0.1","port":8080}})"</span>);
+Poco::JSON::Object::Ptr root = v.<span class="fn">extract</span>&lt;Poco::JSON::Object::Ptr&gt;();
+Poco::JSON::Object::Ptr server = root-&gt;<span class="fn">getObject</span>(<span class="str">"server"</span>);
+<span class="kw">if</span> (server) {
+    std::cout &lt;&lt; server-&gt;<span class="fn">getValue</span>&lt;<span class="type">int</span>&gt;(<span class="str">"port"</span>) &lt;&lt; std::endl;  <span class="cmt">// 8080</span>
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：系统排查 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你按 11.3 的流程编译 POCO，configure 一切正常，但 make 到一半报错：<code>fatal error: mysql.h: No such file or directory</code>。请用系统分析的方法：① 这条错误出现在哪个模块？② 问题出在链路（原料 → 定位 → 成品）的哪个环节？③ 给出至少两种修复方案，并说明各自的代价。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>错误信息里的 mysql.h 是 MySQL 开发头文件；想想 11.4 的"先有原料，才能定位"链条，以及 11.3 里 omit 清单的作用——不想要 MySQL 也是一种合法选择。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 错误发生在 Data/MySQL 模块——它是唯一需要 mysql.h 的模块。② 问题出在"原料"环节：mysql-devel 没装（或装了但路径不对），configure 只记路径不验证存在性，所以到 make 才爆雷。③ 方案一：补原料，<code>yum install mysql-devel</code> 后重跑 configure + make，代价是需要安装开发包；方案二：绕开，把 Data/MySQL 加进 omit 清单（如 <code>--omit=Data/ODBC,Data/MySQL,MongoDB,PDF</code>）重配重编，代价是失去 MySQL 连接能力。按需求选：要用 MySQL 选一，不用就选二。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

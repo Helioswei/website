@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第5章：包管理工具 vcpkg 入门 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter05.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第5章：包管理工具 vcpkg 入门 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter05.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="5" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：包管理工具 vcpkg 入门</h1>
+  <p class="chapter-subtitle">当你终于决定不自己造轮子，第一个要学的不是某个库的 API，而是怎么把库装进你的工程</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「木匠做活，三分手艺七分家伙。你写了那么多 C++，可每次要用第三方库，是不是还在手动下载源码、配置路径、跟链接错误搏斗？这一章我带你认一件趁手的家伙——vcpkg。它干的事很简单：把『下载、编译、配置』这三件重复劳动包了，让你把力气花在真正的木活上。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 零基础铺垫：为什么 C++ 需要包管理工具 ========== -->
+  <h2>5.1 零基础铺垫：为什么 C++ 需要包管理工具</h2>
+
+  <p>先回答一个最朴素的问题：<strong>什么是"包"（package）？</strong>说人话，包就是"别人写好的、可以直接拿来用的代码合集"，它通常包含头文件（.h）、编译好的库文件（.a 或 .so）和一份说明怎么用的文档。而<strong>包管理工具</strong>，就是帮你完成"把包下载下来、编译好、放到工程能找得到的位置"这一整套流程的程序——你只需要告诉它"我要 jsoncpp"，剩下的它来做。</p>
+
+  <p>你可能会想：下载源码我自己也会啊，为什么非要一个工具？因为<strong>C++ 的第三方库，从来不是"下载即用"这么简单</strong>。想想看，拿到一份第三方库源码后，你要回答多少个问题：编译成 <strong>Debug 还是 Release</strong>？（调试版带符号信息、不优化，发布版反之）编译成<strong>动态库还是静态库</strong>？（.so 运行时加载、.a 链接进可执行文件）用 <strong>MD 还是 MT</strong>运行时库？（Windows 下决定是否依赖系统 DLL）编译成 <strong>32 位还是 64 位</strong>？光这三个维度就有 2×2×2×2 = <strong>16 种组合</strong>。如果这个库还依赖别的库（比如 libcurl 依赖 zlib 和 openssl），组合数还会往上翻。</p>
+
+  <p>更要命的是<strong>依赖链</strong>：你要用 A，A 依赖 B，B 依赖 C……手动编译时你得从 C 开始一个个编，顺序还不能错。这就是为什么社区里流传着一句话："C++ 项目三分之一的时间在写代码，三分之一在编依赖，三分之一在修链接错误。"包管理工具要解决的，正是后三分之二。</p>
+
+  <table>
+    <tr><th>痛点</th><th>手动处理</th><th>包管理工具处理</th></tr>
+    <tr><td>下载源码</td><td>自己找官网、找版本、找镜像</td><td>自动下载 + 缓存管理 + 版本管理</td></tr>
+    <tr><td>编译配置</td><td>自己记 Debug/Release、静态/动态、位数组合</td><td>用 triplet（三元组）一键指定</td></tr>
+    <tr><td>依赖链</td><td>手动从底层库开始逐个编译</td><td>自动检查依赖并递归编译</td></tr>
+    <tr><td>工程集成</td><td>手动设置头文件目录、库文件目录</td><td>与构建系统（CMake）自动集成</td></tr>
+  </table>
+
+  <p>主流 C++ 包管理工具有好几家：Linux 生态有系统自带的 apt/yum（但版本旧、只装系统路径）、vcpkg（微软出品，跨平台）、Conan（独立社区，配置灵活但上手门槛高）。本章主角 <strong>vcpkg</strong> 由微软开源维护，最大的优点是<strong>开箱即用、跨平台、与 Visual Studio 和 CMake 无缝集成</strong>，非常适合作为 C++ 新手的第一款包管理工具。</p>
+
+  <pre><code><span class="cmt"># 一个典型的「手动编依赖」噩梦：从底层库开始逐个编</span>
+wget https://github.com/madler/zlib/archive/v1.3.1.tar.gz
+tar -xzf v1.3.1.tar.gz <span class="op">&amp;&amp;</span> <span class="fn">cd</span> zlib-1.3.1
+./configure <span class="op">&amp;&amp;</span> <span class="fn">make</span> <span class="op">&amp;&amp;</span> sudo make install
+
+<span class="cmt"># 然后再编依赖 zlib 的 openssl……再编依赖 openssl 的 libcurl……</span>
+<span class="cmt"># 等你编完，一周过去了，项目还没开始写</span></code></pre>
+
+  <pre><code><span class="cmt"># 同样的需求，用 vcpkg：一条命令，依赖链自动处理</span>
+./vcpkg/vcpkg install curl</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>如果你完全没接触过"库"，可以先做个比喻：库就像乐高零件——单个零件没多大用，但拼起来能搭出任何东西。包管理工具就是那个帮你把零件分类、装箱、送货上门的仓库管理员。你报货号，他送货，你只管拼。</p>
+  </div>
+
+  <!-- ========== 5.2 vcpkg 是什么：微软的跨平台包管理器 ========== -->
+  <h2>5.2 vcpkg 是什么：微软的跨平台开源包管理器</h2>
+
+  <p><strong>vcpkg</strong> 是微软开源的 C/C++ 跨平台软件包管理器，源码托管在 <code>github.com/microsoft/vcpkg</code>。它的官方定位是"<strong>C++ Library Manager for Windows, Linux, and macOS</strong>"——注意，它不只支持 Windows，Linux 和 macOS 同样是一等公民。vcpkg 同时支持开源库和专有库，仓库里目前收录了数千个常用 C++ 库（截至 2025 年底已超过 2500 个 port）。</p>
+
+  <p>vcpkg 有<strong>两种工作模式</strong>，这个区分很重要，后面 5.6 会细讲：</p>
+
+  <ul>
+    <li><strong>经典模式（Classic mode）</strong>：把包安装到 vcpkg 根目录下的 <code>installed/</code> 全局目录，一次安装、所有项目共用。适合快速尝试一个库。</li>
+    <li><strong>清单模式（Manifest mode）</strong>：在项目里放一个 <code>vcpkg.json</code> 声明文件，包安装在项目自己的 <code>vcpkg_installed/</code> 目录，每个项目依赖独立、可版本锁定。官方推荐模式。</li>
+  </ul>
+
+  <p>为什么官方推荐清单模式？因为它把"依赖"变成了<strong>项目的一部分</strong>：你 clone 一个项目，<code>vcpkg install</code> 一跑，依赖环境就绪——不用猜"作者装的什么版本"。后面 5.6 我们会看到它长什么样。</p>
+
+  <table>
+    <tr><th>维度</th><th>经典模式</th><th>清单模式（推荐）</th></tr>
+    <tr><td>依赖声明</td><td>命令行直接写包名</td><td><code>vcpkg.json</code> 文件声明</td></tr>
+    <tr><td>安装位置</td><td>vcpkg 根 <code>installed/</code>（全局共享）</td><td>项目内 <code>vcpkg_installed/</code>（每项目独立）</td></tr>
+    <tr><td>版本管理</td><td>跟随 vcpkg 仓库整体更新</td><td><code>builtin-baseline</code> 锁定版本基线</td></tr>
+    <tr><td>适合场景</td><td>临时试用、快速验证</td><td>正式工程、团队协作</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 经典模式：直接指定包名安装（Linux 默认编译静态库）</span>
+./vcpkg/vcpkg install jsoncpp
+
+<span class="cmt"># 指定 triplet（三元组）：编译 64 位 Linux 版本</span>
+./vcpkg/vcpkg install jsoncpp:x64-linux</code></pre>
+
+  <pre><code><span class="cmt"># 清单模式：项目根目录放一个 vcpkg.json 声明依赖</span>
+{
+  <span class="str">"name"</span>: <span class="str">"my-app"</span>,
+  <span class="str">"version"</span>: <span class="str">"1.0.0"</span>,
+  <span class="str">"dependencies"</span>: [
+    <span class="str">"jsoncpp"</span>,
+    <span class="str">"curl"</span>
+  ]
+}</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：vcpkg 下载源码默认走 GitHub，在国内网络下可能很慢甚至超时。遇到下载慢的问题，可以配置镜像源（如 <code>VCPKG_BINARY_SOURCES</code> 或 GitHub 代理），或者耐心等它一次，因为下载的源码会缓存在 <code>downloads/</code> 目录，第二次安装同类库就不用再下了。</p>
+  </div>
+
+  <!-- ========== 5.3 安装与目录解剖 ========== -->
+  <h2>5.3 安装与目录解剖</h2>
+
+  <p>vcpkg 的安装方式很特别：<strong>它不提供安装包，而是让你 clone 它的源码仓库，然后运行一个引导脚本</strong>。这是因为 vcpkg 本身就是 C++ 写的，引导脚本会把它编译成可执行文件——你得到的既是一个包管理器，也是它的全部源码和包定义。整个过程只需要两样东西：<code>git</code> 和 <code>g++（&gt;= 6）</code>。Linux 下还需要一些基础工具，先装齐：</p>
+
+  <pre><code><span class="cmt"># 依赖工具（Ubuntu / Debian）</span>
+sudo apt-get update
+sudo apt-get install build-essential tar curl zip unzip</code></pre>
+
+  <pre><code><span class="cmt"># 1. clone vcpkg 仓库（建议固定到一个工作目录，比如 ~/work/source/）</span>
+git clone https://github.com/microsoft/vcpkg
+<span class="fn">cd</span> vcpkg
+
+<span class="cmt"># 2. 运行引导脚本，生成 vcpkg 命令行工具</span>
+./bootstrap-vcpkg.sh</code></pre>
+
+  <p>引导完成后，当前目录下会出现一个 <code>vcpkg</code> 可执行文件。跑 <code>./vcpkg version</code> 可以验证安装是否成功。如果机器上没有 CMake，vcpkg 会自动下载 portable 版本的 CMake 用于编译库——但自动下载的速度往往不理想，建议先手动装一个最新版 CMake（<code>sudo apt install cmake</code> 或去 cmake.org 下载），让 vcpkg 直接用系统的。</p>
+
+  <p>vcpkg 的一个设计哲学是<strong>自包含</strong>：所有功能和数据都在自己的目录树里，不写注册表、不设环境变量（Windows 上不碰注册表），一台机器上可以有任意多个互不干扰的 vcpkg 实例。它的目录结构是这样的——认识它们，后面排查问题会快很多：</p>
+
+  <table>
+    <tr><th>目录</th><th>作用</th></tr>
+    <tr><td><code>buildtrees/</code></td><td>编译每个库时的中间产物（源码解压、构建目录）</td></tr>
+    <tr><td><code>downloads/</code></td><td>所有下载过的工具与源码缓存，装包时先在这里找</td></tr>
+    <tr><td><code>installed/</code></td><td>已安装库的头文件与二进制（经典模式安装位置）</td></tr>
+    <tr><td><code>packages/</code></td><td>安装过程中的暂存目录</td></tr>
+    <tr><td><code>ports/</code></td><td>每个库的"配方"：版本、下载地址、编译脚本，可自定义</td></tr>
+    <tr><td><code>scripts/</code></td><td>vcpkg 使用的脚本（CMake 工具链文件也在这）</td></tr>
+    <tr><td><code>toolsrc/</code></td><td>vcpkg 自身的 C++ 源代码</td></tr>
+    <tr><td><code>triplets/</code></td><td>各目标平台配置（如 x86-windows、x64-linux）</td></tr>
+  </table>
+
+  <pre><code><span class="cmt"># 验证安装</span>
+./vcpkg version
+<span class="cmt"># 输出示例（版本号随仓库更新而变）：</span>
+<span class="cmt"># vcpkg package management program version 2025.xx.x</span></code></pre>
+
+  <pre><code><span class="cmt"># 查看 vcpkg 支持的 triplet 列表（三元组，即"平台+位数+链接方式"的配置名）</span>
+./vcpkg help triplet</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>更新 vcpkg 本身很简单：<code>git pull</code> 拉取最新代码后重新跑一次 <code>bootstrap-vcpkg.sh</code>。引导程序会重建 vcpkg 可执行文件，但<strong>不会动你已经装好的库</strong>——工具箱升级了，工具不会丢。</p>
+  </div>
+
+  <!-- ========== 5.4 命令行实战：search / install / list / remove ========== -->
+  <h2>5.4 命令行实战：search / install / list / remove</h2>
+
+  <p>vcpkg 的常用命令不多，掌握六个就够日常使用：<code>search</code>（找包）、<code>install</code>（装包）、<code>list</code>（看已装）、<code>remove</code>（卸包）、<code>upgrade</code>（升级）、<code>export</code>（导出）。先从 search 开始——<strong>永远先搜，再装</strong>，因为包名不一定是你猜的那个（比如"uuid 库"在 vcpkg 里叫 <code>libuuid</code>）。</p>
+
+  <pre><code><span class="cmt"># 搜索包含 "uuid" 的包</span>
+./vcpkg/vcpkg search uuid
+<span class="cmt"># 搜索 "json" 相关的包</span>
+./vcpkg/vcpkg search json</code></pre>
+
+  <pre><code><span class="cmt"># 安装：默认用当前平台默认 triplet（Linux 下静态库）</span>
+./vcpkg/vcpkg install jsoncpp
+
+<span class="cmt"># 指定 triplet：64 位 Linux 动态库版本（如果该 triplet 可用）</span>
+./vcpkg/vcpkg install jsoncpp:x64-linux</code></pre>
+
+  <p>install 的包名语法是 <code>portname[feature1,feature2]:triplet</code>——中括号里是特性（features，即该库的可选功能模块），冒号后是目标平台配置。比如 <code>curl[ssl]:x64-linux</code> 表示"带 SSL 支持的 curl，64 位 Linux"。不带 triplet 时用默认值（Windows 默认 x86-windows，Linux 默认 x64-linux）。</p>
+
+  <p>装完之后想确认"我到底装了什么"，用 <code>list</code>；想卸掉，用 <code>remove</code>。注意 remove 有个安全机制：如果别的库依赖它，vcpkg 会警告你加 <code>--recurse</code> 才会连坐删除。</p>
+
+  <pre><code><span class="cmt"># 列出已安装的所有库</span>
+./vcpkg/vcpkg list
+<span class="cmt"># 输出示例：</span>
+<span class="cmt"># jsoncpp:x64-linux                           1.9.6    A C++ library for interacting with JSON</span></code></pre>
+
+  <pre><code><span class="cmt"># 移除一个库（若被依赖，需加 --recurse 连坐）</span>
+./vcpkg/vcpkg remove libuuid
+./vcpkg/vcpkg remove libuuid --recurse</code></pre>
+
+  <pre><code><span class="cmt"># 升级：先看哪些过期（默认只列出，不动手）</span>
+./vcpkg/vcpkg upgrade
+<span class="cmt"># 真正执行升级</span>
+./vcpkg/vcpkg upgrade --no-dry-run</code></pre>
+
+  <p>最后是 <code>export</code>：把装好的包导出来分发给别人（比如给没网的环境用），导出时必须指定格式，支持 <code>--raw</code>（目录）、<code>--nuget</code>（NuGet 包）、<code>--zip</code>（压缩包）、<code>--7zip</code> 等。对应地，<code>import</code> 命令可以把导出的包再导入。</p>
+
+  <pre><code><span class="cmt"># 把 jsoncpp 导出为 zip 包</span>
+./vcpkg/vcpkg export jsoncpp --zip
+<span class="cmt"># 指定输出目录和文件名</span>
+./vcpkg/vcpkg export jsoncpp --zip --output=/home/helios/pkgs/jsoncpp</code></pre>
+
+  <div class="warning">
+    <p><strong>Linux 下默认静态库</strong>：vcpkg 在 Linux 平台默认编译<strong>静态库</strong>（.a），如果需要动态库（.so），要用 overlay triplet 的方式自定义（参考 vcpkg 官方文档 <code>docs/examples/overlay-triplets-linux-dynamic.md</code>）。Windows 下默认则反过来是动态库。</p>
+  </div>
+
+  <!-- ========== 5.5 与 CMake 集成 ========== -->
+  <h2>5.5 与 CMake 集成：让工程"看见"库</h2>
+
+  <p>包装好了，接下来是重头戏：<strong>怎么让 CMake 工程找到这些库</strong>。手动做法是在 CMakeLists.txt 里写死头文件路径和库路径——但那样换台机器就失效。vcpkg 的正确集成姿势是<strong>工具链文件（toolchain file）</strong>：vcpkg 自带一个 CMake 工具链文件，它会在 CMake 配置阶段自动把 <code>installed/</code> 里的 include 和 lib 目录加进搜索路径。</p>
+
+  <p>两种指定方式，任选其一：</p>
+
+  <pre><code><span class="cmt"># 方式一：命令行传参（推荐，不污染 CMakeLists.txt）</span>
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=/home/helios/work/source/vcpkg/scripts/buildsystems/vcpkg.cmake</code></pre>
+
+  <pre><code><span class="cmt"># 方式二：写在 CMakeLists.txt 顶部（必须在 project() 之前）</span>
+<span class="fn">set</span>(<span class="param">CMAKE_TOOLCHAIN_FILE</span> /home/helios/work/source/vcpkg/scripts/buildsystems/vcpkg.cmake <span class="kw">CACHE</span> <span class="type">PATH</span> <span class="str">""</span>)
+<span class="cmt"># 指定目标 triplet（可选，默认自动检测）</span>
+<span class="cmt"># set(VCPKG_TARGET_TRIPLET x64-linux CACHE PATH "")</span>
+
+<span class="fn">project</span>(my_app <span class="type">CXX</span>)
+
+<span class="fn">find_package</span>(jsoncpp <span class="kw">CONFIG</span> <span class="kw">REQUIRED</span>)
+<span class="fn">target_link_libraries</span>(my_app <span class="kw">PRIVATE</span> jsoncpp_lib)</code></pre>
+
+  <p>注意第 7 行的 <code>find_package</code>——装完包之后，vcpkg 会在终端<strong>明确告诉你这个库该用哪个 CMake 目标</strong>。比如装 sqlite3 时它会打印：</p>
+
+  <pre><code><span class="cmt"># vcpkg install 完成后的提示（真实输出格式）</span>
+The package sqlite3:x64-linux provides CMake targets:
+
+    find_package(unofficial-sqlite3 CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE unofficial::sqlite3::sqlite3)</code></pre>
+
+  <p>每个库的用法可能不同：有的提供 <code>find_package</code> 的 <code>CONFIG</code> 模式（如上），有的只提供传统 <code>MODULE</code> 模式（<code>find_package(jsoncpp)</code> 不带 CONFIG），还有的既不提供 CMake 配置也不提供 pkg-config，只能手动加头文件路径。判断方法：<code>vcpkg install</code> 输出会直接告诉你。这也是 vcpkg 设计得好的地方——<strong>安装即教学</strong>。</p>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>如果你用 Visual Studio（Windows），vcpkg 还能一键全局集成：<code>vcpkg integrate install</code> 之后，VS 里新建的项目自动就能找到 vcpkg 装的所有库，不用在工程属性里配任何路径。Linux/macOS 下没有这个命令，用上面的 CMake 工具链方式即可。</p>
+  </div>
+
+  <!-- ========== 5.6 清单模式：现代推荐用法 ========== -->
+  <h2>5.6 清单模式：把依赖写进项目（Manifest mode）</h2>
+
+  <p>经典模式有个隐蔽的坑：<strong>不同项目可能依赖同一个库的不同版本</strong>，而经典模式所有项目共用 <code>installed/</code>，升级一个包可能悄悄破坏另一个项目。清单模式从根上解决这个问题——每个项目在自己的目录里声明依赖，vcpkg 为每个项目维护独立的 <code>vcpkg_installed/</code>。</p>
+
+  <p>用法极简：在项目根目录放一个 <code>vcpkg.json</code>（名字固定），内容声明项目名、版本和依赖列表。然后在这个目录里执行 <code>vcpkg install</code>——<strong>注意不带任何包参数</strong>，vcpkg 会读取 vcpkg.json 按声明安装，并把安装目录放在项目自己的 <code>vcpkg_installed/</code> 下。</p>
+
+  <pre><code><span class="cmt"># vcpkg.json —— 项目的依赖清单（清单模式核心）</span>
+{
+  <span class="str">"name"</span>: <span class="str">"my-app"</span>,
+  <span class="str">"version"</span>: <span class="str">"1.0.0"</span>,
+  <span class="str">"dependencies"</span>: [
+    <span class="str">"jsoncpp"</span>,
+    <span class="str">"curl"</span>
+  ]
+}</code></pre>
+
+  <pre><code><span class="cmt"># 在含 vcpkg.json 的目录执行（不带包参数，读清单安装）</span>
+./vcpkg/vcpkg install
+<span class="cmt"># 安装目录出现在项目自己的 vcpkg_installed/ 下</span>
+ls vcpkg_installed/x64-linux/include</code></pre>
+
+  <p>清单模式还有两个高级武器。第一个是 <strong>版本基线（builtin-baseline）</strong>：在 vcpkg.json 里指定一个 vcpkg 仓库的 commit 哈希，所有依赖的版本就锁定在那个时间点的版本——团队里任何人在任何机器上 clone 项目，装出来的依赖完全一致，这就是"可复现构建"（reproducible build）。第二个是 <strong>特性（features）</strong>：在 dependencies 里用对象语法按需开启库的功能模块，比如只想要 curl 的 ssl 特性。</p>
+
+  <pre><code><span class="cmt"># 带版本基线与特性的 vcpkg.json</span>
+{
+  <span class="str">"name"</span>: <span class="str">"my-app"</span>,
+  <span class="str">"version"</span>: <span class="str">"1.0.0"</span>,
+  <span class="str">"builtin-baseline"</span>: <span class="str">"a1b2c3d4e5f6789012345678abcdef0123456789"</span>,
+  <span class="str">"dependencies"</span>: [
+    <span class="str">"jsoncpp"</span>,
+    { <span class="str">"name"</span>: <span class="str">"curl"</span>, <span class="str">"features"</span>: [<span class="str">"ssl"</span>] }
+  ]
+}</code></pre>
+
+  <p>至此你有了完整的"装库"技能：经典模式快速试用、清单模式正式工程、CMake 工具链集成、triplet 指定平台。下一章我们就会真刀真枪地用 vcpkg 装 jsoncpp，然后动手解析 JSON——到时候你会发现，第 5 章打的地基有多省事。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念三连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>包</code>、<code>包管理工具</code>、<code>triplet</code>、<code>工具链文件</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个概念对应"东西 / 搬运工 / 规格 / 钥匙"四个角色。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>包：别人写好的、可直接拿来用的代码合集（头文件 + 库文件 + 文档）；包管理工具：自动完成"下载、编译、配置"流程的程序；triplet：目标平台的配置名（如 x64-linux 表示 64 位 Linux），决定库编译成什么形态；工具链文件：CMake 配置阶段加载的文件，把 vcpkg 安装目录加进搜索路径（vcpkg 自带 <code>scripts/buildsystems/vcpkg.cmake</code>）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>以下需求分别用 vcpkg 的哪个命令？(a) 想看看 vcpkg 里有没有"uuid"库；(b) 安装 64 位 Linux 的 jsoncpp；(c) 查看自己装过哪些库；(d) 卸掉 libuuid。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个动词：找、装、看、卸——对应 search / install / list / remove。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>./vcpkg/vcpkg search uuid</code>；(b) <code>./vcpkg/vcpkg install jsoncpp:x64-linux</code>；(c) <code>./vcpkg/vcpkg list</code>；(d) <code>./vcpkg/vcpkg remove libuuid</code>（若被依赖加 <code>--recurse</code>）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：对比清单模式与经典模式 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>项目 A 用 jsoncpp 1.9.6，项目 B 用 jsoncpp 1.9.5。如果用经典模式共用 installed/，会出什么问题？换成清单模式如何解决？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想"全局共享"和"每项目独立"的区别；再想想 vcpkg_installed/ 装在哪里。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>经典模式所有项目共用 vcpkg 根目录的 <code>installed/</code>，A、B 两个项目会争抢同一个 jsoncpp 版本——升级 A 的依赖可能破坏 B 的构建。清单模式每个项目在自己的目录（<code>vcpkg_installed/</code>）安装依赖，A、B 互不干扰；再配合 <code>builtin-baseline</code> 锁定版本，还能保证团队协作时依赖完全一致。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：动手装一个库 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在 Linux 环境（或 WSL）实操：安装 vcpkg → 用经典模式装 jsoncpp → 写一个最小 CMake 工程用工具链文件链接 jsoncpp → 编译运行，往 JSON 里塞一个字段再读出来。把每一步命令和遇到的问题记下来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>安装见 5.3（clone + bootstrap）；装包见 5.4（<code>install jsoncpp:x64-linux</code>）；集成见 5.5（CMake 工具链 + find_package）。若下载慢，耐心等首次下载（会缓存）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心三步：① <code>git clone https://github.com/microsoft/vcpkg && cd vcpkg && ./bootstrap-vcpkg.sh</code>；② <code>./vcpkg install jsoncpp:x64-linux</code>；③ CMakeLists.txt 顶部 <code>set(CMAKE_TOOLCHAIN_FILE /path/to/vcpkg/scripts/buildsystems/vcpkg.cmake CACHE PATH "")</code>，然后 <code>find_package(jsoncpp CONFIG REQUIRED)</code> + <code>target_link_libraries(app PRIVATE jsoncpp_lib)</code>。验证：<code>cmake -B build &amp;&amp; cmake --build build</code> 无链接错误即成功。下一章第 6 章会完整演示 jsoncpp 的读写代码。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

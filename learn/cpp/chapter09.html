@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第9章：单元测试：gtest 与覆盖率 - C++ 工程实践</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp/chapter09.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第9章：单元测试：gtest 与覆盖率 - C++ 工程实践",
+  "url": "https://aigcwei.cn/learn/cpp/chapter09.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp" data-track="cpp" data-chapter="9" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：单元测试：gtest 与覆盖率</h1>
+  <p class="chapter-subtitle">代码有没有毛病，不是你觉得，是测试说了算——这一章给代码立规矩、上枷锁，再用量化报告看看你的测试到底覆盖了多少</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「升堂！本府断案，不看交情，只看证据。代码也一样——它到底有没有毛病，不是你觉得，是测试说了算。这一章，我教你给每一段代码立规矩：一条断言就是一道铁证，一份覆盖率报告就是案卷的完整度。代码在你心里没毛病？先过了本府这一关。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 零基础铺垫：单元测试是什么，为什么需要 ========== -->
+  <h2>9.1 零基础铺垫：单元测试是什么，为什么需要</h2>
+
+  <p>先给概念定个调。<strong>单元测试</strong>（unit test），说人话，就是"对程序里<strong>最小的代码单元</strong>——一个函数、一个类的一个方法——写一段自动化验证程序，用断言检查它的行为是否符合预期"。这里的关键词是<strong>断言</strong>（assertion）：一条"某个条件必须成立"的声明，比如"add(2,3) 必须等于 5"。断言成立，测试通过；断言不成立，测试失败并报出详细信息。单元测试的价值在于<strong>自动化</strong>：写一次，之后每次改动代码，跑一遍就知道有没有弄坏东西，不需要人肉去点、去看、去试。</p>
+
+  <p>为什么需要它？最核心的两个理由是<strong>回归保护</strong>和<strong>重构安全网</strong>。回归（regression），说人话就是"以前好的功能，改了别的代码之后悄悄变坏了"——没有测试的话，这种坏往往要等上线后被用户发现；有了测试，改完代码跑一遍，红了就当场抓住。重构（refactor），说人话就是"不改变功能、只重写内部实现"——没有测试兜底，谁也不敢动自己写过的代码，因为不知道会碰坏什么；有测试，你就有底气把烂代码翻新。此外，测试还是一份<strong>活的文档</strong>：别人看你的测试，就知道你的类该怎么构造、方法该传什么参数、边界情况是什么——比注释可靠得多。</p>
+
+  <p>你可能说：验证功能，我直接在 main 里写 if 判断不就行了？早期的确有人这么干，但它的毛病很明显：验证代码和业务代码搅在一起、失败信息不统一、跑完没有任何统计（跑了几个、过了几个）、更没有人知道你<strong>测了什么、没测什么</strong>。正如我们在实践中的真实困惑：<strong>"做好了单元测试，但别人并不知道我们的单元测试做得如何，是否覆盖了所有需要被测试的类方法或者变量"</strong>——这正是本章要解决的两个问题：怎么把测试写规范（gtest），怎么证明覆盖得够不够（lcov 覆盖率）。</p>
+
+  <pre><code><span class="cmt">// 手工验证的原始形态：把断言写死在 main 里</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>cassert<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="str">"calculator.h"</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    Calculator calc;
+    <span class="fn">assert</span>(calc.<span class="fn">add</span>(<span class="num">2</span>, <span class="num">3</span>) <span class="op">==</span> <span class="num">5</span>);      <span class="cmt">// 失败直接崩溃，只有一行信息</span>
+    <span class="fn">assert</span>(calc.<span class="fn">subtract</span>(<span class="num">5</span>, <span class="num">3</span>) <span class="op">==</span> <span class="num">2</span>);
+    std::cout <span class="op">&lt;&lt;</span> <span class="str">"全部通过！"</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;   <span class="cmt">// 跑了几条？失败了哪条？没人知道</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">// 同样的验证，用 gtest 来写：每条断言独立、失败信息完整、自动统计</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>gtest/gtest.h<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="str">"calculator.h"</span>
+
+TEST(CalculatorTest, Add) {
+    Calculator calc;
+    EXPECT_EQ(calc.<span class="fn">add</span>(<span class="num">2</span>, <span class="num">3</span>), <span class="num">5</span>);   <span class="cmt">// 失败会打印期望值/实际值，但不中断</span>
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>铁面无私第一课：断言必须<strong>可证伪</strong>。像 <code>EXPECT_TRUE(1 == 1)</code> 这种恒真的断言毫无价值——它永远不会失败，也就永远不会帮你抓住 bug。合格的断言是那种"如果代码有毛病就一定会失败"的条件，比如拿一个边界值、一个异常输入去撞被测函数。</p>
+  </div>
+
+  <!-- ========== 9.2 gtest 是什么与安装 ========== -->
+  <h2>9.2 gtest 是什么：Google 开源的测试框架</h2>
+
+  <p><strong>gtest</strong>（正式名 GoogleTest）是 Google 开源的 C++ 单元测试框架，官方文档在 google.github.io/googletest/，源码托管在 github.com/google/googletest。它提供了写测试所需的三样核心武器：<strong>断言宏</strong>（EXPECT_/ASSERT_ 系列，负责验证）、<strong>测试组织</strong>（TEST/TEST_F 宏，负责把测试分组登记）、<strong>运行与统计</strong>（RUN_ALL_TESTS，负责跑完所有测试并汇报通过/失败数量）。此外它还支持死亡测试（death test，验证程序应当崩溃的场景）、参数化测试（同一套断言喂多组数据）等高级特性——本章先掌握核心，剩下的等你需要时再看文档。</p>
+
+  <p>gtest 编译后分成<strong>两个链接目标</strong>，这个区分要记住：<code>gtest</code> 是框架本体（只有断言、宏、运行机制），<code>gtest_main</code> 是一个自带 main 入口的小库——链接它之后你连 main 函数都不用写，它会自动调用 <code>RUN_ALL_TESTS()</code> 并返回退出码。新手阶段直接链接 <code>gtest_main</code> 最省事，9.3 我们再揭开它的 main 到底写了什么。</p>
+
+  <p>安装沿用第 5 章的家伙——vcpkg：一条命令搞定下载、编译、配置。装完头文件会出现在安装目录的 <code>include/gtest/</code> 下，CMake 集成我们在 9.5 讲。不想用 vcpkg 的话还有两条路：Debian/Ubuntu 上 <code>sudo apt install libgtest-dev</code>；或者用 CMake 官方推荐的 <code>FetchContent</code> 方式直接在构建时从 GitHub 拉源码编译（GoogleTest 官方 quickstart 就是这么演示的）。</p>
+
+  <pre><code><span class="cmt"># 用 vcpkg 安装 gtest（经典模式，延续第 5 章）</span>
+./vcpkg/vcpkg install gtest
+
+<span class="cmt"># 验证头文件就位</span>
+ls vcpkg_installed/x64-linux/include/gtest/gtest.h</code></pre>
+
+  <pre><code><span class="cmt"># 不用 vcpkg 的替代方案：CMake FetchContent 拉源码编译（GoogleTest 官方 quickstart 方式）</span>
+<span class="fn">include</span>(FetchContent)
+<span class="fn">FetchContent_Declare</span>(
+  googletest
+  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+)
+<span class="cmt"># Windows 下避免覆盖父项目的编译/链接设置（官方模板原样保留）</span>
+<span class="fn">set</span>(<span class="param">gtest_force_shared_crt</span> <span class="kw">ON</span> <span class="kw">CACHE</span> <span class="type">BOOL</span> <span class="str">""</span> <span class="kw">FORCE</span>)
+<span class="fn">FetchContent_MakeAvailable</span>(googletest)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>FetchContent 里的 URL 指向一个固定的 commit 哈希——官方建议经常更新哈希以跟随最新版本。vcpkg 和 FetchContent 二选一即可，别同时用，否则可能出现"两份 gtest、链接打架"的怪问题。断案要人证物证齐全，依赖也得来源唯一。</p>
+  </div>
+
+  <!-- ========== 9.3 第一个测试：TEST 宏与 EXPECT_/ASSERT_ 断言 ========== -->
+  <h2>9.3 第一个测试：TEST 宏与 EXPECT_/ASSERT_ 断言</h2>
+
+  <p>gtest 里登记一个测试用 <code>TEST(TestSuiteName, TestName)</code> 宏：<strong>第一个参数是测试套件名</strong>（逻辑分组，比如 CalculatorTest），<strong>第二个参数是测试名</strong>（比如 Add）。两者拼起来构成测试的唯一标识。同一套件的测试共享命名，但<strong>每个测试独立运行、互不干扰</strong>——一个失败不会连累其他测试。我们先写一个要被测的 Calculator 类，再为它写测试。</p>
+
+  <p>断言是测试的"铁证"，gtest 把它们分成<strong>两大家族</strong>：<code>EXPECT_</code> 系列失败后<strong>记录错误但继续执行</strong>当前测试（非致命），方便一次跑出尽量多的失败点；<code>ASSERT_</code> 系列失败后<strong>立即中止</strong>当前测试（致命）。选型原则一句话：<strong>如果后面语句的执行依赖这条断言的结果，就用 ASSERT_，否则用 EXPECT_</strong>。比如断言指针非空之后要解引用它，就必须用 <code>ASSERT_NE(ptr, nullptr)</code>，否则解引用空指针会直接段错误，连错误报告都看不到。常用成员：<code>EXPECT_EQ</code>/<code>EXPECT_NE</code>（相等/不等）、<code>EXPECT_TRUE</code>/<code>EXPECT_FALSE</code>（布尔）、<code>EXPECT_THROW</code>（应抛异常）、<code>EXPECT_STRNE</code>（C 字符串不等）。注意参数顺序：<code>EXPECT_EQ(实际值, 期望值)</code>——第一个是<strong>被测代码的输出</strong>，第二个是<strong>你期望的值</strong>。</p>
+
+  <p>谁调用这些测试？入口是 <code>RUN_ALL_TESTS()</code>。链接 <code>gtest_main</code> 时它替你写好了 main；手动写也很简单：先 <code>testing::InitGoogleTest(&amp;argc, argv)</code> 解析命令行参数（gtest 支持 <code>--gtest_filter</code> 等调试参数），再 <code>return RUN_ALL_TESTS()</code>——全部通过返回 0，有失败返回非 0，这个退出码就是给 CI（持续集成，说人话：自动构建+自动跑测试的流水线）看的。</p>
+
+  <pre><code><span class="cmt">// calculator.h —— 被测单元：一个最简计算器类</span>
+<span class="kw">#pragma once</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>stdexcept<span class="op">&gt;</span>
+
+<span class="kw">class</span> <span class="type">Calculator</span> {
+<span class="kw">public</span>:
+    <span class="type">int</span> <span class="fn">add</span>(<span class="type">int</span> a, <span class="type">int</span> b) { <span class="kw">return</span> a <span class="op">+</span> b; }
+    <span class="type">int</span> <span class="fn">subtract</span>(<span class="type">int</span> a, <span class="type">int</span> b) { <span class="kw">return</span> a <span class="op">-</span> b; }
+    <span class="type">double</span> <span class="fn">divide</span>(<span class="type">double</span> a, <span class="type">double</span> b);   <span class="cmt">// 除零时抛 std::invalid_argument</span>
+};</code></pre>
+
+  <pre><code><span class="cmt">// test_calculator.cpp —— 第一个 gtest 测试文件</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>gtest/gtest.h<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="str">"calculator.h"</span>
+
+TEST(CalculatorTest, Add) {
+    Calculator calc;
+    EXPECT_EQ(calc.<span class="fn">add</span>(<span class="num">2</span>, <span class="num">3</span>), <span class="num">5</span>);        <span class="cmt">// 实际值在前，期望值在后</span>
+    EXPECT_EQ(calc.<span class="fn">add</span>(<span class="op">-</span><span class="num">1</span>, <span class="num">1</span>), <span class="num">0</span>);       <span class="cmt">// 一个测试里可以写多条断言</span>
+}
+
+TEST(CalculatorTest, Subtract) {
+    Calculator calc;
+    EXPECT_EQ(calc.<span class="fn">subtract</span>(<span class="num">5</span>, <span class="num">3</span>), <span class="num">2</span>);
+    EXPECT_TRUE(calc.<span class="fn">subtract</span>(<span class="num">3</span>, <span class="num">5</span>) <span class="op">&lt;</span> <span class="num">0</span>);   <span class="cmt">// 结果为负也符合预期</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">// main.cpp —— 不链接 gtest_main 时的手动入口（gtest_main 内部干的就是这件事）</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>gtest/gtest.h<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="type">int</span> argc, <span class="type">char</span>** argv) {
+    <span class="fn">testing::InitGoogleTest</span>(<span class="op">&amp;</span>argc, argv);
+    <span class="kw">return</span> <span class="fn">RUN_ALL_TESTS</span>();   <span class="cmt">// 跑全部测试；0 = 全部通过</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">// 异常测试：验证"除零必须抛异常"这个契约</span>
+TEST(CalculatorTest, DivideByZero) {
+    Calculator calc;
+    <span class="cmt">// 如果 divide 没有抛 invalid_argument，这条断言就失败——可证伪的断言</span>
+    EXPECT_THROW(calc.<span class="fn">divide</span>(<span class="num">1.0</span>, <span class="num">0.0</span>), <span class="type">std::invalid_argument</span>);
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p><code>EXPECT_EQ</code> 的两个参数顺序别写反：第一个是实际值（被测代码的输出），第二个是期望值。写反了测试照样能跑，但失败时打印的 "Expected / Actual" 是颠倒的，排查时容易看岔——铁证也要摆放整齐，方便对质。</p>
+  </div>
+
+  <!-- ========== 9.4 测试夹具：TEST_F 与 SetUp/TearDown ========== -->
+  <h2>9.4 测试夹具：TEST_F 与 SetUp/TearDown</h2>
+
+  <p>9.3 里每个测试都要自己 <code>Calculator calc;</code> 构造一次。测试一多，你会发现大量测试共享<strong>相同的初始化逻辑</strong>——同样的对象、同样的临时文件、同样的数据库连接。重复粘贴初始化代码既啰嗦又危险（改一处忘一处）。gtest 的<strong>测试夹具</strong>（fixture）就是为这个场景设计的：写一个继承 <code>::testing::Test</code> 的类，把公共初始化放进 <code>SetUp()</code>，把清理放进 <code>TearDown()</code>，测试函数里直接用夹具的成员。</p>
+
+  <p>夹具的运行机制是"<strong>每个测试独立开堂</strong>"：每跑一个 <code>TEST_F</code>，gtest 都新建一个夹具实例 → 调用 <code>SetUp()</code> → 执行测试体 → 调用 <code>TearDown()</code> → 销毁实例。也就是说，测试之间通过夹具共享的是"<strong>写法</strong>"，不是"<strong>状态</strong>"——上一条测试对成员变量的修改绝不会泄漏到下一条，这就是测试隔离。注意 <code>TEST_F(FixtureClassName, TestName)</code> 的<strong>第一个参数必须是夹具类名</strong>（不是测试套件名，写错会编译报错）。夹具成员通常放在 <code>protected</code> 区，测试体里可以直接访问。</p>
+
+  <pre><code><span class="cmt">// calculator_fixture.h —— 定义夹具：继承 ::testing::Test</span>
+<span class="cmt">#include</span> <span class="op">&lt;</span>gtest/gtest.h<span class="op">&gt;</span>
+<span class="cmt">#include</span> <span class="str">"calculator.h"</span>
+
+<span class="kw">class</span> <span class="type">CalculatorTest</span> : <span class="kw">public</span> ::testing::Test {
+<span class="kw">protected</span>:
+    <span class="type">void</span> <span class="fn">SetUp</span>() <span class="kw">override</span> {
+        calc <span class="op">=</span> <span class="kw">new</span> <span class="type">Calculator</span>();   <span class="cmt">// 每个测试开始前执行一次</span>
+    }
+    <span class="type">void</span> <span class="fn">TearDown</span>() <span class="kw">override</span> {
+        <span class="kw">delete</span> calc;                 <span class="cmt">// 每个测试结束后执行一次</span>
+    }
+    <span class="type">Calculator</span>* calc;                <span class="cmt">// protected 成员，测试体可直接访问</span>
+};</code></pre>
+
+  <pre><code><span class="cmt">// 使用夹具：TEST_F 的第一个参数必须是夹具类名</span>
+TEST_F(CalculatorTest, Add) {
+    EXPECT_EQ(calc<span class="op">-&gt;</span><span class="fn">add</span>(<span class="num">2</span>, <span class="num">3</span>), <span class="num">5</span>);
+}
+
+TEST_F(CalculatorTest, Subtract) {
+    EXPECT_EQ(calc<span class="op">-&gt;</span><span class="fn">subtract</span>(<span class="num">10</span>, <span class="num">4</span>), <span class="num">6</span>);
+}
+
+<span class="cmt">// 运行输出（示意）：每个测试都走一遍 SetUp → 测试体 → TearDown</span>
+<span class="cmt">// [ RUN      ] CalculatorTest.Add</span>
+<span class="cmt">// [       OK ] CalculatorTest.Add (0 ms)</span>
+<span class="cmt">// [ RUN      ] CalculatorTest.Subtract</span>
+<span class="cmt">// [       OK ] CalculatorTest.Subtract (0 ms)</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>现代 C++ 里，如果夹具成员是 <code>Calculator calc;</code> 这样的<strong>栈对象</strong>，构造和析构自动发生在每个测试的起止，<code>TearDown</code> 甚至可以省略；只有当成员需要手动管理资源（new/delete、打开文件、连接网络）时，<code>SetUp</code>/<code>TearDown</code> 才有用武之地。能用 RAII 就不用写清理代码——这也是工程判断力的一部分。</p>
+  </div>
+
+  <!-- ========== 9.5 CMake 集成：find_package(GTest) 与 ctest ========== -->
+  <h2>9.5 CMake 集成：find_package(GTest) 与 ctest</h2>
+
+  <p>测试文件写好了，怎么把它编进工程？在 CMakeLists.txt 里做三件事：第一，<code>find_package(GTest REQUIRED)</code>——找到 gtest 的头文件路径和库。因为第 5 章配置的 vcpkg 工具链文件会把 <code>installed/</code> 目录自动加进搜索路径，所以装过 gtest 之后这行直接就能命中，不用手写任何路径。第二，把测试可执行文件链接到 <code>GTest::gtest_main</code>（现代 CMake 的 imported target，自带 main 入口）。第三，<code>enable_testing()</code> 打开 CTest 支持，再用 <code>gtest_discover_tests()</code> 让 ctest 自动扫描测试二进制里所有 <code>TEST</code>/<code>TEST_F</code> 并逐个注册——这样每个测试都是 ctest 里的独立用例，失败时定位精确到测试名。</p>
+
+  <p><strong>ctest</strong> 是 CMake 自带的测试运行器（说人话：一个统一的"跑所有测试"的命令）。配好后两条命令起飞：<code>cmake --build build</code> 编译，然后 <code>ctest --test-dir build --output-on-failure</code> 跑全部测试。ctest 的好处是工程里有多个测试二进制时统一调度、统一报告，CI 里也用它。想只跑某个测试？直接运行测试二进制并加 gtest 的过滤参数，比如 <code>./build/test_calculator --gtest_filter=CalculatorTest.Add</code>。</p>
+
+  <pre><code><span class="cmt"># CMakeLists.txt —— 被测库 + 测试可执行文件 + CTest 集成</span>
+<span class="fn">cmake_minimum_required</span>(VERSION <span class="num">3.14</span>)
+<span class="fn">project</span>(calculator <span class="type">CXX</span>)
+
+<span class="fn">set</span>(<span class="param">CMAKE_CXX_STANDARD</span> <span class="num">17</span>)
+<span class="fn">set</span>(<span class="param">CMAKE_CXX_STANDARD_REQUIRED</span> <span class="kw">ON</span>)
+
+<span class="cmt"># 找到 gtest（vcpkg 工具链自动提供搜索路径）</span>
+<span class="fn">find_package</span>(GTest <span class="kw">REQUIRED</span>)
+
+<span class="cmt"># 被测代码编成静态库，测试文件链接它</span>
+<span class="fn">add_library</span>(calculator STATIC calculator.cpp calculator.h)
+<span class="fn">target_include_directories</span>(calculator <span class="kw">PUBLIC</span> ${CMAKE_CURRENT_SOURCE_DIR})
+
+<span class="cmt"># 打开 CTest，注册测试可执行文件</span>
+<span class="fn">enable_testing</span>()
+
+<span class="fn">add_executable</span>(test_calculator test_calculator.cpp)
+<span class="fn">target_link_libraries</span>(test_calculator <span class="kw">PRIVATE</span> calculator GTest::gtest_main)
+
+<span class="cmt"># 自动发现 test_calculator 里所有 TEST/TEST_F 并注册为 ctest 用例</span>
+<span class="fn">include</span>(GoogleTest)
+<span class="fn">gtest_discover_tests</span>(test_calculator)</code></pre>
+
+  <pre><code><span class="cmt"># 构建并运行测试</span>
+cmake -B build
+cmake --build build
+
+<span class="cmt"># 方式一：ctest 统一跑（推荐，CI 里也是这么跑的）</span>
+ctest --test-dir build --output-on-failure
+
+<span class="cmt"># 方式二：直接运行测试二进制（可用 --gtest_filter 只跑某一条）</span>
+./build/test_calculator --gtest_filter=CalculatorTest.Add</code></pre>
+
+  <pre><code><span class="cmt"># 直接运行的输出（gtest 真实格式）</span>
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[ RUN      ] CalculatorTest.Add
+[       OK ] CalculatorTest.Add (0 ms)
+[ RUN      ] CalculatorTest.Subtract
+[       OK ] CalculatorTest.Subtract (0 ms)
+[ RUN      ] CalculatorTest.DivideByZero
+[       OK ] CalculatorTest.DivideByZero (0 ms)
+[----------] 3 tests from 1 test suite ran. (1 ms total)
+[  PASSED  ] 3 tests.</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：如果 <code>find_package(GTest)</code> 找不到包，先确认两件事：gtest 真的装了吗（<code>./vcpkg/vcpkg list | grep gtest</code>）；配置 CMake 时是否带了 vcpkg 工具链参数（<code>-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake</code>）。工具链没带的话，CMake 根本不知道去哪找 vcpkg 装的库——这是第 5 章就埋下的伏笔，现在该还了。</p>
+  </div>
+
+  <!-- ========== 9.6 覆盖率：gcov/lcov/genhtml 实战 ========== -->
+  <h2>9.6 覆盖率：gcov/lcov/genhtml 实战</h2>
+
+  <p>测试全绿，就万事大吉了吗？回到本章开头那句真实困惑：<strong>"做好了单元测试，但别人并不知道我们做得如何，是否覆盖了所有需要被测试的类方法或者变量"</strong>。覆盖率（coverage）就是量化这个问题的指标。它分两个常见口径：<strong>行覆盖</strong>（line coverage），说人话就是"被测代码里有多少行真的被执行过"，比如一个 100 行的文件跑了 80 行，行覆盖就是 80%；<strong>分支覆盖</strong>（branch coverage），说人话就是"if/switch 的每个分支是否都被走到"——代码里藏着 <code>if (a) {...} else {...}</code>，只测了 a 为真的路，else 那条就是漏网之鱼。覆盖率报告告诉你的是：<strong>哪些代码被测试摸过，哪些从来没被摸到</strong>。</p>
+
+  <p>工具链是三件套：<strong>gcov</strong> 是 GCC 自带的覆盖率工具（编译时插桩记录，运行时统计）；<strong>lcov</strong> 是 gcov 的前端封装，把原始数据整理成人类可读的报告；<strong>genhtml</strong> 是 lcov 包里负责把统计数据渲染成 HTML 报告的工具。lcov 的安装：官网 http://ltp.sourceforge.net/coverage/lcov.php 提供 rpm 包和源码包（源码包解压后 <code>make install</code>，然后 <code>lcov -v</code> 能输出版本号即成功）；Debian/Ubuntu 上更省事的是 <code>sudo apt install lcov</code>。</p>
+
+  <p>整个流程分三步，每一步的产物要对得上：<strong>① 编译插桩</strong>——给编译器加 <code>--coverage</code> 标志（等价于 <code>-fprofile-arcs -ftest-coverage</code>，即"记录每行执行次数 + 记录分支跳转"），编译后每个源文件旁生成 <code>.gcno</code> 文件（记录代码结构，编译期产生）；<strong>② 运行测试</strong>——跑测试程序，结束后生成 <code>.gcda</code> 文件（记录实际执行情况，运行期产生，与 .gcno 一一对应）；<strong>③ 汇总出报告</strong>——lcov 采集 .gcda/.gcno 生成 .info 统计文件，genhtml 渲染成 HTML 报告。CMake 里通常用开关控制是否插桩（素材验证过的真实配置如下，原样保留）。</p>
+
+  <pre><code><span class="cmt"># CMakeLists.txt —— 覆盖率开关（真实项目验证过的配置）</span>
+<span class="cmt"># coverage option</span>
+OPTION(<span class="param">ENABLE_COVERAGE</span> <span class="str">"Use gcov"</span> <span class="kw">ON</span>)
+MESSAGE(STATUS <span class="str">"ENABLE_COVERAGE=${ENABLE_COVERAGE}"</span>)
+IF(<span class="param">ENABLE_COVERAGE</span>)
+    SET(<span class="param">CMAKE_CXX_FLAGS</span> <span class="str">"${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage"</span>)
+    SET(<span class="param">CMAKE_C_FLAGS</span> <span class="str">"${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage"</span>)
+    SET(<span class="param">CMAKE_EXE_LINKER_FLAGS</span> <span class="str">"${CMAKE_EXE_LINKER_FLAGS} -fprofile-arcs -ftest-coverage"</span>)
+ENDIF()</code></pre>
+
+  <pre><code><span class="cmt"># ① 开覆盖率开关编译 → 生成 .gcno；② 跑测试 → 生成 .gcda</span>
+cmake -B build -DENABLE_COVERAGE=ON
+cmake --build build
+
+<span class="cmt"># 必须让进程正常退出（return / exit），统计才会写入 .gcda</span>
+./build/test_calculator
+
+<span class="cmt"># 查看插桩产物：.gcno（编译期）与 .gcda（运行期）成对出现</span>
+find build -name <span class="str">"*.gcno"</span> -o -name <span class="str">"*.gcda"</span></code></pre>
+
+  <p>这里有一个实践里踩过的<strong>大坑</strong>，务必记住：<strong>覆盖率统计只有在进程正常退出时才会落盘</strong>。如果进程不是通过调用 exit 或从 main 正常 return 结束（比如后台服务被 <code>kill</code> 强杀），.gcda 文件根本不会产生，自然也就没有覆盖率报告。所以测覆盖率时，测试程序必须跑完自然结束——这也是为什么"能自动退出"的单元测试程序比"常驻服务"更适合做覆盖率统计对象。</p>
+
+  <p>采集与出报告的命令以素材里验证过的为准：在 build 目录下用 <code>lcov -c</code>（--capture 的简写，采集）汇总出 .info 文件，再用 <code>genhtml</code> 生成 HTML 报告。报告默认输出一个 <code>index.html</code> 总览页，能看到每个文件、每个函数的覆盖率百分比和红绿标记，点进文件还能看到具体哪一行没被执行。系统头文件和第三方 include 目录会拉低数字，用 <code>lcov --remove</code> 把它们过滤掉再看真实覆盖率。</p>
+
+  <pre><code><span class="cmt"># ③ 采集覆盖率（素材验证过的命令：-d 数据目录，-c 采集，-o 输出，-b 基准目录）</span>
+<span class="fn">cd</span> build
+lcov -d . -t test -o test.info -b . -c --no-external
+
+<span class="cmt"># 等价写法：--capture/--directory 长参数版</span>
+lcov --capture --directory . --output-file test.info --no-external</code></pre>
+
+  <pre><code><span class="cmt"># 过滤掉系统头文件与第三方 include，再看"自己的代码"的真实覆盖率</span>
+lcov --remove test.info <span class="str">'/usr/*'</span> <span class="str">'*/inc/*'</span> -o finalresult.info
+
+<span class="cmt"># genhtml 生成 HTML 报告（-o 指定输出目录）</span>
+genhtml -o report finalresult.info
+
+<span class="cmt"># 浏览器打开 report/index.html：总览 → 点文件 → 看红绿行标记</span>
+open report/index.html</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>覆盖率数字不是目标，是<strong>线索</strong>。100% 行覆盖也不代表没有 bug——只调用不验证的"空转测试"照样能刷满数字；但 30% 的覆盖率说明你的大部分代码从未被测试摸过，那才是真正危险的信号。断案的智慧在于：低覆盖率必须解释，高覆盖率也值得抽查，数字背后的人（谁写的测试、验证了什么）比数字本身重要。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念四连 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用一句话分别解释：<code>单元测试</code>、<code>断言</code>、<code>行覆盖</code>、<code>分支覆盖</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个概念对应"验证 / 条件声明 / 行 / 分支"四个视角，想想每个词回答的是"什么"问题。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>单元测试：对最小代码单元（函数/类方法）写自动化验证程序；断言：一条"某条件必须成立"的声明，成立则通过、不成立则失败；行覆盖：测试运行中实际被执行过的代码行占总行数的比例；分支覆盖：if/switch 的各个分支是否都被走到。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：EXPECT_ 还是 ASSERT_？ <span class="difficulty difficulty-easy">入门</span></h3>
+      <p><code>EXPECT_EQ</code> 和 <code>ASSERT_EQ</code> 行为上有什么区别？在什么场景下必须用 <code>ASSERT_</code> 系列？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想"失败后是继续跑还是停下来"，再想想哪种失败会让后续语句没法安全执行。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>EXPECT_ 失败后记录错误并继续执行当前测试；ASSERT_ 失败后立即中止当前测试。当后续语句的执行依赖当前断言的结果时必须用 ASSERT_——比如断言指针非空后要解引用它（否则空指针解引用直接崩溃），或断言对象已初始化后要调用它的方法。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：补全异常测试 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>Calculator 的 <code>divide(a, b)</code> 约定：b 为 0 时抛出 <code>std::invalid_argument</code>，正常时返回 a/b。请用 gtest 补全测试文件：一个用例测正常除法（含期望值 <code>EXPECT_EQ(divide(10, 4), 2.5)</code>），一个用例用 <code>EXPECT_THROW</code> 测除零。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>两个 TEST，套件名用 CalculatorTest；注意 <code>divide</code> 参数是 double，10/4 不会整除以 0；除零用例传 <code>0.0</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <pre><code>TEST(CalculatorTest, Divide) {
+    Calculator calc;
+    EXPECT_EQ(calc.divide(10.0, 4.0), 2.5);
+    EXPECT_EQ(calc.divide(1.0, 3.0) * 3.0, 1.0);  // 浮点误差容忍度自己把握
+}
+
+TEST(CalculatorTest, DivideByZero) {
+    Calculator calc;
+    EXPECT_THROW(calc.divide(1.0, 0.0), std::invalid_argument);
+}</code></pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：完整实战流水线 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>从零走完一整条流水线：① vcpkg 装 gtest；② 写一个你自己的类（比如一个字符串工具类）和覆盖主要方法的测试；③ CMake 集成（find_package + gtest_discover_tests）并用 ctest 跑通；④ 打开 ENABLE_COVERAGE 开关重新编译运行；⑤ 用 lcov + genhtml 生成覆盖率报告；⑥ 打开 report/index.html，指出哪个文件覆盖率最低，并补一个测试把它的行覆盖提上去。把每一步命令和遇到的坑记录下来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>安装见 9.2；测试写法见 9.3/9.4；CMake 集成见 9.5；覆盖率开关和命令见 9.6。坑位预告：忘记加 vcpkg 工具链参数会导致 find_package 找不到；测试程序没跑完就 Ctrl+C 会导致 .gcda 缺失；没过滤 /usr/* 时覆盖率会被系统头文件拉低。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心命令链：① <code>./vcpkg/vcpkg install gtest</code>；② 写好 <code>myutil.h</code> + <code>test_myutil.cpp</code>；③ <code>cmake -B build -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake</code>，CMakeLists 里 <code>find_package(GTest REQUIRED)</code> + <code>target_link_libraries(test_myutil PRIVATE GTest::gtest_main)</code> + <code>gtest_discover_tests(test_myutil)</code>，然后 <code>ctest --test-dir build --output-on-failure</code>；④ <code>cmake -B build -DENABLE_COVERAGE=ON &amp;&amp; cmake --build build &amp;&amp; ./build/test_myutil</code>；⑤ <code>cd build &amp;&amp; lcov -c -o test.info -b . -d . &amp;&amp; lcov --remove test.info '/usr/*' -o final.info &amp;&amp; genhtml -o report final.info</code>；⑥ 看 report/index.html 里红色/低百分比文件，为没测到的方法补 TEST 后重跑 ④⑤。整个过程就是：测试保功能、覆盖率保完整。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>
