@@ -1,4 +1,4 @@
-# 测试名XYZ — 主站仓库（aigcwei.cn）
+# Helios's AILab — 主站仓库（aigcwei.cn）
 
 纯 HTML 静态主站，公开内容仓库。部署到 `aigcwei.cn`（博客根 + learn 教程模块）。
 
