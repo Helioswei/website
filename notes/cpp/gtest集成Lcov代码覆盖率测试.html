@@ -175,7 +175,7 @@ ENDIF()
 <h3>使用方式</h3>
 <ol><li>将cmake编译选项设置为-DENABLE_COVERAGE=OFF …，或者将顶层目录CmakeLists.txt中OPTION (ENABLE_COVERAGE “Use gcov” OFF)编译选项手动设置为ON；</li></ol>
 <ol><li>编译产生<code>.gcno</code>文件，运行则产生<code>.gcda</code>（与.gcno对应）文件；</li></ol>
-<p>   - 我们使用的是<code>cmake编译</code>，则编译后生成的.gcno文件存在build目录下的每个项目中，例如：&lt;img src="../../images/cpp/gcno.png" alt="gcno" style="zoom:75%;" /&gt;</p>
+<p>   - 我们使用的是<code>cmake编译</code>，则编译后生成的.gcno文件存在build目录下的每个项目中，例如：<img src="../../images/cpp/gcno.png" alt="gcno" style="zoom:75%;" /></p>
 <p>   - <code>运行</code>我们的测试代码才会产生.gcda文件，如图是运行后产生的。</p>
 <p>     - 若用户进程<code>并非调用 exit 正常退出</code>，覆盖率统计数据就无法输出，也就无从生成报告了。后台服务程序若非专门设计，一旦启动就很少主动退出，用 kill 杀死进程强制退出时就不会调用 exit，因此没有覆盖率统计结果产生。所以必须当前进程退出后才会产生.gcda文件。</p>
 <ol><li>使用Lcov生成覆盖率统计文件；</li></ol>
