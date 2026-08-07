@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第10章：特征检测实战：Harris 与 Canny - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter10.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第10章：特征检测实战：Harris 与 Canny - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter10.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="10" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：特征检测实战：Harris 与 Canny</h1>
+  <p class="chapter-subtitle">从"什么是特征"出发，拆开 Harris 角点检测与 Canny 边缘检测两大经典算法的原理，再用 cv::cornerHarris 与 cv::Canny 亲手跑通、调参、把特征画回原图</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「画家起稿，先画的是轮廓和几个关键的交点，剩下的细节都是后补的。计算机视觉也一样：边缘是轮廓，角点是交点，它们构成图像最"骨感"的骨架。这一章我们学两把最经典的"素描笔"——Harris 角点检测（10.2 原理、10.3 用法）与 Canny 边缘检测（10.4 原理、10.5 用法），最后把特征画回原图，看看骨架长什么样（10.6）。艺术负责回答"什么是重要的"，工程负责回答"怎么算得又快又准"。第 9 章的 Mat 是画布，这一章我们开始真正动笔。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 特征是什么 ========== -->
+  <h2>10.1 特征是什么：角点、边缘与"可重复性"</h2>
+
+  <p>先问一个艺术问题：人眼扫过一张照片，第一眼抓住的是什么？不是每个像素的灰度，而是<strong>轮廓</strong>——楼房的边、天空和屋顶的分界线、窗户的四角。画家起稿时画的正是这些：几条线加上几个交点。计算机视觉复刻的就是这套直觉，它管这些"线条与交点"叫<strong>特征（feature）</strong>。官方文档把这一族算法收在 imgproc 模块的 <em>Feature Detection</em>（特征检测）分组里，其中最基础、最经典的两类就是本章主角：<strong>角点</strong>（corner，两条边交界、向任意方向移动窗口灰度都剧烈变化的点）与<strong>边缘</strong>（edge，灰度突变的边界线）。与之相对的是<strong>平坦区</strong>：窗口往哪挪，灰度都几乎不变。</p>
+
+  <p>为什么要在意这些点？因为工程上特征承担着"锚点"的角色：全景拼接要找出两幅图里同一批角点才能对齐，视频跟踪要在帧与帧之间找到同一个标记点，相机标定需要能稳定定位的棋盘格角点。所以特征有一个硬性要求——<strong>可重复性</strong>：同一场景换个角度、换个光照再拍，同一个角点还应该被检出来。这也是 Harris 与 Canny 从 1988 年和 1986 年用到现在依然是教学与工程地基的原因。动手前先做一件公共准备：第 9 章讲过 Mat 是"数字地图"，而 Harris 与 Canny 的输入都要求单通道灰度图，所以第一步永远是读图、转灰度、落盘——下面的 gray_prep.cpp 是本章所有程序的公共前奏。</p>
+
+  <pre><code><span class="cmt">// gray_prep.cpp —— 特征检测的公共前奏：读图、转灰度、落盘</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"building.jpg"</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+    <span class="kw">if</span> (<span class="param">img</span>.<span class="fn">empty</span>()) {
+        <span class="kw">return</span> <span class="num">1</span>;                  <span class="cmt">// 读图失败，沿用 9.6 节的防护习惯</span>
+    }
+    <span class="cmt">// 转灰度：Harris 与 Canny 都以单通道灰度图为输入</span>
+    <span class="type">cv::Mat</span> <span class="param">gray</span>;
+    <span class="fn">cv::cvtColor</span>(<span class="param">img</span>, <span class="param">gray</span>, <span class="ann">cv::COLOR_BGR2GRAY</span>);
+    <span class="fn">cv::imwrite</span>(<span class="str">"gray.png"</span>, <span class="param">gray</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>"平坦区、边缘、角点"的区别能不能量化？能——用一个小窗口里的灰度方差就能看出来：平坦区方差小、边缘中等、角点最大。下面这个程序用 <code>cv::meanStdDev</code> 对三个假设位置各取一个窗口，把三种区域的"数字手感"打出来——"窗口移动、灰度变化"的直觉，正是 10.2 节 Harris 公式的出发点。</p>
+
+  <pre><code><span class="cmt">// region_stats.cpp —— 三个窗口的灰度方差：平坦区小、边缘中等、角点大</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="cmt">// 以 (x, y) 为中心、边长 2*half+1 的窗口，返回灰度方差</span>
+<span class="kw">double</span> <span class="fn">region_var</span>(<span class="kw">const</span> <span class="type">cv::Mat</span><span class="op">&amp;</span> <span class="param">gray</span>, <span class="kw">int</span> <span class="param">x</span>, <span class="kw">int</span> <span class="param">y</span>, <span class="kw">int</span> <span class="param">half</span>) {
+    <span class="type">cv::Rect</span> <span class="param">win</span>(<span class="param">x</span> <span class="op">-</span> <span class="param">half</span>, <span class="param">y</span> <span class="op">-</span> <span class="param">half</span>, <span class="num">2</span> <span class="op">*</span> <span class="param">half</span> <span class="op">+</span> <span class="num">1</span>, <span class="num">2</span> <span class="op">*</span> <span class="param">half</span> <span class="op">+</span> <span class="num">1</span>);
+    <span class="type">cv::Scalar</span> <span class="param">m</span>, <span class="param">sd</span>;            <span class="cmt">// mean 与标准差一次算完</span>
+    <span class="fn">cv::meanStdDev</span>(<span class="param">gray</span>(<span class="param">win</span>), <span class="param">m</span>, <span class="param">sd</span>);
+    <span class="kw">return</span> <span class="param">sd</span>[<span class="num">0</span>] <span class="op">*</span> <span class="param">sd</span>[<span class="num">0</span>];     <span class="cmt">// 方差 = 标准差平方</span>
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"平坦区: "</span> <span class="op">&lt;&lt;</span> <span class="fn">region_var</span>(<span class="param">gray</span>, <span class="num">10</span>, <span class="num">10</span>, <span class="num">3</span>) <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"边缘上: "</span> <span class="op">&lt;&lt;</span> <span class="fn">region_var</span>(<span class="param">gray</span>, <span class="num">100</span>, <span class="num">100</span>, <span class="num">3</span>) <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"角点处: "</span> <span class="op">&lt;&lt;</span> <span class="fn">region_var</span>(<span class="param">gray</span>, <span class="num">200</span>, <span class="num">200</span>, <span class="num">3</span>) <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 10.2 Harris 原理 ========== -->
+  <h2>10.2 Harris 原理：窗口移动与角点响应</h2>
+
+  <p>1988 年，Chris Harris 和 Mike Stephens 发表了论文 <em>A Combined Corner and Edge Detector</em>，把"角点"这个艺术直觉变成了一个可计算的公式。核心思想一句话：<strong>角点是"往哪个方向挪动窗口，灰度都剧烈变化"的点</strong>。设窗口位移为 (u, v)，灰度变化量写成 E(u, v)：<code>E(u, v) = Σ w(x, y) [I(x+u, y+v) - I(x, y)]²</code>，其中 w(x, y) 是窗口函数（矩形窗或高斯窗）。平坦区里 E 处处很小；在边缘上，沿边缘方向挪窗口 E 很小、垂直方向很大；而在角点处，<strong>所有方向</strong>的 E 都大。官方教程《Harris Corner Detection》的推导正是从最大化这个 E 出发的。</p>
+
+  <p>对 E 做泰勒展开，可以把它近似成一个二次型：<code>E ≈ [u v] M [u v]ᵀ</code>，其中 M 是 2×2 的<strong>结构张量（梯度协方差矩阵）</strong>：<code>M = Σ w [Ix², IxIy; IxIy, Iy²]</code>，Ix、Iy 是图像在 x、y 方向的梯度（用 Sobel 算子算）。M 的两个特征值 λ1、λ2 直接刻画局部形状：<strong>两个都大 → 角点；一大一小 → 边缘；两个都小 → 平坦区</strong>。但解特征值太贵，Harris 用一个响应函数代替：<code>R = det(M) - k * trace(M)²</code>，det 是行列式、trace 是迹，k 是自由参数（典型 0.04 到 0.06）。官方文档对 cornerHarris 的描述与此一致：每个像素在 blockSize×blockSize 邻域上算 M，再算 <code>dst(x,y) = det M - k * (tr M)²</code>，角点是响应图的局部极大值。</p>
+
+  <p>把公式落成代码最能消除"玄学感"：下面的 harris_math.cpp 不调用 cornerHarris，而是用 Sobel 求梯度、逐像素乘法和高斯模糊把 M 的四个分量算出来，再合成 R——每一步对应公式里的一项。跑完会看到 R 是一张和原图一样大的浮点图，值有正有负，正是 10.3 节要处理的"得分地图"。</p>
+
+  <pre><code><span class="cmt">// harris_math.cpp —— 把 Harris 公式亲手落成代码：Ix/Iy -&gt; M -&gt; R</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+
+    <span class="cmt">// 第一步：Sobel 求梯度，输出 CV_32F 防溢出</span>
+    <span class="type">cv::Mat</span> <span class="param">Ix</span>, <span class="param">Iy</span>;
+    <span class="fn">cv::Sobel</span>(<span class="param">gray</span>, <span class="param">Ix</span>, <span class="ann">CV_32F</span>, <span class="num">1</span>, <span class="num">0</span>, <span class="num">3</span>);   <span class="cmt">// x 方向一阶导</span>
+    <span class="fn">cv::Sobel</span>(<span class="param">gray</span>, <span class="param">Iy</span>, <span class="ann">CV_32F</span>, <span class="num">0</span>, <span class="num">1</span>, <span class="num">3</span>);   <span class="cmt">// y 方向一阶导</span>
+
+    <span class="cmt">// 第二步：结构张量 M 的四个分量，mul 是逐像素相乘</span>
+    <span class="type">cv::Mat</span> <span class="param">Ix2</span> = <span class="param">Ix</span>.<span class="fn">mul</span>(<span class="param">Ix</span>);
+    <span class="type">cv::Mat</span> <span class="param">Iy2</span> = <span class="param">Iy</span>.<span class="fn">mul</span>(<span class="param">Iy</span>);
+    <span class="type">cv::Mat</span> <span class="param">Ixy</span> = <span class="param">Ix</span>.<span class="fn">mul</span>(<span class="param">Iy</span>);
+
+    <span class="cmt">// 窗口求和：高斯模糊扮演 w(x,y)</span>
+    <span class="fn">cv::GaussianBlur</span>(<span class="param">Ix2</span>, <span class="param">Ix2</span>, <span class="type">cv::Size</span>(<span class="num">3</span>, <span class="num">3</span>), <span class="num">0</span>);
+    <span class="fn">cv::GaussianBlur</span>(<span class="param">Iy2</span>, <span class="param">Iy2</span>, <span class="type">cv::Size</span>(<span class="num">3</span>, <span class="num">3</span>), <span class="num">0</span>);
+    <span class="fn">cv::GaussianBlur</span>(<span class="param">Ixy</span>, <span class="param">Ixy</span>, <span class="type">cv::Size</span>(<span class="num">3</span>, <span class="num">3</span>), <span class="num">0</span>);
+
+    <span class="cmt">// 第三步：角点响应 R = det(M) - k * trace(M)^2</span>
+    <span class="kw">double</span> <span class="param">k</span> = <span class="num">0.04</span>;
+    <span class="type">cv::Mat</span> <span class="param">R</span> = <span class="param">Ix2</span>.<span class="fn">mul</span>(<span class="param">Iy2</span>) <span class="op">-</span> <span class="param">Ixy</span>.<span class="fn">mul</span>(<span class="param">Ixy</span>)
+               <span class="op">-</span> <span class="param">k</span> <span class="op">*</span> (<span class="param">Ix2</span> <span class="op">+</span> <span class="param">Iy2</span>).<span class="fn">mul</span>(<span class="param">Ix2</span> <span class="op">+</span> <span class="param">Iy2</span>);
+
+    <span class="kw">double</span> <span class="param">mn</span>, <span class="param">mx</span>;
+    <span class="fn">cv::minMaxLoc</span>(<span class="param">R</span>, <span class="op">&amp;</span><span class="param">mn</span>, <span class="op">&amp;</span><span class="param">mx</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"R 的范围: "</span> <span class="op">&lt;&lt;</span> <span class="param">mn</span> <span class="op">&lt;&lt;</span> <span class="str">" ~ "</span> <span class="op">&lt;&lt;</span> <span class="param">mx</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>R 是浮点图，直接存成 PNG 会丢失信息，所以看响应图之前要归一化。下面这段把 R 线性缩放到 0 到 255 再保存——你会看到一张"得分地图"：越亮的地方角点响应越强，窗户角、房檐交点都在图上发亮，而墙面、天空一片漆黑。这张图就是 Harris 的"素描稿"，10.3 节只需要在这张稿子上画阈值。</p>
+
+  <pre><code><span class="cmt">// harris_visual.cpp —— 响应图归一化：把浮点 R 变成能看的 8 位图</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+
+    <span class="cmt">// cornerHarris 一步出响应图（内部已含梯度计算与邻域求和）</span>
+    <span class="type">cv::Mat</span> <span class="param">R</span>;
+    <span class="fn">cv::cornerHarris</span>(<span class="param">gray</span>, <span class="param">R</span>, <span class="num">3</span>, <span class="num">3</span>, <span class="num">0.04</span>);
+
+    <span class="cmt">// 响应值有正有负，先线性归一化到 0~255 再保存</span>
+    <span class="type">cv::Mat</span> <span class="param">Rn</span>;
+    <span class="fn">cv::normalize</span>(<span class="param">R</span>, <span class="param">Rn</span>, <span class="num">0</span>, <span class="num">255</span>, <span class="ann">cv::NORM_MINMAX</span>, <span class="ann">CV_8UC1</span>);
+    <span class="fn">cv::imwrite</span>(<span class="str">"harris_response.png"</span>, <span class="param">Rn</span>);
+
+    <span class="cmt">// 响应图里越亮 = 角点响应越强，它就是一张"得分地图"</span>
+    <span class="kw">double</span> <span class="param">mn</span>, <span class="param">mx</span>; <span class="type">cv::Point</span> <span class="param">pmin</span>, <span class="param">pmax</span>;
+    <span class="fn">cv::minMaxLoc</span>(<span class="param">R</span>, <span class="op">&amp;</span><span class="param">mn</span>, <span class="op">&amp;</span><span class="param">mx</span>, <span class="op">&amp;</span><span class="param">pmin</span>, <span class="op">&amp;</span><span class="param">pmax</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"R 范围: "</span> <span class="op">&lt;&lt;</span> <span class="param">mn</span> <span class="op">&lt;&lt;</span> <span class="str">" ~ "</span> <span class="op">&lt;&lt;</span> <span class="param">mx</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 10.3 cornerHarris 用法 ========== -->
+  <h2>10.3 cv::cornerHarris 用法：blockSize、ksize 与 k</h2>
+
+  <p>工程视角看 API。官方签名是 <code>void cv::cornerHarris(InputArray src, OutputArray dst, int blockSize, int ksize, double k, int borderType = BORDER_DEFAULT)</code>，参数含义按官方文档逐一核实过：<strong>src</strong> 是输入单通道 8 位或浮点图；<strong>dst</strong> 是输出响应图，类型恒为 CV_32FC1、尺寸与 src 相同；<strong>blockSize</strong> 是结构张量求和的邻域尺寸（越大越"宏观"，角点越少越稳）；<strong>ksize</strong> 是 Sobel 算子的孔径参数（梯度核大小，须为奇数）；<strong>k</strong> 是响应公式里的自由参数。borderType 是边界外推方式，绝大多数场景用默认值即可。使用流程永远三步：转灰度 → 算响应 → 阈值化。</p>
+
+  <p>阈值怎么定？响应值的绝对大小随图像灰度尺度和尺寸变化，不能写死一个数。官方 Python 教程的示例就是以<strong>最大响应的 1%</strong> 作为阈值（<code>dst &gt; 0.01 * dst.max()</code>），这是最常用的经验起点：先用 <code>cv::minMaxLoc</code> 取到最大值，乘以 0.01 得到阈值，再把响应图里超过阈值的像素在原图副本上画红点。C++ 里没有 Python 那种向量化掩膜，直接用 9.4 节学的 <code>ptr</code> 逐行扫描即可。另外两个相关的进阶函数值得记住：想要亚像素级精度时用 <code>cv::cornerSubPix</code> 精化角点坐标（官方教程《Harris Corner Detection》专门有一节讲它）；想要"最多 N 个、彼此至少距离 d"的工程化角点列表，用 <code>cv::goodFeaturesToTrack</code>，它内部也可以选择 Harris 响应作为质量度量。</p>
+
+  <pre><code><span class="cmt">// cornerharris_demo.cpp —— 标准用法：响应图 + 阈值 + 画圈</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"building.jpg"</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+    <span class="type">cv::Mat</span> <span class="param">gray</span>;
+    <span class="fn">cv::cvtColor</span>(<span class="param">img</span>, <span class="param">gray</span>, <span class="ann">cv::COLOR_BGR2GRAY</span>);
+
+    <span class="cmt">// 1) 算响应图：src 单通道 8U/浮点，dst 恒为 CV_32FC1</span>
+    <span class="type">cv::Mat</span> <span class="param">R</span>;
+    <span class="fn">cv::cornerHarris</span>(<span class="param">gray</span>, <span class="param">R</span>, <span class="num">3</span>, <span class="num">3</span>, <span class="num">0.04</span>);
+
+    <span class="cmt">// 2) 阈值：以最大响应的 1% 为界（经验起点，需按图微调）</span>
+    <span class="kw">double</span> <span class="param">mx</span>;
+    <span class="fn">cv::minMaxLoc</span>(<span class="param">R</span>, <span class="kw">nullptr</span>, <span class="op">&amp;</span><span class="param">mx</span>);
+    <span class="kw">double</span> <span class="param">t</span> = <span class="num">0.01</span> <span class="op">*</span> <span class="param">mx</span>;
+
+    <span class="cmt">// 3) 在原图副本上，把响应超阈值的像素画成红点</span>
+    <span class="type">cv::Mat</span> <span class="param">out</span> = <span class="param">img</span>.<span class="fn">clone</span>();
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">r</span> = <span class="num">0</span>; <span class="param">r</span> <span class="op">&lt;</span> <span class="param">R</span>.rows; <span class="op">++</span><span class="param">r</span>) {
+        <span class="kw">float</span>* <span class="param">p</span> = <span class="param">R</span>.<span class="fn">ptr</span><span class="op">&lt;</span><span class="kw">float</span><span class="op">&gt;</span>(<span class="param">r</span>);
+        <span class="kw">for</span> (<span class="kw">int</span> <span class="param">c</span> = <span class="num">0</span>; <span class="param">c</span> <span class="op">&lt;</span> <span class="param">R</span>.cols; <span class="op">++</span><span class="param">c</span>) {
+            <span class="kw">if</span> (<span class="param">p</span>[<span class="param">c</span>] <span class="op">&gt;</span> <span class="param">t</span>) {
+                <span class="fn">cv::circle</span>(<span class="param">out</span>, <span class="type">cv::Point</span>(<span class="param">c</span>, <span class="param">r</span>), <span class="num">3</span>,
+                             <span class="type">cv::Scalar</span>(<span class="num">0</span>, <span class="num">0</span>, <span class="num">255</span>), <span class="op">-</span><span class="num">1</span>);   <span class="cmt">// 半径 3 的实心红点</span>
+            }
+        }
+    }
+    <span class="fn">cv::imwrite</span>(<span class="str">"harris_corners.png"</span>, <span class="param">out</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"阈值: "</span> <span class="op">&lt;&lt;</span> <span class="param">t</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>参数</th><th>含义</th><th>典型值</th></tr>
+    <tr><td>blockSize</td><td>结构张量求和的邻域边长，越大越"宏观"</td><td>3 或 5</td></tr>
+    <tr><td>ksize</td><td>Sobel 算子的孔径（核）大小，须为奇数</td><td>3</td></tr>
+    <tr><td>k</td><td>响应公式里的自由参数，越大判定越严格</td><td>0.04 ~ 0.06</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// harris_tune.cpp —— 参数扫描：blockSize 与 k 如何影响角点数量</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="cmt">// 返回"响应超过最大响应 1%"的像素个数</span>
+<span class="kw">int</span> <span class="fn">count_corners</span>(<span class="kw">const</span> <span class="type">cv::Mat</span><span class="op">&amp;</span> <span class="param">gray</span>, <span class="kw">int</span> <span class="param">block</span>, <span class="kw">double</span> <span class="param">k</span>) {
+    <span class="type">cv::Mat</span> <span class="param">R</span>;
+    <span class="fn">cv::cornerHarris</span>(<span class="param">gray</span>, <span class="param">R</span>, <span class="param">block</span>, <span class="num">3</span>, <span class="param">k</span>);
+    <span class="kw">double</span> <span class="param">mx</span>;
+    <span class="fn">cv::minMaxLoc</span>(<span class="param">R</span>, <span class="kw">nullptr</span>, <span class="op">&amp;</span><span class="param">mx</span>);
+    <span class="kw">return</span> <span class="fn">cv::countNonZero</span>(<span class="param">R</span> <span class="op">&gt;</span> <span class="num">0.01</span> <span class="op">*</span> <span class="param">mx</span>);  <span class="cmt">// 比较表达式直接得二值掩膜</span>
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"blockSize=3, k=0.04 -&gt; "</span>
+              <span class="op">&lt;&lt;</span> <span class="fn">count_corners</span>(<span class="param">gray</span>, <span class="num">3</span>, <span class="num">0.04</span>) <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"blockSize=5, k=0.04 -&gt; "</span>
+              <span class="op">&lt;&lt;</span> <span class="fn">count_corners</span>(<span class="param">gray</span>, <span class="num">5</span>, <span class="num">0.04</span>) <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"blockSize=3, k=0.10 -&gt; "</span>
+              <span class="op">&lt;&lt;</span> <span class="fn">count_corners</span>(<span class="param">gray</span>, <span class="num">3</span>, <span class="num">0.10</span>) <span class="op">&lt;&lt;</span> std::endl;
+    <span class="cmt">// 规律：blockSize 越大越"宏观"（角点更少更稳），k 越大越严格</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 10.4 Canny 原理 ========== -->
+  <h2>10.4 Canny 原理：高斯、梯度、非极大值抑制与双阈值</h2>
+
+  <p>1986 年，John F. Canny 提出了以他命名的边缘检测算法，它的贡献是把"找边缘"从单一步骤变成一条<strong>多阶段流水线</strong>，每一阶段解决一个具体问题。官方教程《Canny Edge Detection》按顺序给出五步：<strong>① 噪声抑制</strong>——边缘检测对噪声极其敏感，先用 5×5 高斯滤波去噪；<strong>② 求梯度</strong>——用 Sobel 核分别算出水平方向 Gx 与垂直方向 Gy，再合成梯度幅度 <code>G = sqrt(Gx² + Gy²)</code> 和梯度方向 <code>θ = atan2(Gy, Gx)</code>；<strong>③ 非极大值抑制</strong>；<strong>④ 双阈值（hysteresis）</strong>；<strong>⑤ 连通性追踪</strong>。后三步是 Canny 区别于朴素"梯度阈值化"的关键。</p>
+
+  <p>先说非极大值抑制。梯度幅度大的像素连成一片，边缘看起来是"粗带"，而我们要的是单像素宽的细线。做法是：梯度方向始终垂直于边缘，把 θ 归到水平、垂直、两条对角线四个方向之一，然后看当前像素沿梯度方向的两个邻居——只有当前像素是局部最大才保留，否则置零。官方教程用 A、B、C 三点说明：A 在边缘上，B、C 是 A 沿梯度方向的邻居，A 必须大于 B、C 才留下，抑制后得到"细边缘"二值图。双阈值则回答"哪些细线是真的"：设低阈值 minVal 和高阈值 maxVal，<strong>高于 maxVal 的必是边缘，低于 minVal 的必不是</strong>；介于两者之间的，看它是否与"确定边缘"连通——连着的算边缘（保留完整曲线），孤立的丢弃，这一机制顺带清掉了小噪点。官方教程的图例里：A 是确定边缘，C 虽然低于 maxVal 但连着 A 所以保留，B 与任何确定边缘都不连通所以丢弃。</p>
+
+  <p>把前两阶段落成代码，中间产物一目了然：归一化后的幅度图就是"所有候选边缘的亮度图"。下面 canny_stages.cpp 只做高斯模糊和 Sobel 梯度，输出幅度图；接着用一段"流水线图"把五阶段串起来——这正是 10.5 节 cv::Canny 内部替你完成的事。</p>
+
+  <pre><code><span class="cmt">// canny_stages.cpp —— Canny 前两阶段手动实现：高斯降噪 + Sobel 梯度</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+
+    <span class="cmt">// 阶段 1：5x5 高斯模糊去噪（边缘检测对噪声极其敏感）</span>
+    <span class="type">cv::Mat</span> <span class="param">smooth</span>;
+    <span class="fn">cv::GaussianBlur</span>(<span class="param">gray</span>, <span class="param">smooth</span>, <span class="type">cv::Size</span>(<span class="num">5</span>, <span class="num">5</span>), <span class="num">0</span>);
+
+    <span class="cmt">// 阶段 2：Sobel 求 Gx、Gy，再合成幅度与方向</span>
+    <span class="type">cv::Mat</span> <span class="param">Gx</span>, <span class="param">Gy</span>;
+    <span class="fn">cv::Sobel</span>(<span class="param">smooth</span>, <span class="param">Gx</span>, <span class="ann">CV_32F</span>, <span class="num">1</span>, <span class="num">0</span>, <span class="num">3</span>);
+    <span class="fn">cv::Sobel</span>(<span class="param">smooth</span>, <span class="param">Gy</span>, <span class="ann">CV_32F</span>, <span class="num">0</span>, <span class="num">1</span>, <span class="num">3</span>);
+    <span class="type">cv::Mat</span> <span class="param">mag</span>, <span class="param">ang</span>;
+    <span class="fn">cv::magnitude</span>(<span class="param">Gx</span>, <span class="param">Gy</span>, <span class="param">mag</span>);           <span class="cmt">// G = sqrt(Gx^2 + Gy^2)</span>
+    <span class="fn">cv::phase</span>(<span class="param">Gx</span>, <span class="param">Gy</span>, <span class="param">ang</span>, <span class="kw">true</span>);        <span class="cmt">// theta = atan2(Gy, Gx)，角度制</span>
+
+    <span class="cmt">// 幅度图归一化保存：越亮 = 梯度越大</span>
+    <span class="type">cv::Mat</span> <span class="param">mag8</span>;
+    <span class="fn">cv::normalize</span>(<span class="param">mag</span>, <span class="param">mag8</span>, <span class="num">0</span>, <span class="num">255</span>, <span class="ann">cv::NORM_MINMAX</span>, <span class="ann">CV_8UC1</span>);
+    <span class="fn">cv::imwrite</span>(<span class="str">"canny_magnitude.png"</span>, <span class="param">mag8</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"幅度图已保存（非极大值抑制之前的粗边缘）"</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// canny 五阶段流水线（数字对应官方教程的顺序）</span>
+<span class="cmt">// 1) 5x5 高斯模糊      -&gt; 去掉噪声，防止把噪点当边缘</span>
+<span class="cmt">// 2) Sobel 梯度 Gx/Gy  -&gt; 算出幅度 G 与方向 theta</span>
+<span class="cmt">// 3) 非极大值抑制       -&gt; 只保留梯度方向上的局部最大，边缘变细</span>
+<span class="cmt">// 4) 双阈值 hysteresis -&gt; 高于 maxVal 必保，低于 minVal 丢弃</span>
+<span class="cmt">// 5) 连通性追踪         -&gt; 介于两者之间：连着强边缘就保留</span>
+<span class="cmt">// 结果：一张二值边缘图（白 = 边缘，黑 = 背景）</span></code></pre>
+
+  <!-- ========== 10.5 Canny 用法 ========== -->
+  <h2>10.5 cv::Canny 用法：threshold1 与 threshold2</h2>
+
+  <p>工程视角看 API。官方签名是 <code>void cv::Canny(InputArray image, OutputArray edges, double threshold1, double threshold2, int apertureSize = 3, bool L2gradient = false)</code>。参数逐个说：<strong>image</strong> 是输入单通道图（8 位即可）；<strong>edges</strong> 是输出二值边缘图（CV_8UC1，白为边缘）；<strong>threshold1 是低阈值 minVal，threshold2 是高阈值 maxVal</strong>——这是最容易记反的一对参数；<strong>apertureSize</strong> 是求梯度用的 Sobel 核大小，默认 3；<strong>L2gradient</strong> 决定幅度公式：true 用精确的 <code>sqrt(Gx² + Gy²)</code>，false 用更快的 <code>|Gx| + |Gy|</code>，官方教程说 true 更准确、默认 false 更快。Canny 内部自动完成高斯模糊等前置步骤，输入一张灰度图、输出一张二值图，一步到位。</p>
+
+  <p>阈值怎么选？官方教程特别强调：<strong>"必须把 minVal 和 maxVal 选对才能得到正确结果"</strong>。经验法则：两个阈值保持 2:1 到 3:1 的比例，比如 50/150、100/200——minVal 太低会把纹理和噪声都当成边缘，太高又会让边缘断成碎片。调参的工程化做法是<strong>阈值扫描</strong>：固定图片，跑几组阈值，对比边缘像素占比（<code>cv::countNonZero</code> 统计白点数）和目视效果。注意输出是二值图，直接 imwrite 保存即可；想叠加到原图上看，要等 10.6 节的颜色转换。</p>
+
+  <pre><code><span class="cmt">// canny_demo.cpp —— 标准用法：一步出二值边缘图</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+
+    <span class="cmt">// threshold1 = 低阈值 minVal，threshold2 = 高阈值 maxVal</span>
+    <span class="type">cv::Mat</span> <span class="param">edges</span>;
+    <span class="fn">cv::Canny</span>(<span class="param">gray</span>, <span class="param">edges</span>, <span class="num">50</span>, <span class="num">150</span>);     <span class="cmt">// 经典 1:3 组合</span>
+    <span class="fn">cv::imwrite</span>(<span class="str">"canny_50_150.png"</span>, <span class="param">edges</span>);
+
+    <span class="cmt">// 边缘像素占比：countNonZero 统计白色像素</span>
+    <span class="kw">int</span> <span class="param">n</span> = <span class="fn">cv::countNonZero</span>(<span class="param">edges</span>);
+    <span class="kw">double</span> <span class="param">ratio</span> = <span class="num">100.0</span> <span class="op">*</span> <span class="param">n</span> <span class="op">/</span> (<span class="param">edges</span>.rows <span class="op">*</span> <span class="param">edges</span>.cols);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"边缘像素: "</span> <span class="op">&lt;&lt;</span> <span class="param">n</span> <span class="op">&lt;&lt;</span> <span class="str">" ("</span> <span class="op">&lt;&lt;</span> <span class="param">ratio</span> <span class="op">&lt;&lt;</span> <span class="str">"%)"</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// canny_thresholds.cpp —— 阈值扫描：同样的图，三组阈值三张结果</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">void</span> <span class="fn">run</span>(<span class="kw">const</span> <span class="type">cv::Mat</span><span class="op">&amp;</span> <span class="param">gray</span>, <span class="kw">double</span> <span class="param">t1</span>, <span class="kw">double</span> <span class="param">t2</span>, <span class="kw">const</span> <span class="kw">char</span>* <span class="param">name</span>) {
+    <span class="type">cv::Mat</span> <span class="param">edges</span>;
+    <span class="fn">cv::Canny</span>(<span class="param">gray</span>, <span class="param">edges</span>, <span class="param">t1</span>, <span class="param">t2</span>);
+    <span class="fn">cv::imwrite</span>(<span class="param">name</span>, <span class="param">edges</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="param">name</span> <span class="op">&lt;&lt;</span> <span class="str">": 边缘像素 "</span> <span class="op">&lt;&lt;</span> <span class="fn">cv::countNonZero</span>(<span class="param">edges</span>) <span class="op">&lt;&lt;</span> std::endl;
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+    <span class="fn">run</span>(<span class="param">gray</span>, <span class="num">30</span>, <span class="num">90</span>,   <span class="str">"canny_30_90.png"</span>);    <span class="cmt">// 低阈值：边缘多而杂</span>
+    <span class="fn">run</span>(<span class="param">gray</span>, <span class="num">50</span>, <span class="num">150</span>,  <span class="str">"canny_50_150.png"</span>);   <span class="cmt">// 中等：常用起点</span>
+    <span class="fn">run</span>(<span class="param">gray</span>, <span class="num">100</span>, <span class="num">300</span>, <span class="str">"canny_100_300.png"</span>);  <span class="cmt">// 高阈值：只留强边缘</span>
+    <span class="cmt">// L2gradient=true 用 sqrt(Gx^2+Gy^2)，更精确但稍慢</span>
+    <span class="type">cv::Mat</span> <span class="param">edges2</span>;
+    <span class="fn">cv::Canny</span>(<span class="param">gray</span>, <span class="param">edges2</span>, <span class="num">50</span>, <span class="num">150</span>, <span class="num">3</span>, <span class="kw">true</span>);
+    <span class="fn">cv::imwrite</span>(<span class="str">"canny_l2.png"</span>, <span class="param">edges2</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 10.6 可视化叠加 ========== -->
+  <h2>10.6 可视化叠加：把特征画回原图</h2>
+
+  <p>检测结果是一堆坐标和二值图，怎么"看"？答案是画回原图。角点已在 10.3 节用 <code>cv::circle</code> 画过红点；边缘是二值图，直接叠会盖住原图，标准做法是先用 <code>cv::cvtColor</code>（<code>COLOR_GRAY2BGR</code>）转成三通道，再用 <code>cv::addWeighted</code> 按权重混合——原图 0.9、边缘图 0.4，得到半透明绿色描边。把两段逻辑放进同一个程序，就得到一张"角点红圈 + 边缘绿线"的完整特征图——这正是笔记素材里的真实经历：第一次用 OpenCV，一小时就同时做出了 Harris 与 Canny 两个检测器。API 上手极快，功夫在原理与调参。</p>
+
+  <p>另一条更工程化的可视化路线是 features2d 模块的 <code>cv::KeyPoint</code> 与 <code>cv::drawKeypoints</code>：把超阈值角点包装成 KeyPoint 向量（参数是 x、y 和特征尺寸），一次调用画完所有点。KeyPoint 自带尺度信息，是 SIFT/ORB 等现代特征检测器的统一输出格式——你现在就把 Harris 的结果"翻译"成了那个格式。综合实战闭环：读图 → 灰度 → Harris 角点 + Canny 边缘 → 叠加可视化 → 保存。</p>
+
+  <pre><code><span class="cmt">// visualize_overlay.cpp —— 角点红圈 + 边缘绿色叠加，画回原图</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"building.jpg"</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+    <span class="type">cv::Mat</span> <span class="param">gray</span>;
+    <span class="fn">cv::cvtColor</span>(<span class="param">img</span>, <span class="param">gray</span>, <span class="ann">cv::COLOR_BGR2GRAY</span>);
+
+    <span class="cmt">// 1) 角点：响应图 + 阈值 + 红圈</span>
+    <span class="type">cv::Mat</span> <span class="param">R</span>;
+    <span class="fn">cv::cornerHarris</span>(<span class="param">gray</span>, <span class="param">R</span>, <span class="num">3</span>, <span class="num">3</span>, <span class="num">0.04</span>);
+    <span class="kw">double</span> <span class="param">mx</span>;
+    <span class="fn">cv::minMaxLoc</span>(<span class="param">R</span>, <span class="kw">nullptr</span>, <span class="op">&amp;</span><span class="param">mx</span>);
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">r</span> = <span class="num">0</span>; <span class="param">r</span> <span class="op">&lt;</span> <span class="param">R</span>.rows; <span class="op">++</span><span class="param">r</span>) {
+        <span class="kw">float</span>* <span class="param">p</span> = <span class="param">R</span>.<span class="fn">ptr</span><span class="op">&lt;</span><span class="kw">float</span><span class="op">&gt;</span>(<span class="param">r</span>);
+        <span class="kw">for</span> (<span class="kw">int</span> <span class="param">c</span> = <span class="num">0</span>; <span class="param">c</span> <span class="op">&lt;</span> <span class="param">R</span>.cols; <span class="op">++</span><span class="param">c</span>) {
+            <span class="kw">if</span> (<span class="param">p</span>[<span class="param">c</span>] <span class="op">&gt;</span> <span class="num">0.01</span> <span class="op">*</span> <span class="param">mx</span>) {
+                <span class="fn">cv::circle</span>(<span class="param">img</span>, <span class="type">cv::Point</span>(<span class="param">c</span>, <span class="param">r</span>), <span class="num">3</span>,
+                             <span class="type">cv::Scalar</span>(<span class="num">0</span>, <span class="num">0</span>, <span class="num">255</span>), <span class="op">-</span><span class="num">1</span>);   <span class="cmt">// 红点</span>
+            }
+        }
+    }
+
+    <span class="cmt">// 2) 边缘：Canny 出二值图，转 BGR 后按权重叠回（绿线半透明）</span>
+    <span class="type">cv::Mat</span> <span class="param">edges</span>, <span class="param">edges_bgr</span>;
+    <span class="fn">cv::Canny</span>(<span class="param">gray</span>, <span class="param">edges</span>, <span class="num">50</span>, <span class="num">150</span>);
+    <span class="fn">cv::cvtColor</span>(<span class="param">edges</span>, <span class="param">edges_bgr</span>, <span class="ann">cv::COLOR_GRAY2BGR</span>);
+    <span class="fn">cv::addWeighted</span>(<span class="param">img</span>, <span class="num">0.9</span>, <span class="param">edges_bgr</span>, <span class="num">0.4</span>, <span class="num">0</span>, <span class="param">img</span>);
+    <span class="fn">cv::imwrite</span>(<span class="str">"overlay.png"</span>, <span class="param">img</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// draw_keypoints.cpp —— 可选的 KeyPoint 路线：drawKeypoints 一步画完</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/features2d.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>vector<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">gray</span> = <span class="fn">cv::imread</span>(<span class="str">"gray.png"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+    <span class="type">cv::Mat</span> <span class="param">R</span>;
+    <span class="fn">cv::cornerHarris</span>(<span class="param">gray</span>, <span class="param">R</span>, <span class="num">3</span>, <span class="num">3</span>, <span class="num">0.04</span>);
+    <span class="kw">double</span> <span class="param">mx</span>;
+    <span class="fn">cv::minMaxLoc</span>(<span class="param">R</span>, <span class="kw">nullptr</span>, <span class="op">&amp;</span><span class="param">mx</span>);
+
+    <span class="cmt">// 超阈值像素装进 KeyPoint（x 列、y 行，尺寸 5）</span>
+    std::<span class="type">vector</span><span class="op">&lt;</span><span class="type">cv::KeyPoint</span><span class="op">&gt;</span> <span class="param">kps</span>;
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">r</span> = <span class="num">0</span>; <span class="param">r</span> <span class="op">&lt;</span> <span class="param">R</span>.rows; <span class="op">++</span><span class="param">r</span>) {
+        <span class="kw">float</span>* <span class="param">p</span> = <span class="param">R</span>.<span class="fn">ptr</span><span class="op">&lt;</span><span class="kw">float</span><span class="op">&gt;</span>(<span class="param">r</span>);
+        <span class="kw">for</span> (<span class="kw">int</span> <span class="param">c</span> = <span class="num">0</span>; <span class="param">c</span> <span class="op">&lt;</span> <span class="param">R</span>.cols; <span class="op">++</span><span class="param">c</span>) {
+            <span class="kw">if</span> (<span class="param">p</span>[<span class="param">c</span>] <span class="op">&gt;</span> <span class="num">0.01</span> <span class="op">*</span> <span class="param">mx</span>) {
+                <span class="param">kps</span>.<span class="fn">push_back</span>(<span class="type">cv::KeyPoint</span>(<span class="param">c</span>, <span class="param">r</span>, <span class="num">5</span>));
+            }
+        }
+    }
+    <span class="cmt">// drawKeypoints：每个点画带半径的圆圈</span>
+    <span class="type">cv::Mat</span> <span class="param">out</span>;
+    <span class="fn">cv::drawKeypoints</span>(<span class="param">gray</span>, <span class="param">kps</span>, <span class="param">out</span>, <span class="type">cv::Scalar</span>(<span class="num">0</span>, <span class="num">0</span>, <span class="num">255</span>));
+    <span class="fn">cv::imwrite</span>(<span class="str">"keypoints.png"</span>, <span class="param">out</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+<p>这一章我们完成了从"看得见图"到"看得懂图"的第一步：10.1 厘清特征概念（角点与边缘、可重复性），10.2 拆解 Harris 的窗口移动思想与响应公式，10.3 上手 cv::cornerHarris 并学会调 blockSize、ksize、k，10.4 走完 Canny 五阶段流水线，10.5 用 cv::Canny 出二值边缘图并做阈值扫描，10.6 把两类特征叠加回原图。三个钩子留给后面：一是 cv::cornerSubPix 的亚像素精化与 cv::goodFeaturesToTrack 的工程化角点输出，是特征工程的进阶方向；二是 Harris 与 Canny 的"慢"——每个像素都要算梯度、每个窗口都要算结构张量、Canny 更是五遍全图扫描，全是互不依赖的像素级重复劳动，这种形状的计算天然适合并行；三是这个"像素级并行"的答案，第 11 章的 CUDA 会用 GPU 把"特征检测为什么慢"彻底解开——特征检测正是 GPU 加速的最佳练兵场。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① Harris 角点检测器检测的是图像边缘；② cornerHarris 输出的响应图类型是 CV_32FC1；③ Canny 的 threshold1 是高阈值、threshold2 是低阈值；④ Canny 的第一阶段是高斯模糊降噪；⑤ R = det(M) - k * trace(M)² 中 k 越大，通过阈值的角点通常越少。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 10.2 节的响应公式与特征值判读、10.3 节的 dst 类型、10.4 节的五阶段顺序、10.5 节的阈值定义。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 错——论文名虽叫 A Combined Corner and Edge Detector，但 cornerHarris 输出的是角点响应，找边缘是 Canny 的活；② 对——官方文档明确 dst 类型为 CV_32FC1、尺寸与 src 相同；③ 错——threshold1 是低阈值 minVal，threshold2 是高阈值 maxVal，这对参数最容易记反；④ 对——边缘检测对噪声敏感，第一步先用 5×5 高斯滤波去噪；⑤ 对——k 越大 R 整体越小，超阈值的点变少，判定更严格。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：Harris 三参数 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① blockSize、ksize、k 三个参数分别控制什么？② 为什么阈值不能写死一个绝对数，官方示例为什么用最大响应的 1%？③ 想要亚像素精度的角点坐标，应该用什么函数？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个参数的官方含义在 10.3 节正文与速查表里；阈值的问题想一想响应值的大小和什么有关；亚像素函数在 10.3 节正文提到过。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① blockSize 是结构张量求和的邻域边长，越大越"宏观"；ksize 是 Sobel 孔径（梯度核）大小，须为奇数；k 是响应公式里的自由参数，典型 0.04~0.06，越大判定越严格；② 响应值的绝对大小随灰度尺度、尺寸和光照变化，绝对阈值不可移植，最大响应的 1% 是官方教程的经验起点，把阈值"相对化"后换图也能用；③ cv::cornerSubPix，对响应极大值附近做迭代精化。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：Canny 原理问答 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① Canny 为什么第一步要做高斯模糊？② 非极大值抑制解决什么问题、具体怎么做？③ 双阈值阶段，介于 minVal 与 maxVal 之间的像素如何判定去留？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个问题分别对应 10.4 节五阶段中的第 1、3、4 阶段；想清楚梯度对噪声的反应、梯度方向与边缘方向的关系、以及"连通性"这个词。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 梯度对噪声极其敏感，噪点会产生虚假的强梯度，先平滑掉噪声才能避免把噪点当边缘；② 梯度幅度大的像素连成"粗带"，NMS 把梯度方向归到四个主方向之一，沿梯度方向比较前后两个邻居，只有当前像素是局部最大才保留，否则置零，把边缘压成单像素宽的细线；③ 看连通性：与"确定边缘"（高于 maxVal 的像素）连通的保留，孤立的丢弃——这就是 hysteresis 滞回机制，同时顺带清除孤立小噪点。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：综合实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个完整程序：读入彩色图 → 转灰度 → 分别做 Harris 角点检测（在原图副本上画红圈）与 Canny 边缘检测（转 BGR 后 addWeighted 叠加成绿色半透明边缘）→ 保存两张结果图；并统计角点数量与边缘像素占比。延伸思考：为什么说 Harris 与 Canny 是"像素级并行"的算法、天然适合 GPU 加速？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>两段逻辑都在 10.6 节 visualize_overlay.cpp 里，拆成两个函数即可；角点数可以用 countNonZero(R &gt; 阈值) 统计；边缘占比参考 10.5 节 canny_demo.cpp。延伸思考想清楚：每个像素的响应计算依赖哪些邻居？不同像素之间有没有依赖关系？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>结构：cvtColor 转灰度 → cornerHarris(3, 3, 0.04) → minMaxLoc 取最大值 → 阈值 0.01×max → 循环里 cv::circle 画红圈；cv::Canny(gray, edges, 50, 150) → cvtColor(COLOR_GRAY2BGR) → addWeighted(img, 0.9, edges_bgr, 0.4, 0, img)；角点数用 countNonZero(R &gt; 0.01 * mx)，边缘占比用 countNonZero(edges) 除以 rows×cols。延伸思考：Harris 的梯度、结构张量、响应计算都只依赖像素局部邻域，Canny 每一阶段也是逐像素独立运算——没有全局依赖，正是"数据并行"的天然形态，GPU 上千个线程可同时算不同像素。具体怎么做，第 11 章的 CUDA 会给出答案。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

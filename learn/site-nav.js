@@ -182,6 +182,39 @@ window.SITE_NAV = {
           { num: 16, title: "生态收尾：工具链全景回顾", mentor: "鲁班", method: "工欲善其事" }
         ]}
       ]
+    },
+    {
+      id: "graphics",
+      name: "图像与视觉实战",
+      accent: "#8a6d3b",
+      desc: "图像与视觉实战教程（格式 / 图像库 / OpenCV / CUDA）",
+      tagline: "从像素到视觉：RAW 解析、图像处理库、OpenCV、CUDA 加速，一条吃透服务端图像处理的路径",
+      parts: [
+        { title: "图像基础与格式", chapters: [
+          { num: 1, title: "图像处理全景：像素与资源现状", mentor: "费曼", method: "第一性原理" },
+          { num: 2, title: "图像文件格式：从 JPEG/PNG 到 TIFF", mentor: "达芬奇", method: "艺术与工程" },
+          { num: 3, title: "相机底片解析：RAW 与 DNG", mentor: "狄仁杰", method: "系统分析" },
+          { num: 4, title: "图像元数据：EXIF 与 XMP", mentor: "柯南", method: "追踪数据流" }
+        ]},
+        { title: "图像处理库实战", chapters: [
+          { num: 5, title: "图像库选型全景：六库对比", mentor: "诸葛亮", method: "运筹帷幄" },
+          { num: 6, title: "LibRaw：RAW 解码实战", mentor: "鲁班", method: "工欲善其事" },
+          { num: 7, title: "libvips：高性能图像处理", mentor: "狄仁杰", method: "系统分析" },
+          { num: 8, title: "OpenCV 入门：源码安装", mentor: "鲁班", method: "工欲善其事" }
+        ]},
+        { title: "计算机视觉与 GPU 加速", chapters: [
+          { num: 9, title: "OpenCV 第一个程序与 Mat 核心", mentor: "费曼", method: "第一性原理" },
+          { num: 10, title: "特征检测实战：Harris 与 Canny", mentor: "达芬奇", method: "艺术与工程" },
+          { num: 11, title: "CUDA 入门：GPU 加速环境", mentor: "鲁班", method: "工欲善其事" },
+          { num: 12, title: "CUDA 图像处理：内核与内存模型", mentor: "费曼", method: "第一性原理" }
+        ]},
+        { title: "深入工程实践", chapters: [
+          { num: 13, title: "图像库的依赖与链接排错", mentor: "福尔摩斯", method: "排除不可能" },
+          { num: 14, title: "调试实战：版本与崩溃", mentor: "包青天", method: "铁面无私" },
+          { num: 15, title: "性能优化：多线程、内存与缓存", mentor: "诸葛亮", method: "运筹帷幄" },
+          { num: 16, title: "生态收尾：图像工具链全景回顾", mentor: "达芬奇", method: "融会贯通" }
+        ]}
+      ]
     }
   ]
 };

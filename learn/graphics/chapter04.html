@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第4章：图像元数据：EXIF 与 XMP - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter04.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第4章：图像元数据：EXIF 与 XMP - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter04.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="4" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：图像元数据：EXIF 与 XMP</h1>
+  <p class="chapter-subtitle">按下快门的瞬间，相机就把拍摄参数、时间甚至经纬度写进了文件——跟着字节流走，让照片自己开口说话</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：追踪数据流</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「看照片的人相信屏幕上显示的拍摄信息，我只看字节。一张 JPEG 从 <code>FFD8</code> 开始，APP1 段里躺着 EXIF 的 TIFF 结构，XMP 的 XML 包紧跟其后——信息在文件里怎么排布，真相就怎么流动。这一章，我们跟着数据流，把元数据从头走到尾：它存在哪、存了什么、怎么读出来、又该怎么防它泄露隐私。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 元数据是什么：像素之外的边栏信息 ========== -->
+  <h2>4.1 元数据是什么：像素之外的「边栏信息」</h2>
+
+  <p>前两章我们一直在看<strong>像素</strong>：位图是像素矩阵，JPEG 是压缩后的像素，RAW 是相机传感器的原始像素。但一张数码照片文件里，装的不只是像素——还有一大块<strong>关于这张照片的信息</strong>：它是什么牌子的相机拍的、快门多少、光圈多少、ISO 多少、几点几分拍的、甚至在哪拍的。相机在按下快门的瞬间，就把这些信息自动写进了文件。这种「关于数据的数据」，就叫<strong>元数据</strong>（metadata）。说人话：<strong>像素是照片的「肉体」，元数据是照片的「身份证」</strong>。</p>
+
+  <p>元数据不是可有可无的装饰。几万张照片的图库，靠拍摄时间归档；电商平台要按拍摄参数筛选商品图；图片管理系统要用 <code>Orientation</code> 标签自动把竖拍的照片转正；新闻图片要靠标题、作者、关键词流通。对服务端图像处理来说，元数据更是躲不开：<strong>转码时要决定保不保留元数据、缩略图可以直接用文件里内嵌的缩略图、隐私合规要先把 GPS 擦掉</strong>。所以这一章在分部一（图像基础与格式）里压轴，专门把「像素之外的那部分字节」讲透。</p>
+
+  <p>图像元数据主要有三家：<strong>EXIF</strong>（相机拍摄参数，标签表固定，摄影行业事实标准）、<strong>IPTC</strong>（新闻行业的老标准，存标题、说明、作者、关键词，全称 Information Interchange Model 信息交换模型）、<strong>XMP</strong>（Adobe 提出的可扩展元数据平台，用 XML 组织，谁都能往里加字段）。一个 JPEG 文件可能同时住着这三家：EXIF 在 APP1 段，IPTC 藏在 APP13 段的 Photoshop 资源块里，XMP 也在 APP1 段——只不过签名不同。先别急，下面我们用「追踪数据流」的方法，从文件头开始一字节一字节看。</p>
+
+  <pre><code><span class="cmt"># xxd 看 JPEG 文件头 32 字节：元数据就藏在图像数据之前</span>
+$ xxd -l <span class="num">32</span> photo.jpg
+00000000: ffd8 ffe1 8d1d 4578 6966 0000 4949 2a00  .......Exif..II*.
+00000010: 0800 0000 0000 0000 5a01 0100 5a01 0100  ........Z...Z...
+
+<span class="cmt"># 逐字节解读：</span>
+<span class="cmt"># ffd8         SOI 标记：JPEG 图像从这里开始</span>
+<span class="cmt"># ffe1 8d1d    APP1 段：0x8d1d = 36125 字节长的元数据段</span>
+<span class="cmt"># 4578 6966    "Exif\0\0"：6 字节的 EXIF 签名</span>
+<span class="cmt"># 4949         "II"：Intel 小端字节序（大端则是 "MM"）</span>
+<span class="cmt"># 2a00         魔数 42：说明后面是 TIFF 结构</span>
+<span class="cmt"># 08000000     第一个 IFD（图像文件目录）的偏移 = 8</span></code></pre>
+
+  <p>不用写任何程序，<code>file</code> 命令就能把这段数据流读出来——它靠的就是解析 APP1 段里的 EXIF 结构：</p>
+
+  <pre><code>$ file photo.jpg
+photo.jpg: JPEG image data, Exif standard: [TIFF image data,
+little-endian, direntries=<span class="num">5</span>, manufacturer=Canon, model=Canon EOS 5D Mark III],
+baseline, precision <span class="num">8</span>, <span class="num">5760</span>x<span class="num">3840</span>, components <span class="num">3</span></code></pre>
+
+  <table>
+    <tr><th>格式</th><th>谁在用</th><th>组织方式</th><th>能扩展吗</th></tr>
+    <tr><td>EXIF</td><td>相机 / 摄影行业</td><td>二进制标签表（TIFF 结构）</td><td>不能：标签编号表固定，厂商只能塞私有 MakerNote</td></tr>
+    <tr><td>IPTC</td><td>新闻 / 图库行业</td><td>二进制数据集（IIM 老标准）</td><td>基本不能：数据集编号固定</td></tr>
+    <tr><td>XMP</td><td>Adobe 生态 / 通用</td><td>XML（RDF 序列化）</td><td>能：任意命名空间，任意自定义字段</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>追踪数据流有三板斧，本章会反复用：<strong>① xxd 直接看字节</strong>（验证「元数据到底在不在、在哪」）；<strong>② 命令行工具读标签</strong>（exiv2 / exiftool，快速看人话版）；<strong>③ 用库解析容器</strong>（Exiv2，程序化处理）。先会看字节，再看工具输出，最后写代码——顺序不能反，否则你永远不知道工具给你的信息是从哪来的。</p>
+  </div>
+
+  <!-- ========== 4.2 EXIF 存什么：从 APP1 段追踪数据流 ========== -->
+  <h2>4.2 EXIF 存什么：从 APP1 段追踪数据流</h2>
+
+  <p><strong>EXIF</strong>（Exchangeable Image File Format，可交换图像文件格式）是相机行业的元数据标准：1995 年由日本电子工业协会（JEIDA）提出，如今由相机与影像产品协会（CIPA）维护，现行版本是 Exif 2.32（标准号 CIPA DC-008）。说人话：<strong>它是数码相机、手机厂商共同遵守的一张「拍摄信息表」</strong>——拍照那一刻，快门、光圈、ISO、时间、位置，按约定好的位置写进文件，任何软件都能读出来。</p>
+
+  <p>注意一个关键事实：<strong>EXIF 不是一种独立格式，它是一套「住进 JPEG 的 TIFF 结构」</strong>。第 2 章我们讲过 TIFF 的标签（tag）结构，第 3 章又见到 TIFF-EP 藏在 RAW 文件里——现在 EXIF 在 JPEG 里用的还是同一套：APP1 段里 <code>Exif\0\0</code> 签名之后，紧跟一个 TIFF 头（字节序 + 魔数 42 + IFD 偏移），然后是长长的 <strong>IFD 链</strong>（Image File Directory，图像文件目录）。这就是为什么柯南说「同一套结构，三张面孔」：TIFF、TIFF-EP、EXIF，底层都是 IFD + 标签。追踪数据流，就是从 IFD0 出发，顺着指针一条条把目录走完。</p>
+
+  <p>IFD 本身是「2 字节条目数 + 条目数组 + 4 字节下一 IFD 偏移」的表格。每个条目固定 12 字节，拆成四段：<strong>Tag 编号</strong>（2 字节，这条信息是什么）、<strong>数据类型</strong>（2 字节，值怎么解释）、<strong>值的数量</strong>（4 字节）、<strong>值或偏移</strong>（4 字节，值短就直接内联，长了存到别处给偏移）。一条「相机型号 = Canon EOS 5D Mark III」就是这么存下来的。JPEG 里的 EXIF 一般有四张表：<strong>IFD0</strong>（设备信息：Make/Model/Orientation…，并带着指向子目录的指针）、<strong>Exif SubIFD</strong>（拍摄参数：曝光、光圈、ISO、时间…）、<strong>GPS IFD</strong>（经纬度）、<strong>IFD1</strong>（内嵌缩略图）。</p>
+
+  <pre><code><span class="cmt"># EXIF 在 JPEG 里的存放结构（数据流：SOI -&gt; APP1 -&gt; TIFF 头 -&gt; IFD 链）</span>
+JPEG 文件
+├── FFD8  SOI（图像开始）
+├── FFE1  APP1 段：EXIF 数据（段长 0x8D1D）
+│   ├── "Exif\0\0"        6 字节签名
+│   ├── "II" 2A00         TIFF 头：小端字节序 + 魔数 42
+│   ├── 00000008          第一个 IFD 偏移 = 8
+│   ├── IFD0              设备信息（Make/Model/Orientation…）
+│   │   ├── 0x8769 指针 -&gt; Exif SubIFD（曝光/光圈/ISO/时间…）
+│   │   ├── 0x8825 指针 -&gt; GPS IFD（经纬度/海拔…）
+│   │   └── 指针 -&gt; IFD1（内嵌缩略图）
+├── FFE0  APP0 段：JFIF（可选）
+├── FFDA  SOS（扫描开始，之后才是压缩的像素数据）
+└── FFD9  EOI（图像结束）
+
+<span class="cmt"># IFD 条目解剖（每条固定 12 字节）：</span>
+┌────────────┬────────────┬──────────────┬──────────────────┐
+│ Tag 编号    │ 数据类型    │ 值的数量      │ 值 / 指向值的偏移 │
+│ 2 字节      │ 2 字节      │ 4 字节        │ 4 字节           │
+└────────────┴────────────┴──────────────┴──────────────────┘</code></pre>
+
+  <p>下面这张表是摄影师最常用的 EXIF 标签——键名用 Exiv2 的写法（组.标签名），编号是 IFD 条目里的真实 Tag 值。你会发现 EXIF 存的信息分三类：<strong>设备</strong>（谁拍的）、<strong>拍摄参数</strong>（怎么拍的）、<strong>时间与位置</strong>（何时何地拍的）：</p>
+
+  <table>
+    <tr><th>Exiv2 键名</th><th>Tag 编号</th><th>含义</th><th>典型值</th></tr>
+    <tr><td><code>Exif.Image.Make</code></td><td>0x010F</td><td>相机制造商</td><td>Canon</td></tr>
+    <tr><td><code>Exif.Image.Model</code></td><td>0x0110</td><td>相机型号</td><td>Canon EOS 5D Mark III</td></tr>
+    <tr><td><code>Exif.Image.Orientation</code></td><td>0x0112</td><td>方向（转正靠它）</td><td>1 = 正常</td></tr>
+    <tr><td><code>Exif.Photo.ExposureTime</code></td><td>0x829A</td><td>曝光时间（快门）</td><td>1/250 s</td></tr>
+    <tr><td><code>Exif.Photo.FNumber</code></td><td>0x829D</td><td>光圈</td><td>F5.6</td></tr>
+    <tr><td><code>Exif.Photo.ISOSpeedRatings</code></td><td>0x8827</td><td>ISO 感光度</td><td>100</td></tr>
+    <tr><td><code>Exif.Photo.DateTimeOriginal</code></td><td>0x9003</td><td>拍摄时间</td><td>2026:05:01 14:30:00</td></tr>
+    <tr><td><code>Exif.Photo.FocalLength</code></td><td>0x920A</td><td>焦距</td><td>50.0 mm</td></tr>
+    <tr><td><code>Exif.Photo.PixelXDimension</code></td><td>0xA002</td><td>像素宽</td><td>5760</td></tr>
+    <tr><td><code>Exif.GPSInfo.GPSLatitude</code></td><td>0x0002</td><td>纬度（度分秒）</td><td>30deg 32' 45.55" N</td></tr>
+    <tr><td><code>Exif.GPSInfo.GPSLongitude</code></td><td>0x0004</td><td>经度（度分秒）</td><td>114deg 17' 59.93" E</td></tr>
+  </table>
+
+  <p>值怎么解释，由「数据类型」决定。EXIF 的数据类型编号是 TIFF 规范定的，最常用的五种：<strong>BYTE</strong>（8 位整数）、<strong>ASCII</strong>（字符串）、<strong>SHORT</strong>（16 位整数）、<strong>LONG</strong>（32 位整数）、<strong>RATIONAL</strong>（两个 32 位整数拼成的分数）。曝光时间 1/250 就是 RATIONAL：分子 1、分母 250 分开存。这也是一个典型的「数据流」细节——<strong>你在看图软件里看到的 "1/250"，文件里其实是两个整数</strong>。</p>
+
+  <pre><code><span class="cmt"># 用 exiftool 看一张真实照片的 EXIF（它把二进制解析成了人话）</span>
+$ exiftool photo.jpg
+Exif Byte Order                 : Little-endian (II, II)
+Make                            : Canon
+Camera Model Name               : Canon EOS 5D Mark III
+Orientation                     : Horizontal (normal)
+Exposure Time                   : <span class="num">1</span>/<span class="num">250</span>
+F Number                        : <span class="num">5.6</span>
+ISO                             : <span class="num">100</span>
+Focal Length                    : <span class="num">50.0</span> mm
+Date/Time Original              : <span class="num">2026</span>:<span class="num">05</span>:<span class="num">01</span> <span class="num">14</span>:<span class="num">30</span>:<span class="num">00</span>
+GPS Latitude                    : <span class="num">30</span> deg <span class="num">32</span>' <span class="num">45.55</span>" N
+GPS Longitude                   : <span class="num">114</span> deg <span class="num">17</span>' <span class="num">59.93</span>" E</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>注意 <code>DateTimeOriginal</code> 的格式：<code>2026:05:01 14:30:00</code>——时间之间用冒号而不是横线，这是 EXIF 的老传统（ASCII 字符串直接存，省得再定义日期格式）。很多程序解析时都要先处理这个「冒号日期」。看到怪格式先别急着骂，多半是标准历史遗留。</p>
+  </div>
+
+  <!-- ========== 4.3 XMP：Adobe 的可扩展元数据平台 ========== -->
+  <h2>4.3 XMP：Adobe 的可扩展元数据平台</h2>
+
+  <p>EXIF 有个天生的短板：<strong>标签表是固定的</strong>。Tag 编号只有那么多，想存个「这张照片属于哪个拍摄项目」「授权给谁用了」这类自定义字段，EXIF 里没有位置——厂商只能各自往私有 MakerNote 里塞，互不通用。Adobe 在 2001 年推出 <strong>XMP</strong>（eXtensible Metadata Platform，可扩展元数据平台）来解决这个问题，2012 年它成为国际标准 <strong>ISO 16684-1</strong>。说人话：<strong>XMP 是一套「给元数据定格式」的开放框架，用 XML 写，任何行业、任何公司都能注册自己的字段，互不冲突</strong>。</p>
+
+  <p>XMP 和 EXIF 有四个根本差异。第一，<strong>没有标签编号，用路径式键名</strong>：EXIF 靠 <code>0x9003</code> 这种编号查表，XMP 直接写 <code>Xmp.dc.title</code>、<code>Xmp.xmp.Rating</code> 这种「命名空间.属性名」。第二，<strong>命名空间机制</strong>：每个字段都声明自己来自哪本「字典」（一个 URI），不同字典里同名不同义的字段井水不犯河水。第三，<strong>跨格式统一</strong>：JPEG、TIFF、PNG、PDF、视频都能嵌 XMP，甚至单独存成 <code>.xmp</code> 侧车文件（sidecar），不动原图就能改元数据。第四，<strong>可扩展</strong>：想加字段就注册个命名空间，不需要任何人批准。</p>
+
+  <p>XMP 的数据流长这样：在 JPEG 里它同样住在 APP1 段，但签名不同——EXIF 是 <code>Exif\0\0</code>，XMP 是字符串 <code>http://ns.adobe.com/xap/1.0/\0</code>（XMP 最初代号 XAP），签名之后就是一个完整的 XML 包。XMP 包的结构基于 <strong>RDF</strong>（资源描述框架）：一个 <code>rdf:RDF</code> 根元素，里面每个 <code>rdf:Description</code> 描述一组属性，属性值支持简单值、数组（<code>rdf:Seq</code> 有序列表）、语言变体（<code>rdf:Alt</code> 多语言标题）等类型。下面是 Exiv2 官方示例同款结构的 XMP 片段：</p>
+
+  <pre><code><span class="cmt"># XMP 包示例：rdf:RDF 根 + rdf:Description 属性组（缩略，真实结构）</span>
+&lt;?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?&gt;
+&lt;x:xmpmeta xmlns:x="adobe:ns:meta/"&gt;
+  &lt;rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"&gt;
+    &lt;rdf:Description rdf:about=""
+        xmlns:dc="http://purl.org/dc/elements/1.1/"
+        xmlns:xmp="http://ns.adobe.com/xap/1.0/"&gt;
+      &lt;dc:title&gt;
+        &lt;rdf:Alt&gt;
+          &lt;rdf:li xml:lang="x-default"&gt;黄鹤楼日落&lt;/rdf:li&gt;
+        &lt;/rdf:Alt&gt;
+      &lt;/dc:title&gt;
+      &lt;dc:creator&gt;
+        &lt;rdf:Seq&gt;
+          &lt;rdf:li&gt;Helios&lt;/rdf:li&gt;
+        &lt;/rdf:Seq&gt;
+      &lt;/dc:creator&gt;
+      &lt;xmp:Rating&gt;5&lt;/xmp:Rating&gt;
+      &lt;xmp:CreateDate&gt;2026-05-01T14:30:00+08:00&lt;/xmp:CreateDate&gt;
+    &lt;/rdf:Description&gt;
+  &lt;/rdf:RDF&gt;
+&lt;/x:xmpmeta&gt;
+&lt;?xpacket end="w"?&gt;</code></pre>
+
+  <p>用 xxd 验证 XMP 的签名——注意 APP1 段里不再是 <code>Exif</code> 而是完整的命名空间字符串，紧接着就是 <code>&lt;?xpacket</code> 开头的 XML 包（<code>EF BB BF</code> 是 UTF-8 的 BOM）：</p>
+
+  <pre><code>$ xxd -l <span class="num">64</span> photo_xmp.jpg
+00000000: ffd8 ffe1 91a2 6874 7470 3a2f 2f6e 732e  ....http://ns.
+00000010: 6164 6f62 652e 636f 6d2f 7861 702f 312e  adobe.com/xap/1.
+00000020: 3000 3c3f 7870 6163 6b65 7420 6265 6769  <span class="num">0</span>.&lt;?xpacket begi
+00000030: 6e3d 22ef bbbf 2220 6964 3d22 5735 4d30  n="..." id="W5M0</code></pre>
+
+  <table>
+    <tr><th>命名空间前缀</th><th>URI</th><th>典型属性</th></tr>
+    <tr><td>dc</td><td>http://purl.org/dc/elements/1.1/</td><td>title 标题 / creator 作者 / description 描述 / subject 关键词</td></tr>
+    <tr><td>xmp</td><td>http://ns.adobe.com/xap/1.0/</td><td>CreateDate 创建时间 / Rating 评级 / CreatorTool 工具</td></tr>
+    <tr><td>xmpMM</td><td>http://ns.adobe.com/xap/1.0/mm/</td><td>DocumentID 文档标识 / History 修改历史（资源管理）</td></tr>
+    <tr><td>photoshop</td><td>http://ns.adobe.com/photoshop/1.0/</td><td>DateCreated / City / Country（PS 里的文件信息）</td></tr>
+    <tr><td>tiff / exif</td><td>http://ns.adobe.com/tiff/1.0/ 等</td><td>EXIF/TIFF 标签的 XMP 版（同信息、两套容器）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>把命名空间想成「字典」：XMP 里每个属性必须声明自己来自哪本字典（URI）。同一本字典里，<code>dc:title</code> 永远指标题；换一本字典，同名属性就是另一个意思。所以解析 XMP 时<strong>先看 xmlns 声明，再看属性名</strong>——这也是追踪数据流：属性值之前，先追到它的命名空间。</p>
+  </div>
+
+  <!-- ========== 4.4 Exiv2 库：用 C++ 读取元数据 ========== -->
+  <h2>4.4 Exiv2 库：用 C++ 读取元数据</h2>
+
+  <p><strong>Exiv2</strong> 是图像元数据领域最常用的开源 C++ 库：能读取和写入 EXIF、IPTC、XMP 三类元数据，附带一个同名的命令行工具，官网 exiv2.org，采用 GPL-2.0-or-later 开源许可。素材笔记（2020 年的《图片处理库总结》）里记录过它的示例骨架——打开图片、读元数据、遍历容器。但注意一个版本差异：<strong>笔记里的 <code>Exiv2::Image::AutoPtr</code> 是 0.27 及以前的老 API</strong>（本质是 C++98 时代的 <code>std::auto_ptr</code>），现行稳定版 0.28.x 已把它移除，统一返回 <code>std::unique_ptr</code>——写法更简单了，流程骨架没变：<code>open()</code> → <code>readMetadata()</code> → 遍历容器。这正是「素材提供真实流程、版本按现行官方文档写」的典型例子。</p>
+
+  <p>Exiv2 的核心是 <code>Exiv2::Image</code> 类：它代表「一个图片文件及其元数据」，具体格式（JPEG/TIFF/PNG/WebP/RAW…）由 <code>Exiv2::ImageFactory::open()</code> 工厂按<strong>文件内容</strong>（不是扩展名）自动识别，返回对应格式的派生类。打开后调用 <code>readMetadata()</code> 把文件里的元数据读进内存容器，<code>exifData()</code> 拿到 <code>Exiv2::ExifData</code>（每条是一个 <code>Exiv2::Metadatum</code>，提供 <code>key()</code>、<code>tag()</code>、<code>typeName()</code>、<code>toString()</code> 等方法）。下面是按官方示例 exifprint.cpp 精简的完整程序：</p>
+
+  <pre><code><span class="cmt">// exifprint.cpp —— 打印一张图片的全部 EXIF 元数据</span>
+<span class="cmt">// 以 exiv2.org 官方示例 exifprint.cpp 为蓝本精简（Exiv2 0.28.x API）</span>
+<span class="kw">#include</span> &lt;exiv2/exiv2.hpp&gt;
+<span class="kw">#include</span> &lt;iomanip&gt;
+<span class="kw">#include</span> &lt;iostream&gt;
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> <span class="param">argc</span>, <span class="kw">char</span>* <span class="kw">const</span> <span class="param">argv</span>[])
+{
+    <span class="kw">if</span> (<span class="param">argc</span> != <span class="num">2</span>) {
+        std::cerr &lt;&lt; <span class="str">"用法: exifprint &lt;图片路径&gt;"</span> &lt;&lt; std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="kw">try</span> {
+        <span class="cmt">// 打开图片：工厂按文件内容（而非扩展名）识别格式</span>
+        <span class="kw">auto</span> image = Exiv2::ImageFactory::<span class="fn">open</span>(<span class="param">argv</span>[<span class="num">1</span>]);
+        <span class="kw">if</span> (!image) {
+            std::cerr &lt;&lt; <span class="str">"无法打开文件"</span> &lt;&lt; std::endl;
+            <span class="kw">return</span> <span class="num">1</span>;
+        }
+        <span class="cmt">// 读取元数据到内存容器</span>
+        image-&gt;<span class="fn">readMetadata</span>();
+        <span class="type">Exiv2::ExifData</span>&amp; exifData = image<span class="op">-&gt;</span><span class="fn">exifData</span>();
+
+        <span class="kw">if</span> (exifData.<span class="fn">empty</span>()) {
+            std::cout &lt;&lt; <span class="str">"这张图片没有 EXIF 数据"</span> &lt;&lt; std::endl;
+            <span class="kw">return</span> <span class="num">0</span>;
+        }
+        <span class="cmt">// 遍历：每条元数据是一个 Exiv2::Metadatum（键 + 值）</span>
+        <span class="kw">for</span> (<span class="kw">const</span> <span class="kw">auto</span>&amp; m : exifData) {
+            std::cout &lt;&lt; std::left &lt;&lt; std::setw(<span class="num">40</span>) &lt;&lt; m.<span class="fn">key</span>()
+                      &lt;&lt; <span class="str">" 0x"</span> &lt;&lt; std::hex &lt;&lt; std::setw(<span class="num">4</span>) &lt;&lt; std::setfill(<span class="str">'0'</span>)
+                      &lt;&lt; m.<span class="fn">tag</span>() &lt;&lt; std::dec &lt;&lt; std::setfill(<span class="str">' '</span>)
+                      &lt;&lt; <span class="str">" "</span> &lt;&lt; std::setw(<span class="num">9</span>) &lt;&lt; m.<span class="fn">typeName</span>()
+                      &lt;&lt; <span class="str">" "</span> &lt;&lt; m.<span class="fn">toString</span>() &lt;&lt; std::endl;
+        }
+    } <span class="kw">catch</span> (<span class="type">Exiv2::Error</span>&amp; e) {
+        std::cout &lt;&lt; <span class="str">"Exiv2 异常: "</span> &lt;&lt; e.<span class="fn">what</span>() &lt;&lt; std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>编译链接用 pkg-config 最省事（<code>libexiv2-dev</code> 开发包装好后自带 <code>exiv2.pc</code>），运行输出长这样——键名、十六进制 Tag 编号、类型、值，和 4.2 节的表一一对应：</p>
+
+  <pre><code><span class="cmt"># 安装（三选一）：macOS / Debian/Ubuntu / vcpkg</span>
+$ brew install exiv2
+$ sudo apt install libexiv2-dev exiv2
+
+<span class="cmt"># 编译并运行</span>
+$ g++ exifprint.cpp -o exifprint $(pkg-config --cflags --libs exiv2)
+$ ./exifprint photo.jpg
+Exif.Image.Make                             0x010f Ascii      Canon
+Exif.Image.Model                            0x0110 Ascii      Canon EOS 5D Mark III
+Exif.Photo.ExposureTime                     0x829a Rational   <span class="num">1</span>/<span class="num">250</span> s
+Exif.Photo.FNumber                          0x829d Rational   F<span class="num">5.6</span>
+Exif.Photo.ISOSpeedRatings                  0x8827 Short      <span class="num">100</span>
+Exif.Photo.DateTimeOriginal                 0x9003 Ascii      <span class="num">2026</span>:<span class="num">05</span>:<span class="num">01</span> <span class="num">14</span>:<span class="num">30</span>:<span class="num">00</span>
+Exif.Photo.FocalLength                      0x920a Rational   <span class="num">50.0</span> mm
+Exif.Photo.PixelXDimension                  0xa002 Long       <span class="num">5760</span>
+Exif.GPSInfo.GPSLatitude                    0x0002 Rational   <span class="num">30</span>deg <span class="num">32</span>' <span class="num">45.55</span>"
+Exif.GPSInfo.GPSLongitude                   0x0004 Rational   <span class="num">114</span>deg <span class="num">17</span>' <span class="num">59.93</span>" E</code></pre>
+
+  <p>读 XMP 和读 EXIF 几乎一样，只是换成 <code>xmpData()</code> 容器——键名变成 <code>Xmp.命名空间.属性</code> 的路径式写法，正好呼应 4.3 节：XMP 没有标签编号，键本身就是定位方式。写入元数据也简单：给容器的键直接赋值，再 <code>writeMetadata()</code> 写回文件。官方 addmoddel 示例就是这么干的：</p>
+
+  <pre><code><span class="cmt">// 读取 XMP：容器换成 XmpData，遍历方式与 ExifData 相同</span>
+<span class="type">Exiv2::XmpData</span>&amp; xmpData = image<span class="op">-&gt;</span><span class="fn">xmpData</span>();
+<span class="kw">for</span> (<span class="kw">const</span> <span class="kw">auto</span>&amp; m : xmpData) {
+    std::cout &lt;&lt; m.<span class="fn">key</span>() &lt;&lt; <span class="str">" = "</span> &lt;&lt; m.<span class="fn">toString</span>() &lt;&lt; std::endl;
+}
+<span class="cmt">// 输出示例：</span>
+<span class="cmt">// Xmp.dc.title   = 黄鹤楼日落</span>
+<span class="cmt">// Xmp.dc.creator = Helios</span>
+<span class="cmt">// Xmp.xmp.Rating = 5</span></code></pre>
+
+  <pre><code><span class="cmt">// 写入元数据：给 ExifData 的键赋值，再写回文件</span>
+<span class="type">Exiv2::ExifData</span>&amp; exifData = image<span class="op">-&gt;</span><span class="fn">exifData</span>();
+exifData[<span class="str">"Exif.Image.Artist"</span>] = <span class="str">"Helios"</span>;
+exifData[<span class="str">"Exif.Image.ImageDescription"</span>] = <span class="str">"拍摄于黄鹤楼"</span>;
+image-&gt;<span class="fn">writeMetadata</span>();</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>记住 Exiv2 的三步节奏：<strong>open（打开文件）→ readMetadata（把元数据读进内存容器）→ 遍历/修改容器</strong>。修改容器之后文件并不会自动变——必须再调 <code>writeMetadata()</code> 落盘。另外 <code>ImageFactory::open</code> 按内容识别格式，所以把 <code>.jpg</code> 改名成 <code>.png</code>，Exiv2 照样能读出 EXIF——追踪数据流的人从不信扩展名。</p>
+  </div>
+
+  <!-- ========== 4.5 命令行工具：exiv2 与 exiftool ========== -->
+  <h2>4.5 命令行工具：exiv2 与 exiftool</h2>
+
+  <p>写 C++ 程序之前，命令行工具是看元数据最快的入口——两个主力：<strong>exiv2</strong>（Exiv2 库自带的命令行程序）和 <strong>exiftool</strong>（Phil Harvey 用 Perl 写的「元数据瑞士军刀」，官网 exiftool.org）。exiv2 的定位是「轻量、与 C++ API 行为一致」：默认打印摘要，<code>-p t</code> 打印翻译后的值（人话版），<code>-p v</code> 打印原始值，还能用 <code>-M</code> 直接在命令行改元数据：</p>
+
+  <pre><code><span class="cmt"># exiv2 命令行：读</span>
+$ exiv2 photo.jpg                  <span class="cmt"># 默认：文件信息 + 元数据摘要</span>
+$ exiv2 -pt photo.jpg              <span class="cmt"># -p t：翻译后的（interpreted）值，如 1/250 s</span>
+$ exiv2 -pv photo.jpg              <span class="cmt"># -p v：原始值（直接看容器里存的字节解释）</span>
+$ exiv2 -h                         <span class="cmt"># 全部选项</span>
+
+<span class="cmt"># exiv2 命令行：写（-M 直接给命令，-m 从文件读命令）</span>
+$ exiv2 -M"set Exif.Image.Artist Helios" photo.jpg
+$ exiv2 -m commands.txt photo.jpg</code></pre>
+
+  <p>exiftool 则是另一个量级：它能读写的元数据格式包括 EXIF、GPS、IPTC、XMP、ICC 色彩配置文件、Photoshop 资源块等，还能解码几十个相机品牌的私有 MakerNote（厂商藏在标准标签之外的独家信息），支持数百种文件格式（含音视频）。它最常用的场景是<strong>批量处理</strong>：一个命令扫整个目录、CSV/JSON 输出、从一个文件向另一个文件复制元数据（<code>-tagsFromFile</code>）。下面这组命令是日常高频操作：</p>
+
+  <pre><code><span class="cmt"># exiftool：读</span>
+$ exiftool photo.jpg                       <span class="cmt"># 全部元数据（EXIF/IPTC/XMP 汇总）</span>
+$ exiftool -g photo.jpg                    <span class="cmt"># 按组显示（EXIF / GPS / XMP / Composite…）</span>
+$ exiftool -DateTimeOriginal photo.jpg     <span class="cmt"># 只读一个标签</span>
+$ exiftool -j photo.jpg                    <span class="cmt"># JSON 输出，方便脚本解析</span>
+
+<span class="cmt"># exiftool：写</span>
+$ exiftool -Artist="Helios" photo.jpg      <span class="cmt"># 写入标签（默认生成 photo.jpg_original 备份）</span>
+$ exiftool -overwrite_original -Artist="Helios" photo.jpg   <span class="cmt"># 覆盖原文件，不留备份</span>
+$ exiftool -GPSLatitude=<span class="num">30.5</span> -GPSLongitude=<span class="num">114.3</span> photo.jpg   <span class="cmt"># 写入 GPS</span>
+$ exiftool -all= photo.jpg                 <span class="cmt"># 删除全部元数据（-all= 置空）</span></code></pre>
+
+  <table>
+    <tr><th>维度</th><th>exiv2（命令行）</th><th>exiftool</th></tr>
+    <tr><td>出身</td><td>C++ 库 Exiv2 自带的命令行程序</td><td>Phil Harvey 的 Perl 程序</td></tr>
+    <tr><td>元数据格式</td><td>EXIF / IPTC / XMP 读写</td><td>EXIF / IPTC / XMP / ICC / MakerNote 等数十种</td></tr>
+    <tr><td>文件格式</td><td>JPEG / TIFF / PNG / WebP / 常见 RAW 等</td><td>数百种（含音视频）</td></tr>
+    <tr><td>典型用法</td><td>轻量查看/修改；与 C++ API 行为一致</td><td>批量处理、JSON/CSV 输出、跨文件复制元数据</td></tr>
+    <tr><td>安装</td><td><code>brew install exiv2</code> / <code>apt install exiv2</code></td><td><code>brew install exiftool</code> / 官网下载单文件</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>工具输出再漂亮，也只是 APP1 段里那些字节的「翻译」。遇到可疑的元数据问题（比如某张图读不出 EXIF），先回 4.1 的 xxd 三板斧：看看 APP1 段到底在不在、签名是不是被破坏了。工具会骗你，字节不会。</p>
+  </div>
+
+  <!-- ========== 4.6 读取实践：批量提取、GPS 与隐私擦除 ========== -->
+  <h2>4.6 读取实践：批量提取、GPS 与隐私擦除</h2>
+
+  <p>最后把前面的工具串成三个真实场景。场景一：<strong>按拍摄时间归档</strong>——旅行回来几千张 <code>IMG_*.jpg</code>，文件名毫无信息量，用 exiftool 读出每张的 <code>DateTimeOriginal</code> 重命名，相册立刻按时间排好。注意 <code>-s -s -s</code> 让 exiftool 只输出值本身（去掉标签名和引号），这是脚本里最常用的取值姿势：</p>
+
+  <pre><code><span class="cmt">#!/bin/bash</span>
+<span class="cmt"># 按拍摄时间把 IMG_*.jpg 重命名为 2026_05_01_14_30_00.jpg</span>
+<span class="kw">for</span> f <span class="kw">in</span> *.jpg; <span class="kw">do</span>
+    <span class="cmt"># -s -s -s：只输出值本身，形如 "2026:05:01 14:30:00"</span>
+    t=$(exiftool -s -s -s -DateTimeOriginal <span class="str">"$f"</span>)
+    <span class="kw">if</span> [ -n <span class="str">"$t"</span> ]; <span class="kw">then</span>
+        name=$(<span class="fn">echo</span> <span class="str">"$t"</span> | tr <span class="str">': '</span> <span class="str">'__'</span>)   <span class="cmt"># 冒号和空格换成下划线</span>
+        mv <span class="str">"$f"</span> <span class="str">"${name}.jpg"</span>
+        <span class="fn">echo</span> <span class="str">"$f -&gt; ${name}.jpg"</span>
+    <span class="kw">fi</span>
+<span class="kw">done</span></code></pre>
+
+  <p>场景二：<strong>批量导出 GPS 做轨迹</strong>——照片里带的经纬度可以还原一整天的行程。exiftool 的 <code>-csv</code> 输出一行一条记录，正好喂给地图工具或 Excel 做轨迹图。这背后就是 4.2 节那条数据流：每张照片的 GPS IFD 里，度分秒三个 RATIONAL 被读出来换算成十进制度数（度 + 分/60 + 秒/3600）：</p>
+
+  <pre><code><span class="cmt"># 导出整个目录的拍摄时间 + GPS 到 CSV</span>
+$ exiftool -csv -DateTimeOriginal -GPSLatitude -GPSLongitude ~/photos/*.jpg &gt; gps.csv
+$ head -<span class="num">3</span> gps.csv
+SourceFile,DateTimeOriginal,GPSLatitude,GPSLongitude
+/home/helios/photos/photo1.jpg,<span class="num">2026</span>:<span class="num">05</span>:<span class="num">01</span> <span class="num">14</span>:<span class="num">30</span>:<span class="num">00</span>,<span class="num">30</span> deg <span class="num">32</span>' <span class="num">45.55</span>" N,<span class="num">114</span> deg <span class="num">17</span>' <span class="num">59.93</span>" E
+/home/helios/photos/photo2.jpg,<span class="num">2026</span>:<span class="num">05</span>:<span class="num">02</span> <span class="num">09</span>:<span class="num">12</span>:<span class="num">33</span>,<span class="num">30</span> deg <span class="num">35</span>' <span class="num">12.10</span>" N,<span class="num">114</span> deg <span class="num">20</span>' <span class="num">41.20</span>" E</code></pre>
+
+  <p>场景三：<strong>隐私擦除</strong>——这是元数据最需要警惕的一面。很多社交平台和分享工具会读取 EXIF，在帖子上自动显示「拍摄于某地」；一张原图发出去，<code>DateTimeOriginal</code> + GPS 就精确暴露了你家地址和作息时间。发布到公开渠道前，用 <code>-all=</code> 把 EXIF、IPTC、XMP 一次性清空（注意：<code>-all=</code> 连色彩配置、缩略图这些也删，只留像素）。擦完再用 exiftool 验证：</p>
+
+  <pre><code><span class="cmt"># 发布前擦除全部元数据（生成 photo.jpg_original 备份）</span>
+$ exiftool -all= photo.jpg
+    <span class="num">1</span> image files updated
+
+<span class="cmt"># 不留备份：-overwrite_original 直接覆盖原文件</span>
+$ exiftool -all= -overwrite_original photo.jpg
+    <span class="num">1</span> image files updated
+
+<span class="cmt"># 验证：再读一次，EXIF/GPS 全部消失</span>
+$ exiftool photo.jpg
+ExifTool Version Number         : <span class="num">13.59</span>
+File Name                       : photo.jpg
+File Size                       : <span class="num">8.7</span> MB
+File Type                       : JPEG
+MIME Type                       : image/jpeg
+<span class="cmt"># ……只有文件本身的信息，没有任何拍摄参数了</span></code></pre>
+
+  <div class="warning">
+    <div class="tip-title">注意</div>
+    <p>隐私擦除要「发前再擦」：很多平台在<strong>上传链路里</strong>就会偷偷读 EXIF（用于自动定位、按时间归档），一旦上传，擦除就来不及了。另外 <code>-all=</code> 会把 XMP、ICC 色彩配置、内嵌缩略图一起删掉——如果只是不想暴露位置，可以只删 GPS 组：<code>exiftool -GPS:all= photo.jpg</code>，把拍摄参数留下。</p>
+  </div>
+
+  <p>到这里，分部一（图像基础与格式）就收尾了：第 1 章像素与资源、第 2 章文件格式、第 3 章 RAW 与 DNG、本章元数据——四章合起来，你对「一个图像文件里到底有什么」已经有了完整的地图。下一章（第 5 章）进入分部二「图像处理库实战」，六库对比里，Exiv2 将以「元数据专业户」的身份第一个登场，然后 LibRaw、libvips、OpenCV 依次接棒。先记住柯南的收尾箴言：<strong>读元数据永远从字节开始，从数据流里找真相</strong>——这个习惯到第 13、14 章的链接排错和崩溃调试时，还会救你一命。</p>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>本章的四块拼图——EXIF（固定标签表）、XMP（可扩展命名空间）、Exiv2（程序化读取）、exiftool（命令行批量）——就是图像元数据世界的完整版图。做题之前先默写一遍数据流：JPEG 文件 → APP1 段 → <code>Exif\0\0</code> 签名 → TIFF 头 → IFD0 → Exif SubIFD / GPS IFD / IFD1。这条线画得出来，本章就过关了。</p>
+  </div>
+
+  <!-- ========== 章末练习 ========== -->
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：追踪数据流 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>找一张手机拍的照片（或网上下载样张），用 <code>xxd -l 64 照片.jpg</code> 看文件头，回答三个问题：(a) 前两个字节是什么标记？(b) 在什么偏移位置能看到 <code>Exif</code> 签名？签名后面紧跟的 <code>4949 2a00</code> 是什么？(c) 如果这张照片没有 EXIF，<code>xxd</code> 里会看到什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 4.1 节的逐字节解读：SOI 标记是 FFD8；APP1 段从偏移 2 开始；<code>4949</code> 是 "II"（小端），<code>2a00</code> 是魔数 42。没 EXIF 的照片 APP1 段里就不是 <code>Exif</code> 开头（可能是 XMP 签名，或者根本没有 APP1）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>ffd8</code>，即 SOI（Start of Image，图像开始）标记。(b) 偏移 6 开始能看到 <code>45 78 69 66 00 00</code>（即 <code>Exif\0\0</code> 签名，前面 4 字节是 APP1 标记 <code>ffe1</code> 和段长）；签名后的 <code>4949</code> 是字节序标识 "II"（小端），<code>2a00</code> 是 TIFF 魔数 42——说明 EXIF 是一套住在 JPEG 里的 TIFF 结构。(c) 看不到 <code>Exif</code> 签名：可能 APP1 段装的是 XMP（<code>http://ns.adobe.com/xap/1.0/</code> 开头），也可能直接没有 APP1 段，<code>ffe0</code>（JFIF）之后直接就是图像数据。用 <code>file</code> 命令对照验证：输出里没有 <code>Exif standard:</code> 字样。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读懂一张照片的拍摄参数 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>用 <code>exiftool</code>（或 <code>exiv2 -pt</code>）读取一张照片，挑出 5 个拍摄参数并解释其含义与单位：曝光时间、光圈、ISO、焦距、拍摄时间。再回答：为什么一张 1/250 s、F5.6、ISO 100 的照片是「大晴天户外」的典型设置？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先想三者的物理关系：曝光量 = 光圈进光量 × 快门时间 × 感光度。1/250 s 快门较快、F5.6 光圈不大、ISO 100 感光度很低——三个参数都「不激进」，说明环境光很足。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>曝光时间（ExposureTime，秒）：快门打开多久，1/250 s 属于较快的快门；光圈（FNumber）：<code>F5.6</code> 表示进光孔径，数字越大进光越少；ISO（ISOSpeedRatings）：感光度，100 是低增益、画质最好；焦距（FocalLength，mm）：50.0 mm 是标准镜头视角；拍摄时间（DateTimeOriginal）：<code>2026:05:01 14:30:00</code> 是相机记录的拍摄时刻。三者「都不激进」意味着环境光充足：快门不用放慢、光圈不用开大、ISO 不用拉高——这正是大晴天户外正午到下午的典型参数组合。反过来，夜景照片通常能看到 1/30 s 以下的慢快门、F1.8 左右的大光圈和 1600+ 的高 ISO。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：EXIF 与 XMP 的分工 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你在一家图片服务公司工作，需要给每张图片存两个新字段：①「拍摄任务编号」（如 PROJ-2026-0421）②「AI 检测的图片分类」（如 landscape / portrait）。请分析：这两个字段用 EXIF 存还是用 XMP 存？各自会遇到什么问题？最终方案是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>EXIF 标签表是固定的，<code>Exif.Image.*</code> 和 <code>Exif.Photo.*</code> 里没有「任务编号」和「图片分类」这两个位置；XMP 可以注册自己的命名空间。想想 4.3 节「字典」的比喻。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>用 EXIF 存：没有现成标签——只能借用不相关的标签（如 <code>Exif.Image.ImageDescription</code> 塞任务编号），语义错位、别的软件读不懂、还可能被误当成照片描述；更糟的是 EXIF 标签表没有扩展通道，硬塞会破坏标准兼容性。用 XMP 存：注册一个公司命名空间（如 <code>http://example.com/photo-mgmt/1.0/</code>），定义 <code>jobId</code> 和 <code>aiCategory</code> 两个属性，任何 XMP 工具都能读、不与其他命名空间冲突、还能随时加新字段。结论：<strong>标准的拍摄参数归 EXIF，业务自定义字段归 XMP</strong>——这也是行业惯例（Lightroom 的评级、图库的关键词体系都走 XMP）。代价是 XMP 是 XML，体积比二进制标签大，对海量图片存储略不友好。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：写一个元数据统计程序 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>基于 4.4 节的 exifprint.cpp 写一个升级版程序 <code>exifstats.cpp</code>：遍历图片的 <code>ExifData</code>，统计并打印三样东西——①EXIF 总条目数；②按组分类计数（键名 <code>Exif.Image.*</code>、<code>Exif.Photo.*</code>、<code>Exif.GPSInfo.*</code> 各几条）；③打印拍摄时间 <code>Exif.Photo.DateTimeOriginal</code> 的值。提示：组的判断可以看 <code>m.groupName()</code> 或键名的第二段。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 <code>std::map&lt;std::string, int&gt;</code> 按组计数；<code>Metadatum</code> 有 <code>groupName()</code> 方法返回组名（如 "Image"、"Photo"、"GPSInfo"）。取单个标签可以像写入那样用下标：<code>exifData["Exif.Photo.DateTimeOriginal"]</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <pre><code># exifstats.cpp 核心逻辑（节选）
+#include &lt;exiv2/exiv2.hpp&gt;
+#include &lt;iostream&gt;
+#include &lt;map&gt;
+
+int main(int argc, char* const argv[])
+{
+    if (argc != 2) return 1;
+    try {
+        auto image = Exiv2::ImageFactory::open(argv[1]);
+        image-&gt;readMetadata();
+        Exiv2::ExifData&amp; exifData = image-&gt;exifData();
+        std::map&lt;std::string, int&gt; byGroup;
+        for (const auto&amp; m : exifData) {
+            byGroup[m.groupName()]++;
+        }
+        std::cout &lt;&lt; "EXIF 条目总数: " &lt;&lt; exifData.size() &lt;&lt; std::endl;
+        for (const auto&amp; g : byGroup) {
+            std::cout &lt;&lt; "  " &lt;&lt; g.first &lt;&lt; ": " &lt;&lt; g.second &lt;&lt; " 条" &lt;&lt; std::endl;
+        }
+        std::cout &lt;&lt; "拍摄时间: "
+                  &lt;&lt; exifData["Exif.Photo.DateTimeOriginal"].toString()
+                  &lt;&lt; std::endl;
+    } catch (Exiv2::Error&amp; e) {
+        std::cout &lt;&lt; "Exiv2 异常: " &lt;&lt; e.what() &lt;&lt; std::endl;
+    }
+    return 0;
+}</code></pre>
+          <p>运行示例：<code>./exifstats photo.jpg</code> 会输出类似「EXIF 条目总数: 42 / Image: 8 条 / Photo: 26 条 / GPSInfo: 8 条 / 拍摄时间: 2026:05:01 14:30:00」。小坑：<code>groupName()</code> 返回的是组名不带 "Exif." 前缀（Image 而非 Exif.Image），计数逻辑以实际输出为准。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

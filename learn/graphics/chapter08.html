@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第8章：OpenCV 入门：源码安装 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter08.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第8章：OpenCV 入门：源码安装 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter08.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="8" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：OpenCV 入门：源码安装</h1>
+  <p class="chapter-subtitle">工欲善其事：把 OpenCV 亲手装进工具架——从 gitee 镜像下载、CMake 版本之坑到 configure 三板斧</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「工欲善其事，必先利其器——鲁班的工具箱里没有废铁。这一章我们把 OpenCV 装进工具架：8.2 给下载换一面镜子（gitee 镜像），8.3 给工具链做版本体检（cmake 的老坑），8.4 把依赖备齐（Python 与系统库），8.5 走完 configure、build、install 三板斧，8.6 给版本记一笔账。刀磨好了，第 9 章起我们用它切图像。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 为什么源码装 ========== -->
+  <h2>8.1 工欲善其事：为什么 OpenCV 要从源码装</h2>
+
+  <p>第 5 章六库选型时，我们给 OpenCV 的定位是「计算机视觉」——和 LibRaw、libvips 不同，它的重心不是"把图片读进来、转个格式"，而是"分析图像里有什么"：找角点、认人脸、匹配特征、跑深度学习推理。OpenCV 全称 <strong>Open Source Computer Vision Library</strong>（开源计算机视觉库），1999 年由 Intel 发起，如今由 OpenCV.org 基金会维护，核心用 C++ 编写，提供 Python、Java、JavaScript 等语言的绑定，内置 3000 多个经过优化的算法，从自动驾驶到手机拍照都离不开它。从这一章开始，我们正式从"图像处理"跨进"计算机视觉"的大门。</p>
+
+  <p>装 OpenCV 有三条路。发行版软件包（<code>apt install libopencv-dev</code>）最省事，但版本往往落后——官方文档的原话是：apt 仓库里的 OpenCV 通常比最新版旧不少。Python 轮子（<code>pip install opencv-python</code>）只有 Python 绑定，不带 C++ 头文件，默认也没有 contrib 扩展模块。源码安装最麻烦，却把选择权全交给你：编译最新版本、裁剪不需要的模块、挂上 contrib、指定安装路径——这正是鲁班的"工欲善其事"：<strong>工具决定手艺的上限，先用半天把"视觉工具箱"打好，后面十章的开发效率都建立在它之上</strong>。素材笔记记录的正是一次真实的源码安装全过程，里面踩的坑（下载慢、cmake 版本不够、依赖缺失）至今仍有普遍意义，只是版本号从 OpenCV 3.x 换成了 4.x。</p>
+
+  <pre><code><span class="cmt"># 途径一：发行版软件包——省事，但版本往往落后（官方文档原话）</span>
+<span class="fn">sudo</span> <span class="fn">apt</span> install -y libopencv-dev
+
+<span class="cmt"># 途径二：Python 轮子——只有 Python 绑定，默认不带 contrib 模块</span>
+<span class="fn">python3</span> -m pip install opencv-python
+
+<span class="cmt"># 途径三：源码安装（本章主角）——版本最新、可裁剪、可加 contrib、可改安装路径</span>
+<span class="fn">git</span> clone <span class="str">https://github.com/opencv/opencv.git</span></code></pre>
+
+  <pre><code><span class="cmt"># 源码里 modules/ 下每个子目录是一组功能模块</span>
+<span class="fn">ls</span> opencv/modules
+<span class="cmt"># calib3d  core  dnn  features2d  flann  gapi  highgui</span>
+<span class="cmt"># imgcodecs  imgproc  ml  objdetect  photo  stitching  video  videoio  ...</span>
+
+<span class="cmt"># 本章最相关的三个：core 数据结构、imgproc 图像处理、imgcodecs 编解码</span>
+<span class="fn">ls</span> opencv/modules/core/include/opencv2/core/mat.hpp
+<span class="cmt"># mat.hpp——第 9 章的主角 Mat 就定义在这里，先记住这个文件</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>三条路没有绝对优劣：只想快速调 Python 接口，<code>pip install opencv-python</code> 完全够用；要做 C++ 开发、要最新特性或 contrib 模块、要往 OpenCV 提代码，就必须走源码安装。选路之前先想清楚"这把刀要切什么"。</p>
+  </div>
+
+  <!-- ========== 8.2 下载源码 ========== -->
+  <h2>8.2 第一把刀：下载源码——GitHub 慢，就换一面镜子</h2>
+
+  <p>官方文档给了两种拿源码的方式：用 <code>wget</code> 下载 zip 快照（约 80-90MB，不含 git 历史），或者用 <code>git clone</code> 拉完整仓库（超过 470MB 历史）。两种方式的官方源都在 GitHub 上的 opencv/opencv，稳定分支叫 <code>4.x</code>。对国内开发者来说，这一步就撞上了素材里最真实的一个坑：<strong>直连 GitHub 克隆大仓库，速度常常只有几十 KB/s，甚至中途断连</strong>——一个 470MB 的仓库要拉到天荒地老，这也是素材笔记开篇就写"直接在 GitHub 上下载的速度特别慢"的原因。</p>
+
+  <p>素材的解法是"换一面镜子"：先在 gitee 上把 opencv 仓库 fork（或从 GitHub 导入）到自己的账号，再从这个 gitee 镜像克隆——素材实战仓库就是 <code>gitee.com/helioswei/opencv</code>。这个思路今天依然有效：gitee 对国内网络友好得多，clone 大仓库通常快一个数量级。备选方案还有官方发布页 opencv.org/releases 提供的源码包。别小看"下载"这道工序——官方文档明确提醒：<strong>cmake 配置阶段还会联网拉取部分依赖，网络不稳定会导致某些模块被静默关闭</strong>。下载这关不解决，后面处处受制。</p>
+
+  <pre><code><span class="cmt"># 直连 GitHub 克隆 OpenCV 的真实体验（中国大陆网络常见）：</span>
+<span class="fn">git</span> clone <span class="str">https://github.com/opencv/opencv.git</span>
+<span class="cmt"># Cloning into 'opencv'...</span>
+<span class="cmt"># remote: Enumerating objects: 800000+, done.</span>
+<span class="cmt"># （然后长时间卡住，速度几十 KB/s，甚至直接断连）</span>
+<span class="cmt"># 470MB+ 的完整历史，对国内网络极不友好——这就是素材踩的第一个坑</span></code></pre>
+
+  <pre><code><span class="cmt"># 方案一：fork 到 gitee 再 clone（素材实战做法，仓库：gitee.com/helioswei/opencv）</span>
+<span class="cmt"># 1) 在 gitee.com 上把 GitHub 仓库 fork / 导入到自己的账号（页面操作）</span>
+<span class="cmt"># 2) 克隆自己的 gitee 镜像，速度通常快一个数量级</span>
+<span class="fn">git</span> clone <span class="str">https://gitee.com/helioswei/opencv.git</span>
+<span class="fn">cd</span> opencv
+<span class="fn">git</span> checkout 4.x        <span class="cmt"># 切到 4.x 稳定分支</span>
+
+<span class="cmt"># 方案二：官方 zip 快照（约 80-90MB，不含历史，只想构建的人够用）</span>
+<span class="fn">wget</span> -O opencv.zip <span class="str">https://github.com/opencv/opencv/archive/4.x.zip</span>
+<span class="fn">unzip</span> opencv.zip
+<span class="fn">mv</span> opencv-4.x opencv</code></pre>
+
+  <!-- ========== 8.3 cmake 版本坑 ========== -->
+  <h2>8.3 第二把刀：版本体检——CMake 的老坑</h2>
+
+  <p>素材里最经典的坑在这一步：configure 直接报错 <code>CMake 3.5.1 or higher is required.  You are running version 2.8.12.2</code>。2020 年那台机器的发行版默认 cmake 只有 2.8.12，远够不到 OpenCV 3.x 的要求，最后只能先源码编译一个新版 cmake。这个坑十年后还在：<strong>现行 OpenCV 4.x 把最低要求提到了 CMake 3.7</strong>——官方仓库的 cmake/OpenCVMinDepVersions.cmake 里白纸黑字写着 MIN_VER_CMAKE 3.7。版本号从 3.5.1 涨到 3.7，报错形态一模一样：还是"or higher is required"，还是"running version 2.8.12.2"。版本数字会过期，"动工前先体检工具链版本"的习惯不会过期——这正是鲁班教的第一课。</p>
+
+  <p>体检很简单，三条命令：<code>cmake --version</code>、<code>g++ --version</code>、<code>make --version</code>。版本不够时有两条路：一是用发行版软件源装新版（Ubuntu 18.04 起自带 cmake 3.10 以上，通常直接满足 OpenCV 4.x 的要求）；二是老发行版（如 CentOS 7 默认还是 2.8.12）的软件源里没有新版包，只能<strong>源码编译 cmake 本身</strong>——素材当年走的就是这条路。cmake 是用 C++ 写的，自举构建流程很成熟：<code>./bootstrap</code> 用旧版生成新版，再 make、make install，装完记得 <code>hash -r</code> 清掉 shell 缓存的旧命令路径，否则 cmake --version 可能还是老版本。</p>
+
+  <pre><code><span class="cmt"># 动工前的工具链体检：三连问（工欲善其事的第一步）</span>
+<span class="fn">cmake</span> --version   <span class="cmt"># 构建配置工具</span>
+<span class="fn">g++</span> --version    <span class="cmt"># C++ 编译器（OpenCV 4.x 要求支持 C++11）</span>
+<span class="fn">make</span> --version   <span class="cmt"># 构建执行器</span>
+
+<span class="cmt"># 版本不够时的报错（素材原话，2020 年 OpenCV 3.x 时代）：</span>
+<span class="cmt"># CMake 3.5.1 or higher is required.  You are running version 2.8.12.2</span>
+
+<span class="cmt"># 现行 OpenCV 4.x 门槛已提到 3.7（官方 OpenCVMinDepVersions.cmake）：</span>
+<span class="cmt"># CMake 3.7 or higher is required.  You are running version 2.8.12.2</span></code></pre>
+
+  <pre><code><span class="cmt"># 老发行版没有新版 cmake 软件包时，源码编译 cmake（素材当年的路）</span>
+<span class="cmt"># 版本号以 https://cmake.org/download/ 实际发布为准（示例为 3.31.12）</span>
+<span class="fn">wget</span> <span class="str">https://cmake.org/files/v3.31/cmake-3.31.12.tar.gz</span>
+<span class="fn">tar</span> -xzf cmake-3.31.12.tar.gz
+<span class="fn">cd</span> cmake-3.31.12
+<span class="fn">./bootstrap</span>              <span class="cmt"># 自举：先用旧 cmake 构建出新 cmake</span>
+<span class="fn">make</span> -j4
+<span class="fn">sudo</span> make install
+<span class="fn">hash</span> -r                   <span class="cmt"># 清掉 shell 缓存的旧命令路径</span>
+<span class="fn">cmake</span> --version          <span class="cmt"># 确认新版本生效，再回去跑 OpenCV 的 configure</span></code></pre>
+
+  <!-- ========== 8.4 依赖备齐 ========== -->
+  <h2>8.4 第三把刀：依赖备齐——Python 包与系统库</h2>
+
+  <p>官方 Linux 安装教程列出的最小依赖其实很少：C++ 编译器（g++ 或 clang）、cmake、构建执行器（make 或 ninja）、下载解压工具（wget 加 unzip，或 git）。但 OpenCV 是"带着功能长大的"：<strong>要 Python 绑定，就需要 python3-dev（Python 开发头文件）和 numpy</strong>——素材笔记里"需要 Python 的依赖包"说的正是这两样，官方 Python 教程的原话是"构建 Python 绑定需要 Python-devel 和 Numpy"。缺了它们，configure 时 Python 相关模块会被悄悄跳过，装完才发现 import cv2 报错，回头补装还得重新编译。</p>
+
+  <p>其余依赖按需添加：highgui 模块要弹窗口预览图像，需要 GTK 开发包（<code>libgtk-3-dev</code>）；要读写视频，需要 ffmpeg 的开发包（libavcodec-dev 等）；各图像格式也可以对接系统库。这里有个"依赖是资产"的彩蛋：<strong>第 7 章装 libvips 时已经编译安装过 libjpeg-turbo、libpng、libwebp 等图像库，OpenCV 配置时会自动检测到它们并启用对应格式支持</strong>——前面磨过的刀，这里直接复用，这正是素材里"先装依赖再编译"的顺序智慧。</p>
+
+  <pre><code><span class="cmt"># Ubuntu/Debian：一次装齐构建工具 + Python 绑定依赖（官方教程口径）</span>
+<span class="fn">sudo</span> apt update
+<span class="fn">sudo</span> apt install -y cmake g++ make wget unzip git \
+    python3-dev python3-numpy \
+    libgtk-3-dev libavcodec-dev libavformat-dev libswscale-dev
+
+<span class="cmt"># 拆开看：cmake/g++/make 是构建三件套；</span>
+<span class="cmt"># python3-dev + python3-numpy 是 Python 绑定（素材说的"Python 依赖包"）；</span>
+<span class="cmt"># libgtk-3-dev 提供 GUI 窗口（highgui），ffmpeg 三件套提供视频读写（videoio）</span></code></pre>
+
+  <pre><code><span class="cmt"># configure 输出很长，重点看 Python 相关行：</span>
+<span class="cmt"># 官方教程：看到这些行，说明 Python 绑定会被构建</span>
+<span class="fn">cmake</span> .. 2&gt;&amp;1 | <span class="fn">grep</span> -i python
+
+<span class="cmt"># 示例输出（节选，路径随系统而异）：</span>
+<span class="cmt"># --   Python 3:                       /usr/bin/python3</span>
+<span class="cmt"># --   Python 3 numpy:                 /usr/lib/python3/dist-packages/numpy</span>
+<span class="cmt"># --   Python (for build):             /usr/bin/python3</span></code></pre>
+
+  <!-- ========== 8.5 三板斧 ========== -->
+  <h2>8.5 磨刀完成：configure、build、install 三板斧</h2>
+
+  <p>素材的编译流程干净利落：<code>cd opencv</code>，<code>mkdir build</code>，<code>cd build</code>，<code>cmake ..</code>。为什么必须新建 build 目录、而不是直接在源码目录里跑 cmake？官方 CMakeLists.txt 的第一道关卡就是<strong>禁止 in-source 构建</strong>："FATAL: In-source builds are not allowed. You should create a separate directory for build files." 源码树一旦混入构建产物，git 状态、增量编译、多配置并存全都会乱，所以"建独立构建目录"是硬规矩——素材流程一步不差，正是这个原因。</p>
+
+  <p><code>cmake ..</code> 是配置阶段：检查编译器与依赖、生成 Makefile。默认配置就是 Release 模式、安装到 /usr/local，绝大多数情况直接可用。常用开关：<code>-DCMAKE_BUILD_TYPE=Release</code> 显式指定优化模式；<code>-DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib-4.x/modules</code> 挂上扩展模块仓库（<strong>contrib 与主仓必须同分支同版本，否则编译期就会错配报错</strong>）；<code>-DCMAKE_INSTALL_PREFIX</code> 改安装前缀。配置完成后 <code>make -j4</code> 开编——<code>-jN</code> 是并行编译，N 一般取 CPU 核数；OpenCV 全量编译从几十分钟到一两个小时都很正常，官方新版文档也推荐 <code>cmake --build .</code> 这种写法。</p>
+
+  <p>编译产物落在 build 目录里：可执行文件在 build/bin（比如 <code>opencv_version</code>），动态库在 build/lib（libopencv_core.so 等）。确认无误后 <code>sudo make install</code> 安装到 /usr/local：可执行文件进 bin、库进 lib、头文件进 include/opencv4、cmake 包进 cmake/opencv4、级联数据（人脸检测用的 XML 等）进 share/opencv4。官方提醒：<strong>make install 只是把文件复制到位，不会注册进系统包管理器</strong>，与发行版自带的 OpenCV 混装可能冲突。装完跑 <code>sudo ldconfig</code> 刷新动态库缓存，再命令行与 Python 双验收。</p>
+
+  <pre><code><span class="cmt"># 素材原流程：建独立 build 目录，进目录再 configure</span>
+<span class="fn">cd</span> opencv
+<span class="fn">mkdir</span> build
+<span class="fn">cd</span> build
+<span class="fn">cmake</span> ..
+
+<span class="cmt"># 为什么不能直接在源码里 cmake？官方 CMakeLists.txt 明令禁止：</span>
+<span class="cmt"># FATAL: In-source builds are not allowed.</span>
+<span class="cmt">#        You should create a separate directory for build files.</span></code></pre>
+
+  <pre><code><span class="cmt"># 加 contrib 扩展模块（SIFT 等 xfeatures2d 算法在 opencv_contrib 仓库）</span>
+<span class="cmt"># contrib 与主仓必须同分支/同 tag，否则版本错配会编译失败</span>
+<span class="fn">wget</span> -O opencv_contrib.zip <span class="str">https://github.com/opencv/opencv_contrib/archive/4.x.zip</span>
+<span class="fn">unzip</span> opencv_contrib.zip
+
+<span class="fn">cd</span> opencv/build
+<span class="fn">cmake</span> <span class="param">-DOPENCV_EXTRA_MODULES_PATH</span>=../opencv_contrib-4.x/modules \
+      <span class="param">-DCMAKE_BUILD_TYPE</span>=Release \
+      <span class="param">-DCMAKE_INSTALL_PREFIX</span>=/usr/local \
+      ..
+<span class="fn">make</span> -j4    <span class="cmt"># -jN：N 个编译任务并行，大工程省时间</span></code></pre>
+
+  <pre><code><span class="cmt"># 安装（/usr/local 归 root 所有，需要 sudo）</span>
+<span class="fn">sudo</span> make install
+<span class="fn">sudo</span> ldconfig    <span class="cmt"># 刷新动态库缓存，让链接器找得到新装的 .so</span>
+
+<span class="cmt"># 验收：命令行与 Python 各验一次</span>
+<span class="fn">opencv_version</span>
+<span class="cmt"># 4.12.0（示例，取决于你 checkout 的版本）</span>
+<span class="fn">python3</span> -c <span class="str">"import cv2; print(cv2.__version__)"</span>
+<span class="cmt"># 4.12.0</span></code></pre>
+
+  <!-- ========== 8.6 版本差异 ========== -->
+  <h2>8.6 版本差异：3.x 时代 vs 4.x 现状</h2>
+
+  <p>素材笔记写于 2020 年，记录的是 OpenCV 3.x 时代：当时最新稳定版是 3.4.x，cmake 门槛 3.5.1，C 风格的 API（IplImage、CvMat）还在大量使用。2018 年 11 月 OpenCV 4.0 发布后，C API 被大幅移除、最低要求 C++11、内置 DNN 深度学习模块，<strong>从此 4.x 成为唯一活跃主线</strong>——本章写作时官方文档站已是 4.13.0。连 cmake 自己都进入了 4.x 大版本（2025 年发布 CMake 4.0）。素材里那段报错文字可以直接"套用"到今天，只有版本号不同：<strong>工具链版本永远在涨，这是常态，不是意外</strong>。</p>
+
+  <p>比"装最新版"更重要的是版本管理的习惯：构建记录里固定到具体 tag（<code>git checkout 4.12.0</code>），contrib 同步同 tag，团队才能复现同一套环境；别裸 checkout 分支——分支是流动的，今天能编译，三个月后就未必。装完可以用"版本四查"确认环境一致性：<code>git describe --tags</code> 看源码版本、<code>opencv_version</code> 看二进制版本、<code>cv2.__version__</code> 看 Python 绑定版本、<code>cv2.getBuildInformation()</code> 看完整构建信息（编译器、启用的模块、第三方库版本都在里面，排错时是宝藏）。</p>
+
+  <pre><code><span class="cmt"># 可复现的构建：固定到具体发布 tag，而不是裸 checkout 分支</span>
+<span class="fn">git</span> -C opencv tag | <span class="fn">tail</span> -<span class="num">3</span>
+<span class="cmt"># 4.10.0</span>
+<span class="cmt"># 4.11.0</span>
+<span class="cmt"># 4.12.0</span>
+<span class="fn">git</span> -C opencv checkout 4.12.0
+<span class="fn">git</span> -C opencv_contrib checkout 4.12.0   <span class="cmt"># contrib 与主仓保持同一版本</span>
+
+<span class="cmt"># 素材是 2020 年 OpenCV 3.x 时代的记录（当时最新 3.4.x），</span>
+<span class="cmt"># 如今 4.x 是唯一活跃主线——版本数字会变，"固定版本再构建"的习惯不变</span></code></pre>
+
+  <pre><code><span class="cmt"># Python 绑定里的版本自检：cv2 就是 OpenCV 的 Python 脸面</span>
+<span class="kw">import</span> cv2
+<span class="fn">print</span>(cv2.__version__)   <span class="cmt"># 4.12.0（示例）</span>
+
+<span class="kw">def</span> <span class="fn">describe</span>(<span class="param">name</span>: <span class="type">str</span>) <span class="op">-&gt;</span> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="fn">f</span><span class="str">"{name}: {cv2.getBuildInformation().splitlines()[0]}"</span>
+
+<span class="fn">print</span>(<span class="fn">describe</span>(<span class="str">"opencv"</span>))
+<span class="cmt"># opencv: General configuration for OpenCV 4.12.0 ...</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>排错时先看 <code>cv2.getBuildInformation()</code>：它把编译器版本、启用的模块、第三方库（ffmpeg、GTK、图像格式库）全列出来，configure 时被静默跳过的模块在这里一目了然——不用瞎猜，先让系统自报家门。</p>
+  </div>
+
+  <p>到这里，鲁班的工具箱里多了一把最重要的工具。下一章我们写第一个 OpenCV 程序：<code>imread</code> 读图、<code>imshow</code> 显示、<code>waitKey</code> 等待按键，并深入 Mat——OpenCV 的核心数据结构。到时候你会发现，第 9 章 CMakeLists.txt 里的 <code>find_package(OpenCV REQUIRED)</code> 认的，正是这一章装进 /usr/local/cmake/opencv4 的包；而如果以后写程序链接 OpenCV 报 undefined reference，第 13 章会系统讲依赖与链接排错——工具装好了，后面的故事才讲得下去。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① OpenCV 是 1999 年由 Intel 发起的开源计算机视觉库；② 源码构建时必须在 opencv 源码目录内直接运行 cmake；③ 现行 OpenCV 4.x 要求 CMake 3.7 或更高；④ gitee 镜像只是把 GitHub 仓库复制一份以加速国内下载；⑤ opencv_contrib 扩展仓库可以随便用和主仓不同的版本。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 8.1 节的 OpenCV 出身、8.5 节官方对 in-source 构建的禁令、8.3 节 MIN_VER_CMAKE 数值、8.2 节 gitee 镜像的做法、8.5 节 contrib 与主仓的版本约定。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 对——1999 年 Intel 发起，现由 OpenCV.org 基金会维护；② 错——官方 CMakeLists.txt 明确禁止 in-source 构建（FATAL: In-source builds are not allowed），必须建独立 build 目录；③ 对——官方 OpenCVMinDepVersions.cmake 里 MIN_VER_CMAKE 为 3.7；④ 对——fork/导入到 gitee 再从国内克隆，解决直连 GitHub 慢的问题；⑤ 错——contrib 必须与主仓同分支/同 tag，版本错配会编译失败。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：工具链体检 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 写出动工前体检工具链的三条命令；② cmake 版本不足时，两条解决路径各适合什么场景？③ 为什么素材当年（CentOS 系老机器）只能走源码编译 cmake 这条路，而不是 apt 装新版？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>体检命令在 8.3 节；两条路径的适用场景对应"软件源里有没有新版包"；素材机器默认 cmake 2.8.12，想想它的软件源能不能提供 3.7+。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① cmake --version、g++ --version、make --version；② 用 apt 装新版适合发行版软件源里有新版（如 Ubuntu 18.04 起自带 cmake 3.10+，直接满足）；源码编译适合老发行版（如 CentOS 7 默认 2.8.12）——软件源里没有新版包，只能从 cmake.org 下载源码 ./bootstrap 自举编译；③ 因为那台机器的软件源里根本没有满足要求的新版 cmake 包，apt 装不到 3.7+，只能源码编译。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：构建流程 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 为什么必须在独立 build 目录里跑 cmake？官方是怎么规定的？② 配置阶段如何确认 Python 绑定会被构建？③ 安装到 /usr/local 之后，怎样验证安装成功？（至少写出两条验证方式）</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>in-source 禁令在 8.5 节第一段；Python 确认方式在 8.4 节第二个代码块；验证方式在 8.5 节第三个代码块（命令行、Python 各一）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 官方 CMakeLists.txt 禁止 in-source 构建（"FATAL: In-source builds are not allowed. You should create a separate directory for build files."），避免源码树混入构建产物导致 git 状态、增量编译、多配置全乱；② 配置输出里看 Python 相关行——运行 cmake .. 2&gt;&amp;1 | grep -i python，看到 Python 3 与 numpy 被找到，说明绑定会构建；③ opencv_version 打印版本号；python3 -c "import cv2; print(cv2.__version__)" 成功输出版本；也可以 ls /usr/local/lib 找 libopencv_core.so。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：排错设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你在 CentOS 7 老机器上按本章流程装 OpenCV 4.x，依次遇到三个问题：git clone 卡死；cmake 报版本不够；配置通过但 make 时发现 GTK、视频相关模块被跳过。请按顺序给出每个问题的排查与解决步骤，并说明每一步对应 8.2-8.5 节的哪一节方法。延伸思考：第三个问题的两种可能根因（缺依赖 vs 网络问题）分别对应官方的哪两条提醒？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>问题一对应 8.2 的"换镜子"；问题二对应 8.3 的体检与两条路径；问题三对应 8.4 的依赖矩阵与 8.5 的配置检查——还要想起官方关于"configure 联网拉依赖"的提醒。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① clone 卡死（8.2）：放弃直连，把 opencv 仓库 fork/导入到 gitee 再 git clone，或改用 wget 下载官方 zip 快照（80-90MB）；② cmake 版本不够（8.3）：先三连体检确认 cmake --version 是 2.8.12；CentOS 7 软件源没有新版包，从 cmake.org/download 下载源码包，./bootstrap、make -j4、sudo make install 自举编译，hash -r 后复检版本；③ 模块被跳过（8.4/8.5）：先 apt 补装 libgtk-3-dev 与 ffmpeg 开发包，删除 build 目录重新 cmake，用 cmake .. 2&gt;&amp;1 | grep -i -E "gtk|ffmpeg" 确认配置输出里 GTK/FFMPEG 为启用状态。延伸：根因一是依赖没装齐——对应官方"configure 会检测依赖并决定模块开关"；根因二是 configure 阶段联网拉依赖失败——对应官方"网络连接失败会导致部分模块被关闭或行为异常"的提醒。两种根因的解法都是补齐条件后重建 build 目录重新配置。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

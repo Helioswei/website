@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第7章：libvips：高性能图像处理 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter07.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第7章：libvips：高性能图像处理 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter07.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="7" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：libvips：高性能图像处理</h1>
+  <p class="chapter-subtitle">把「高性能」拆开看：需求驱动、依赖矩阵、HEIC 转码链，以及一次链接错误的现场</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案先拆现场，这一章我们拆的是『高性能』三个字：先问为什么服务端需要它（7.1），把源码和依赖矩阵摆上桌（7.2、7.3），拆开 HEIC 这条转码链（7.4），走一遍从 configure 到 Meson 的编译（7.5），处理编译中冒出来的 fribidi 链接错误（7.6），最后用命令行工具验收成果（7.7）。拆得越细，后面第 13 章讲依赖排错、第 15 章讲性能优化时，你就越有底气。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 为什么需要 libvips ========== -->
+  <h2>7.1 为什么服务端需要 libvips：从 HEIC 转码说起</h2>
+
+  <p>先看一个真实需求。素材笔记的第一句话是：<strong>「目前主要是用于苹果平台图片 heic 图片的转码处理」</strong>。iPhone 拍出来的照片默认是 HEIC 格式——HEIF 容器套 HEVC（H.265）编码（第 2 章格式选型表里的现代格式之一），同等画质体积大约只有 JPEG 的一半。但问题在于：Web 前端、老旧系统、部分浏览器对 HEIC 的支持并不好。于是服务端拿到 HEIC 的第一件事，往往就是转码成 JPEG、生成缩略图。这正是第 1 章说过的服务端图像处理存在的理由——转码、预览、视觉：一批 iPhone 上传的 HEIC 文件，要批量转 JPEG 并出预览小图，还要快、还要省内存。今天的主角 libvips，就是为这类「大图、批量、高频」场景而生的。</p>
+
+  <p>libvips 官网给自己的定位是一句话：<strong>demand-driven, horizontally threaded image processing library</strong>——「需求驱动、水平线程」的图像处理库。需求驱动，意思是它只计算输出真正需要的像素（例如做 100 像素宽的缩略图，就只解码缩放所需的那部分数据，而不是把 4000 万像素全搬进内存）；水平线程则是它处理多核并行时的线程模型——这里只带一句，完整的方法论留到第 15 章《性能优化：多线程、内存与缓存》专门讲。官网的数据：约 300 个操作（算术、直方图、卷积、形态学、频域滤波、色彩、重采样、统计等），支持 JPEG、JPEG 2000、JPEG XL、TIFF、PNG、WebP、HEIC、AVIF、FITS、Matlab、OpenEXR、PDF、SVG、GIF、DeepZoom、OpenSlide 等一大批格式，许可为 LGPL-2.1，被 Mastodon、Node.js 的 sharp、imgproxy、Rails 的 Active Storage、MediaWiki 等知名项目当作图像引擎。从系统分析的角度看，一个库能被社交网络、无头图片服务、框架内置存储同时选为引擎，本身就说明它在「快、省、格式全」三个维度上都经过了生产检验。</p>
+
+  <p>要理解这份「高性能」，狄仁杰的第一刀是把它拆成两层：<strong>设计层</strong>（需求驱动、线程模型——第 15 章）和<strong>工程层</strong>（依赖怎么配、格式怎么支持、编译怎么过——本章）。本章沿着工程层把一次真实的源码编译走完，7.2 到 7.7 每节一步。先看一眼目标——装好之后的 libvips 应该长什么样：</p>
+
+  <pre><code><span class="cmt"># 装好之后，先验明正身：版本号与 pkg-config 元数据</span>
+<span class="fn">vips</span> --version
+<span class="cmt"># 示例输出：vips-8.18.0（现行版本为 8.x 系列，素材时代是 8.x 早期）</span>
+<span class="fn">pkg-config</span> --modversion vips
+<span class="cmt"># 示例输出：8.18.0</span>
+
+<span class="cmt"># 需求侧的目标：把 HEIC 转成 JPEG——这是 7.4 装好 libheif 之后才能跑通的</span>
+<span class="fn">vips</span> copy photo.heic out.jpg
+<span class="fn">vipsheader</span> out.jpg
+<span class="cmt"># 示例输出：out.jpg: 4032x3024 uchar, 3 bands, srgb, jpegload</span></code></pre>
+
+  <pre><code><span class="cmt"># 先看内存账本：一张 4032x3024 的照片，解成 8-bit RGB 需要 4032*3024*3 字节</span>
+<span class="fn">python3</span> -c <span class="str">"print(4032*3024*3/1024/1024)"</span>
+<span class="cmt"># 输出：34.9 —— 一张图全解出来就要约 35MB，批量转码时内存立刻成为瓶颈</span>
+<span class="cmt"># libvips 的"需求驱动"设计让做缩略图时的内存占用与输出大小挂钩，而不是与输入大小挂钩</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>「支持 HEIC」这句话在系统分析下要拆成两层：文件容器层（HEIF，由 libheif 负责）与编解码层（HEVC，由 libde265 负责）。第 7.4 节那个著名的坑——"configure 显示支持、真用时报错"——就藏在这两层之间。先记住这个分层，后面就顺了。</p>
+  </div>
+
+  <!-- ========== 7.2 源码获取与构建依赖矩阵 ========== -->
+  <h2>7.2 源码获取与构建依赖矩阵</h2>
+
+  <p>源码编译的第一步是拿到源码。libvips 托管在 GitHub 的 libvips/libvips 仓库，素材笔记用的就是标准的 git clone；也可以从官网 GitHub Releases 下载发布包（release tarball）。为什么要源码编译而不是直接 yum/apt 装一个？素材场景很典型：内网环境、需要特定的格式支持组合（比如必须带 HEIC）、或者发行版仓库里的版本太旧。走一遍源码编译，还能顺便看清这个库的依赖全景——这正是系统分析的拿手活。</p>
+
+  <p>狄仁杰的第二刀：<strong>把「依赖」按职责切成两组</strong>。第一组是<strong>构建工具链</strong>——编译器（gcc/gcc-c++）、构建工具（make，现行还要 ninja）、依赖探测（pkgconfig）、基础库（glib 是 libvips 的 GObject 根基，expat 是 XML 解析）、文档与内省工具（gtk-doc 与 gobject-introspection，前者生成文档、后者给 GObject 库生成内省数据供 Python 等绑定使用）。第二组是<strong>图片格式库</strong>——JPEG、PNG、WebP 各一个库，7.3 节专门讲。这里有个素材过时点要说明：素材时代（2020 年）libvips 用 autotools 构建，所以还要 autoconf/automake 来从 git 源码生成 configure 脚本；现行 libvips 已经切换到 Meson 构建系统（官网安装页只保留 Meson 流程），不再需要 autoconf/automake，文档工具也从 gtk-doc 换成了 gi-docgen。</p>
+
+  <pre><code><span class="cmt"># 第一步：拿源码（素材原流程）</span>
+<span class="fn">git</span> clone https://github.com/libvips/libvips.git
+<span class="fn">cd</span> libvips
+
+<span class="cmt"># 看看发布到哪了：现行 8.x 系列，最新到 8.18（2025-12）</span>
+<span class="fn">git</span> tag | <span class="fn">tail</span> -n <span class="num">5</span>
+<span class="cmt"># 示例输出：v8.17.0  v8.17.1  v8.18.0 ...</span>
+<span class="fn">git</span> checkout v8.18.0   <span class="cmt"># 想锁定版本就切 tag；不切就用 master</span></code></pre>
+
+  <pre><code><span class="cmt"># 素材时代（2020，CentOS/yum）：构建工具链全套</span>
+<span class="fn">yum</span> install gtk-doc
+<span class="fn">yum</span> install gobject-introspection
+<span class="fn">yum</span> install gobject-introspection-devel
+<span class="fn">yum</span> install expat-devel
+<span class="fn">yum</span> install glib glib-devel
+<span class="fn">yum</span> install gcc gcc-c++
+<span class="fn">yum</span> install make pkgconfig autoconf automake</code></pre>
+
+  <pre><code><span class="cmt"># 现行（Debian/Ubuntu/apt）：同样的职责，Meson 时代的包</span>
+<span class="cmt"># build-essential 含 gcc/g++/make；meson 与 ninja-build 替代 autoconf/automake+make 的职责</span>
+<span class="fn">apt</span> install -y build-essential pkg-config meson ninja-build
+<span class="fn">apt</span> install -y libglib2.0-dev libexpat1-dev
+<span class="cmt"># 文档/内省：现行文档工具是 gi-docgen（对应素材的 gtk-doc），内省仍用 gobject-introspection</span>
+<span class="fn">apt</span> install -y gobject-introspection libgirepository1.0-dev</code></pre>
+
+  <table>
+    <tr><th>依赖</th><th>素材 yum 包</th><th>现行 apt 包</th><th>职责</th></tr>
+    <tr><td>编译器</td><td>gcc gcc-c++</td><td>build-essential</td><td>C/C++ 编译</td></tr>
+    <tr><td>构建工具</td><td>make</td><td>ninja-build</td><td>执行编译（Meson 后端）</td></tr>
+    <tr><td>构建系统</td><td>autoconf automake</td><td>meson</td><td>生成/配置构建（素材时代生成 configure）</td></tr>
+    <tr><td>依赖探测</td><td>pkgconfig</td><td>pkg-config</td><td>定位第三方库的头文件与链接参数</td></tr>
+    <tr><td>基础库</td><td>glib glib-devel</td><td>libglib2.0-dev</td><td>GObject 类型系统，libvips 的根基</td></tr>
+    <tr><td>XML 解析</td><td>expat-devel</td><td>libexpat1-dev</td><td>libvips 必需的 XML 解析能力</td></tr>
+    <tr><td>文档生成</td><td>gtk-doc</td><td>gi-docgen</td><td>API 文档（素材时代 --enable-gtk-doc-pdf）</td></tr>
+    <tr><td>内省数据</td><td>gobject-introspection(-devel)</td><td>gobject-introspection</td><td>为 Python 等绑定提供类型信息</td></tr>
+  </table>
+
+  <!-- ========== 7.3 图片格式依赖 ========== -->
+  <h2>7.3 图片格式依赖：一个格式背后一个库</h2>
+
+  <p>系统分析的第三刀：<strong>libvips 自己不实现 JPEG、PNG 这些编解码器——每个格式背后站着一个独立的库</strong>，构建时通过 pkg-config 自动探测、找到了就链接进来。libvips 官方 README 的原话是：如果找到合适版本的库，libvips 会自动加上对应格式的支持。所以"这个库支持的格式多"翻译成工程语言就是"它链接的格式库多"。这也解释了第 5 章六库对比时 libvips 的格式覆盖为什么最广——它不是自己写了几十种解码器，而是把整个开源图像格式生态都借了过来。</p>
+
+  <p>素材笔记列了一份完整的格式依赖清单（CentOS 的 yum 命令，见下方代码块）：JPEG 用 libjpeg-turbo、PNG 用 libpng、TIFF 用 libtiff、WebP 用 libwebp、GIF 用 giflib、SVG 用 librsvg2、PDF 用 poppler-glib、HEIC 用 libheif（7.4 节单独讲）、EXIF 用 libexif、FITS 用 cfitsio、Matlab 用 matio、文档用 libgsf、病理切片用 openslide、SIMD 用 orc、量化用 libimagequant、FFT 用 fftw，完整对应关系见下方表格。注意素材过时点：GIF 的保存现行版本走 cgif、加载走内置 nsgif；libgsf 在现行构建选项里已经消失（新构建不需要再装）；SIMD 加速现行优先用 highway，找不到才回退 orc。另外还有一个可选项素材没装——<strong>libraw</strong>：libvips 读相机 RAW 就是靠它，也就是第 6 章的主角库；素材场景主要转 HEIC，所以没有启用。</p>
+
+  <p>安装原则是<strong>按需安装</strong>：要支持什么格式，就装对应库的运行时加 devel（开发头文件）两个包。下面的命令是素材真实跑过的全套格式依赖：</p>
+
+  <pre><code><span class="cmt"># 素材真实流程（CentOS/yum）：图片格式依赖全套</span>
+<span class="fn">yum</span> install -y libjpeg-turbo libjpeg-turbo-devel
+<span class="fn">yum</span> install -y libexif libexif-devel
+<span class="fn">yum</span> install -y giflib giflib-devel
+<span class="fn">yum</span> install -y librsvg2 librsvg2-devel
+<span class="fn">yum</span> install -y libtiff libtiff-devel
+<span class="fn">yum</span> install -y libwebp libwebp-devel
+<span class="fn">yum</span> install -y libpng libpng-devel
+<span class="fn">yum</span> install -y libgsf libgsf-devel
+<span class="fn">yum</span> install -y poppler-glib poppler-glib-devel
+<span class="fn">yum</span> install -y openslide openslide-devel
+<span class="fn">yum</span> install -y orc orc-devel
+<span class="fn">yum</span> install -y libimagequant libimagequant-devel
+<span class="fn">yum</span> install -y cfitsio cfitsio-devel
+<span class="fn">yum</span> install -y matio matio-devel
+<span class="fn">yum</span> install -y fftw fftw-devel</code></pre>
+
+  <pre><code><span class="cmt"># 装之前先侦察：pkg-config 能不能找到这些库？装完再验证一次</span>
+<span class="fn">pkg-config</span> --modversion libjpeg libpng libtiff libwebp
+<span class="cmt"># 示例输出：6b  1.6.47  4.7.0  1.5.0（每行一个，找不到的会报错）</span>
+<span class="fn">pkg-config</span> --list-all | <span class="fn">grep</span> -iE <span class="str">"heif|jpeg|webp"</span>
+<span class="cmt"># 示例输出：libheif  libjpeg  libwebp ...（libvips 的 Meson 构建就是靠这份清单找库）</span></code></pre>
+
+  <table>
+    <tr><th>图片格式</th><th>依赖库（素材 yum 包名）</th><th>作用</th></tr>
+    <tr><td>JPEG</td><td>libjpeg-turbo</td><td>高速 JPEG 编解码（IJG 兼容）</td></tr>
+    <tr><td>PNG</td><td>libpng</td><td>PNG 读写</td></tr>
+    <tr><td>TIFF</td><td>libtiff</td><td>TIFF 读写（大图、多页、金字塔）</td></tr>
+    <tr><td>WebP</td><td>libwebp</td><td>WebP 读写</td></tr>
+    <tr><td>GIF</td><td>giflib（素材）</td><td>GIF 读写；现行保存走 cgif、加载走内置 nsgif</td></tr>
+    <tr><td>SVG</td><td>librsvg2</td><td>SVG 矢量渲染成位图</td></tr>
+    <tr><td>PDF</td><td>poppler-glib</td><td>PDF 渲染（也可用 PDFium）</td></tr>
+    <tr><td>HEIC / AVIF</td><td>libheif（+libde265）</td><td>HEIF 容器与 HEVC/AV1 编解码（7.4 节）</td></tr>
+    <tr><td>EXIF</td><td>libexif</td><td>JPEG 的 EXIF 元数据读写</td></tr>
+    <tr><td>FITS</td><td>cfitsio</td><td>天文 FITS 格式</td></tr>
+    <tr><td>Matlab</td><td>matio</td><td>读 Matlab .mat 文件</td></tr>
+    <tr><td>Office 文档</td><td>libgsf（素材）</td><td>gsfload 读文档里的图；现行已不再依赖</td></tr>
+    <tr><td>病理切片</td><td>openslide</td><td>Aperio/Hamamatsu/Leica/MIRAX 等切片格式</td></tr>
+    <tr><td>FFT</td><td>fftw</td><td>傅里叶变换运算</td></tr>
+    <tr><td>量化</td><td>libimagequant</td><td>生成 8-bit 调色板 PNG/GIF</td></tr>
+    <tr><td>SIMD 加速</td><td>orc</td><td>向量化加速；现行优先 highway</td></tr>
+    <tr><td>RAW</td><td>（libraw，素材未装）</td><td>相机 RAW 解码——第 6 章主角库</td></tr>
+  </table>
+
+  <!-- ========== 7.4 HEIC 支持 ========== -->
+  <h2>7.4 HEIC 支持：libde265 与 libheif 的源码安装</h2>
+
+  <p>回到 7.1 的动机——HEIC 转码。系统分析把「HEIC 支持」拆成两层：<strong>容器层</strong>由 libheif 负责——它是一个 ISO/IEC 23008-12 HEIF/AVIF 文件格式的解码编码库，负责解析 HEIF 文件结构、管理图像条目与元数据；<strong>编解码层</strong>由具体 codec 负责——HEIC 用的是 HEVC（H.265）编码，libheif 默认用 <strong>libde265</strong> 解码、x265 编码。注意一个工程事实：libheif 只是个壳，它把真正的压缩解码委托给 libde265；如果 libheif 编译时找不到 libde265，HEIC 的解码能力就是残缺的。</p>
+
+  <p>这正好解释了素材里那个著名的坑。素材笔记原话：<strong>libde265「必须安装，不然在编译 libvips 时，虽然 configure 表示支持，但是在真正使用的时候会报错」</strong>。为什么 configure 会"谎报军情"？因为 libvips 构建时探测的是 libheif 是否可链接——只要 libheif 的头文件和库在，configure 就报"支持"；但 libheif 自己若是没带 libde265 编出来的，真正解码 HEIC 时就只能干瞪眼。这个坑 2020 年存在，现行依然有效——libheif 官方 README 至今写着同样的要求：「确保先编译安装 libde265，这样配置脚本才能找到它」。所以源码安装的顺序必须铁打不动：先 libde265，再 libheif，最后才轮到 libvips。</p>
+
+  <p>两个库都托管在 strukturag 名下，构建都用 CMake（素材时代 libheif 还有 autotools 支持，现行 1.16 起已完全切到 CMake）：</p>
+
+  <pre><code><span class="cmt"># 第一步：libde265（HEVC 解码器）——必须最先装</span>
+<span class="fn">git</span> clone https://github.com/strukturag/libde265.git
+<span class="fn">cd</span> libde265
+<span class="fn">mkdir</span> build &amp;&amp; <span class="fn">cd</span> build
+<span class="fn">cmake</span> ..
+<span class="fn">make</span>
+<span class="fn">make</span> install   <span class="cmt"># 默认装到 /usr/local，头文件与 pkg-config 元数据就位</span>
+<span class="fn">cd</span> ../..</code></pre>
+
+  <pre><code><span class="cmt"># 第二步：libheif（HEIF 容器库）——确保找到上一步的 libde265</span>
+<span class="fn">git</span> clone https://github.com/strukturag/libheif.git
+<span class="fn">cd</span> libheif
+<span class="fn">mkdir</span> build &amp;&amp; <span class="fn">cd</span> build
+<span class="fn">cmake</span> --preset=release ..   <span class="cmt"># release 预设：各编解码器编成插件（需 CMake 3.21+）</span>
+<span class="fn">make</span>
+<span class="fn">make</span> install
+<span class="cmt"># 装完先自测：libvips 官方 README 给的检查法——看解码器/编码器列表里有没有 libde265</span>
+<span class="fn">heif-convert</span> --list-decoders
+<span class="cmt"># HEIC decoders:</span>
+<span class="cmt"># - libde265 = libde265 HEVC decoder, version ...</span>
+<span class="fn">heif-enc</span> --list-encoders
+<span class="cmt"># HEIC encoders:</span>
+<span class="cmt"># - x265 = x265 HEVC encoder ... [default]</span></code></pre>
+
+  <pre><code><span class="cmt"># 第三步：把自定义安装的库告诉 pkg-config（素材 myconfig.sh 里的关键技巧）</span>
+<span class="cmt"># 如果 libheif 装在非标准前缀（如 /usr/local/heif），libvips 构建时默认找不到它</span>
+<span class="fn">export</span> PKG_CONFIG_PATH=<span class="str">"/usr/local/lib/pkgconfig:/usr/local/heif/lib/pkgconfig"</span>
+<span class="fn">pkg-config</span> --modversion libheif
+<span class="cmt"># 示例输出：1.19.0（能打出版本号，说明 libvips 构建时一定能探测到）</span></code></pre>
+
+  <table>
+    <tr><th>格式</th><th>解码器</th><th>编码器</th><th>说明</th></tr>
+    <tr><td>HEIC</td><td>libde265</td><td>x265（默认）/ kvazaar</td><td>HEVC/H.265，iPhone 默认照片格式</td></tr>
+    <tr><td>AVIF</td><td>libaom / dav1d</td><td>libaom / svt-av1 / rav1e</td><td>AV1 编码，第 16 章格式演进再提</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>判断「HEIC 支持到底装好没有」，别信 configure 的一行字，要用证据链：① <code>pkg-config --modversion libheif</code> 能出版本号；② <code>heif-convert --list-decoders</code> 里能看到 libde265；③ 最后拿一张真 HEIC 文件跑一次转码。三步全过，才算真的支持。</p>
+  </div>
+
+  <!-- ========== 7.5 编译安装 ========== -->
+  <h2>7.5 编译安装：从 configure 到 Meson</h2>
+
+  <p>依赖配齐，开始编译。素材时代（2020 年）的流程是 autotools 三件套：<code>./configure</code>、<code>make</code>、<code>make install</code>。素材里还留了一个自己写的 <code>myconfig.sh</code>——把编译参数、库路径、PKG_CONFIG_PATH 一次性传给 configure，并指定安装前缀 <code>/usr/local/vips</code>、打开 gtk-doc 的 PDF 文档开关。这个脚本是当时真实跑通的流程，一字不改抄在下面：</p>
+
+  <pre><code><span class="cmt"># 素材真实流程（2020）：myconfig.sh —— autotools 时代的配置</span>
+<span class="cmt">#!/bin/sh</span>
+commoninclude=/usr/include
+commonlib=/usr/lib64
+
+CPPFLAGS=<span class="str">"-g -Wall -I${commoninclude}  -L${commonlib}"</span>    \
+CXXFLAGS=<span class="str">"-g -Wall -I${commoninclude}  -L${commonlib}"</span>    \
+PKG_CONFIG_PATH=<span class="str">"/usr/local/lib/pkgconfig:/usr/local/heif/lib/pkgconfig"</span>         \
+./configure  --enable-gtk-doc-pdf=yes --prefix=/usr/local/vips
+
+<span class="cmt"># 然后编译安装：</span>
+<span class="fn">make</span> &amp;&amp; <span class="fn">make</span> install</code></pre>
+
+  <p>现行版本已经切换到 Meson。官网安装页给的流程是：<code>meson setup build</code>（配置）、<code>meson compile</code>（编译）、<code>meson test</code>（测试）、<code>meson install</code>（安装）。meson setup 的输出会逐个报告每个可选依赖 found 还是 missing——这是整个编译过程中最值得盯的一屏：确认 heif 一行是 YES。想强制某个依赖开或关，用 -D 开关，例如 <code>-Dheif=enabled</code>（完整选项清单见源码里的 meson_options.txt）。两个时代的差异一句话总结：autoconf/automake 生成 configure 的活，被 meson 加 ninja 取代了；gtk-doc 换成了 gi-docgen；依赖探测方式不变，还是 pkg-config。</p>
+
+  <pre><code><span class="cmt"># 现行官方流程（libvips 8.x）：Meson 四步</span>
+<span class="fn">meson</span> setup build --prefix /usr/local/vips
+<span class="fn">cd</span> build
+<span class="fn">meson</span> compile
+<span class="fn">meson</span> test
+<span class="fn">meson</span> install
+
+<span class="cmt"># 想强制开启 HEIC 支持，在 setup 时显式传开关（选项名见 meson_options.txt）</span>
+<span class="fn">meson</span> setup build -Dheif=enabled --prefix /usr/local/vips</code></pre>
+
+  <pre><code><span class="cmt"># meson setup 的关键输出（示例）：逐个依赖报 found/missing，盯住 heif 这一行</span>
+<span class="fn">meson</span> setup build --prefix /usr/local/vips
+<span class="cmt"># Message: Summary of optional dependencies:</span>
+<span class="cmt">#   heif: found (libheif)      &lt;- 要的就是这一行</span>
+<span class="cmt">#   jpeg: found (libjpeg-turbo)</span>
+<span class="cmt">#   png : found (libpng)</span>
+<span class="cmt">#   webp: found (libwebp)</span>
+<span class="cmt">#   magick: not found</span>
+
+<span class="cmt"># 装完验证：版本、可执行文件位置、真实转码一把</span>
+<span class="fn">vips</span> --version
+<span class="cmt"># 示例输出：vips-8.18.0</span>
+<span class="fn">vips</span> copy photo.heic out.jpg &amp;&amp; <span class="fn">ls</span> -lh out.jpg</code></pre>
+
+  <table>
+    <tr><th>环节</th><th>素材时代（2020）</th><th>现行（8.x）</th></tr>
+    <tr><td>配置</td><td>./configure（autoconf/automake 生成）</td><td>meson setup build</td></tr>
+    <tr><td>编译</td><td>make</td><td>meson compile（后端 ninja）</td></tr>
+    <tr><td>测试</td><td>make check（可选）</td><td>meson test</td></tr>
+    <tr><td>安装</td><td>make install</td><td>meson install</td></tr>
+    <tr><td>文档工具</td><td>gtk-doc（--enable-gtk-doc-pdf）</td><td>gi-docgen（-Ddocs）</td></tr>
+    <tr><td>依赖开关</td><td>--enable-xxx / --disable-xxx</td><td>-Dxxx=enabled / disabled</td></tr>
+  </table>
+
+  <!-- ========== 7.6 fribidi 链接错误 ========== -->
+  <h2>7.6 编译中的链接错误：fribidi 的 undefined reference</h2>
+
+  <p>素材的真实编译并没有一路绿灯。链接阶段（make 的最后一步）抛出了这样一个错误：<code>libpango-1.0.so: undefined reference to 'fribidi_get_par_embedding_levels_ex'</code>。先把背景说清楚：libvips 依赖 pango（文本渲染，比如在图上写字、渲染 SVG 文本），而 pango 又依赖 fribidi——一个处理双语文本书写方向（阿拉伯文、希伯来文从右往左）的库。undefined reference 的意思是：pango 在调用 <code>fribidi_get_par_embedding_levels_ex</code> 这个符号，但链接时找到的 fribidi 库里没有这个符号——典型的「库与库之间版本对不上」。为什么版本会错位？</p>
+
+  <p>素材留下了现场线索：用 <code>ldd</code> 检查 <code>/usr/lib64/libpango-1.0.so</code>，发现它链接到的 <code>libfribidi.so.0</code> 指向了「自己装的那份」——系统里同时存在两份 fribidi，链接器抓错了人。这就是现象的完整记录：一个 undefined reference，一份 ldd 观察。至于「为什么会出现两份」「怎么改回去」「ldconfig 与 -rpath 这套系统解法」——按大纲约定，全部留给第 13 章《图像库的依赖与链接排错》，福尔摩斯会在那里用「排除不可能」的方法把它讲透。本章只做一件事：把这个错误现场原样存档。</p>
+
+  <pre><code><span class="cmt"># 素材真实报错（链接阶段）：</span>
+/usr/lib64/libpango-1.0.so: <span class="kw">undefined</span> reference <span class="kw">to</span> `<span class="fn">fribidi_get_par_embedding_levels_ex</span>&#x27;
+<span class="cmt"># 现象拆解：libpango 需要的 fribidi 符号，在当前链接到的 fribidi 库里不存在</span>
+<span class="cmt"># 解法按大纲留到第 13 章（依赖树、ldd、ldconfig、-rpath）——这里只存档现象</span></code></pre>
+
+  <pre><code><span class="cmt"># 素材的现场观察（ldd 查动态链接关系——13 章会系统讲，这里只看现象）：</span>
+<span class="fn">ldd</span> /usr/lib64/libpango-1.0.so | <span class="fn">grep</span> fribidi
+<span class="cmt"># 素材观察：libfribidi.so.0 的解析路径指向了"自己装的那份"，与系统版本不一致</span>
+<span class="cmt"># 结论（现象层面）：同一个库出现两个版本，链接器抓错了——这就是版本冲突的现场</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>遇到 undefined reference，先按系统分析的规矩办：<strong>记录现象、保留现场</strong>（报错原文、ldd 输出、装了哪些包），不要急着乱改。第 13 章会教你把「依赖树」画出来，用 ldd、ldconfig、-rpath 一步步定位——到那时，今天这份现场记录就是最好的破案材料。</p>
+  </div>
+
+  <!-- ========== 7.7 命令行实战 ========== -->
+  <h2>7.7 命令行实战：vips、vipsheader 与 vipsthumbnail</h2>
+
+  <p>编译安装完成后，libvips 会带来几个命令行工具，官网文档按现行用法列得清清楚楚。<strong>vips</strong> 是主命令，可以直接执行库里的任意操作：第一个参数是操作名，后面跟输入输出。例如官网文档的原例 <code>vips rot k2.jpg x.jpg d90</code>——把 k2.jpg 逆时针旋转 90 度写成 x.jpg。不给参数只给操作名时，它会打印这个操作的帮助：参数、可选选项、默认值一应俱全。这套「操作即命令」的设计，让整个库的 300 个操作都能在命令行里直接调用，调试和脚本化都非常方便。</p>
+
+  <p><strong>vipsheader</strong> 打印图像的头字段——宽高、通道数、格式、加载器，一眼看清一个文件到底是什么；<strong>vipsthumbnail</strong> 则是专门做缩略图的命令：默认把每张图缩小到 128×128 的方框内、输出成 <code>tn_</code> 前缀的 JPEG（例如 <code>vipsthumbnail fred.png jim.tif</code> 会生成 tn_fred.jpg 与 tn_jim.jpg）。它支持 <code>--size</code> 指定尺寸（可以写 MxN 矩形）、<code>-o</code> 指定输出模板（<code>%s</code> 是文件名占位符，还能在方括号里带格式选项如 <code>[Q=20]</code> 控制 JPEG 质量）、<code>--rotate</code> 按 EXIF 方向自动旋转、<code>--smartcrop</code> 智能裁剪填满目标框。看几个官网文档原例：</p>
+
+  <pre><code><span class="cmt"># vips 主命令：操作即命令（官网原例）</span>
+<span class="fn">vips</span> rot k2.jpg x.jpg d90       <span class="cmt"># 逆时针旋转 90 度，写入 x.jpg</span>
+
+<span class="cmt"># 不给参数时打印操作帮助（官网原例）</span>
+<span class="fn">vips</span> gamma
+<span class="cmt"># gamma an image</span>
+<span class="cmt"># usage:</span>
+<span class="cmt">#  gamma in out [--option-name option-value ...]</span>
+<span class="cmt"># optional arguments:</span>
+<span class="cmt">#  exponent - Gamma factor, input gdouble</span>
+<span class="cmt">#  default: 0.416667</span></code></pre>
+
+  <pre><code><span class="cmt"># vipsheader：打印头字段，识别文件真身</span>
+<span class="fn">vipsheader</span> photo.heic
+<span class="cmt"># 示例输出：photo.heic: 4032x3024 uchar, 3 bands, srgb, heifload</span>
+<span class="fn">vipsheader</span> out.jpg
+<span class="cmt"># 示例输出：out.jpg: 4032x3024 uchar, 3 bands, srgb, jpegload</span></code></pre>
+
+  <pre><code><span class="cmt"># vipsthumbnail：一键缩略图（man 手册原例）</span>
+<span class="fn">vipsthumbnail</span> fred.png jim.tif
+<span class="cmt"># 生成 tn_fred.jpg 与 tn_jim.jpg（默认：同目录、tn_ 前缀、JPEG、128x128 框内）</span>
+
+<span class="fn">vipsthumbnail</span> --size=<span class="num">64</span> -o thumbnails/%s.png fred.jpg
+<span class="cmt"># 生成 64x64 的 thumbnails/fred.png</span>
+
+<span class="cmt"># 带质量参数与 EXIF 旋转：-o 模板里 %s 是文件名占位，[Q=20] 是 JPEG 质量</span>
+<span class="fn">vipsthumbnail</span> --rotate -o <span class="str">"tn_%s.jpg[Q=20]"</span> IMG_0001.heic</code></pre>
+
+  <pre><code><span class="cmt"># smartcrop：先缩到框内再智能裁剪填满（官网原例，attention 策略找"人眼关注区"）</span>
+<span class="fn">vipsthumbnail</span> owl.jpg --smartcrop attention -s <span class="num">128</span>
+
+<span class="cmt"># 调试利器：--vips-cache-trace 把 libvips 实际执行的每个操作打印出来</span>
+<span class="fn">vipsthumbnail</span> --vips-cache-trace k2.jpg
+<span class="cmt"># 示例输出：... thumbnail ... shrink ...（能看到它内部真正跑了哪些步骤）</span></code></pre>
+
+  <pre><code><span class="cmt"># 流式管线：从 stdin 读、往 stdout 写，不解盘（官网原例）</span>
+<span class="fn">cat</span> k2.jpg | <span class="fn">vips</span> thumbnail_source [descriptor=<span class="num">0</span>] .jpg[Q=<span class="num">90</span>] <span class="num">128</span> | <span class="fn">cat</span> &gt; x.jpg
+<span class="cmt"># 把 k2.jpg 缩成 128 宽的 JPEG（质量 90）从 stdout 吐出，接进任意管道</span></code></pre>
+
+  <pre><code><span class="cmt"># Python 绑定 pyvips：同样的"操作"在脚本里用（官网绑定清单里有 pyvips）</span>
+<span class="kw">import</span> pyvips
+
+<span class="param">im</span>: <span class="type">pyvips.Image</span> = pyvips.Image.<span class="fn">thumbnail</span>(<span class="str">"photo.heic"</span>, <span class="num">200</span>)  <span class="cmt"># 200 像素宽的缩略图</span>
+<span class="param">im</span>.<span class="fn">write_to_file</span>(<span class="str">"tn_200.jpg"</span>)</code></pre>
+
+  <p>到这里，这一章的系统分析完成了一次闭环：从「为什么要它」（7.1 HEIC 转码需求），到「依赖是什么」（7.2 构建工具链、7.3 格式库矩阵），到「HEIC 这条链怎么搭」（7.4 libde265 与 libheif），到「怎么编译安装」（7.5 configure 到 Meson），到「编译中遇到什么坑」（7.6 fribidi 链接错误），最后「怎么验收和使用」（7.7 命令行三件套）。两个钩子留给后面：7.6 的 fribidi 链接错误只是现象，完整的依赖与链接排错体系在第 13 章；7.1 提到的「需求驱动、水平线程」设计，其方法论与实战在第 15 章性能优化。而 HEIC/AVIF 这些现代格式的演进脉络，第 16 章生态收尾会再串一遍。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① HEIC 是 HEIF 容器套 HEVC 编码的格式；② libde265 是 HEVC 解码器，libheif 是 HEIF 容器库；③ libvips 自己实现了 JPEG 编解码，所以不需要链接 libjpeg；④ vipsthumbnail 的默认输出是 tn_ 前缀的 JPEG 文件；⑤ 现行 libvips 仍然使用 autotools（./configure）构建。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 7.1 节格式背景、7.4 节容器与编解码分层、7.3 节"一个格式背后一个库"、7.7 节 vipsthumbnail 默认行为、7.5 节构建系统演变。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 对——HEIC 是 HEIF 容器 + HEVC/H.265 编码；② 对——libheif 负责容器，libde265 负责 HEVC 解码；③ 错——libvips 自己不实现 JPEG 编解码，JPEG 由 libjpeg-turbo 提供（7.3 节）；④ 对——默认输出到同目录的 tn_ 前缀 JPEG（7.7 节）；⑤ 错——现行版本用 Meson 构建（meson setup / meson compile），autotools 是素材时代的流程（7.5 节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：依赖矩阵 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 分别写出 libvips 构建依赖中"构建工具链"与"图片格式库"各至少 3 个例子；② 为什么源码安装时必须先装 libde265、再装 libheif？③ 为什么"configure 显示支持 HEIC"仍然可能在真正使用时报错？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>工具链看 7.2 节表格，格式库看 7.3 节表格；顺序问题回到 7.4 节 libheif 官方 README 的要求；"显示支持"的原因在于 libvips 探测的是 libheif 而不是 libde265。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 工具链示例：编译器 gcc、构建系统 meson（旧为 autoconf/automake）、依赖探测 pkg-config、基础库 glib、XML 解析 expat；格式库示例：libjpeg-turbo（JPEG）、libpng（PNG）、libwebp（WebP）、libtiff（TIFF）、librsvg2（SVG）等；② libheif 构建时需要找到 libde265 才能获得完整的 HEIC 解码能力，官方 README 明确要求先编译安装 libde265，让配置脚本能发现它（7.4 节）；③ libvips 构建时探测到的是 libheif 是否可链接，它无法知道 libheif 内部的 libde265 是否完整——所以探测通过 ≠ 解码可用，必须以 heif-convert --list-decoders 看到 libde265 为准（7.4 节证据链）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：命令行实战 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>解释下面三条 vipsthumbnail 命令分别做了什么：① <code>vipsthumbnail fred.png jim.tif</code>；② <code>vipsthumbnail --size=64 -o thumbnails/%s.png fred.jpg</code>；③ <code>vipsthumbnail owl.jpg --smartcrop attention -s 128</code>。另外说明 -o 模板中 %s 与 [Q=20] 的含义。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>默认行为见 7.7 节 man 原例；%s 是文件名占位符；smartcrop 的 attention 策略在官网文档有原例。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 把 fred.png 与 jim.tif 各自缩小到 128×128 框内，生成同目录的 tn_fred.jpg 与 tn_jim.jpg（默认输出）；② 把 fred.jpg 缩小为 64×64，输出到 thumbnails/fred.png——%s 被替换为输入文件名 fred；③ 把 owl.jpg 缩到 128 框内、再用 attention 策略智能裁剪成 128×128 的正方形——裁剪时优先保留人眼关注的区域。%s 是 -o 模板里的文件名占位符（输出目录/格式随它变），[Q=20] 是写在方括号里的格式选项，这里指 JPEG 质量 20。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：系统分析实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>场景：你按本章流程编译安装了 libvips，meson setup 输出里 heif 一行是 found，但执行 <code>vips copy photo.heic out.jpg</code> 仍然报错（无法解码）。请设计一个系统分析的排障流程，说明每一步检查什么、对应 7.4 节证据链的哪一环；并指出哪些步骤属于第 13 章「依赖与链接排错」的范畴。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 7.4 节证据链三步走：pkg-config 探测、heif-convert --list-decoders、真实转码；再想 PKG_CONFIG_PATH 与安装前缀是否对得上；"链接到了哪份库"这类问题正是第 13 章的主场。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>流程：① 先查 <code>heif-convert --list-decoders</code>——如果 HEIC decoders 里没有 libde265，说明 libheif 编译时就没找到 libde265，回到 7.4 节按"先 libde265 再 libheif"重装，这是证据链第一环（解码能力缺失）；② 再查 <code>pkg-config --modversion libheif</code> 与 <code>PKG_CONFIG_PATH</code>——如果 libvips 探测到的是系统里另一份旧 libheif，说明路径没指对（7.4 节第三步），这是证据链第二环（版本/路径错位）；③ 换一张已知正常的 HEIC 文件重试，排除文件本身的问题；④ 如果以上都正常但仍报错，就进入动态链接层面——vips 运行时到底加载了哪份 libheif/libfribidi，需要 ldd 查看、ldconfig 刷新缓存、必要时 -rpath 指定路径——这正是第 13 章「图像库的依赖与链接排错」的系统解法（7.6 节的 fribidi 现场也是同一类问题）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

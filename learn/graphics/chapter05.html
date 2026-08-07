@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第5章：图像库选型全景：六库对比 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter05.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第5章：图像库选型全景：六库对比 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter05.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="5" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：图像库选型全景：六库对比</h1>
+  <p class="chapter-subtitle">工具已经摆在桌上，问题是：什么场景该用哪一把？这一章把六个库摆上沙盘，逐一看清长短，再给出一套走到哪里都能用的选型决策流程</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「用兵之道，先定其谋，然后乃施其事。选库就是定谋：动手写代码之前，先把"要解决什么问题、战场在哪里、代价几何"算清楚。这一章我们把六个库摆上沙盘——Exiv2 管元数据、libvips 管批量转码、CImg 管轻量原型、LibRaw 管相机底片、CxImage 管 Windows 老生态、OpenCV 管计算机视觉——逐一考察长短，再给你一套五步选型流程。谋定而后动，第六到第八章的实战才不会走弯路。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 选型从问题开始 ========== -->
+  <h2>5.1 选型从问题开始：先把需求分成五类</h2>
+
+  <p>前四章把地基打完了：第 1 章认识了像素矩阵，第 2 章拆开了文件格式，第 3 章解析了相机 RAW，第 4 章读懂了元数据。工具箱里也早就摆好了六把工具——Exiv2、libvips、CImg、LibRaw、CxImage、OpenCV，第 1 章结尾给它们各写过一句介绍。但工具多不等于会用：<strong>真正的工程问题从来不是"哪个库最强"，而是"我这个需求该用哪个库"</strong>。本章做三件事：先建立选型决策框架，再逐一考察六库的长处与短板，最后用一张对比表和一套流程把决策固化下来。诸葛亮的打仗方式不是临阵选将，而是"先定其谋，乃施其事"——选库就是定谋，谋定而后动。</p>
+
+  <p>选型的第一原则，是<strong>先把需求分类</strong>。把图像相关的任务摊开看，几乎都能归进五类：<strong>解码读图</strong>（把文件变成像素矩阵）、<strong>批量处理与转码</strong>（格式转换、缩略图、质量压缩）、<strong>视觉分析</strong>（特征检测、识别、理解内容）、<strong>元数据读写</strong>（EXIF/IPTC/XMP 的读取与修改）、<strong>RAW 解码</strong>（把相机底片变成可处理的位图）。每个库本质上都是在某一类上做到极致：Exiv2 只碰元数据不碰像素，OpenCV 只关心"看懂"不关心"转码"，LibRaw 眼里只有相机底片。所以选型的第一步不是翻文档，而是先回答：<strong>我的需求到底属于哪一类，或者哪几类？</strong></p>
+
+  <p>分类之前，先让文件自己报个名。拿到一张陌生图片，用 <code>file</code> 和 <code>magick identify</code> 摸清格式、尺寸、颜色空间——这是选型沙盘上的第一手情报：</p>
+
+  <pre><code><span class="cmt"># 选型第一步：先认清文件，再谈库 —— 用 file 与 identify 摸清家底</span>
+file photo.nef
+<span class="cmt"># 输出示例：Nikon raw image data ...（传感器原始数据，要交给 LibRaw 这类解码器）</span>
+file photo.jpg
+<span class="cmt"># 输出示例：JPEG image data, baseline, precision 8, 4000x3000, components 3</span>
+
+magick identify photo.jpg
+<span class="cmt"># 输出示例：photo.jpg JPEG 4000x3000 8-bit sRGB </span><span class="ann">4.2MiB</span>
+<span class="cmt"># 三个问题：什么格式、什么尺寸、什么颜色空间 —— 答完，选型就有了一半答案</span></code></pre>
+
+  <pre><code><span class="cmt"># 需求分类伪代码：选型前先把需求对号入座（五类问题的代表库）</span>
+<span class="kw">def</span> <span class="fn">choose_lib</span>(<span class="param">req</span>):
+    <span class="kw">if</span> <span class="str">"解析相机原始数据"</span> <span class="kw">in</span> <span class="param">req</span>:     <span class="kw">return</span> <span class="str">"LibRaw"</span>   <span class="cmt"># RAW 解码</span>
+    <span class="kw">elif</span> <span class="str">"读写元数据"</span> <span class="kw">in</span> <span class="param">req</span>:      <span class="kw">return</span> <span class="str">"Exiv2"</span>    <span class="cmt"># 元数据</span>
+    <span class="kw">elif</span> <span class="str">"批量转码或缩略图"</span> <span class="kw">in</span> <span class="param">req</span>: <span class="kw">return</span> <span class="str">"libvips"</span>  <span class="cmt"># 批处理</span>
+    <span class="kw">elif</span> <span class="str">"特征检测或识别"</span> <span class="kw">in</span> <span class="param">req</span>:  <span class="kw">return</span> <span class="str">"OpenCV"</span>   <span class="cmt"># 视觉</span>
+    <span class="kw">elif</span> <span class="str">"轻量像素实验"</span> <span class="kw">in</span> <span class="param">req</span>:    <span class="kw">return</span> <span class="str">"CImg"</span>     <span class="cmt"># 原型</span>
+    <span class="kw">else</span>:                                 <span class="kw">return</span> <span class="str">"CxImage"</span>  <span class="cmt"># Windows/MFC 生态</span></code></pre>
+
+  <table>
+    <tr><th>需求类别</th><th>要解决的本质问题</th><th>代表库</th><th>本书章节</th></tr>
+    <tr><td>解码读图</td><td>文件 → 像素矩阵</td><td>OpenCV / libvips / CImg</td><td>第 7、9 章</td></tr>
+    <tr><td>批量处理与转码</td><td>格式转换、缩略图、质量压缩</td><td>libvips</td><td>第 7 章</td></tr>
+    <tr><td>视觉分析</td><td>特征检测、识别、理解内容</td><td>OpenCV</td><td>第 8~12 章</td></tr>
+    <tr><td>元数据读写</td><td>EXIF / IPTC / XMP</td><td>Exiv2</td><td>第 4 章</td></tr>
+    <tr><td>RAW 解码</td><td>相机底片 → 可处理位图</td><td>LibRaw</td><td>第 6 章</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>选型最大的错误是"先选库、再想需求"——看到 OpenCV 名气大就什么任务都往里塞，最后转码慢、元数据读不出来、RAW 打不开。反过来，先问"我这一单属于哪一类"，五类需求对号入座，候选库立刻缩小到一两个。</p>
+  </div>
+
+  <!-- ========== 5.2 Exiv2 ========== -->
+  <h2>5.2 Exiv2：元数据专业户（EXIF / IPTC / XMP）</h2>
+
+  <p>第一个登场的是元数据专业户 <strong>Exiv2</strong>。它的定位极其纯粹：<strong>读取和写入图片中的 EXIF、IPTC、XMP 元数据</strong>，附带一个命令行工具，除此之外不做任何像素处理。第 4 章我们已经亲手用过它的 API，本章换个视角——从选型角度重新评估：什么时候该选它，用它的代价是什么。Exiv2 现行版本是 0.28.x，C++ 库采用 GPL-2.0-or-later 许可。它为什么值得单独占一个席位？因为元数据格式本身非常复杂：EXIF 是嵌套的 IFD 链加几十种标签类型（第 4 章拆过它的 12 字节条目结构），XMP 是 XML 与 RDF 序列化——自己手写解析器极易踩坑，而 Exiv2 把"打开 → 读元数据 → 遍历 → 写回"整个流程做成了几个稳定的 API。</p>
+
+  <p>选型视角看 Exiv2，记住三句话：<strong>只要动元数据，它就是第一选择</strong>——它按文件内容而不是扩展名识别格式，对 JPEG、TIFF、PNG、HEIC 等主流格式一视同仁；<strong>它不碰像素</strong>——缩略图、转码、滤波这些事要交给别的库；<strong>它的许可值得留意</strong>——GPL-2.0-or-later 有传染性，闭源商业产品里直接链它需要评估，但用于内部工具或命令行脚本没有障碍。下面的代码是 0.28.x 现行 API 的完整读元数据流程（与第 4 章同一套写法）：</p>
+
+  <pre><code><span class="cmt">// 读元数据五连：open → readMetadata → exifData → 遍历 → 打印（Exiv2 0.28.x）</span>
+<span class="kw">#include</span> <span class="type">&lt;exiv2/exiv2.hpp&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> <span class="param">argc</span>, <span class="kw">char</span>** <span class="param">argv</span>) {
+    <span class="kw">auto</span> image = Exiv2::<span class="type">ImageFactory</span>::<span class="fn">open</span>(<span class="param">argv</span>[<span class="num">1</span>]); <span class="cmt">// 工厂按文件内容识别格式</span>
+    image-&gt;<span class="fn">readMetadata</span>();                      <span class="cmt">// 解析全部元数据</span>
+    Exiv2::<span class="type">ExifData</span>&amp; exifData = image-&gt;<span class="fn">exifData</span>();
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"共 "</span> <span class="op">&lt;&lt;</span> exifData.<span class="fn">size</span>() <span class="op">&lt;&lt;</span> <span class="str">" 条 EXIF 记录"</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">for</span> (<span class="kw">const</span> <span class="kw">auto</span>&amp; m : exifData) {
+        std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> m.<span class="fn">key</span>() <span class="op">&lt;&lt;</span> <span class="str">" = "</span> <span class="op">&lt;&lt;</span> m.<span class="fn">toString</span>() <span class="op">&lt;&lt;</span> std::endl;
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 安装：macOS 用 brew，Debian/Ubuntu 用 apt（0.28.x 现行版）</span>
+brew install exiv2
+sudo apt install libexiv2-dev exiv2
+
+<span class="cmt"># 编译：pkg-config 自动带出头文件与链接参数</span>
+g++ readmeta.cpp -o readmeta $(pkg-config --cflags --libs exiv2)
+
+<span class="cmt"># 命令行：直接看照片的拍摄参数（-pt = 把值翻译成人类可读形式）</span>
+exiv2 -pt photo.jpg
+<span class="cmt"># 输出片段：Exif.Image.Make Sony / Exif.Photo.ExposureTime 1/125 ...</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>Exiv2 的战场边界非常清晰：它是"单点专精"型选手。选型时别指望它帮你转码，也别因为项目里已经装了 OpenCV 就顺手用 OpenCV 读 EXIF——各干各的，组合起来才是完整的管线。</p>
+  </div>
+
+  <!-- ========== 5.3 libvips ========== -->
+  <h2>5.3 libvips：高性能与低内存的批处理王者</h2>
+
+  <p>第二个登场的是 <strong>libvips</strong>，服务端批处理场景的王者。官网对自己的描述只有一句话：<strong>"a demand-driven, horizontally threaded image processing library"——需求驱动、水平线程的图像处理库</strong>。这句话翻译成工程语言就是：它只在真正需要的时候才去解码像素（需求驱动），并且用多线程把大图切块并行计算（水平线程），所以"与类似的库相比，运行迅速且几乎不占用内存"——这正是第 1 章那笔内存账本的解药。libvips 提供约 300 种运算，覆盖算术、直方图、卷积、形态学、频域滤波、颜色、重采样、统计等，数值类型从 8 位整数一直到 128 位复数，图像可以有任意数量的波段。许可为 LGPL-2.1-or-later，对商业项目相当友好。现行版本是 8.x 系列（2026 年初已到 8.18）。</p>
+
+  <p>libvips 的第二个杀手锏是<strong>格式支持面</strong>：JPEG、TIFF、PNG、WebP、HEIC、AVIF、FITS、Matlab、OpenEXR、PDF、SVG、GIF、PPM 系、CSV 等都能直接读写，还能借道 ImageMagick 或 GraphicsMagick 处理 DICOM 这类冷门格式。素材里对它的真实使用记录就是"主要用这个处理苹果平台 HEIC 图片格式的转码"——iPhone 照片的 HEIC 在服务端几乎全靠它转成 JPEG/WebP 分发。第 7 章会完整复现它的源码编译过程，到时候你会亲眼看到为了支持这么多格式，它要链接 libjpeg-turbo、libpng、libwebp、libheif 等一长串底层编解码库（那是第 7 章的主场，这里不展开）；它的线程设计细节也先埋个伏笔，第 15 章的性能专题会系统讲。先看命令行用法——缩略图和转码都是一行命令的事：</p>
+
+  <pre><code><span class="cmt"># 缩略图：一行命令把 HEIC 压成 256 像素宽的 JPEG，内存占用极低</span>
+vips thumbnail input.heic thumb.jpg <span class="num">256</span>
+
+<span class="cmt"># 转码：HEIC → JPEG，质量 85（文件名后缀 [Q=85] 是保存参数）</span>
+vips copy input.heic output.jpg[Q=<span class="num">85</span>]
+
+<span class="cmt"># 转码：HEIC → WebP，质量 80</span>
+vips copy input.heic output.webp[Q=<span class="num">80</span>]
+
+<span class="cmt"># 版本：现行 8.x 系列</span>
+vips --version
+<span class="cmt"># 输出示例：vips-8.18.3</span></code></pre>
+
+  <pre><code><span class="cmt"># Python 绑定 pyvips：同一个引擎，写法更短（需求驱动 ← 惰性求值）</span>
+<span class="kw">import</span> pyvips
+
+img = pyvips.<span class="fn">Image</span>.<span class="fn">new_from_file</span>(<span class="str">"input.heic"</span>) <span class="cmt"># 惰性加载：先不真正解码</span>
+thumb = img.<span class="fn">thumbnail_image</span>(<span class="num">256</span>)                <span class="cmt"># 按需只解码缩略图需要的部分</span>
+thumb.<span class="fn">write_to_file</span>(<span class="str">"thumb.jpg"</span>)                <span class="cmt"># 此刻才真正计算并写出</span>
+
+<span class="cmt"># 约 300 种运算：算术、直方图、卷积、形态学、频域、颜色、重采样、统计</span>
+<span class="cmt"># 数值类型从 8 位整数到 128 位复数，波段数任意 —— 素材原话：几乎不占内存</span></code></pre>
+
+  <p>选型视角总结 libvips：<strong>服务端"转码 + 多尺寸生成"就是它的主场</strong>。第 1 章算过账——12MP 原图在内存里要占 36 MB，而需求驱动设计让它只解码输出真正需要的部分，内存占用被压到极致；高并发场景下，这是 libvips 相对传统"整图读入内存"方案的决定性优势。</p>
+
+  <!-- ========== 5.4 CImg 与 LibRaw ========== -->
+  <h2>5.4 CImg 与 LibRaw：轻量原型与 RAW 专精</h2>
+
+  <p>第三个选手 <strong>CImg</strong> 的卖点是极致轻量：<strong>整个库就一个 CImg.h 头文件</strong>，拷进项目直接编译，连安装都省了。它是模板化的 C++ 图像库，一个类能表示从 1 维信号到 3 维高光谱体积图像的数据，像素类型可以是 bool、char、int、float 等任意模板参数；自包含、线程安全、跨平台（Unix、Windows、macOS 都能跑）。素材对它的考察印象是：基于 LAPACK 的矩阵运算和完善的线性滤波卷积函数，像素运算方便，还有独家的 Display 类可以方便地实现各种显示（显示图像、打字、画线），并附赠一个基于光流的多尺度图像配准例子。许可采用法国 CeCILL 系双许可：CeCILL-C（类似 LGPL，宽松）或 CeCILL（兼容 GPL），可以用于商业应用。CImg 的短板也很明显：对特殊格式支持弱——HEIC、相机原生格式都不支持，功能深度不如大库。所以它的最佳战场是<strong>快速原型、教学实验、小工具</strong>，而不是生产级服务端。</p>
+
+  <pre><code><span class="cmt">// CImg：整个库就一个 CImg.h，拷进项目直接编译，连安装都省了</span>
+<span class="kw">#include</span> <span class="str">"CImg.h"</span>
+<span class="kw">using</span> <span class="kw">namespace</span> cimg_library;
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">CImg</span>&lt;<span class="kw">unsigned</span> <span class="kw">char</span>&gt; img(<span class="str">"photo.jpg"</span>); <span class="cmt">// 构造即读图，像素类型是模板参数</span>
+    img.<span class="fn">blur</span>(<span class="num">2.5</span>);                            <span class="cmt">// 高斯模糊，sigma 取 2.5</span>
+    img.<span class="fn">save</span>(<span class="str">"blurred.jpg"</span>);                 <span class="cmt">// 存盘</span>
+    img.<span class="fn">display</span>(<span class="str">"blurred"</span>);                  <span class="cmt">// 独有 Display 类：弹窗显示、画线、打字</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>第四个选手 <strong>LibRaw</strong> 是 RAW 专精：<strong>专门从数码相机读取 RAW 文件</strong>，支持的格式覆盖 CRW/CR2、NEF、RAF、DNG、MOS、KDC、DCR 等，几乎囊括所有主流 RAW。它的设计目标写得很清楚：把 RAW 文件作为初始数据嵌入 RAW 转换器、数据分析器和其他程序，并且"特别注意正确检索后续 RAW 转换所需的数据"——也就是说，它不只给你像素，还保证你能拿到去马赛克、白平衡、色彩还原所需的完整信息。第 3 章我们拆过 RAW 文件的结构（TIFF/EP 头、传感器元数据、缩略图、图像数据），LibRaw 正是把这一整套结构吃透的库。许可为 LGPL-2.1。第 6 章会用一整章实战它的源码编译和命令行工具，这里只预览它的 C++ API 骨架，让你对"RAW 解码四步"有个印象：</p>
+
+  <pre><code><span class="cmt">// LibRaw：只干一件事 —— 把相机 RAW 解成可处理的图像数据（C++ API 概览）</span>
+<span class="kw">#include</span> <span class="type">&lt;libraw/libraw.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">LibRaw</span> processor;                          <span class="cmt">// 核心类：一个 RAW 文件一个实例</span>
+    <span class="kw">int</span> ret = processor.<span class="fn">open_file</span>(<span class="str">"photo.nef"</span>); <span class="cmt">// 打开文件，读传感器与元数据头</span>
+    processor.<span class="fn">unpack</span>();                          <span class="cmt">// 解出传感器原始像素</span>
+    processor.<span class="fn">dcraw_process</span>();                    <span class="cmt">// 去马赛克、白平衡、色彩还原</span>
+    <span class="type">libraw_processed_image_t</span>* img =
+        processor.<span class="fn">dcraw_make_mem_image</span>();        <span class="cmt">// 得到内存中的 RGB 位图</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>CImg 与 LibRaw 放在一起看很有意思：一个追求"轻到极致"，一个追求"专到极致"。CImg 用单头文件换来了零依赖的便利，代价是格式支持浅；LibRaw 用专注换来了对 RAW 体系的完整支持，代价是它只做这一件事。选型时它们代表了两种常见思路——<strong>要轻要快选 CImg，要深要全选 LibRaw</strong>。</p>
+
+  <!-- ========== 5.5 CxImage 与 OpenCV ========== -->
+  <h2>5.5 CxImage 与 OpenCV：Windows 老将与视觉霸主</h2>
+
+  <p>第五个选手 <strong>CxImage</strong> 是 Windows/MFC 时代的全功能位图库：完全开源（zlib 许可），把图像封装成一个类，功能极为强大——线性滤波、中值滤波、直方图操作、旋转缩放、区域选取、阈值处理、膨胀腐蚀、alpha 混合等等一应俱全；支持从文件、内存或 Win32 DIB 位图读图，还能把图像显示在任意窗口。素材的考察印象是"与 Windows、MFC 支持极好，demo 界面很强，可以直接在上面二次开发"。它的缺点同样来自素材原话：里面的子库很多、用起来较麻烦，速度稍慢，而且 Linux 下自己编译困难。所以 CxImage 是典型的<strong>"桌面时代的选择"</strong>：在 Windows 原生工具、MFC 界面的场景里它如鱼得水，但在服务端 Linux 世界里基本没有它的位置。</p>
+
+  <pre><code><span class="cmt">// CxImage：图像封装成一个类，Windows/MFC 生态里最顺手（zlib 许可）</span>
+<span class="kw">#include</span> <span class="str">"ximage.h"</span>   <span class="cmt">// CxImage 主头文件</span>
+
+<span class="type">CxImage</span> img;
+img.<span class="fn">Load</span>(<span class="str">"photo.jpg"</span>, <span class="ann">CXIMAGE_FORMAT_JPG</span>);  <span class="cmt">// 从文件读入</span>
+<span class="kw">int</span> gray = img.<span class="fn">GetPixelGray</span>(<span class="num">100</span>, <span class="num">200</span>);       <span class="cmt">// 取 (100,200) 处的灰度值</span>
+img.<span class="fn">Rotate90</span>();                                <span class="cmt">// 旋转 90 度</span>
+img.<span class="fn">Save</span>(<span class="str">"rotated.jpg"</span>, <span class="ann">CXIMAGE_FORMAT_JPG</span>); <span class="cmt">// 存回磁盘</span></code></pre>
+
+  <p>第六个选手 <strong>OpenCV</strong> 是计算机视觉的事实标准，也是本书后半程的主角。它是开源计算机视觉库（现行 4.x，Apache-2.0 许可），算法体系最全：官方手册会先给你补计算机视觉的知识，再逐个给出算法实现函数，几乎覆盖近十年主流算法。素材里对它的真实体验极具说服力：<strong>"我用它做了一个 Harris 角点检测器和 Canny 边缘检测器，总共就花了一个小时（第一次用 OpenCV），而且显示图像极其方便，两句话就可以"</strong>——这正是第 8~10 章要复现的路线：源码安装、Mat 核心、Harris 与 Canny。素材还记录了一些老版本的坑（对 32F/16S/8U 数据支持不稳、cvFilter2D 与 cvmGet 有 bug、用 IPL 矩阵库）——那是 OpenCV 2.x 时代 C 接口的旧账，现行 4.x 的 C++ 接口已全面重写，本书全部按 4.x 现行 API 写作。"两句话显示图像"在现代 OpenCV 里依然成立：</p>
+
+  <pre><code><span class="cmt">// OpenCV：显示图像"两句话"—— imread + imshow（4.x 现行 API）</span>
+<span class="kw">#include</span> <span class="type">&lt;opencv2/opencv.hpp&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    cv::<span class="type">Mat</span> img = cv::<span class="fn">imread</span>(<span class="str">"photo.jpg"</span>, cv::<span class="ann">IMREAD_COLOR</span>);
+    cv::<span class="fn">imshow</span>(<span class="str">"photo"</span>, img);      <span class="cmt">// 一句话显示</span>
+    cv::<span class="fn">waitKey</span>(<span class="num">0</span>);                <span class="cmt">// 等一个按键再退出</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>CxImage 与 OpenCV 的对比，本质是两代技术路线的对比：CxImage 生于 Windows 桌面时代，强在"位图操作全家桶"，长在 MFC 生态；OpenCV 生于计算机视觉时代，强在"算法体系"，长在跨平台与视觉任务。素材里那句"目前没有使用"是对 OpenCV 当时的评价，而本书后半部分会用整整四章告诉你：在视觉这条赛道上，OpenCV 是绕不开的选择。</p>
+
+  <!-- ========== 5.6 对比表与决策流程 ========== -->
+  <h2>5.6 六库对比表与选型决策流程</h2>
+
+  <p>六个库逐一考察完毕，现在把它们摆上同一张对比表，从<strong>功能、平台、许可、典型场景</strong>四个维度横向比较——这也是任何选型对比的标准四维：功能决定"能不能干"，平台决定"在哪干"，许可决定"能不能合法地干"，场景决定"值不值得干"：</p>
+
+  <table>
+    <tr><th>库</th><th>核心定位</th><th>平台</th><th>许可</th><th>典型场景</th><th>本书章节</th></tr>
+    <tr><td>Exiv2</td><td>元数据读写（EXIF/IPTC/XMP）</td><td>跨平台</td><td>GPL-2.0-or-later</td><td>拍摄信息、版权管理、归档入库</td><td>第 4 章</td></tr>
+    <tr><td>libvips</td><td>高性能批处理（约 300 种运算）</td><td>跨平台</td><td>LGPL-2.1-or-later</td><td>HEIC 转码、多尺寸缩略图、低内存服务端</td><td>第 7、15 章</td></tr>
+    <tr><td>CImg</td><td>单头文件轻量图像库</td><td>跨平台</td><td>CeCILL-C / CeCILL</td><td>快速原型、像素实验、教学演示</td><td>本章</td></tr>
+    <tr><td>LibRaw</td><td>相机 RAW 解码</td><td>跨平台</td><td>LGPL-2.1</td><td>RAW 预览、RAW 转换器、摄影后期</td><td>第 6 章</td></tr>
+    <tr><td>CxImage</td><td>全功能位图类库</td><td>Windows/MFC</td><td>zlib</td><td>Windows 桌面图像工具、MFC 界面</td><td>本章</td></tr>
+    <tr><td>OpenCV</td><td>计算机视觉算法体系</td><td>跨平台</td><td>Apache-2.0</td><td>特征检测、人脸、识别、视觉分析</td><td>第 8~12 章</td></tr>
+  </table>
+
+  <p>有了这张表，选型就从"凭感觉"变成了"按流程"。诸葛亮的运筹帷幄，落到工程上就是一套可重复执行的决策流程：<strong>第一步归类</strong>——需求属于五类里的哪一类（5.1 节）；<strong>第二步定平台</strong>——目标是 Windows/MFC 桌面还是服务端 Linux？平台直接淘汰一批候选；<strong>第三步看许可</strong>——闭源商业产品避开 GPL，优先 LGPL、zlib、Apache 这类宽松许可；<strong>第四步估代价</strong>——依赖数量、编译难度、社区活跃度，越重的库维护成本越高；<strong>第五步下结论</strong>——主库选一个，辅助库按需叠加。把它写成伪代码就是：</p>
+
+  <pre><code><span class="cmt"># 五步选型流程：归类 → 定平台 → 看许可 → 估代价 → 下结论</span>
+<span class="kw">def</span> <span class="fn">decide</span>(<span class="param">requirements</span>, <span class="param">platform</span>, <span class="param">commercial</span>):
+    <span class="cmt"># 第一步 归类：需求属于读图 / 转码 / 视觉 / 元数据 / RAW 哪一类？</span>
+    kinds = <span class="fn">classify</span>(<span class="param">requirements</span>)
+    <span class="cmt"># 第二步 定平台：Windows/MFC 桌面选 CxImage 顺手；服务端 Linux 选 libvips</span>
+    <span class="cmt"># 第三步 看许可：闭源商用项目避开 GPL，优先 LGPL / zlib / Apache</span>
+    <span class="kw">if</span> <span class="param">commercial</span> <span class="kw">and</span> <span class="str">"GPL"</span> <span class="kw">in</span> <span class="fn">license_of</span>(<span class="param">kinds</span>):
+        <span class="fn">warn</span>(<span class="str">"建议评估 GPL 传染性，或换用许可更宽松的库"</span>)
+    <span class="cmt"># 第四步 估代价：依赖数量、编译难度、社区活跃度</span>
+    <span class="cmt"># 第五步 下结论：主库一个，辅助库按需叠加，别贪多</span>
+    <span class="kw">return</span> <span class="fn">pick</span>(<span class="param">kinds</span>)</code></pre>
+
+  <p>最后要说破一个常见误解：<strong>选型不是"六选一"，而是"怎么组合"</strong>。真实的图像服务几乎都是多库协作——Exiv2 抽元数据、libvips 出多尺寸、OpenCV 做视觉分析，三个库各司其职拼成一条完整管线。前面 5.2~5.5 节考察过的每一个库，都在这条管线上有自己的位置：</p>
+
+  <pre><code><span class="cmt"># 组合管线：同一张 iPhone HEIC 照片，三个库各司其职</span>
+<span class="cmt"># 1) Exiv2 抽元数据：拍摄时间、设备、GPS（第 4 章已实战）</span>
+exiv2 -pt input.heic | <span class="fn">head</span> -<span class="num">20</span>
+
+<span class="cmt"># 2) libvips 出多尺寸：列表页 256px，详情页 1280px</span>
+vips thumbnail input.heic thumb_256.jpg <span class="num">256</span>
+vips thumbnail input.heic thumb_1280.jpg <span class="num">1280</span>
+
+<span class="cmt"># 3) 转码成通用格式后交给 OpenCV 做视觉分析（第 8~12 章展开）</span>
+vips copy input.heic analysis.jpg[Q=<span class="num">90</span>]</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>选型没有"最好"，只有"最合适"。Exiv2 元数据、libvips 转码、CImg 原型、LibRaw 底片、CxImage 桌面、OpenCV 视觉——六个库不是竞争对手，是六块拼图。把需求分类想清楚，把组合管线搭起来，你就掌握了图像服务端的整体作战地图。接下来的第 6~8 章，我们逐个实战 LibRaw、libvips、OpenCV：先看它们怎么从源码装起来，再亲手跑通第一条管线。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：定位连线 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把六个库与它们的核心定位配对：① Exiv2；② libvips；③ CImg；④ LibRaw；⑤ CxImage；⑥ OpenCV。候选定位：A. 相机 RAW 解码；B. 元数据读写；C. 高性能批处理与转码；D. 计算机视觉；E. 单头文件轻量库；F. Windows/MFC 全功能位图库。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 5.2~5.5 节每节的第一句话：每段开头都点明了该库的定位。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → B；② → C；③ → E；④ → A；⑤ → F；⑥ → D。注意两对容易混淆的：CImg 与 CxImage 名字像但定位完全不同——CImg 是单头文件轻量原型库，CxImage 是 Windows/MFC 全功能位图库；libvips 与 OpenCV 都能读图，但一个强在批处理转码、一个强在视觉分析。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：场景选型 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>三个真实场景，各选哪个库（可组合）？并说明理由：(a) 给 Windows 桌面看图软件加一个"读取照片拍摄参数"的面板；(b) 摄影网站接收用户上传的 CR2/NEF 原图，需要在线预览缩略图；(c) 电商服务端每天处理几十万张商品图，需要统一转码成 WebP 并生成三个尺寸。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 5.6 节五步流程走：先归类需求（元数据 / RAW / 转码），再考虑平台约束（Windows 桌面 vs 服务端 Linux）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) Exiv2——读 EXIF 是它的主场，跨平台 API 稳定，Windows 下一样好用；(b) LibRaw——CR2/NEF 是相机 RAW，只有 LibRaw 这类专用库能解码，配合 libvips 或 OpenCV 出缩略图；(c) libvips——批量转码加多尺寸生成正是它的看家本领，需求驱动设计在高并发下内存优势明显。注意 (b) 场景如果用 CxImage 会卡在"Linux 下编译困难"（素材原话），这就是平台维度淘汰候选的实例。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：许可与商用 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你的公司要做一个闭源商业图像产品。六个库里，哪些可以放心直接链接进产品？哪些需要评估？请按许可从宽松到严格排序，并说明 GPL 与 LGPL 的关键区别。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 5.6 节对比表的"许可"列：zlib、Apache-2.0、LGPL 系、CeCILL-C 都算宽松；GPL 有传染性。LGPL 允许动态链接不传染，GPL 连动态链接都会传染。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>按宽松程度排序：zlib（CxImage）与 Apache-2.0（OpenCV）最宽松，可放心商用；LGPL-2.1（LibRaw）与 LGPL-2.1-or-later（libvips）允许动态链接进闭源产品、不传染，但修改库本身要开源；CeCILL-C（CImg）类似 LGPL 也可商用；GPL-2.0-or-later（Exiv2）传染性最强——闭源产品直接链接它会使整个产品受 GPL 约束，需要评估。关键区别：GPL 要求"使用它的作品"整体开源，LGPL 只要求"对库本身的修改"开源，因此 LGPL 是闭源商业项目链接 C/C++ 库最常见的许可选择。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：组合管线设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>设计一个"iPhone 照片自动归档"服务：用户上传 HEIC 照片，系统需要 (1) 提取拍摄时间与 GPS 写入数据库；(2) 生成 256px 与 1280px 两个缩略图；(3) 做人脸检测用于后续聚类。请给出你的库组合方案与理由，并回答：为什么不用一个库包打天下？如果产品要商用闭源，你的方案需要调整吗？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三个子需求分别对应五类里的哪三类？对照 5.6 节的组合管线示例。商用闭源再看练习 3 的许可结论。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>方案：Exiv2 读 EXIF 提取拍摄时间与 GPS；libvips 做 HEIC 转码与多尺寸缩略图（需求驱动低内存，适合服务端）；OpenCV 做人脸检测（视觉任务的事实标准）。理由：每个库都在自己的主场做到极致，组合起来的整体成本最低。不用一个库包打天下的原因：①没有任何一个库同时把元数据、批处理、视觉都做到最好——OpenCV 读 EXIF 不如 Exiv2 专业，libvips 不做视觉分析，Exiv2 不碰像素；②单库方案会在非主场任务上踩坑（比如用 OpenCV 批量转码 HEIC 的内存开销）。商用闭源时方案基本不用改：libvips（LGPL）动态链接、OpenCV（Apache-2.0）和 Exiv2（GPL）中——Exiv2 需要评估，若担心传染可改用内部工具进程隔离调用，或选 exiftool 命令行替代，其余两个许可都友好。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

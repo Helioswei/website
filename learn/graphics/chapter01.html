@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第1章：图像处理全景：像素与资源现状 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter01.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第1章：图像处理全景：像素与资源现状 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter01.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="1" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第1章：图像处理全景：像素与资源现状</h1>
+  <p class="chapter-subtitle">在碰任何图像库之前，先把三件事想明白：一张图片在计算机里到底是什么、为什么要处理它、处理它要付出多少代价</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「如果你不能把'一张图片在计算机里就是一堆数字'讲给完全不懂的人听，说明你还没有真正理解图像处理。这一章我们不动任何库，只用第一性原理拆开三件事：图像由什么构成、服务端为什么必须处理图像、资源到底有多紧张。把这张全景图画清楚，后面十五章的每一块拼图，你都知道该放在哪里。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 1.1 像素与位图 ========== -->
+  <h2>1.1 像素与位图：一张图片的最小构成</h2>
+
+  <p>用第一性原理问一个问题：<strong>一张照片在计算机里到底是什么？</strong>不是"图片"，不是"文件"，而是一大串数字。放大任何一张数码照片，你会看到它是由密密麻麻的小色块拼成的——每个小色块就是一个<strong>像素</strong>（pixel，picture element 的缩写，直译就是"图像元素"）。像素是图像的最小单位，每个像素只负责记录一个颜色。把几百万个像素按行列排好，就得到一张<strong>位图</strong>（bitmap，也叫<strong>栅格图</strong>，raster image）。与之相对的是<strong>矢量图</strong>（vector image，比如 SVG），它存的不是像素而是"点、线、圆"的数学描述，放大不模糊——但照片这种天然连续的内容只能用量化后的像素来表达，所以本教程讨论的图像处理，几乎全指位图。</p>
+
+  <p>既然图像 = 像素矩阵，那么"这张图有多大"就由两个数决定：<strong>分辨率</strong>（resolution，宽 × 高，单位是像素）和<strong>每个像素占多少字节</strong>。最常见的彩色位图是 RGB 三通道、每通道 8 位（bit）：红（R）、绿（G）、蓝（B）各用一个 0~255 的数字表示强度，三个通道拼在一起就是 24 位真彩色，能表达 256³ ≈ 1670 万种颜色。于是内存占用有一个小学乘法公式：<strong>宽 × 高 × 通道数 × 每通道字节数</strong>。这就是图像处理的"第一性原理"——后面所有关于内存、带宽、性能的讨论，都要回到这个公式。</p>
+
+  <p>为了让你"看得见"像素，这里用一个极其朴素的格式举例：<strong>PPM</strong>（Portable Pixmap）——它把每个像素的 RGB 值直接以纯文本写进文件，没有任何压缩。下面的文件就是一张 2×2 的图：左上红、右上绿、左下蓝、右下白。你可以亲手复制到一个文件里，用任何看图软件打开它：</p>
+
+  <pre><code><span class="cmt"># tiny.ppm —— PPM 的 P3 变体：文件头 + 像素数据，全部是能直接读的 ASCII 文本</span>
+P3
+<span class="cmt"># 第 1 行：P3 = "ASCII 文本版 PPM"（P6 是二进制版）</span>
+<span class="cmt"># 第 2 行：宽 2、高 2，即一共 4 个像素</span>
+<span class="num">2</span> <span class="num">2</span>
+<span class="cmt"># 第 3 行：每个通道的最大值 255，表示 8 位每通道</span>
+<span class="num">255</span>
+<span class="cmt"># 之后每 3 个数是一个像素的 R G B：红 / 绿 / 蓝 / 白</span>
+<span class="num">255</span> <span class="num">0</span> <span class="num">0</span>   <span class="num">0</span> <span class="num">255</span> <span class="num">0</span>
+<span class="num">0</span> <span class="num">0</span> <span class="num">255</span>   <span class="num">255</span> <span class="num">255</span> <span class="num">255</span></code></pre>
+
+  <p>现在用那个乘法公式算一笔账——同样是"一张图"，分辨率不同，内存开销天差地别。下面这条命令算出 1080p 一帧画面的未压缩 RGB 内存占用：</p>
+
+  <pre><code><span class="cmt"># 未压缩位图内存 = 宽 × 高 × 通道数 × 每通道字节数</span>
+<span class="fn">python3</span> -c <span class="str">"print(1920 * 1080 * 3 / 1024 / 1024)"</span>
+<span class="cmt"># 输出约 5.93 —— 1080p 一帧 RGB 位图约 5.9 MiB（约 6.2 MB）</span>
+<span class="cmt"># 对比：一张 4000×3000（1200 万像素）的照片，未压缩要 36 MB 内存</span></code></pre>
+
+  <table>
+    <tr><th>常见尺寸</th><th>像素尺寸</th><th>像素总数</th><th>未压缩 RGB 内存（约）</th></tr>
+    <tr><td>缩略图</td><td>256 × 256</td><td>6.6 万</td><td>0.2 MB</td></tr>
+    <tr><td>720p 帧</td><td>1280 × 720</td><td>92 万</td><td>2.8 MB</td></tr>
+    <tr><td>1080p 帧</td><td>1920 × 1080</td><td>207 万</td><td>6.2 MB</td></tr>
+    <tr><td>4K UHD 帧</td><td>3840 × 2160</td><td>830 万</td><td>24.9 MB</td></tr>
+    <tr><td>1200 万像素照片</td><td>4000 × 3000</td><td>1200 万</td><td>36 MB</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把"图像 = 像素矩阵"焊死在脑子里：读图就是"把文件解码成矩阵"，写图就是"把矩阵编码成文件"，处理就是"对矩阵做数学运算"。后面学 OpenCV 的 Mat、学 LibRaw 的 RAW 解码、学 CUDA 的像素级并行，全都是在跟这个矩阵打交道。</p>
+  </div>
+
+  <!-- ========== 1.2 颜色空间 ========== -->
+  <h2>1.2 颜色空间：数字如何变成颜色（RGB / sRGB / CMYK）</h2>
+
+  <p>上一节说像素存的是"颜色"，但严格讲，<strong>数字本身不是颜色</strong>。255, 0, 0 这组数在电脑屏幕上显示成鲜红，在某个品牌的显示器上可能是暗红，在印刷品上又完全是另一回事。为什么？因为"数字 → 可见颜色"需要一套<strong>解释规则</strong>，这套规则就叫<strong>颜色空间</strong>（color space）——它规定了三件事：三个通道分别代表什么、每个数值对应多亮的颜色、整套规则覆盖多大范围的颜色（即<strong>色域</strong>，gamut）。同样的数字，套用不同的规则，出来的颜色就不同。</p>
+
+  <p>最常用的颜色空间是 <strong>RGB</strong>：基于<strong>加色模型</strong>（additive color model）——屏幕是黑底发光，红绿蓝三束光叠加，越加越亮，三色全开就是白。R、G、B 分别是红、绿、蓝三个通道（channel）。但"RGB"只是通道结构，还没规定数值映射——所以业界定了一个具体标准：<strong>sRGB</strong>（standard RGB），由惠普和微软于 1996 年提出，1999 年成为国际电工委员会标准 <strong>IEC 61966-2-1</strong>。它是网页、显示器、数码相机默认的颜色空间：<strong>一张 8 位每通道、没标注颜色空间的图片，业界默认按 sRGB 解释</strong>。sRGB 之所以重要，是因为它给"屏幕上的数字"立了规矩——你写的 <code>#FF0000</code>，在遵守规范的设备上应该显示成同一个红。这也埋了一个伏笔：真正讲究的流程要靠 <strong>ICC 配置文件</strong>（International Color Consortium 国际色彩联盟制定的色彩管理文件）来精确描述设备特性，这属于第 2 章的格式话题。</p>
+
+  <p>另一种完全相反的颜色空间是 <strong>CMYK</strong>：基于<strong>减色模型</strong>（subtractive color model），用于印刷。纸张是白的，油墨是往白纸上"吸光"——青（Cyan）、品红（Magenta）、黄（Yellow）三色油墨按比例叠印，越叠越暗，理论上三色全叠是黑，但实际油墨不纯，叠出来是脏棕色，所以还要加第四色 <strong>K（Key，黑色）</strong>来压暗部、省油墨。这就是印刷四色（four-color process）的来历，对应的印刷过程控制标准是 ISO 12647。一句话说人话：<strong>屏幕用 RGB 发光造色，印刷用 CMYK 吸光造色；同一张图在这两个世界里，数值和颜色都要重新换算</strong>。</p>
+
+  <p>先看网页开发最常见的"数字 → 颜色"写法——十六进制颜色，它的本质就是把三个 0~255 的数字用两位十六进制拼起来：</p>
+
+  <pre><code><span class="cmt"># #RRGGBB：每两位十六进制数 = 一个通道的 0~255 值</span>
+<span class="cmt"># #FF0000 = 红（R=255, G=0, B=0）；#00FF00 = 绿；#0000FF = 蓝；#FFFFFF = 白</span>
+<span class="fn">python3</span> -c <span class="str">"print(int('FF', 16), int('00', 16), int('00', 16))"</span>
+<span class="cmt"># 输出：255 0 0 —— 和 1.1 节 PPM 文件里的 "255 0 0" 是同一件事</span></code></pre>
+
+  <p>再往深一层：sRGB 的数值和"实际亮度"不是线性关系（人眼对暗部更敏感，所以编码时给暗部更多精度）。sRGB 标准用一条分段函数定义数值与线性光强的换算，下面这段 Python 就是它的<strong>线性化</strong>方向（sRGB 值 → 线性光强），公式来自 IEC 61966-2-1，不是我们编的：</p>
+
+  <pre><code><span class="cmt"># sRGB 线性化（IEC 61966-2-1 定义）：把 0~1 的 sRGB 值还原为线性光强</span>
+<span class="kw">def</span> <span class="fn">srgb_to_linear</span>(<span class="param">c</span>):
+    <span class="kw">if</span> c <span class="op">&lt;=</span> <span class="num">0.04045</span>:
+        <span class="kw">return</span> c / <span class="num">12.92</span>
+    <span class="kw">return</span> ((c + <span class="num">0.055</span>) / <span class="num">1.055</span>) <span class="op">**</span> <span class="num">2.4</span>
+
+<span class="cmt"># 8 位值 128（约中间灰）在线性空间里其实只有约 0.2158 的亮度：</span>
+<span class="fn">print</span>(<span class="fn">srgb_to_linear</span>(<span class="num">128</span> / <span class="num">255</span>))
+<span class="cmt"># 输出约 0.2158 —— 数字上的"一半"并不是亮度上的一半</span></code></pre>
+
+  <table>
+    <tr><th>维度</th><th>RGB / sRGB（屏幕世界）</th><th>CMYK（印刷世界）</th></tr>
+    <tr><td>造色原理</td><td>加色：黑底上发光，越叠越亮</td><td>减色：白纸上吸光，越叠越暗</td></tr>
+    <tr><td>通道构成</td><td>R、G、B 三通道</td><td>C、M、Y、K 四色油墨</td></tr>
+    <tr><td>面向设备</td><td>显示器、相机、手机、网页</td><td>打印机、印刷机、出版</td></tr>
+    <tr><td>代表标准</td><td>sRGB（IEC 61966-2-1）</td><td>ISO 12647（印刷过程控制）</td></tr>
+    <tr><td>色域范围</td><td>屏幕可发光颜色</td><td>油墨可吸收颜色（通常更窄）</td></tr>
+  </table>
+
+  <!-- ========== 1.3 服务端图像处理为什么存在 ========== -->
+  <h2>1.3 服务端图像处理为什么存在：转码、预览与视觉</h2>
+
+  <p>接下来问第二个"为什么"：浏览器和手机自己就能显示图片，<strong>为什么还需要在服务器上处理图像？</strong>答案很简单：<strong>一张原图满足不了所有场景</strong>。相机拍出来的 HEIC、手机拍出来的 12MP 原图、设计稿里的 TIFF——它们要么格式不通用，要么体积太大，要么用户根本不需要那么高的质量。服务端图像处理的本质，就是<strong>在"用户拿到的"和"原始素材"之间做翻译与裁剪</strong>。归纳起来，服务端图像处理主要回答三类需求：<strong>转码</strong>（transcode）、<strong>预览</strong>（preview/thumbnail）、<strong>视觉</strong>（computer vision）。</p>
+
+  <p><strong>转码</strong>：把一种格式换成另一种。最典型的就是苹果生态的 <strong>HEIC</strong>——iPhone 拍的照片默认存成 HEIC（HEIF 容器 + HEVC 编码，体积只有 JPEG 的一半左右），但绝大多数网页和第三方服务不认它。于是服务端拿到 HEIC 后要立刻转成 JPEG 或 WebP 再分发。这不是假想场景：本教程素材里真实发生过"用 libvips 处理苹果平台 HEIC 图片格式的转码"这件事，第 7 章会完整复现。转码还包含"统一规格"：把用户上传的乱七八糟的格式、尺寸、颜色空间，全部归一成服务端约定的标准。</p>
+
+  <p><strong>预览</strong>：同一张图，列表页只需要 200 像素的缩略图，详情页要 1280 宽的大图，原图则几乎不会直接发给用户——因为 12MB 的原图在网络上是巨大的浪费（1.4 节算账）。服务端的常见做法是<strong>预生成多尺寸</strong>（responsive images）：上传时一次性生成缩略图、中图、大图几个版本，用户请求时按需返回。这也是为什么"缩略图"是几乎所有图像库的标配功能。看两个真实命令——libvips 的 <code>vips thumbnail</code> 和 ImageMagick 7 的 <code>magick</code>：</p>
+
+  <pre><code><span class="cmt"># 缩略图：把 HEIC 原图压成 256 像素宽的 JPEG（libvips 自带命令行工具，内存占用极低）</span>
+vips thumbnail input.heic thumb.jpg <span class="num">256</span>
+
+<span class="cmt"># 转码：HEIC → JPEG，质量 85（ImageMagick 7 统一用 magick 命令）</span>
+magick input.heic -quality <span class="num">85</span> output.jpg
+
+<span class="cmt"># 批量：把一个目录里的 HEIC 全部转成 1280 宽的 WebP（shell 循环）</span>
+<span class="kw">for</span> f <span class="kw">in</span> *.heic; <span class="kw">do</span> magick <span class="str">"$f"</span> -resize <span class="num">1280</span>x<span class="num">720</span> <span class="str">"${f%.heic}.webp"</span>; <span class="kw">done</span></code></pre>
+
+  <p><strong>视觉</strong>：让程序"看懂"图像内容。OCR 识别文字、人脸检测、商品分类、自动驾驶感知——这些推理任务大多跑在服务端（GPU 集群）而不是用户手机里，因为它们吃算力、要模型、要统一管理。图像处理库里的"视觉担当"是 OpenCV（计算机视觉的事实标准）；本教程素材里真实记录过"用 OpenCV 做了一个 Harris 角点检测器和 Canny 边缘检测器，总共花了一个小时"——第 9、10 章会复现。先看视觉任务的最基本操作长什么样（OpenCV 4.x 的真实 API）：</p>
+
+  <pre><code><span class="cmt">// 服务端视觉分析的典型入口：读图 → 缩小 → 保存（OpenCV 4.x 真实 API）</span>
+<span class="kw">#include</span> <span class="type">&lt;opencv2/opencv.hpp&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span>** argv) {
+    <span class="cmt">// imread 把图片解码成 Mat 矩阵；IMREAD_COLOR = 按 3 通道 BGR 读入</span>
+    cv::Mat img = cv::<span class="fn">imread</span>(<span class="str">"input.jpg"</span>, cv::IMREAD_COLOR);
+    cv::Mat small;
+    cv::<span class="fn">resize</span>(img, small, cv::Size(<span class="num">640</span>, <span class="num">360</span>));  <span class="cmt">// 缩放到 640×360</span>
+    cv::<span class="fn">imwrite</span>(<span class="str">"small.jpg"</span>, small);            <span class="cmt">// 保存回 JPEG</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>场景</th><th>典型任务</th><th>代表工具</th><th>本书章节</th></tr>
+    <tr><td>转码</td><td>HEIC→JPEG、格式统一、质量压缩</td><td>libvips、ImageMagick</td><td>第 2、7 章</td></tr>
+    <tr><td>预览</td><td>缩略图、多尺寸、水印</td><td>libvips、CImg</td><td>第 5、7 章</td></tr>
+    <tr><td>视觉</td><td>特征检测、人脸、OCR、分类</td><td>OpenCV</td><td>第 9~12 章</td></tr>
+    <tr><td>元数据</td><td>读取 EXIF 拍摄信息、版权管理</td><td>Exiv2、exiftool</td><td>第 4 章</td></tr>
+    <tr><td>RAW 解码</td><td>相机原始数据 → 可处理位图</td><td>LibRaw</td><td>第 3、6 章</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>判断一个服务端图像需求，先问它属于哪一类：<strong>格式不对 → 转码；太大太慢 → 预览/缩略图；要理解内容 → 视觉</strong>。三类需求对应三类完全不同的技术栈，本书的章节布局就是按这个分类展开的。</p>
+  </div>
+
+  <!-- ========== 1.4 资源现状：内存与带宽的账本 ========== -->
+  <h2>1.4 资源现状：内存与带宽的账本</h2>
+
+  <p>第三个"为什么"要算账：<strong>图像处理为什么是资源大户？</strong>回到 1.1 的公式——未压缩位图的内存 = 宽 × 高 × 通道数 × 每通道字节数。一张 1200 万像素的照片就要 36 MB 内存，这还只是"一张原图"。真实的服务端场景是：用户上传、格式转换、缩略图生成、视觉分析，常常并发处理成百上千张图——每张图在内存里可能同时存在原图、中间结果、输出图多个副本。处理 100 张 12MP 原图就是 3.6 GB 内存起步，还没算解码器的临时缓冲。这就是为什么 1.3 节说"缩略图是标配"：<strong>在内存里处理 0.2 MB 的缩略图和 36 MB 的原图，代价差两个数量级</strong>。</p>
+
+  <p>再看带宽。服务端处理的每一张图最终都要通过网络送到用户设备，流量 = 图片体积 × 访问次数，这是实打实的账单。一张 2 MB 的 JPEG 被访问 1000 次就是 2 GB 流量；换成 200 KB 的缩略图，同样的访问量只消耗十分之一。对高访问量的站点来说，<strong>"给用户哪张图"直接决定 CDN 账单和首屏速度</strong>——这也是"响应式图片"（responsive images）思想的经济学根源：服务端多花一点算力预生成多尺寸，换取带宽和用户体验的巨额回报。下面两段脚本就是这两笔账的计算：</p>
+
+  <pre><code><span class="cmt"># 内存账本：12MP 照片未压缩占多少内存？</span>
+<span class="fn">python3</span> -c <span class="str">"print(4000 * 3000 * 3 / 1024 / 1024)"</span>
+<span class="cmt"># 输出 34.33 —— 约 34 MiB（十进制约 36 MB）</span>
+<span class="cmt"># 并发 100 张：约 3.4 GiB 内存，还没算中间结果和输出副本</span></code></pre>
+
+  <pre><code><span class="cmt"># 带宽账本：一张 2 MB 的 JPEG 被访问 1000 次 = 多少流量？</span>
+<span class="fn">python3</span> -c <span class="str">"print(2 * 1000)"</span>
+<span class="cmt"># 输出 2000 —— 2000 MB ≈ 2 GB 流量</span>
+<span class="cmt"># 换成 200 KB 的缩略图：同样访问量只花 200 MB，省了 90%</span></code></pre>
+
+  <table>
+    <tr><th>图像</th><th>未压缩内存</th><th>压缩后典型体积</th><th>一次访问的流量代价</th></tr>
+    <tr><td>256×256 缩略图</td><td>0.2 MB</td><td>10~30 KB（JPEG）</td><td>可忽略</td></tr>
+    <tr><td>1080p 照片</td><td>6.2 MB</td><td>150~500 KB（JPEG）</td><td>约 300 KB</td></tr>
+    <tr><td>12MP 原图</td><td>36 MB</td><td>3~8 MB（JPEG）</td><td>约 5 MB</td></tr>
+    <tr><td>4K 单帧</td><td>24.9 MB</td><td>50~200 KB（HEVC 视频帧）</td><td>视场景而定</td></tr>
+  </table>
+
+  <p>这笔账还揭示了一个重要视角：<strong>图像处理的核心矛盾，是"图像信息量天然巨大"和"内存、带宽、CPU 都有限"之间的矛盾</strong>。整个图像处理技术史，本质上就是围绕这个矛盾做文章：压缩算法（第 2 章）用算力换体积，缩略图/多尺寸（第 5、7 章）用预计算换带宽，GPU 加速（第 11、12 章）用并行换时间，性能优化（第 15 章）用算法换内存。记住这个矛盾，你就抓住了全书的线索。</p>
+
+  <!-- ========== 1.5 格式碎片化 ========== -->
+  <h2>1.5 格式碎片化：图像格式的百家争鸣</h2>
+
+  <p>现在看资源现状的第三块拼图：<strong>格式碎片化</strong>。打开一个真实的服务端 uploads 目录，你大概率会同时看到 JPEG、PNG、WebP、GIF、TIFF，甚至 HEIC 和相机 RAW——为什么图像格式这么多？因为<strong>每一种格式都是在"体积、质量、功能、兼容性"之间做了不同取舍</strong>：有损压缩（JPEG）牺牲细节换体积，无损压缩（PNG）保真但更大，支持透明通道的、支持动画的、面向印刷的、面向相机的……各有各的生态位。文件扩展名背后是两样东西：<strong>编码算法</strong>（怎么压缩像素数据）和<strong>容器结构</strong>（怎么组织文件内的元数据、缩略图、图像数据），细节是第 2 章的主题，这里先建立"格式是分层的选择"这个观念。</p>
+
+  <p>碎片化给服务端带来的是实打实的工程负担：<strong>每多支持一种格式，就要多引入一套编解码依赖</strong>。回想素材里 libvips 的依赖矩阵——为了读各种格式，它要链接 libjpeg-turbo、libpng、libwebp、libheif 等一堆底层编解码库，第 7 章会亲眼看到这些依赖怎么一个个装起来。格式碎片化还意味着：<strong>"读图"这个动作远没有看起来简单</strong>——同一个"打开文件"的 API 背后，是几十种格式各自的解码器在分工。</p>
+
+  <p>拿到一张陌生图片，先让系统自报家门。Linux 的 <code>file</code> 命令和 ImageMagick 的 <code>identify</code> 是判断格式的两把瑞士军刀：</p>
+
+  <pre><code><span class="cmt"># 问三个问题：什么格式？多大？什么颜色空间？</span>
+file photo.jpg
+<span class="cmt"># 示例输出：JPEG image data, baseline, precision 8, 4000x3000, components 3</span>
+
+magick identify photo.jpg
+<span class="cmt"># 示例输出：photo.jpg JPEG 4000x3000 8-bit sRGB 4.2MiB 0.010u 0:00.008</span></code></pre>
+
+  <pre><code><span class="cmt"># 一个真实服务端目录里可能同时躺着这些格式——每多一种，就多一套编解码依赖</span>
+<span class="fn">ls</span> -lh uploads/
+<span class="cmt"># -rw-r--r--  4.2M photo.jpg    （有损，网页照片主力）</span>
+<span class="cmt"># -rw-r--r--  2.8M logo.png     （无损 + 透明通道，UI 图形）</span>
+<span class="cmt"># -rw-r--r--  1.9M banner.webp  （新一代网页格式，更小）</span>
+<span class="cmt"># -rw-r--r--  6.1M scan.tiff    （印刷/存档，标签式结构）</span>
+<span class="cmt"># -rw-r--r--  38M  photo.nef    （相机 RAW，第 3 章的主角）</span></code></pre>
+
+  <table>
+    <tr><th>格式</th><th>有损/无损</th><th>一句话特点</th><th>典型用途</th></tr>
+    <tr><td>JPEG</td><td>有损</td><td>照片压缩的王者，无处不在</td><td>网页照片、相机直出</td></tr>
+    <tr><td>PNG</td><td>无损</td><td>支持透明通道（alpha）</td><td>UI 图形、图标、截图</td></tr>
+    <tr><td>GIF</td><td>无损（限 256 色）</td><td>调色板 + 逐帧动画</td><td>小动画、表情包</td></tr>
+    <tr><td>WebP</td><td>两者皆可</td><td>Google 出品，同等质量体积更小</td><td>现代网页</td></tr>
+    <tr><td>AVIF</td><td>有损/无损</td><td>基于 AV1 编码，压缩率最高</td><td>下一代网页格式</td></tr>
+    <tr><td>HEIC/HEIF</td><td>有损</td><td>基于 HEVC 编码，苹果生态默认</td><td>iPhone 照片</td></tr>
+    <tr><td>TIFF</td><td>无损</td><td>标签式结构，专业级</td><td>印刷、扫描、存档</td></tr>
+    <tr><td>RAW 系</td><td>传感器原始数据</td><td>未加工的相机底片</td><td>摄影后期（第 3 章）</td></tr>
+  </table>
+
+  <p>这张表就是"格式碎片化"的全貌。注意一个趋势：格式还在持续进化——WebP 还没普及完，AVIF 又来了。对服务端开发者来说，<strong>与其追着格式跑，不如理解"编码算法 + 容器"的抽象层次</strong>：理解了 JPEG 的 DCT 有损压缩和 PNG 的调色板/透明机制（第 2 章），任何新格式出现，你都能快速把它归类到"有损/无损/专业/相机"的某个象限里。</p>
+
+  <!-- ========== 1.6 六库引子与全书路线图 ========== -->
+  <h2>1.6 六库引子与全书路线图</h2>
+
+  <p>最后把这本书的工具箱摊开。图像处理是一个"库的生态"，本教程围绕六个库展开，素材来自真实的使用与编译记录。这里先各用一句话介绍它们（详细对比是第 5 章的主场）：<strong>Exiv2</strong> 是读写 EXIF/IPTC/XMP 元数据的 C++ 库，还带命令行工具；<strong>libvips</strong> 是需求驱动、水平线程的高性能图像处理库，约 300 种运算、内存占用极低，素材里主要拿它处理苹果 HEIC 转码；<strong>CImg</strong> 只有一个 .h 头文件，轻量好用，矩阵运算和显示类方便；<strong>LibRaw</strong> 专门读取相机 RAW 文件（CR2/NEF/RAF/DNG 等）；<strong>CxImage</strong> 是全开源的 C++ 图像类，与 Windows/MFC 配合极好，滤波、旋转、alpha 混合等功能强大；<strong>OpenCV</strong> 是计算机视觉的事实标准，算法体系最全，做 Harris 角点、Canny 边缘这类特征检测特别顺手。</p>
+
+  <p>先混个脸熟——这六个库的官网和仓库地址如下。第 5 章会从功能、平台、许可、适用场景四个维度做一张对比表，第 6~8 章则逐个实战编译和上手：</p>
+
+  <pre><code><span class="cmt"># 六库速览（官网/仓库，第 5 章逐一对比）</span>
+Exiv2   <span class="cmt"># https://www.exiv2.org/          —— 元数据（EXIF / XMP）</span>
+libvips <span class="cmt"># https://www.libvips.org/        —— 高性能、低内存批处理</span>
+CImg    <span class="cmt"># https://cimg.eu/                —— 单头文件轻量图像库</span>
+LibRaw  <span class="cmt"># https://www.libraw.org/         —— 相机 RAW 解码</span>
+CxImage <span class="cmt"># https://www.codeproject.com/Articles/1300/CxImage —— Windows 位图操作</span>
+OpenCV  <span class="cmt"># https://opencv.org/             —— 计算机视觉</span></code></pre>
+
+  <p>无论用哪个库，"读图"最终都落在同一件事：把文件解码成像素矩阵。以 OpenCV 为例，图像就是一个 <code>Mat</code> 矩阵——行是高度、列是宽度、每个元素是一个 BGR 三元组（注意 OpenCV 的通道顺序是 BGR 而不是 RGB，这是它历史遗留的约定）：</p>
+
+  <pre><code><span class="cmt">// 读图 = 解码成矩阵；取像素 = 按下标访问矩阵元素</span>
+<span class="kw">#include</span> <span class="type">&lt;opencv2/opencv.hpp&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    cv::Mat img = cv::<span class="fn">imread</span>(<span class="str">"photo.jpg"</span>, cv::IMREAD_COLOR);
+    <span class="cmt">// at&lt;Vec3b&gt;(y, x) 取第 y 行第 x 列的像素（通道顺序是 BGR）</span>
+    cv::Vec3b px = img.<span class="fn">at</span>&lt;cv::Vec3b&gt;(<span class="num">100</span>, <span class="num">200</span>);
+    <span class="kw">int</span> blue  = px[<span class="num">0</span>];
+    <span class="kw">int</span> green = px[<span class="num">1</span>];
+    <span class="kw">int</span> red   = px[<span class="num">2</span>];
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>全书 16 章分四个部分，正好沿着"图像处理工程师的成长路径"展开：<strong>第一部分"图像基础与格式"</strong>（第 1~4 章）把像素、格式、RAW、元数据讲透；<strong>第二部分"图像处理库实战"</strong>（第 5~8 章）先做六库选型对比，再逐个实战 LibRaw、libvips、OpenCV；<strong>第三部分"计算机视觉与 GPU 加速"</strong>（第 9~12 章）从 OpenCV 的 Mat 核心讲到特征检测，再上 CUDA 让像素级并行飞起来；<strong>第四部分"深入工程实践"</strong>（第 13~16 章）沉淀依赖链接排错、调试、性能优化和生态收尾。这一章的每个概念，都会在后面的章节里找到落点：像素矩阵 → 第 9 章的 Mat；颜色空间 → 第 2 章的格式；资源账本 → 第 15 章的性能；六库 → 第 5 章的对比表。</p>
+
+  <table>
+    <tr><th>分部</th><th>章节</th><th>主题</th></tr>
+    <tr><td>一、图像基础与格式</td><td>1~4</td><td>全景 → JPEG/PNG/TIFF → RAW 与 DNG → EXIF 与 XMP</td></tr>
+    <tr><td>二、图像处理库实战</td><td>5~8</td><td>六库选型对比 → LibRaw → libvips → OpenCV</td></tr>
+    <tr><td>三、计算机视觉与 GPU 加速</td><td>9~12</td><td>Mat 核心 → Harris 与 Canny → CUDA 环境 → CUDA 内核</td></tr>
+    <tr><td>四、深入工程实践</td><td>13~16</td><td>依赖与链接排错 → 调试 → 性能优化 → 生态收尾</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>这一章的信息量不小，但请记住一条主线：<strong>图像是像素矩阵（1.1），颜色靠空间解释（1.2），处理因场景而存在（1.3），资源永远紧张（1.4），格式永远碎片化（1.5），所以我们需要一套趁手的库（1.6）</strong>。把这六句话串起来，全景图就画完了。下一章，我们从最具体的格式讲起。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念连线 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边的概念与右边最贴切的解释配对：① 像素；② 位图；③ 分辨率；④ 颜色空间。候选解释：A. 按行列排好的像素矩阵；B. 图像的最小单位，记录一个颜色；C. "数字 → 可见颜色"的解释规则；D. 图像的宽 × 高（像素数）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 1.1 和 1.2 节：四个概念分别是"最小单位 / 组织方式 / 尺寸描述 / 解释规则"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 像素 → B；② 位图 → A；③ 分辨率 → D；④ 颜色空间 → C。注意像素是"点"，位图是"点的排列"，分辨率描述排列的规模，颜色空间则决定每个点上的数字显示成什么颜色。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：算内存账 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 1.1 节的公式计算：① 一张 1920×1080 的 RGB 8 位位图占多少 MB？② 一张 3840×2160 的 4K 位图呢？③ 如果服务端同时把 50 张 12MP 原图（4000×3000×3）读进内存，最少需要多少 GB？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>公式：宽 × 高 × 3 字节 ÷ 1,048,576 = MiB；把十进制 MB 和二进制 MiB 区分开，答案写约数即可。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 1920×1080×3 ≈ 6.2 MB（约 5.9 MiB）；② 3840×2160×3 ≈ 24.9 MB（约 23.7 MiB）；③ 单张 4000×3000×3 = 36,000,000 字节 ≈ 34.3 MiB，50 张 ≈ 1.7 GiB——还没算解码中间缓冲和输出副本，实际会更高。这印证了 1.4 节"图像处理是资源大户"的判断。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：场景归类 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面三个真实场景，分别属于 1.3 节的哪一类需求（转码 / 预览 / 视觉）？并说明理由：(a) 电商平台把卖家上传的 12MP 原图自动生成 200px、800px、1600px 三个版本；(b) 图片托管服务把用户上传的 HEIC 统一转成 JPEG 存储；(c) 安防系统对摄像头画面做车牌识别。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三类需求的判据：格式不对 → 转码；太大太慢 → 预览/缩略图；要理解内容 → 视觉。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 预览——多尺寸生成是为了让列表页、详情页各取所需，省带宽省内存；(b) 转码——HEIC 不通用，必须换成 JPEG/WebP 再分发；(c) 视觉——识别车牌是"理解图像内容"，属于计算机视觉。注意真实系统常常三者叠加：上传时先转码、再生成多尺寸、后台再跑视觉分析。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：第一性原理推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用第一性原理回答：为什么服务端普遍"预生成"缩略图，而不是每次用户请求时现场压缩原图？请从内存、带宽、CPU 三个角度各推一层。延伸思考：如果用户上传的全是 HEIC，服务端直接原样存储 HEIC 并把 HEIC 当分发格式，可行吗？为什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>预生成 = 把算力成本一次性付清；现场压缩 = 每次请求都付。想想 1.4 节的账本：一张原图 36 MB 内存、3~8 MB 体积，而热门图片会被访问成千上万次。HEIC 的分发问题回到 1.3 节"转码"存在的理由。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>预生成的理由：<strong>内存</strong>——现场压缩要把 36 MB 原图读进内存再算，高并发下内存瞬间爆掉；<strong>带宽</strong>——原图 3~8 MB，直接发给用户是缩略图的几十倍流量；<strong>CPU</strong>——同样的压缩计算，热门图会被重复算成千上万次，预生成只算一次。所以"一次算好、多次复用"是资源约束下的必然选择。HEIC 直接当分发格式不可行：兼容性太差——绝大多数浏览器和第三方服务不认 HEIC（这正是 1.3 节苹果生态转码需求的来源），分发必须用 JPEG/WebP 这类通用格式；这也是"转码"这个场景存在的根本原因。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

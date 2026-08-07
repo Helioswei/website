@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第3章：相机底片解析：RAW 与 DNG - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter03.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第3章：相机底片解析：RAW 与 DNG - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter03.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="3" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：相机底片解析：RAW 与 DNG</h1>
+  <p class="chapter-subtitle">把相机底片拆开看：RAW 的五层结构、各家格式的方言，以及 Adobe 给出的统一答案 DNG</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案先拆现场，分析先拆文件。RAW 不是一个格式，而是一族'同源而异相'的文件系统——这一章我们用系统分析的办法：把底片拆成零件（3.2 的五层结构），看清传感器在记录什么（3.3 的拜耳阵列），给各家方言排队（3.4），认识统一方案 DNG（3.5），最后画出 TIFF、TIFF/EP、DNG、RAW 的关系图（3.6）。拆得越细，第 6 章用 LibRaw 读它时就越有底气。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 底片思维 ========== -->
+  <h2>3.1 底片思维：为什么相机不直接给你「照片」</h2>
+
+  <p>先建立一个"系统分析"的视角。数码相机按下快门那一瞬间，传感器记录的其实是一堆亮度读数，而不是照片。要让这些读数变成能看的 JPEG，相机内部要做一整套处理：对拜耳马赛克去马赛克（demosaic）、白平衡校正、套用色彩矩阵、伽马曲线，最后 JPEG 压缩——这条流水线叫<strong>相机内处理管线</strong>（in-camera pipeline）。问题在于：管线每一步都在"做决定"——白平衡猜错了、高光压掉了、暗部提亮出噪点——决定一旦做错，信息就永远丢了。<strong>JPEG 是相机帮你冲印好的"成品照片"，而 RAW 文件保存的，是传感器在"做决定之前"的原始读数，相当于胶片时代的"底片"。</strong>本教程素材里公司的真实需求就是"对 dng、CR2 这类相机原生格式转码并预览"——服务端要处理的，恰恰是用户直接丢过来的"底片"，而不是相机加工好的 JPEG。</p>
+
+  <p>"底片"和"成品"的差距有多大？核心在<strong>位深</strong>（bit depth）：JPEG 每通道 8 位，只有 256 级亮度；而现代相机的 RAW 通常是 12 位或 14 位，每通道 4096 或 16384 级。14 位是 8 位的 64 倍——这意味着高光不易过曝、阴影提得起来，后期有巨大的调整空间。这就是 RAW 存在的根本理由：<strong>把"记录"和"解释"分开</strong>。传感器只负责如实记录，解释（白平衡、风格、色调）留给后期。一句话说人话：JPEG 是结果，RAW 是过程。</p>
+
+  <pre><code><span class="cmt"># 位深账本：每通道能记录多少级亮度？</span>
+<span class="cmt"># 8-bit：2^8=256 级；12-bit：2^12=4096 级；14-bit：2^14=16384 级</span>
+<span class="fn">python3</span> -c <span class="str">"print(2**8, 2**12, 2**14)"</span>
+<span class="cmt"># 输出：256 4096 16384</span>
+<span class="cmt"># 14 位的级数是 8 位的 64 倍——这就是"底片"比"成品"宽容的原因</span></code></pre>
+
+  <pre><code><span class="cmt"># 同一台相机、同一画面，底片与成品的体积差一个数量级</span>
+<span class="fn">ls</span> -lh IMG_0001.JPG IMG_0001.CR2
+<span class="cmt"># -rw-r--r-- 482K IMG_0001.JPG   成品：相机内处理 + JPEG 压缩</span>
+<span class="cmt"># -rw-r--r-- 5.8M IMG_0001.CR2   底片：传感器原始数据 + 完整元数据</span>
+
+<span class="cmt"># 判断一个文件是不是"底片"，先让系统自报家门</span>
+<span class="fn">file</span> IMG_0001.CR2
+<span class="cmt"># 示例输出：Canon CR2 RAW image data, 6000x4000, little-endian</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>判断"是不是底片"的三个特征：一是后缀（CR2/NEF/ARW…），二是体积（远大于同尺寸 JPEG），三是 <code>file</code> 命令的输出——它要么直接报出"XXX RAW image data"，要么显示它是 TIFF 系的变体。这三个特征分别对应 RAW 结构的不同层面，3.2 节逐一拆开。</p>
+  </div>
+
+  <!-- ========== 3.2 解剖 RAW ========== -->
+  <h2>3.2 解剖 RAW：五层结构的系统拆解</h2>
+
+  <p>系统分析的第一招是"解剖"：把文件拆成零件。素材笔记里有一段非常精炼的归纳：<strong>RAW 文件虽然厂商各异，但结构往往遵循一个共同模式</strong>——①一个短<strong>文件头</strong>，通常包含文件的字节顺序、文件标识符和主数据的文件偏移量；②<strong>传感器元数据</strong>，描述传感器尺寸、颜色滤波矩阵（CFA）的属性与颜色配置文件；③<strong>图像元数据</strong>，包括曝光设定、相机/扫描仪/镜头型号、拍摄日期、位置与创作信息（部分文件含 EXIF 标准化元数据节）；④<strong>图像缩略图</strong>，以及可选的 JPEG 缩小图用于快速预览；⑤<strong>传感器图像数据</strong>本身（胶片扫描文件还会带帧编号，用于按帧排序）。记住这五层，后面所有 RAW 相关的工具、库、排错，都能对号入座。</p>
+
+  <p>为什么说"多数 RAW 基于 TIFF"？因为 TIFF 是一个极其灵活的容器：文件头之后是一串 <strong>IFD</strong>（Image File Directory，图像文件目录），每个 IFD 里是若干 <strong>tag</strong>（标签）——每个 tag 用数字编号，标明图像尺寸、数据如何排列、用了什么压缩等。RAW 厂商把传感器数据当作"一幅特殊的图像"塞进 TIFF 容器，再用 tag 描述它。所以拆 RAW 的第一步永远是先读文件头：前两个字节是字节序（II=小端、MM=大端），接着是 magic 数字 42，然后是第一个 IFD 的偏移量。下面是真实 CR2 文件头的前 16 字节（示例输出）：</p>
+
+  <pre><code><span class="cmt"># 任何 TIFF 系文件的头都是同一套"门牌号"</span>
+<span class="fn">hexdump</span> -C -n <span class="num">16</span> IMG_0001.CR2
+<span class="cmt"># 00000000  49 49 2a 00 10 00 00 00  43 52 02 00 00 00 00 00  |II*.....CR......|</span>
+<span class="cmt">#</span>
+<span class="cmt"># 49 49        = "II"：小端字节序（大端机器写 "MM"）</span>
+<span class="cmt"># 2a 00        = 42：TIFF 的 magic 数字，看到它 = TIFF 系</span>
+<span class="cmt"># 10 00 00 00  = 第一个 IFD 的偏移量（十六进制 0x10 = 16）</span>
+<span class="cmt"># 偏移 8 起    = CR2 额外写的厂商标识 "CR" + 版本号 2.0</span></code></pre>
+
+  <pre><code><span class="cmt"># 用 struct 手工解析 TIFF 头：2 字节字节序 + 2 字节 magic + 4 字节 IFD 偏移</span>
+<span class="kw">import</span> struct
+
+<span class="kw">with</span> <span class="fn">open</span>(<span class="str">"IMG_0001.CR2"</span>, <span class="str">"rb"</span>) <span class="kw">as</span> f:
+    head = f.<span class="fn">read</span>(<span class="num">8</span>)
+
+byte_order, magic, ifd_offset = struct.<span class="fn">unpack</span>(<span class="str">&lt;2sHI</span>, head)
+<span class="fn">print</span>(byte_order, magic, ifd_offset)
+<span class="cmt"># 输出：b'II' 42 16</span>
+<span class="cmt"># 小端序、magic=42、第一个 IFD 在偏移 16——和 hexdump 看到的一致</span></code></pre>
+
+  <pre><code><span class="cmt"># IFD 里的 tag 是"编号 + 值"，exiftool 负责把它们翻译成人话</span>
+<span class="fn">exiftool</span> -s -Make -Model -ExposureTime -DateTimeOriginal IMG_0001.CR2
+<span class="cmt"># Make             : Canon</span>
+<span class="cmt"># Model            : Canon EOS R5</span>
+<span class="cmt"># ExposureTime     : 1/250</span>
+<span class="cmt"># DateTimeOriginal : 2026:08:08 10:00:00</span>
+<span class="cmt"># 这些拍摄参数就是五层结构里的"图像元数据"层（部分来自 EXIF 节）</span></code></pre>
+
+  <p>看到这里，"解剖"已经有了完整骨架：文件头是"门牌号"，IFD 是"目录"，tag 是"条目"，图像数据是"正文"。素材笔记里说各家格式"可能在许多方面偏离 TIFF 标准"——偏离的通常是门牌号（非标准文件头）和条目（额外 tag、甚至加密），但目录组织方式大多保留。这解释了为什么读 RAW 的解码器（比如第 6 章的 LibRaw）总是先认"门牌号"再决定走哪套解析逻辑。</p>
+
+  <!-- ========== 3.3 颜色滤波矩阵 ========== -->
+  <h2>3.3 颜色滤波矩阵：一个像素只有一种颜色</h2>
+
+  <p>五层结构里最核心、也最容易被忽略的是第二层"传感器元数据"中的<strong>颜色滤波矩阵</strong>（Color Filter Array，CFA）。为什么需要它？因为传感器的一个像素只能记录"亮度"这一个数；要拍彩色照片，就在每个像素前盖一块只放行一种颜色的滤色片：红、绿、蓝三选一。最常见的排列是柯达工程师拜耳（Bryce E. Bayer）在 1976 年提出的<strong>拜耳阵列</strong>（Bayer pattern）：2×2 单元里放 1 个红、2 个绿、1 个蓝（RGGB），绿色翻倍是因为人眼对绿色最敏感。整个传感器就是无数个 RGGB 单元平铺出来的。</p>
+
+  <p>这意味着 RAW 文件里的"传感器图像数据"层，存的是<strong>单通道马赛克</strong>（mosaic）——每个像素只有一个值，而不是 JPEG 里每像素 RGB 三通道。要把马赛克还原成彩色图，必须做<strong>去马赛克</strong>（demosaic）：每个像素缺的两种颜色，从周围同色像素"借"。这个"借"的算法五花八门（最近邻、双线性、AHD、VNG……），质量直接决定成片的锐度和摩尔纹。从系统分析的角度看：CFA 的排列属于"传感器的属性"，必须记录在文件里——TIFF/EP 与 DNG 用 CFAPattern 等 tag 描述它；解码器（如第 6 章的 LibRaw）只有知道 CFA 排列，才知道每个像素到底是 R、G 还是 B。</p>
+
+  <pre><code><span class="cmt"># RGGB 2x2 单元：左上 R、右上 G、左下 G、右下 B，平铺整个传感器</span>
+pattern = [[<span class="str">"R"</span>, <span class="str">"G"</span>, <span class="str">"R"</span>, <span class="str">"G"</span>],
+           [<span class="str">"G"</span>, <span class="str">"B"</span>, <span class="str">"G"</span>, <span class="str">"B"</span>],
+           [<span class="str">"R"</span>, <span class="str">"G"</span>, <span class="str">"R"</span>, <span class="str">"G"</span>],
+           [<span class="str">"G"</span>, <span class="str">"B"</span>, <span class="str">"G"</span>, <span class="str">"B"</span>]]
+<span class="kw">for</span> row <span class="kw">in</span> pattern:
+    <span class="fn">print</span>(<span class="str">" "</span>.<span class="fn">join</span>(row))
+<span class="cmt"># R G R G</span>
+<span class="cmt"># G B G B</span>
+<span class="cmt"># R G R G</span>
+<span class="cmt"># G B G B</span>
+<span class="cmt"># 每个像素只有 1 个通道值——RAW 图像数据是单通道马赛克</span></code></pre>
+
+  <pre><code><span class="cmt"># 最朴素的去马赛克：每个 2x2 单元解出 R/G/G/B 四个值，</span>
+<span class="cmt"># 整个单元统一填成 (R, (G1+G2)/2, B)——缺失的颜色是"借"出来的</span>
+<span class="kw">def</span> <span class="fn">demosaic_naive</span>(<span class="param">mosaic</span>: np.ndarray) <span class="op">-&gt;</span> np.ndarray:
+    h, w = mosaic.shape
+    rgb = np.<span class="fn">zeros</span>((h, w, <span class="num">3</span>), dtype=np.float32)
+    <span class="kw">for</span> y <span class="kw">in</span> <span class="fn">range</span>(<span class="num">0</span>, h, <span class="num">2</span>):
+        <span class="kw">for</span> x <span class="kw">in</span> <span class="fn">range</span>(<span class="num">0</span>, w, <span class="num">2</span>):
+            r  = mosaic[y,     x]       <span class="cmt"># 单元左上：R</span>
+            g1 = mosaic[y,     x + <span class="num">1</span>]   <span class="cmt"># 单元右上：G</span>
+            g2 = mosaic[y + <span class="num">1</span>, x]       <span class="cmt"># 单元左下：G</span>
+            b  = mosaic[y + <span class="num">1</span>, x + <span class="num">1</span>]   <span class="cmt"># 单元右下：B</span>
+            rgb[y:y + <span class="num">2</span>, x:x + <span class="num">2</span>] = (r, (g1 + g2) / <span class="num">2</span>, b)
+    <span class="kw">return</span> rgb
+<span class="cmt"># 真实解码器用更聪明的插值（AHD、VNG 等），原理都是"从邻居借缺失的颜色"</span></code></pre>
+
+  <table>
+    <tr><th>CFA 阵列</th><th>2×2 排列</th><th>说明</th></tr>
+    <tr><td>RGGB</td><td>R G / G B</td><td>最常见，多数相机默认</td></tr>
+    <tr><td>BGGR</td><td>B G / G R</td><td>部分机型采用</td></tr>
+    <tr><td>GBRG</td><td>G B / R G</td><td>部分机型采用</td></tr>
+    <tr><td>GRBG</td><td>G R / B G</td><td>部分机型采用</td></tr>
+    <tr><td>X-Trans（Fujifilm）</td><td>6×6 非拜耳</td><td>富士独有，减少摩尔纹</td></tr>
+  </table>
+
+  <!-- ========== 3.4 常见 RAW 格式巡礼 ========== -->
+  <h2>3.4 常见 RAW 格式巡礼：各家底片的「方言」</h2>
+
+  <p>系统分析的第二招是"归类"：给散落各家的"方言"排队。素材笔记列了一份相当完整的清单：<strong>3FR</strong>（Hasselblad 哈苏）、<strong>DCR / K25 / KDC</strong>（Kodak 柯达）、<strong>IIQ</strong>（Phase One 飞思）、<strong>CR2</strong>（Canon 佳能）、<strong>ERF</strong>（Epson 爱普生）、<strong>MEF</strong>（Mamiya 玛米亚）、<strong>MOS</strong>（Leaf）、<strong>NEF</strong>（Nikon 尼康）、<strong>ORF</strong>（Olympus 奥林巴斯）、<strong>PEF</strong>（Pentax 宾得）、<strong>RW2</strong>（Panasonic 松下）、<strong>ARW / SRF / SR2</strong>（Sony 索尼）——这些格式大多基于 TIFF，但"可能在许多方面偏离 TIFF 标准，包括使用非标准的文件头、加入额外的图像标记，甚至对部分标签的数据加密"。</p>
+
+  <p>为什么各家非要搞私有格式？素材笔记给了两个原因：一是 DNG 出现之前确实没有统一的 RAW 格式；二是更重要的——<strong>各家希望用"只对自己公开的数据格式"保护私密信息</strong>（算法参数、镜头校正数据等）。这些私有数据藏在私有 tag 里，第三方解码器只能靠逐格式适配来读。注意两个例外：Canon 2018 年起的新格式 <strong>CR3</strong> 改用 ISO-BMFF 容器（和 MP4 同族），不再沿用 TIFF 头；Fujifilm 的 <strong>RAF</strong> 也是自有容器。这也解释了第 6 章 LibRaw 为什么维护着几十种格式的适配代码——每一行都是跟一种"方言"谈判的结果。</p>
+
+  <pre><code><span class="cmt"># 验明正身：一个目录里的底片，让 file 逐个自报家门</span>
+<span class="fn">file</span> *.CR2 *.NEF *.ARW *.ORF *.RW2
+<span class="cmt"># IMG_0001.CR2: Canon CR2 RAW image data, 6000x4000, little-endian</span>
+<span class="cmt"># DSC_0001.NEF: Nikon NEF raw image data, 6048x4024, little-endian</span>
+<span class="cmt"># DSC00001.ARW: Sony ARW raw image data, 6000x4000, little-endian</span>
+<span class="cmt"># P1010001.ORF: Olympus ORF raw image data, 5184x3888, little-endian</span>
+<span class="cmt"># P1000001.RW2: Panasonic RAW image data, 6000x4000, little-endian</span></code></pre>
+
+  <pre><code><span class="cmt"># 尽管"方言"不同，拍摄参数 tag 大多继承自 TIFF/EP，字段名通用</span>
+<span class="fn">exiftool</span> -s -Make -Model -ISO DSC_0001.NEF
+<span class="cmt"># Make : NIKON CORPORATION</span>
+<span class="cmt"># Model: NIKON D850</span>
+<span class="cmt"># ISO  : 400</span></code></pre>
+
+  <table>
+    <tr><th>厂商</th><th>扩展名</th><th>结构基础</th><th>备注</th></tr>
+    <tr><td>Canon 佳能</td><td>CR2 / CR3</td><td>CR2 基于 TIFF；CR3 为 ISO-BMFF</td><td>CR3 自 2018 年起，容器与 MP4 同族</td></tr>
+    <tr><td>Nikon 尼康</td><td>NEF</td><td>TIFF 变体</td><td>有压缩与未压缩两种存储</td></tr>
+    <tr><td>Sony 索尼</td><td>ARW（旧 SRF/SR2）</td><td>TIFF 变体</td><td>部分机型 tag 带加密</td></tr>
+    <tr><td>Olympus 奥林巴斯</td><td>ORF</td><td>TIFF 变体</td><td>——</td></tr>
+    <tr><td>Pentax 宾得</td><td>PEF</td><td>TIFF 变体</td><td>不少机型提供 DNG 直出选项</td></tr>
+    <tr><td>Panasonic 松下</td><td>RW2</td><td>TIFF 变体</td><td>与 Leica 部分机型共用</td></tr>
+    <tr><td>Fujifilm 富士</td><td>RAF</td><td>自有容器</td><td>X-Trans 传感器，CFA 非拜耳</td></tr>
+    <tr><td>Hasselblad 哈苏</td><td>3FR</td><td>TIFF 变体</td><td>中画幅后背</td></tr>
+    <tr><td>Phase One 飞思</td><td>IIQ</td><td>TIFF 变体</td><td>智能压缩</td></tr>
+    <tr><td>Kodak 柯达</td><td>DCR / K25 / KDC</td><td>TIFF 变体</td><td>早期数码后背</td></tr>
+  </table>
+
+  <!-- ========== 3.5 DNG ========== -->
+  <h2>3.5 DNG：Adobe 的统一底片</h2>
+
+  <p>面对"方言"林立，Adobe 在 2004 年 9 月 27 日发布了 <strong>DNG</strong>（Digital Negative，数字负片），目标就是做"一统底片江湖"的通用格式。DNG 规范是<strong>公开的、无专利限制</strong>的，任何厂商和个人都可以实现。结构上它毫不另起炉灶：DNG 是 <strong>TIFF 6.0 的直接扩展，与 TIFF/EP 兼容</strong>——它使用的 tag 基本都定义在 TIFF 或 TIFF/EP 中，DNG 规范本身主要规定数据的组织方式、颜色空间转换等（素材笔记原话）。同时 DNG 内嵌 EXIF 与 XMP 元数据。最直观的证据：DNG 规范明确要求读取器接受 <code>.DNG</code> 与 <code>.TIF</code> 两种扩展名——把 photo.dng 改成 photo.tif，TIFF 读取器照样能打开，这正是素材笔记说的"DNG 实际上就是扩张的 TIFF"。</p>
+
+  <p>DNG 规范从 2004 年至今持续演进（关键版本见下表）。对服务端开发者最重要的是两条：一是 1.4 版本加入的<strong>有损 JPEG 压缩</strong>（Lossy DNG）——体积可以做到接近 JPEG，同时保留"底片"的处理属性，适合做代理文件（Proxy DNG）；二是 1.7 版本加入的 <strong>JPEG XL</strong> 压缩。此外 Adobe 提供免费的 <strong>DNG Converter</strong> 转换工具，可以把各家 RAW 批量转成 DNG——许多摄影师的存档流程就是"所有底片一律转 DNG"，图的就是格式统一、长期可读。</p>
+
+  <pre><code><span class="cmt"># DNG 就是"扩展的 TIFF"：扩展名改成 .tif 照样被识别</span>
+<span class="fn">file</span> photo.dng
+<span class="cmt"># photo.dng: TIFF image data, little-endian, direntries=13, height=4000, ...</span>
+<span class="fn">cp</span> photo.dng photo.tif
+<span class="fn">file</span> photo.tif
+<span class="cmt"># photo.tif: TIFF image data, little-endian, direntries=13, ...  （同上）</span>
+<span class="cmt"># DNG 规范要求读取器接受 .DNG 与 .TIF 两种扩展名</span></code></pre>
+
+  <pre><code><span class="cmt"># pip install tifffile —— 读 TIFF/DNG 的 Python 瑞士军刀</span>
+<span class="kw">import</span> tifffile
+
+<span class="kw">with</span> tifffile.<span class="fn">TiffFile</span>(<span class="str">"photo.dng"</span>) <span class="kw">as</span> tif:
+    page = tif.pages[<span class="num">0</span>]
+    <span class="fn">print</span>(page.shape)                     <span class="cmt"># (4000, 6000)：单通道马赛克，没有第 3 维</span>
+    <span class="fn">print</span>(page.tags[<span class="str">"Make"</span>].value)        <span class="cmt"># b'Canon' 等厂商信息</span>
+    <span class="fn">print</span>(page.tags.<span class="fn">get</span>(<span class="str">"DNGVersion"</span>))    <span class="cmt"># DNG 规范版本 tag（编号 50706）</span>
+<span class="cmt"># 示例输出：</span>
+<span class="cmt"># (4000, 6000)</span>
+<span class="cmt"># b'Canon'</span>
+<span class="cmt"># Tag(50706) DNGVersion @ offset 1234, value=(1, 6, 0, 0)</span></code></pre>
+
+  <table>
+    <tr><th>规范版本</th><th>发布时间</th><th>关键新增</th></tr>
+    <tr><td>1.0.0.0</td><td>2004-09</td><td>DNG 初版发布</td></tr>
+    <tr><td>1.2.0.0</td><td>2008-04</td><td>规范补充与修正</td></tr>
+    <tr><td>1.3.0.0</td><td>2009-06</td><td>引入 Opcode 机制（镜头畸变/暗角校正）</td></tr>
+    <tr><td>1.4.0.0</td><td>2012-09</td><td>有损 JPEG 压缩（Lossy DNG）、浮点数据、Proxy DNG</td></tr>
+    <tr><td>1.5.0.0</td><td>2019-05</td><td>深度图（Depth Maps）</td></tr>
+    <tr><td>1.6.0.0</td><td>2021-12</td><td>64 位 BigTIFF、语义遮罩、增益图</td></tr>
+    <tr><td>1.7.0.0 / 1.7.1.0</td><td>2023-06 / 2023-09</td><td>新增 JPEG XL 压缩（现行规范）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>判断一个 .dng 是不是"真·底片"还有一层细节：DNG 规范把传感器数据分成两类，<code>PhotometricInterpretation</code>=32803（CFA）是真正的拜耳马赛克；34892（LinearRaw）是已经去马赛克、但没做颜色处理的线性数据（Foveon X3 这类无 CFA 传感器或手机多摄常用）。两类都能继续做白平衡和调色，但"可调程度"不同——前者才是完整意义上的底片。</p>
+  </div>
+
+  <!-- ========== 3.6 四者关系与实战 ========== -->
+  <h2>3.6 四者关系图与实战：从底片到预览</h2>
+
+  <p>系统分析的第三招是"画关系图"。素材笔记把四个概念的关系讲得很清楚：<strong>TIFF 和 DNG 同为规范（Specification）</strong>，分别定义了 .tif/.tiff 和 .dng 的文件格式，TIFF 规范同时定义了 baseline（基线）及部分扩展 tag；<strong>TIFF/EP</strong>（ISO 12234-2）定义并规范了"电子影像"中所使用的 tag；<strong>DNG 同时与 TIFF 和 TIFF/EP 兼容，并包含 EXIF 和 XMP 信息</strong>——DNG 实际上就是扩展的 TIFF。一句话记忆：TIFF 是"通用容器"，TIFF/EP 给容器补了"相机配件"，各厂商 RAW 是"方言化的组装"，DNG 则是 Adobe 按统一标准重新组装、且公开图纸的那一款。</p>
+
+  <pre><code>TIFF 规范（.tif / .tiff）—— 通用容器：头 + IFD + tag + 图像数据
+   |
+   +-- 扩展出 TIFF/EP（ISO 12234-2）：定义"电子影像"专用 tag
+   |       （CFA 颜色滤波矩阵、传感器信息、拍摄参数等）
+   |
+   +-- 各厂商 RAW：基于 TIFF/TIFF-EP，但各自"方言化"
+   |       （CR2 / NEF / ARW / ORF / PEF / RW2 / 3FR ...）
+   |       非标准文件头、私有 tag、甚至数据加密
+   |       例外：CR3（ISO-BMFF）、RAF（自有容器）
+   |
+   +-- DNG（2004，Adobe）：TIFF 6.0 的直接扩展
+           兼容 TIFF/EP，内嵌 EXIF + XMP，公开无专利限制
+           目标：把上面的"方言"统一成一种通用底片</code></pre>
+
+  <p>关系图画完，落地到素材里的真实场景：公司要求在 Linux 服务端把 dng、CR2 等底片转成 JPEG 供预览。素材笔记采用的方案是 <strong>dcraw + ffmpeg</strong> 组合：dcraw 是 David Coffin 写的经典 RAW 解码命令行工具（LibRaw 就是它的后继库，第 6 章主角）；先看底片有没有内嵌缩略图，有就直接提取（<code>dcraw -e</code>），没有就完整解码成 PPM（<code>dcraw -v</code>），再交给 ffmpeg 转 JPEG。这条流程每一步都在跟 3.2 节的五层结构打交道：提取缩略图只读"缩略图/JPEG 预览"层，毫秒级；完整解码则要处理"传感器元数据 + 传感器图像数据"，做去马赛克、白平衡，代价高一个数量级。</p>
+
+  <pre><code><span class="cmt"># 真实需求：服务端拿到 dng / CR2 底片，转 JPEG 供预览（素材原流程）</span>
+<span class="cmt"># 1) 底片自带缩略图 → 直接提取，秒出预览</span>
+<span class="fn">dcraw</span> -e test.dng          <span class="cmt"># 输出 test.thumb.jpg（注意：缩略图也可能不存在）</span>
+
+<span class="cmt"># 2) 没有缩略图 → 完整解码成 PPM（无损中间格式）</span>
+<span class="fn">dcraw</span> -v test.dng          <span class="cmt"># 输出 test.ppm，-v 显示解码过程</span>
+
+<span class="cmt"># 3) PPM 再交给 ffmpeg 转成 JPEG</span>
+<span class="fn">ffmpeg</span> -i test.ppm out.jpg
+
+<span class="cmt"># 批量：循环处理一整个目录（先试缩略图，失败再完整解码）</span>
+<span class="kw">for</span> f <span class="kw">in</span> *.dng; <span class="kw">do</span>
+    <span class="fn">dcraw</span> -e <span class="str">"$f"</span>
+    test -f <span class="str">"${f%.dng}.thumb.jpg"</span> || <span class="fn">dcraw</span> -v <span class="str">"$f"</span>
+<span class="kw">done</span></code></pre>
+
+  <p>这一章我们完成了一次完整的系统分析：先讲清"底片为什么存在"（3.1），再拆开五层结构（3.2），深入传感器那一层看清拜耳阵列（3.3），给各家方言排队（3.4），认识统一方案 DNG（3.5），最后把四者关系画成一张图并落地到真实工作流（3.6）。两个钩子留给后面的章节：RAW 文件里那些拍摄参数 tag 到底是什么、怎么读写——第 4 章《图像元数据：EXIF 与 XMP》专门讲；而以代码方式直面五层结构、把几十种"方言"解码成位图——第 6 章 LibRaw 就是干这个的。到那时候你会发现，3.2 节那张解剖图，就是 LibRaw 源码的阅读地图。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① RAW 文件是相机直接输出的最终成品照片；② TIFF/EP 是一份 ISO 标准，标准号为 ISO 12234-2；③ 拜耳阵列中每个像素同时记录红、绿、蓝三种颜色；④ DNG 是基于 TIFF 6.0 扩展、兼容 TIFF/EP 的开放格式；⑤ 把 .dng 扩展名改成 .tif 后文件就损坏了。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 3.1 节"底片 vs 成品"、3.2 节 TIFF/EP 的标准号、3.3 节拜耳阵列的单通道本质、3.5 节 DNG 的兼容性要求。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 错——RAW 是传感器原始数据，JPEG 才是相机处理后的成品；② 对——TIFF/EP 全称 Tag Image File Format / Electronic Photography，标准号 ISO 12234-2；③ 错——每个像素只有一块滤色片、只记录一种颜色，是单通道马赛克；④ 对——DNG 是 TIFF 6.0 的扩展，兼容 TIFF/EP，规范公开无专利限制；⑤ 错——DNG 规范要求读取器接受 .DNG 与 .TIF 两种扩展名，改名不损坏文件。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：位深与结构 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 14-bit RAW 每通道能记录多少级亮度？是 8-bit JPEG 的多少倍？② 写出 RAW 五层结构中"传感器元数据"层至少包含的三类信息；③ 为什么 RAW 的传感器图像数据是单通道马赛克而不是 RGB 三通道？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>位深计算用 2^14；传感器元数据的内容在 3.2 节；单通道的原因在 3.3 节拜耳阵列。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 2^14 = 16384 级，是 8-bit（256 级）的 64 倍；② 传感器尺寸、颜色滤波矩阵（CFA）的属性、颜色配置文件（也可答色彩配置文件）；③ 因为传感器每个像素只有一块滤色片、只能记录一种颜色，图像数据层存的自然是单通道拜耳马赛克；要得到 RGB 三通道必须做去马赛克插值。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：流程判断 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材里的服务端转码流程用了两条路径：dcraw -e 和 dcraw -v + ffmpeg。① 两条路径各自解决什么问题？② 为什么"先试缩略图"是合理的工程决策？③ 如果底片没有内嵌缩略图，完整解码输出的 PPM 是单通道还是 RGB 三通道？为什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>dcraw -e 只读五层结构里的"缩略图/JPEG 预览"层；完整解码要走"传感器元数据 + 图像数据"并做去马赛克；想想两种路径的算力成本差别。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① dcraw -e 直接提取内嵌缩略图，毫秒级；dcraw -v 完整解码传感器图像数据（含去马赛克、白平衡等）输出 PPM，再经 ffmpeg 转 JPEG；② 预览场景大多只需要小图，读缩略图层完全够用，省掉几十倍的解码算力——这正是"缩略图层"存在的意义（3.2 节）；③ RGB 三通道——因为完整解码过程中已经做了去马赛克，PPM 是每像素 3 个值的位图；RAW 图像数据层（单通道）到 PPM（RGB）之间隔着的正是 demosaic 这一步。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：系统分析实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你收到一个陌生扩展名 .rw2 的"底片"，手头有 file、hexdump、exiftool、dcraw 四个工具。请设计一个系统分析流程把它拆开，并说明每一步对应 RAW 五层结构中的哪一层、能得出什么结论。延伸思考：各厂商为什么至今不愿放弃私有 RAW 格式？DNG 规范公开且免费，为什么没能彻底"一统天下"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按"先识别、再解剖、后读值、终解码"的次序组织；延伸题回到 3.4 节"保护私密信息"的动机与生态惯性。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>流程：① file 识别——确认是 Panasonic RW2，属于"文件头/格式家族"层，结论：TIFF 系方言；② hexdump 看头——验证字节序与 TIFF magic，可能发现非标准文件头（3.4 节说的"偏离 TIFF 标准"），仍属文件头层；③ exiftool 读 tag——把 IFD 里的拍摄参数翻译出来（图像元数据层），还可能读到 CFA 排列、传感器尺寸（传感器元数据层）；④ dcraw -v 完整解码——真正处理传感器图像数据层，输出 PPM 后可转 JPEG；若想看内嵌预览，可先 dcraw -e（缩略图层）。延伸：厂商动机一是算法与校正参数属于商业机密（3.4 节素材原话），二是生态惯性——独家格式让用户留在自家软件生态；DNG 没能彻底统一的原因包括厂商不愿丧失差异化控制权、既有工作流惯性，但 DNG 作为"存档格式"的地位已经确立，不少相机也提供 DNG 直出选项。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

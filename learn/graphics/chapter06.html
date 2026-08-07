@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第6章：LibRaw：RAW 解码实战 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter06.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第6章：LibRaw：RAW 解码实战 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter06.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="6" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：LibRaw：RAW 解码实战</h1>
+  <p class="chapter-subtitle">工欲善其事，必先利其器：从 git clone 源码、绕开 dcraw.c 下载的坑，到 open_file → unpack → dcraw_process 三步把底片读成位图</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「工匠不打没准备的仗。第 3 章我们拆过底片——五层结构、拜耳马赛克、各家方言，图纸都在脑子里了；可图纸不能当饭吃，得有一把趁手的刀。这一章我们就亲手打一把刀：从 git clone 取钢（6.2）、磨刀石备料（6.3 的 dcraw.c 下载坑）、开刃定型（6.4 的 configure/make/install）、试刀劈柴（6.5 的命令行）、再到入炉淬火（6.6 的核心 API），最后实战砍一遍从 CR2 到 JPEG 的完整流程（6.7）。刀好，活才快。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 为什么是 LibRaw ========== -->
+  <h2>6.1 工欲善其事：为什么是 LibRaw</h2>
+
+  <p>还记得第 3 章那张 RAW 解剖图吗？文件头是"门牌号"，IFD 是"目录"，tag 是"条目"，传感器图像数据是"正文"，而拜耳马赛克让每个像素只记录一种颜色。图纸画得再清楚，真到了服务端要处理 dng、CR2 的时候，总不能自己写解析器——几十家厂商、几十种方言，光"非标准文件头 + 私有 tag + 数据加密"这三样就够写三年。这正是<strong>LibRaw 存在的理由：把"读懂各种 RAW"这件事封装成一个库，让你的程序只跟一种接口打交道</strong>。</p>
+
+  <p>LibRaw 是什么？官网（libraw.org）的定义很直白：<strong>一个从数码相机 RAW 文件里提取数据的库</strong>，支持 CRW/CR2、NEF、RAF、DNG、MOS、KDC、DCR 等几乎所有 RAW 格式。它的血统值得一提：LibRaw 2008 年立项，基础是 David Coffin 写的经典命令行工具 dcraw.c；dcraw 本身在 2018 年停止维护，此后新机型的支持全靠 LibRaw 团队自己维护，现行稳定版是 0.22.x。许可证是双许可：LGPL 2.1 或 CDDL 1.0，二选一，对服务端商用都友好。第 5 章选型全景里它被定位为"RAW 解码专用"，这一章就把它从源码装起来、用起来。</p>
+
+  <pre><code><span class="cmt"># 先验明正身：素材里的真实需求——服务端拿到的就是这类"底片"</span>
+$ <span class="fn">file</span> IMG_0001.CR2 test.dng
+<span class="cmt"># IMG_0001.CR2: Canon CR2 RAW image data, 6000x4000, little-endian</span>
+<span class="cmt"># test.dng:    TIFF image data, little-endian, direntries=13, height=4000 ...</span>
+
+<span class="cmt"># 体积对比：同一画面，底片通常比 JPEG 大一个数量级</span>
+$ <span class="fn">ls</span> -lh IMG_0001.JPG IMG_0001.CR2
+<span class="cmt"># -rw-r--r-- 482K IMG_0001.JPG</span>
+<span class="cmt"># -rw-r--r-- 5.8M IMG_0001.CR2</span></code></pre>
+
+  <pre><code><span class="cmt"># LibRaw 与 dcraw 的血缘（官网 Project history）：</span>
+dcraw.c（Dave Coffin，1997-2018 维护）
+   └── 2008 年 LibRaw 立项：把 dcraw.c 改造成可被程序调用的库
+        ├── 去掉全局变量、做成线程安全
+        ├── 大幅增强元数据提取
+        └── 2018 年 dcraw 停更后，新机型支持全部由 LibRaw 团队接手
+            （现行稳定版 0.22.x，双许可 LGPL 2.1 / CDDL 1.0）</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>"工欲善其事"的第一层意思：<strong>先确认工具该不该自己造</strong>。第 3 章把 RAW 结构讲透，是为了让你读得懂 LibRaw 在干什么、出了问题知道往哪层查——不是为了让你手写解码器。工具的价值是替你挡住"方言的复杂度"，你要操心的是业务：转码、预览、元数据。</p>
+  </div>
+
+  <!-- ========== 6.2 磨刀：源码下载与编译环境 ========== -->
+  <h2>6.2 磨刀：源码下载与编译环境</h2>
+
+  <p>决定自己编译 LibRaw 的原因很实际：官方发布页提供 0.22.2 的源码包，但很多发行版的包管理器里版本偏旧，而且我们后面要写程序、想直接读源码排错，源码树最合适。第一步是克隆官方仓库：<strong>git clone https://github.com/LibRaw/LibRaw.git</strong>。注意素材笔记里是 2020 年的操作（LibRaw 0.19/0.20 时代），那时克隆下来目录里就有 DEVELOPER-NOTES 文件——它提示你：<strong>先执行 mkdist.sh 脚本来生成编译所需的东西</strong>。为什么？因为仓库里没有直接放 configure 脚本，它要靠 autoconf/automake 现场生成；mkdist.sh 就是干这个的，顺带还会拉一个特殊文件（下一节的主角 dcraw.c）。</p>
+
+  <p>编译环境按素材里的真实流程准备依赖。素材跑在 CentOS/RHEL 系，用 yum 装：<strong>autoconf、automake</strong>（生成 configure 与 Makefile）、<strong>libtool</strong>（构建共享库）、<strong>gcc / gcc-c++</strong>（C/C++ 编译器）、<strong>make</strong>（构建驱动）、<strong>pkgconfig</strong>（生成 libraw.pc）、<strong>freetype-devel</strong>（字体/文本相关，可选模块需要）、<strong>lcms2 与 lcms2-devel</strong>（色彩管理库 Little CMS，处理 ICC 色彩配置文件）、<strong>jasper 与 jasper-devel</strong>（JPEG-2000 编解码，部分格式需要）。Debian/Ubuntu 系把 yum 换成 apt、包名去掉 -devel 后缀（如 liblcms2-dev）即可，思路完全一样。</p>
+
+  <pre><code><span class="cmt"># 素材真实流程：克隆源码（现行主分支即 0.22 系）</span>
+$ <span class="fn">git</span> clone https://github.com/LibRaw/LibRaw.git
+$ <span class="fn">cd</span> LibRaw
+
+<span class="cmt"># 听 DEVELOPER-NOTES 的话：先看它说了什么</span>
+$ <span class="fn">head</span> -<span class="num">30</span> DEVELOPER-NOTES
+<span class="cmt"># 大意：仓库需要先跑 mkdist.sh 生成 configure 等构建文件</span>
+
+$ <span class="fn">ls</span>
+<span class="cmt"># Changelog.txt  COPYRIGHT  Makefile.am  configure.ac  internal/</span>
+<span class="cmt"># lib/  mkdist.sh  samples/  src/  ...</span></code></pre>
+
+  <pre><code><span class="cmt"># 素材真实流程（CentOS/RHEL 系，yum 装依赖）：</span>
+$ <span class="fn">yum</span> install autoconf automake freetype-devel gcc gcc-c++ libtool make pkgconfig -y
+$ <span class="fn">yum</span> install wget -y
+$ <span class="fn">yum</span> install lcms2 lcms2-devel -y
+$ <span class="fn">yum</span> install jasper jasper-devel -y
+
+<span class="cmt"># 检查关键工具是否就位：</span>
+$ <span class="fn">autoconf</span> --version | <span class="fn">head</span> -<span class="num">1</span>
+$ <span class="fn">g++</span> --version | <span class="fn">head</span> -<span class="num">1</span></code></pre>
+
+  <!-- ========== 6.3 排障：dcraw.c 下载失败 ========== -->
+  <h2>6.3 排障：dcraw.c 下载失败的坑</h2>
+
+  <p>磨刀总会碰到硌手的石头。素材笔记里记录了一个真实坑：<strong>执行 mkdist.sh 时，它尝试从网上下载 dcraw.c，结果失败了</strong>。dcraw.c 是 Dave Coffin 的经典工具源码，LibRaw 的历史代码直接继承自它，mkdist.sh 会在生成构建文件时把它拉下来（现行版本里这份源码对应关系已经重构进 src/，但这个"脚本要联网拉东西"的思路保留了下来）。下载失败的原因通常是网络不通或站点临时不可达——服务端环境尤其常见。</p>
+
+  <p>素材的解决方法是教科书式的"看脚本、改脚本、手动补"：先打开 mkdist.sh 找到下载 dcraw.c 的那一行，把自动下载的步骤注释或绕过去，然后<strong>手动用 wget 从 dcraw 的官方站点下载：https://www.dechifro.org/dcraw/dcraw.c</strong>（dechifro.org 就是 Dave Coffin 的站点，LibRaw README 里也指向它），把文件放到脚本期望的位置，再重新执行 mkdist.sh。这条排障链的价值不在命令本身，而在思路：<strong>构建脚本失败时，先读脚本，再决定是修网络、修脚本还是手动补文件</strong>。</p>
+
+  <pre><code><span class="cmt"># 1) 打开 mkdist.sh，找到与 dcraw 相关的下载步骤</span>
+$ <span class="fn">grep</span> -n dcraw mkdist.sh
+<span class="cmt"># ... 某一行：wget 某处/dcraw.c（素材里这一行下载失败）</span>
+
+<span class="cmt"># 2) 手动下载官方 dcraw.c，放到脚本期望的路径</span>
+$ <span class="fn">wget</span> https://www.dechifro.org/dcraw/dcraw.c
+<span class="cmt"># --2026-08-08 ... 'dcraw.c' saved [198K]</span>
+
+<span class="cmt"># 3) 修改 mkdist.sh：把失败的自动下载步骤注释掉（前面加 #）</span>
+<span class="cmt">#    （示意，具体行号以你克隆的版本为准）</span>
+<span class="cmt"># wget http://example.invalid/dcraw/dcraw.c   <- 注释掉</span>
+
+<span class="cmt"># 4) 重新执行 mkdist.sh，这次它直接用本地文件</span>
+$ <span class="fn">./mkdist.sh</span></code></pre>
+
+  <pre><code><span class="cmt"># 下载完验证文件不是 HTML 错误页：</span>
+$ <span class="fn">file</span> dcraw.c
+<span class="cmt"># dcraw.c: C source, ASCII text, with very long lines</span>
+$ <span class="fn">wc</span> -l dcraw.c
+<span class="cmt"># 15000 左右（dcraw.c 是著名的"单文件怪物"）</span>
+
+<span class="cmt"># mkdist.sh 跑完后，configure 脚本就生成了：</span>
+$ <span class="fn">ls</span> configure
+<span class="cmt"># configure</span></code></pre>
+
+  <div class="warning">
+    <p><strong>鲁班提醒</strong>：素材是 2020 年的环境，如今克隆 master 分支时仓库结构已重构，mkdist.sh 的行为也可能变化。遇到脚本报错，第一动作永远是 <code>head</code> / <code>grep</code> 读脚本本身，而不是对着旧笔记抄命令。方法论不变，命令要按现场来。</p>
+  </div>
+
+  <!-- ========== 6.4 开刃：configure、make、make install ========== -->
+  <h2>6.4 开刃：configure、make、make install</h2>
+
+  <p>构建文件齐了，接下来是经典的 autotools 三连：<strong>configure → make → make install</strong>。素材里的 configure 命令是 <code>./configure --prefix=/usr/local/helios CXX=/usr/local/bin/g++</code>——两个参数各有用意：<strong>--prefix</strong> 指定安装目录（装到 /usr/local/helios 而不是系统目录，便于管理、卸载干净）；<strong>CXX=/usr/local/bin/g++</strong> 是指定 C++ 编译器路径（素材机器上系统自带的是老版本 g++，他们另外装了新的，用 CXX 变量指过去）。注意素材那台机器的 g++ 是 4.8.5——这个数字先记下，6.7 节会引出一个大坑。</p>
+
+  <p>make 开始编译：LibRaw 会同时产出两个库——<strong>libraw</strong>（单线程版，一般程序链接它）和 <strong>libraw_r</strong>（reentrant 可重入版，编译时带 -pthread，多线程程序用）；头文件装到 include/libraw/；示例程序装到 bin/（raw-identify、simple_dcraw、dcraw_emu 等，下一节的主角）；另外还有 pkg-config 用的 libraw.pc / libraw_r.pc。make install 之后，用 <code>pkg-config --modversion libraw</code> 验证安装，用 <code>ls</code> 看看三个目录的产物——"工欲善其事"的第三步：<strong>验收工具真的装好了</strong>。</p>
+
+  <pre><code><span class="cmt"># 素材真实流程：configure（指定安装前缀 + C++ 编译器）</span>
+$ <span class="fn">./configure</span> --prefix=/usr/local/helios CXX=/usr/local/bin/g++
+<span class="cmt"># checking for g++... /usr/local/bin/g++</span>
+<span class="cmt"># checking for gcc... gcc</span>
+<span class="cmt"># ...</span>
+<span class="cmt"># config.status: creating Makefile</span>
+
+<span class="cmt"># 编译 + 安装</span>
+$ <span class="fn">make</span>
+<span class="cmt"># g++ ... -c src/libraw_c_api.cpp ...</span>
+$ <span class="fn">make</span> install
+<span class="cmt"># /usr/local/helios/bin/raw-identify</span>
+<span class="cmt"># /usr/local/helios/bin/simple_dcraw</span>
+<span class="cmt"># /usr/local/helios/bin/dcraw_emu</span>
+<span class="cmt"># /usr/local/helios/lib/libraw.a  /usr/local/helios/lib/libraw_r.a</span>
+<span class="cmt"># /usr/local/helios/include/libraw/libraw.h</span></code></pre>
+
+  <pre><code><span class="cmt"># 验收：三个视角各看一眼</span>
+$ <span class="fn">ls</span> /usr/local/helios/lib /usr/local/helios/include/libraw /usr/local/helios/bin
+$ <span class="fn">pkg-config</span> --modversion libraw
+<span class="cmt"># 0.22.2（素材时代是 0.19/0.20，现行版本号以实际编译为准）</span>
+$ <span class="fn">/usr/local/helios/bin/raw-identify</span> IMG_0001.CR2
+<span class="cmt"># Canon EOS R5 6000x4000 ...  <- 能读出底片信息，说明库装好了</span>
+
+<span class="cmt"># 写程序时怎么找到库？链接参数：</span>
+$ <span class="fn">pkg-config</span> --cflags --libs libraw
+<span class="cmt"># -I/usr/local/helios/include/libraw -L/usr/local/helios/lib -lraw</span></code></pre>
+
+  <!-- ========== 6.5 试刀：dcraw_emu 命令行 ========== -->
+  <h2>6.5 试刀：dcraw_emu 命令行</h2>
+
+  <p>刀开了刃，先劈两根柴试试手。素材笔记里提到的命令行工具是 <strong>libraw_dcraw</strong>——那是当时对"dcraw 模拟器"的叫法；现行 0.22 源码树里对应的示例程序叫 <strong>dcraw_emu</strong>（samples/dcraw_emu.cpp，编译产物 bin/dcraw_emu），官网的说明是"almost complete dcraw emulator"（几乎完整的 dcraw 模拟器）。它把 dcraw 的命令行参数几乎全部继承了下来，是验证"库能不能读某个文件"最快的工具——也是素材里服务端转码脚本的骨干。</p>
+
+  <p>常用参数挑几个说人话：<strong>-v</strong> 详细模式（打印解码过程）；<strong>-w</strong> 用相机白平衡、<strong>-a</strong> 用整幅图像平均做白平衡；<strong>-q N</strong> 选去马赛克算法（0=线性、1=VNG、2=PPG、3=AHD、4=DCB——第 3 章讲过，去马赛克就是把缺的颜色从邻居"借"出来，算法质量决定锐度）；<strong>-6</strong> 输出 16 位、<strong>-T</strong> 输出 TIFF（默认 PPM）；<strong>-o sRGB</strong> 指定输出色彩空间；<strong>-t N</strong> 旋转翻转；<strong>-h</strong> 输出半尺寸图（快一倍）。记住这些，是因为第 3 章那条"dcraw -e 提取缩略图 / dcraw -v 完整解码 + ffmpeg 转 JPEG"的流程，现在换汤不换药。</p>
+
+  <pre><code><span class="cmt"># 试刀 1：完整解码成 PPM（-v 看过程，-w 用相机白平衡）</span>
+$ <span class="fn">dcraw_emu</span> -v -w IMG_0001.CR2
+<span class="cmt"># Loading Canon EOS R5 image from IMG_0001.CR2 ...</span>
+<span class="cmt"># Scaling against darkness ...</span>
+<span class="cmt"># AHD interpolation ...        <- 默认去马赛克算法</span>
+<span class="cmt"># IMG_0001.ppm 写入完成</span>
+
+<span class="cmt"># 试刀 2：直接输出 TIFF，并指定 16 位 + sRGB 色彩空间</span>
+$ <span class="fn">dcraw_emu</span> -T -6 -o sRGB -q <span class="num">3</span> IMG_0001.CR2
+<span class="cmt"># 输出 IMG_0001.tiff（-q 3 = AHD 去马赛克）</span>
+
+<span class="cmt"># 试刀 3：半尺寸 + 全图平均白平衡，快速出预览图</span>
+$ <span class="fn">dcraw_emu</span> -h -a -T IMG_0001.CR2</code></pre>
+
+  <pre><code><span class="cmt"># 素材服务端思路的"库版"：批量 CR2 -&gt; JPEG</span>
+<span class="cmt"># dcraw_emu 输出 PPM/TIFF，再用 ffmpeg 压成 JPEG（第 3 章同款组合）</span>
+$ <span class="kw">for</span> f <span class="kw">in</span> *.CR2; <span class="kw">do</span>
+    <span class="fn">dcraw_emu</span> -w -T <span class="str">"$f"</span>
+    <span class="fn">ffmpeg</span> -y -i <span class="str">"${f%.CR2}.tiff"</span> <span class="str">"${f%.CR2}.jpg"</span>
+<span class="kw">done</span>
+
+<span class="cmt"># 先看底片里有没有内嵌缩略图：simple_dcraw 模拟 dcraw -e 的行为</span>
+<span class="cmt"># （samples 里的另一个示例，专门提取内嵌预览图）</span>
+$ <span class="fn">simple_dcraw</span> -e test.dng
+<span class="cmt"># test.thumb.jpg 提取完成（毫秒级，不需要完整解码）</span></code></pre>
+
+  <!-- ========== 6.6 核心 API：三步走 ========== -->
+  <h2>6.6 核心 API：open_file → unpack → dcraw_process</h2>
+
+  <p>命令行只是试刀，真正的活要写进程序。LibRaw 的 C++ API 极简，核心就三步，而且每一步都对应第 3 章的五层结构：<strong>① open_file()</strong> 打开文件、解析文件头与各层元数据（IFD/tag 全读进 imgdata 结构：idata 里是厂商型号，sizes 里是尺寸，color 里是色彩信息，thumbnail 里是缩略图描述）；<strong>② unpack()</strong> 真正解压"传感器图像数据"层——把压缩的拜耳马赛克解成原始像素；<strong>③ dcraw_process()</strong> 做后处理：去马赛克、白平衡、缩放、色彩空间转换，产出可显示的 RGB 图像。官方原话：一个 LibRaw 对象同时只能处理一个文件，但可以串行处理任意多个文件。</p>
+
+  <p>两个细节必须知道：<strong>错误码约定</strong>——所有 API 返回 int，<code>LIBRAW_SUCCESS</code>（值为 0）表示成功，出错时用 <code>libraw_strerror(返回值)</code> 转成人话，写程序务必逐级检查（素材里 open_file 就崩过一次，见 6.7）；<strong>内存管理</strong>——如果用 <code>dcraw_make_mem_image()</code> 把结果拷进内存缓冲，用完必须 <code>dcraw_clear_mem()</code> 释放；处理完一张调用 <code>recycle()</code> 复位对象，好处理下一张。下面是完整的"CR2 → PPM"最小程序，照着官网 API 示例写，直接可编译。</p>
+
+  <pre><code><span class="cmt">// raw2ppm.cpp：LibRaw 三步走最小示例（照官网 API 示例组织）</span>
+<span class="ann">#include</span> <span class="str">&lt;cstdio&gt;</span>
+<span class="ann">#include</span> <span class="str">"libraw/libraw.h"</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span> <span class="op">**</span>argv) {
+    <span class="kw">if</span> (argc &lt; <span class="num">2</span>) {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"usage: %s &lt;rawfile&gt;\n"</span>, argv[<span class="num">0</span>]);
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="type">LibRaw</span> processor;                          <span class="cmt">// ① 创建图像处理器对象</span>
+
+    <span class="kw">int</span> ret = <span class="param">processor</span>.<span class="fn">open_file</span>(argv[<span class="num">1</span>]);     <span class="cmt">// ② 打开文件，读元数据</span>
+    <span class="kw">if</span> (ret != LIBRAW_SUCCESS) {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"open_file: %s\n"</span>,
+                <span class="fn">libraw_strerror</span>(ret));
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="cmt">// 元数据此刻已在 imgdata 里：厂商/型号/尺寸/色彩信息</span>
+    <span class="fn">printf</span>(<span class="str">"make=%s model=%s size=%dx%d\n"</span>,
+           processor.imgdata.idata.make,
+           processor.imgdata.idata.model,
+           processor.imgdata.sizes.width,
+           processor.imgdata.sizes.height);
+
+    ret = processor.<span class="fn">unpack</span>();                  <span class="cmt">// ③ 解压传感器像素（拜耳马赛克）</span>
+    <span class="kw">if</span> (ret != LIBRAW_SUCCESS) {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"unpack: %s\n"</span>, <span class="fn">libraw_strerror</span>(ret));
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+
+    ret = processor.<span class="fn">dcraw_process</span>();             <span class="cmt">// ④ 后处理：去马赛克/白平衡/色彩空间</span>
+    <span class="kw">if</span> (ret != LIBRAW_SUCCESS) {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"dcraw_process: %s\n"</span>, <span class="fn">libraw_strerror</span>(ret));
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+
+    <span class="cmt">// ⑤ 写文件：dcraw_ppm_tiff_writer 自动按后缀决定 PPM/TIFF</span>
+    ret = processor.<span class="fn">dcraw_ppm_tiff_writer</span>(<span class="str">"out.ppm"</span>);
+    <span class="kw">if</span> (ret != LIBRAW_SUCCESS) {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"write: %s\n"</span>, <span class="fn">libraw_strerror</span>(ret));
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    processor.<span class="fn">recycle</span>();                       <span class="cmt">// ⑥ 复位，准备处理下一张</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译链接（-lraw 是单线程版；多线程程序用 -lraw_r）</span>
+$ <span class="fn">g++</span> -o raw2ppm raw2ppm.cpp $(<span class="fn">pkg-config</span> --cflags --libs libraw)
+
+<span class="cmt"># 运行：先看元数据，再产出 out.ppm</span>
+$ <span class="fn">./raw2ppm</span> IMG_0001.CR2
+<span class="cmt"># make=Canon model=Canon EOS R5 size=6000x4000</span>
+$ <span class="fn">file</span> out.ppm
+<span class="cmt"># out.ppm: PPM image data, 6000x4000, 8-bit, RGB</span>
+
+<span class="cmt"># 不用 pkg-config 也可以直接写：</span>
+$ <span class="fn">g++</span> -o raw2ppm raw2ppm.cpp \
+    -I/usr/local/helios/include/libraw -L/usr/local/helios/lib -lraw</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>想拿内存里的结果而不是写文件？用 <code>dcraw_make_mem_image(&amp;errcode)</code> 拿到 <code>libraw_processed_image_t *</code>，里面是 <code>data</code>、<code>width</code>、<code>height</code>、<code>colors</code>、<code>bits</code>——可以直接喂给 OpenCV、libvips 或你自己的管线。用完记得 <code>dcraw_clear_mem(img)</code>。三步走 + 两条内存规矩（make_mem 配 clear_mem、批处理配 recycle），LibRaw 就玩转了。</p>
+  </div>
+
+  <!-- ========== 6.7 实战复盘：从 CR2 到 JPEG，与版本之坑 ========== -->
+  <h2>6.7 实战复盘：从 CR2 到 JPEG，与那个版本之坑</h2>
+
+  <p>最后复盘素材里的完整实战。需求一句话：<strong>服务端拿到 dng/CR2，转成 JPEG 供预览</strong>。最优策略和第 3 章 dcraw 时代一模一样，只是工具换成 LibRaw：<strong>能提缩略图就提缩略图（unpack_thumb / simple_dcraw -e，毫秒级），没有内嵌预览或需要全尺寸才走完整解码（unpack + dcraw_process）</strong>。完整解码要走"传感器元数据 + 传感器图像数据"两层，做去马赛克、白平衡，代价比提缩略图高一个数量级——把这条判断写进服务端，QPS 能差出几倍。</p>
+
+  <p>但素材里藏着一个真正的坑，也是这一章必须记住的现象：<strong>程序里调用 open_file 打开 CR2 时直接崩溃</strong>。不是文件坏了，不是代码写错——素材排查到最后发现，问题出在编译器版本：那台机器的 g++ 是 4.8.5，把编译器升到 4.9.2 之后再编译同样的代码，open_file 就正常了。为什么换个 g++ 小版本程序就从"一打开 CR2 就崩"变正常？这背后是 ABI 兼容性、标准库实现差异这些"看不见的版本"问题——<strong>这一章只把这个现象钉在这里，完整的原因分析和排查方法论（core dump、gdb、strace）留给第 14 章《调试实战：版本与崩溃》</strong>。这也是本教程的节奏：先记住"有这种事"，再学会"怎么查这种事"。</p>
+
+  <pre><code><span class="cmt"># 素材真实现象：同一份代码、同一个 CR2，编译环境不同结果不同</span>
+$ <span class="fn">g++</span> --version | <span class="fn">head</span> -<span class="num">1</span>
+<span class="cmt"># g++ (GCC) 4.8.5            &lt;- 素材最初的系统编译器</span>
+$ <span class="fn">./raw2ppm</span> IMG_0001.CR2
+<span class="cmt"># Segmentation fault (core dumped)   &lt;- open_file 阶段直接崩溃</span>
+
+<span class="cmt"># 换编译器版本（4.8.5 -&gt; 4.9.2）后重编译，同样的代码正常：</span>
+$ <span class="fn">g++</span> --version | <span class="fn">head</span> -<span class="num">1</span>
+<span class="cmt"># g++ (GCC) 4.9.2</span>
+$ <span class="fn">./raw2ppm</span> IMG_0001.CR2
+<span class="cmt"># make=Canon model=Canon EOS R5 size=6000x4000   &lt;- 一切正常</span>
+<span class="cmt"># （原因分析与排查方法见第 14 章：ABI 兼容性、core dump、gdb）</span></code></pre>
+
+  <pre><code><span class="cmt"># 服务端完整流程（素材思路 + LibRaw API）：</span>
+<span class="cmt"># 1) 优先提缩略图：unpack_thumb() + dcraw_make_mem_thumb()</span>
+<span class="cmt">#    或直接 simple_dcraw -e（命令行版），毫秒级出预览</span>
+$ <span class="fn">simple_dcraw</span> -e test.dng        <span class="cmt"># 输出 test.thumb.jpg</span>
+
+<span class="cmt"># 2) 没有缩略图/需要全尺寸：完整解码再压 JPEG</span>
+$ <span class="fn">dcraw_emu</span> -T -w test.dng
+$ <span class="fn">ffmpeg</span> -y -i test.tiff preview.jpg
+
+<span class="cmt"># 3) 批量循环（先试缩略图，失败再完整解码）：</span>
+$ <span class="kw">for</span> f <span class="kw">in</span> *.dng; <span class="kw">do</span>
+    <span class="fn">simple_dcraw</span> -e <span class="str">"$f"</span>
+    test -f <span class="str">"${f%.dng}.thumb.jpg"</span> || <span class="fn">dcraw_emu</span> -T -w <span class="str">"$f"</span>
+<span class="kw">done</span></code></pre>
+
+  <p>走完这一章，回头看第 3 章那张解剖图：open_file 读的是"文件头 + 元数据"，unpack 解的是"传感器图像数据"，dcraw_process 把"单通道马赛克"变成"RGB 三通道"——每一步都有图纸对应。这就是"工欲善其事"的完整闭环：<strong>先懂结构（第 3 章），再选对工具（第 5 章），然后亲手把工具打磨好（本章），最后带着"版本之坑"的意识进第 14 章补排错能力</strong>。下一章主角是 libvips——它甚至内置了 LibRaw 的 loader，能把"读底片"和"高性能处理"串成一条流水线，到时候你会发现，这一章的功底直接能搬过去用。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① LibRaw 支持 CR2、NEF、DNG 等多种 RAW 格式；② LibRaw 是 2008 年基于 dcraw.c 发展而来的库；③ dcraw.c 至今仍在持续维护，新机型全靠它支持；④ LibRaw 采用 LGPL 2.1 或 CDDL 1.0 双许可；⑤ 多线程程序应该链接 libraw 而不是 libraw_r。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 6.1 节的血缘与许可、6.2/6.4 节的双库设计，以及官网 README 的 Project history 部分。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 对——官网明确列出 CRW/CR2、NEF、RAF、DNG 等几乎所有 RAW 格式；② 对——2008 年立项，基础是 dcraw.c；③ 错——dcraw 2018 年停止维护，此后新机型支持全部由 LibRaw 团队承担；④ 对——LGPL 2.1 或 CDDL 1.0，二选一；⑤ 错——多线程程序应该链接 libraw_r（reentrant 版，带 -pthread），单线程程序链接 libraw 即可。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：构建排障 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你在一台新机器上克隆 LibRaw 后执行 mkdist.sh，脚本报错说某个文件下载失败。① 素材里的同类问题是怎么解决的？② 为什么说"先读脚本再动手"是正确姿势？③ 用 apt 系发行版（Debian/Ubuntu）时，yum 依赖清单要怎么翻译？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回到 6.3 节的排障链：grep 找下载行、手动 wget 官方源、注释失败步骤、重跑脚本；依赖包名规则在 6.2 节末尾。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 素材的做法：打开 mkdist.sh 定位下载 dcraw.c 的那一行，把失败的自动下载注释掉，手动 wget https://www.dechifro.org/dcraw/dcraw.c 放到脚本期望的路径，再重新执行 mkdist.sh；② 因为只有读了脚本才知道它"期望文件放在哪、用什么命令下载"，盲目重试或改环境变量都是瞎猜——排障的第一原则是看证据（脚本就是证据）；③ yum 换成 apt，包名去掉 -devel 后缀改为 -dev（如 lcms2-devel → liblcms2-dev、jasper-devel → libjasper-dev、freetype-devel → libfreetype-dev），pkgconfig 包在 Debian 系叫 pkg-config。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：API 流程 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>LibRaw 的 C++ 核心流程是 open_file → unpack → dcraw_process 三步。① 每一步分别处理第 3 章五层结构中的哪一层？② 为什么说"读 RAW 不需要定制、后处理不是 LibRaw 的主要目标"？③ dcraw_make_mem_image 分配的内存怎么释放？处理完一张后想处理下一张要调用什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>6.6 节正文把三步和五层结构对齐了；官网 API Overview 有原话；内存两条规矩在 6.6 节末尾的提示框。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① open_file 读"文件头 + 传感器/图像元数据 + 缩略图描述"层（全部进 imgdata）；unpack 解压"传感器图像数据"层（拜耳马赛克）；dcraw_process 做去马赛克、白平衡等后处理，产出 RGB 图像；② LibRaw 的定位是"提取 RAW 数据与元数据"，后处理代码继承自 dcraw.c 且官方明说不打算重点发展（生产级渲染不是它的目标），所以它把"读"做得极稳，把"渲染"留给上层；③ 用 dcraw_clear_mem(img) 释放 dcraw_make_mem_image 分配的内存；处理完一张调用 recycle() 复位对象再接下一张。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：实战设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>设计一个服务端的 RAW 预览服务：输入 dng/CR2，输出 JPEG 预览图。① 画出完整流程（含"缩略图优先"分支），并说明为什么先试缩略图是合理的；② 完整解码路径你会用 dcraw_emu 命令行还是 C++ API？各自适用什么场景？③ 素材里 open_file 打开 CR2 直接崩溃的案例，你在自己的服务里会怎么预防和应对？提示：应对思路可以列现象、隔离变量、查版本——但"为什么"的完整方法论在第 14 章。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>流程参照 6.7 节的批量循环；缩略图与完整解码的代价对比在第 3 章和第 6 章都讲过；崩溃案例的三问：哪一步崩、什么环境崩、换什么能好。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 流程：收到文件 → 先 simple_dcraw -e（或 C++ 里 unpack_thumb + dcraw_make_mem_thumb）提取内嵌缩略图 → 有则直接转 JPEG 返回；没有缩略图或需要全尺寸 → dcraw_emu -T -w 完整解码 → ffmpeg 压 JPEG。先试缩略图合理：预览场景大多只要小图，读内嵌预览层毫秒级，省掉几十倍解码算力；② 命令行适合快速验证、批处理脚本、原型；C++ API 适合嵌入自己的服务（拿 mem_image 直接喂下游、精细控制错误码与内存、多线程用 libraw_r），QPS 要求高时选 API；③ 预防：记录编译环境（g++ 版本、LibRaw 版本）并锁版本；对 open_file 等每个 API 检查返回值；崩溃时先看现象（哪一步、什么文件、什么环境），再隔离变量（换文件、换机器、换编译器版本试），素材的结论是编译器 4.8.5→4.9.2 后正常——这类"换版本就好"的案例背后是 ABI 兼容性问题，完整排查方法（core dump、gdb、strace）见第 14 章。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第15章：性能优化：多线程、内存与缓存 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter15.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第15章：性能优化：多线程、内存与缓存 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter15.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="15" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：性能优化：多线程、内存与缓存</h1>
+  <p class="chapter-subtitle">谋定而后动——先测后优、内存账本、缓存局部性、线程池与需求驱动，把第 7 章那句只带了一句话的「需求驱动、水平线程」正式展开</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「夫未战而庙算胜者，得算多也。优化这场仗，庙算就是先测量：数据没有到手，绝不轻言优化。这一章我们把运筹帷幄落到工程上——先立方法论（15.1），学会掐表（15.2），把内存这本账算清（15.3），摸透缓存的脾气（15.4），再调兵遣将上多线程（15.5）；然后用第 7 章打过招呼的 libvips 当战例，看『需求驱动 + 水平线程』如何在一座成熟库里运筹帷幄（15.6），最后借一阵 SIMD 东风（15.7）。记住：先测后优，没有数字，不动代码。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 性能方法论 ========== -->
+  <h2>15.1 性能方法论：先测后优</h2>
+
+  <p>诸葛亮的「运筹帷幄」翻译成工程师语言就四个字：<strong>先测后优</strong>。没测量就动手优化，等于不知道敌情就出兵。为什么测量如此重要？因为程序的热点高度集中：绝大多数运行时间花在极少数代码上——性能领域的二八定律。凭感觉猜「哪段代码慢」，猜错的概率极高；改对了地方，收益往往也是压倒性的。第 1 章说过，服务端图像处理是「大图、批量、高频」场景：同样是批量转码，一个 10 倍速的库和一个 1 倍速的库，运维成本差一个数量级。所以方法论第一课：让数据指路，而不是让直觉开车。</p>
+
+  <p>优化要守三条纪律。①<strong>先测后优</strong>：动手前先测基线，时间和内存都要测；②<strong>一次只改一个变量</strong>：同时改三处，变快了你不知道是谁的功劳，变慢了你不知道是谁的锅；③<strong>复测对比</strong>：改完重测，用数字证明变快，而不是「感觉快了」。工具链从轻到重：bash 内建的 <code>time</code> 最轻量；Linux 的 <code>perf stat</code> 看 CPU 周期与缓存未命中；<code>gprof</code> 与 Valgrind 的 callgrind 做函数级剖析（注意 Valgrind 会把程序拖慢几十倍，适合小规模定位）；macOS 上对应的是 Instruments 的 Time Profiler。同时要认得「不要优化」的情形：一次性脚本跑完就扔、瓶颈在磁盘或网络（先确认是 CPU 密集）、收益小于 5% 却要引入成倍复杂度——诸葛亮打仗也讲究有所为有所不为。</p>
+
+  <pre><code><span class="cmt"># 优化流程第一步：测量现状。没测过就动手，等于瞎猜</span>
+<span class="fn">time</span> ./thumb in.heic out.jpg
+real   <span class="num">0m1.842s</span> <span class="ann">(墙钟)</span>  user   <span class="num">0m1.690s</span> <span class="ann">(CPU)</span>  sys   <span class="num">0m0.118s</span> <span class="ann">(内核)</span>
+<span class="cmt"># user + sys 约等于 real，说明基本是单线程在跑——先想多核，再谈微优化</span>
+
+<span class="cmt"># 第二步：定位热点。perf stat 统计周期事件（Linux）</span>
+<span class="fn">perf</span> stat ./thumb in.heic out.jpg
+<span class="cmt"># 重点看 cycles、cache-misses、task-clock 三行：瓶颈在 CPU 还是内存，一目了然</span></code></pre>
+
+  <pre><code><span class="cmt"># 反面教材：不测量直接改，改完不知道快没快</span>
+<span class="cmt"># 正面流程：改前测一次 → 只改一处 → 改后复测 → 对比数字</span>
+<span class="fn">time</span> ./thumb in.heic out.jpg        <span class="cmt"># 改前：real 0m1.842s</span>
+<span class="cmt"># 只改一处：给 gcc 加 -O2 重新编译，其他一概不动</span>
+<span class="fn">time</span> ./thumb in.heic out.jpg        <span class="cmt"># 改后：real 0m1.101s，提速 40%，数据说话</span>
+
+<span class="cmt"># 什么时候不要优化（有所为有所不为）</span>
+<span class="cmt"># 1. 一次性脚本：跑完就扔，不值得投入</span>
+<span class="cmt"># 2. 瓶颈在磁盘/网络：先确认是 CPU 密集，再优化计算</span>
+<span class="cmt"># 3. 收益小于 5% 且复杂度大增：得不偿失</span></code></pre>
+
+  <!-- ========== 15.2 时间测量 ========== -->
+  <h2>15.2 时间测量：steady_clock 掐表</h2>
+
+  <p>C++11 起标准库自带计时器：<code>&lt;chrono&gt;</code>。测量耗时要用 <strong>steady_clock</strong>——单调时钟，只增不减，不受改系统时间、NTP 校时影响；<code>system_clock</code> 会跟着墙上时间跳，拿它掐表，系统时间一调就可能算出负的耗时。用法三步：取开始时刻、跑被测代码、取结束时刻，用 <code>duration_cast</code> 把时长转成毫秒或微秒，再 <code>count()</code> 取数值。测量粒度要心里有数：steady_clock 的精度取决于平台（通常微秒级），对毫秒级的图像操作绰绰有余；如果被测代码快得连一次计时都覆盖不住，就循环多跑几次再除以次数。</p>
+
+  <p>不写代码也能掐表：命令行 <code>time</code>。它的三列输出各有含义——<strong>real</strong> 是墙钟时间（用户真实感知），<strong>user</strong> 是用户态 CPU 时间，<strong>sys</strong> 是内核态时间。怎么读？单线程程序里 user 加 sys 约等于 real；user 加 sys 明显大于 real，说明用上了多核（15.5 节的主角）；real 远大于 user 加 sys，说明程序在等 I/O 或等锁。GNU time（<code>/usr/bin/time -v</code>）还能多报一项 <strong>Maximum resident set size</strong>——进程的峰值内存，这正是下一节内存账本的测量端。测量纪律三条：多跑几次取中位数、避开首次运行的冷启动、基准测试时机器别满载。</p>
+
+  <pre><code><span class="cmt">// steady_clock：单调时钟，专为测量耗时设计，不受系统时间调整影响</span>
+<span class="kw">#include</span> <span class="op">&lt;</span><span class="type">chrono</span><span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span><span class="type">iostream</span><span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">auto</span> t0 <span class="op">=</span> <span class="type">std::chrono::steady_clock</span>::<span class="fn">now</span>();
+    <span class="fn">process_image</span>();                          <span class="cmt">// 被测代码</span>
+    <span class="kw">auto</span> t1 <span class="op">=</span> <span class="type">std::chrono::steady_clock</span>::<span class="fn">now</span>();
+
+    <span class="cmt">// duration_cast 把时长转成目标单位，count() 取数值</span>
+    <span class="kw">auto</span> ms <span class="op">=</span> <span class="type">std::chrono::duration_cast</span><span class="op">&lt;</span><span class="type">std::chrono::milliseconds</span><span class="op">&gt;</span>(t1 <span class="op">-</span> t0).<span class="fn">count</span>();
+    <span class="type">std::cout</span> <span class="op">&lt;&lt;</span> <span class="str">"elapsed: "</span> <span class="op">&lt;&lt;</span> ms <span class="op">&lt;&lt;</span> <span class="str">" ms"</span> <span class="op">&lt;&lt;</span> <span class="type">std::endl</span>;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 不写代码也能掐表：time 命令（bash 内建）</span>
+<span class="fn">time</span> ./gray in.jpg out.jpg
+real  <span class="num">0m0.742s</span> <span class="ann">(墙钟)</span>  user  <span class="num">0m0.698s</span> <span class="ann">(CPU)</span>  sys  <span class="num">0m0.041s</span> <span class="ann">(内核)</span>
+
+<span class="cmt"># 更细的账单：/usr/bin/time -v（GNU time）能报峰值内存</span>
+<span class="fn">/usr/bin/time</span> -v ./gray in.jpg out.jpg
+<span class="cmt">#   Elapsed (wall clock) time: 0.74s</span>
+<span class="cmt">#   Maximum resident set size: 49152 kB      ← 峰值内存，15.3 节的主角</span>
+
+<span class="cmt"># 计时要点：多跑几次取中位数，避开冷启动与系统噪声</span>
+<span class="kw">for</span> i <span class="kw">in</span> <span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span>; <span class="kw">do</span> ./gray in.jpg out.jpg; <span class="kw">done</span></code></pre>
+
+  <!-- ========== 15.3 内存占用计算 ========== -->
+  <h2>15.3 内存账本：宽 × 高 × 通道 × 字节</h2>
+
+  <p>解码后一张位图占多少内存？公式只有一个：<strong>宽 × 高 × 通道数 × 每通道字节数</strong>。以 4000×3000 的约 1200 万像素照片为例：RGB 8bit 是 4000×3000×3×1 = 3600 万字节，约 34.3 MiB；RGBA 8bit 约 45.8 MiB；16bit RGB 直接翻倍到约 68.7 MiB。对比一下：同样这张照片的 JPEG 文件往往只有 5MB 左右——<strong>文件大小（压缩后）与解码内存（解压后）差一个数量级</strong>。这正是第 2 章格式知识的延伸：JPEG 的有损压缩能把 36MB 压到 5MB，但任何库要处理这张图，都得先把 36MB 还原回内存里。</p>
+
+  <p>换到服务端视角，内存要按并发请求数<strong>乘法</strong>放大：45.8 MiB 一张，100 个并发请求就是约 4.5 GiB，还没算程序本身和系统开销——第 1 章说的「资源现状」在这里变成真金白银。还有两个修正项：①16bit、多通道、浮点格式会成倍放大（RAW 与 HDR 尤其，第 3 章提过）；②很多库会把每行按 16 或 32 字节对齐（stride），实际占用略大于理论值。OpenCV 里可以直接问 Mat（第 9 章那张行优先连续存储的 Mat）：<code>total() × elemSize()</code> 就是整张图占的字节数。这一节的意义：任何优化方案先过内存账本——账都平不了，再快的算法也会被内存换页拖死。</p>
+
+  <pre><code><span class="cmt"># 解码后内存 = 宽 × 高 × 通道数 × 每通道字节数</span>
+<span class="cmt"># 4000 × 3000 的照片（约 1200 万像素）：</span>
+<span class="cmt">#   RGB  8bit：4000 × 3000 × 3 × 1 = 36,000,000 B ≈ 34.3 MiB</span>
+<span class="cmt">#   RGBA 8bit：4000 × 3000 × 4 × 1 = 48,000,000 B ≈ 45.8 MiB</span>
+<span class="cmt">#   RGB 16bit：4000 × 3000 × 3 × 2 = 72,000,000 B ≈ 68.7 MiB</span>
+
+<span class="cmt"># 用 python 直接算：8000 × 6000 的 16bit 四通道 TIFF</span>
+<span class="fn">python3</span> -c <span class="str">"print(8000 * 6000 * 4 * 2 / 1024 / 1024)"</span>
+<span class="num">366.2109375</span> <span class="ann">(MiB)</span>   <span class="cmt"># 一张图吃掉三分之一 GB</span></code></pre>
+
+  <pre><code><span class="cmt"># 服务端视角：内存按并发请求数乘法放大</span>
+<span class="cmt"># 45.8 MiB/张 × 100 个并发请求 ≈ 4.5 GiB，还没算程序本身</span>
+<span class="cmt"># 所以生产环境要：限制上传尺寸、先出缩略图、用流式/按需解码的库</span>
+
+<span class="cmt">// OpenCV 里算一张 Mat 占多少内存（第 9 章的 Mat）</span>
+<span class="type">cv::Mat</span> img <span class="op">=</span> <span class="type">cv::imread</span>(<span class="str">"in.jpg"</span>, <span class="type">cv::IMREAD_COLOR</span>);
+<span class="type">size_t</span> bytes <span class="op">=</span> img.<span class="fn">total</span>() <span class="op">*</span> img.<span class="fn">elemSize</span>();  <span class="cmt">// 总元素数 × 每元素字节数</span>
+<span class="type">std::cout</span> <span class="op">&lt;&lt;</span> bytes <span class="op">&lt;&lt;</span> <span class="type">std::endl</span>;
+<span class="cmt">// 4000×3000 三通道 8bit：12000000 × 3 = 36,000,000 字节</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>内存账本三句话：解码前先算宽×高×通道×字节；并发场景按请求数乘；账平不了，优化先停。第 7 章选择 libvips 做 HEIC 转码，很大程度就是这笔账逼出来的。</p>
+  </div>
+
+  <!-- ========== 15.4 缓存友好 ========== -->
+  <h2>15.4 缓存友好：行优先遍历与局部性</h2>
+
+  <p>内存账本算清之后，下一个隐藏瓶颈是「数据怎么走」。位图在内存里按<strong>行优先</strong>排列：第 0 行的像素连续存放，行尾接着第 1 行行首（第 9 章 Mat 同款布局）。CPU 取数不是按字节，而是按<strong>缓存行</strong>整块搬进高速缓存（x86 常见 64 字节）：顺序访问时，一条缓存行装进来的数据几乎全被用上，这就是<strong>空间局部性</strong>；而跳着访问时，缓存行里大部分字节被白白浪费，真正瓶颈从 CPU 算力转移到主存带宽。灰度化、缩放这类逐像素操作，绝大多数时间都花在搬运数据上，遍历顺序直接决定搬运效率。</p>
+
+  <p>同一份数据、同样的算法复杂度，只改变访问顺序，实测常差 5 到 10 倍——这就是局部性的力量。进阶手段是<strong>分块（tiling）</strong>：把大图切成 256×256 的块，块内保持行优先，让工作集整体装进缓存——卷积、缩放这类需要邻域像素的操作尤其受益。诸葛亮的方法论在这里有个推论：先想清楚数据的流动方向，再写循环——因为代码的访问顺序，就是内存的搬运路线。</p>
+
+  <pre><code><span class="cmt">// 行优先遍历：内存连续，一条缓存行取回 64 字节，几乎全被用上</span>
+<span class="kw">for</span> (<span class="kw">int</span> <span class="param">y</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">y</span> <span class="op">&lt;</span> <span class="param">h</span>; <span class="param">y</span><span class="op">++</span>)
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">x</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">x</span> <span class="op">&lt;</span> <span class="param">w</span>; <span class="param">x</span><span class="op">++</span>)
+        <span class="param">gray</span>[<span class="param">y</span> <span class="op">*</span> <span class="param">w</span> <span class="op">+</span> <span class="param">x</span>] <span class="op">=</span> (<span class="param">src</span>[<span class="param">y</span> <span class="op">*</span> <span class="param">w</span> <span class="op">*</span> <span class="num">3</span> <span class="op">+</span> <span class="param">x</span> <span class="op">*</span> <span class="num">3</span>] <span class="op">+</span>
+                                    <span class="param">src</span>[<span class="param">y</span> <span class="op">*</span> <span class="param">w</span> <span class="op">*</span> <span class="num">3</span> <span class="op">+</span> <span class="param">x</span> <span class="op">*</span> <span class="num">3</span> <span class="op">+</span> <span class="num">1</span>] <span class="op">+</span>
+                                    <span class="param">src</span>[<span class="param">y</span> <span class="op">*</span> <span class="param">w</span> <span class="op">*</span> <span class="num">3</span> <span class="op">+</span> <span class="param">x</span> <span class="op">*</span> <span class="num">3</span> <span class="op">+</span> <span class="num">2</span>]) <span class="op">/</span> <span class="num">3</span>;</code></pre>
+
+  <pre><code><span class="cmt">// 反例：列优先遍历。每读一个像素都跨一整行，缓存行利用率极低</span>
+<span class="kw">for</span> (<span class="kw">int</span> <span class="param">x</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">x</span> <span class="op">&lt;</span> <span class="param">w</span>; <span class="param">x</span><span class="op">++</span>)
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">y</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">y</span> <span class="op">&lt;</span> <span class="param">h</span>; <span class="param">y</span><span class="op">++</span>)
+        <span class="param">dst</span>[<span class="param">y</span> <span class="op">*</span> <span class="param">w</span> <span class="op">+</span> <span class="param">x</span>] <span class="op">=</span> <span class="param">src</span>[<span class="param">y</span> <span class="op">*</span> <span class="param">w</span> <span class="op">+</span> <span class="param">x</span>] <span class="op">*</span> <span class="num">2</span>;
+<span class="cmt">// 同一份数据，只是换了访问顺序，实测常慢 5-10 倍</span>
+
+<span class="cmt">// 进阶：分块（tiling）。把图切成 256×256 的块，块内行优先</span>
+<span class="cmt">// 卷积、缩放这类需要邻域像素的操作，分块让工作集装进缓存</span>
+<span class="kw">for</span> (<span class="kw">int</span> <span class="param">by</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">by</span> <span class="op">&lt;</span> <span class="param">h</span>; <span class="param">by</span> <span class="op">+=</span> <span class="num">256</span>)
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">bx</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">bx</span> <span class="op">&lt;</span> <span class="param">w</span>; <span class="param">bx</span> <span class="op">+=</span> <span class="num">256</span>)
+        <span class="fn">process_tile</span>(<span class="param">src</span>, <span class="param">dst</span>, <span class="param">bx</span>, <span class="param">by</span>, <span class="num">256</span>, <span class="num">256</span>);</code></pre>
+
+  <!-- ========== 15.5 多线程 ========== -->
+  <h2>15.5 多线程：线程池与任务并行</h2>
+
+  <p>单核算不动了，多核并行就是图像处理提速的主战场。怎么分活？答案是<strong>任务并行</strong>：把图像按行切成若干条带（band），每条带是一个任务，交给一个线程算——这正是 libvips「水平线程」的思路，15.6 节展开。两个极端都要避免：<strong>每个像素一个线程</strong>是灾难——创建线程有开销、调度有抖动，几百万个任务光排队就能压垮系统；<strong>整图一个线程</strong>则浪费核。条带粒度从「总行数 ÷ 逻辑核数」起步，再按实测调整。逻辑核数用 <code>std::thread::hardware_concurrency()</code> 查询，注意它返回的是含超线程的逻辑核，实际按物理核数调往往更稳。</p>
+
+  <p>线程的创建与销毁是有成本的，频繁建线程不划算——所以有<strong>线程池</strong>：启动时建好 N 个常驻线程，任务投递进队列，谁空闲谁领活。GLib 的 GThreadPool 是现成的实现（libvips 构建在 glib 之上，用的正是它）。多线程还有一道天花板：<strong>阿姆达尔定律</strong>，S = 1 / ((1 − P) + P / N)，P 是可并行比例，N 是核数——串行部分决定加速比上限：P = 90%、8 核时理论加速也只有约 4.7 倍，再算上同步开销与缓存竞争，现实更骨感。图像处理的幸运之处在于，大多数操作逐像素独立、天然免锁；但共享输出缓冲时仍要小心数据竞争，写之前想清楚谁在写哪一行。</p>
+
+  <pre><code><span class="cmt">// 任务并行：把图按行切成 N 条带，每条带一个任务</span>
+<span class="cmt">// 关键：是「按行分条带」，不是「每个像素一个线程」</span>
+<span class="kw">#include</span> <span class="op">&lt;</span><span class="type">future</span><span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span><span class="type">thread</span><span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span><span class="type">vector</span><span class="op">&gt;</span>
+
+<span class="kw">int</span> bands <span class="op">=</span> <span class="type">std::thread</span>::<span class="fn">hardware_concurrency</span>();  <span class="cmt">// 逻辑核数，如 8</span>
+<span class="type">std::vector</span><span class="op">&lt;</span><span class="type">std::future</span><span class="op">&lt;</span><span class="kw">void</span><span class="op">&gt;</span><span class="op">&gt;</span> futures;
+<span class="kw">for</span> (<span class="kw">int</span> <span class="param">b</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">b</span> <span class="op">&lt;</span> bands; <span class="param">b</span><span class="op">++</span>)
+    futures.<span class="fn">push_back</span>(<span class="type">std::async</span>(<span class="type">std::launch::async</span>,
+                                   <span class="fn">process_band</span>, <span class="param">src</span>, <span class="param">dst</span>, <span class="param">b</span>, bands));
+<span class="kw">for</span> (<span class="kw">auto</span> <span class="op">&amp;</span><span class="param">f</span> : futures) <span class="param">f</span>.<span class="fn">get</span>();   <span class="cmt">// 等所有条带算完</span></code></pre>
+
+  <pre><code><span class="cmt">// GLib 线程池：线程只建一次，任务反复投递，避免建线程的开销</span>
+<span class="kw">static</span> <span class="kw">void</span> <span class="fn">worker_func</span>(<span class="type">gpointer</span> <span class="param">data</span>, <span class="type">gpointer</span> <span class="param">user_data</span>) {
+    <span class="kw">int</span> band <span class="op">=</span> *(<span class="type">int</span> *)<span class="param">data</span>;
+    <span class="fn">process_band</span>(band);                     <span class="cmt">// 处理第 band 条带</span>
+}
+
+<span class="type">GThreadPool</span> *pool <span class="op">=</span> <span class="fn">g_thread_pool_new</span>(<span class="fn">worker_func</span>, <span class="kw">NULL</span>,
+                                          <span class="num">4</span>, <span class="kw">FALSE</span>, <span class="kw">NULL</span>);
+<span class="cmt">//                                 线程数     独占? 错误</span>
+<span class="kw">for</span> (<span class="kw">int</span> <span class="param">b</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">b</span> <span class="op">&lt;</span> <span class="num">16</span>; <span class="param">b</span><span class="op">++</span>) {
+    <span class="kw">int</span> *arg <span class="op">=</span> <span class="fn">g_new</span>(<span class="kw">int</span>, <span class="num">1</span>);          <span class="cmt">// 每个任务带自己的参数</span>
+    *arg <span class="op">=</span> <span class="param">b</span>;
+    <span class="fn">g_thread_pool_push</span>(pool, arg, <span class="kw">NULL</span>);  <span class="cmt">// 投递任务，立即返回</span>
+}
+<span class="fn">g_thread_pool_free</span>(pool, <span class="kw">FALSE</span>, <span class="kw">TRUE</span>);   <span class="cmt">// 不打断，等全部完成</span></code></pre>
+
+  <!-- ========== 15.6 libvips 案例 ========== -->
+  <h2>15.6 案例：libvips 的需求驱动与水平线程</h2>
+
+  <p>现在正式展开第 7 章 7.1 节只带了一句话的设计。libvips 官网的自述是：<strong>demand-driven, horizontally threaded image processing library</strong>——「需求驱动、水平线程」的图像处理库，拆成两半看。先说<strong>需求驱动（demand-driven）</strong>：计算从输出往回拉——做 200 宽的缩略图时，缩放器只向解码器要「缩小所需的那部分像素」，解码器能 shrink-on-load（先缩小再解码）就绝不把 4000 万像素全解出来；整条处理链按需求值，没被要求的中间结果不物化。这正是六库总结里那句「<strong>libvips 运行迅速且几乎不占用内存</strong>」的根源：峰值内存 ≈ 输出图 + 当前条带，与原图总大小无关。第 5 章六库对比时记过一笔，这里还上。</p>
+
+  <p>再说<strong>水平线程（horizontally threaded）</strong>，它和「垂直」相对：垂直并行是把不同操作串成流水线（像工厂流水线，各工序同时干不同的活）；水平并行是<strong>同一个操作内部</strong>，把数据按行切成条带，交给线程池里的 worker，每个 worker 各算各的条带——所有核同时算同一道工序的不同行。线程池的大小由 <code>vips_concurrency_set()</code> 设置、<code>vips_concurrency_get()</code> 查询，取值优先级从高到低：显式设置、环境变量 VIPS_CONCURRENCY、机器逻辑核数；8.14 起线程池还能按负载动态伸缩，vips-concurrency 变成了池子上限。配套还有一层<strong>操作缓存</strong>：最近用过的操作结果按内存上限缓存（<code>vips_cache_set_max_mem()</code> 控制），避免重复计算同一段结果。</p>
+
+  <p>回到素材：第 7 章编译 libvips 的真实需求是「苹果平台 heic 图片的转码处理」——大批 iPhone 上传、服务端高并发转 JPEG 出缩略图，内存就是生命线。这套设计把账算到了极致：需求驱动管内存（只算要用的），水平线程管速度（核都用满），操作缓存管重复劳动（同一张图不二次处理）。先算账、再定并行粒度、最后配资源——这就是运筹帷幄在库设计上的完整落地。</p>
+
+  <pre><code><span class="cmt"># 第 7 章装好的 libvips：批量把 iPhone 的 HEIC 转成 JPEG 缩略图</span>
+<span class="cmt"># 默认并发 = 机器逻辑核数；显式指定也随时可以</span>
+<span class="type">VIPS_CONCURRENCY</span><span class="op">=</span><span class="num">4</span> <span class="fn">vips</span> thumbnail in.heic out.jpg <span class="num">200</span>
+
+<span class="cmt"># 等价写法：命令行参数 --vips-concurrency</span>
+<span class="fn">vips</span> thumbnail in.heic out.jpg <span class="num">200</span> --vips-concurrency<span class="op">=</span><span class="num">4</span>
+
+<span class="cmt"># 观察线程数：top -H 看线程，或 ps -eLf | grep vips</span>
+<span class="fn">top</span> -H -p <span class="op">$(</span><span class="fn">pgrep</span> -f <span class="str">"vips thumbnail"</span><span class="op">)</span></code></pre>
+
+  <pre><code><span class="cmt"># 需求驱动：计算从输出往回拉（pull），不是从输入往前推（push）</span>
+<span class="cmt">#</span>
+<span class="cmt">#   vips thumbnail in.heic out.jpg 200</span>
+<span class="cmt">#   ┌─ 输出 200 宽小图</span>
+<span class="cmt">#   │   └─ 缩放器要第 0 条带 → 只向解码器要「缩小需要的像素」</span>
+<span class="cmt">#   │       └─ 解码器能 shrink-on-load 就先缩小再解码，不整图解出</span>
+<span class="cmt">#   │</span>
+<span class="cmt">#   整张 4000 万像素不会全部进内存：峰值内存 ≈ 输出图 + 一条带</span>
+<span class="cmt">#   这就是「运行迅速且几乎不占用内存」的根源</span></code></pre>
+
+  <pre><code><span class="cmt">// C API 控制线程池与操作缓存（官方头文件 vips/vips.h）</span>
+<span class="kw">#include</span> <span class="op">&lt;</span><span class="type">vips/vips.h</span><span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> <span class="param">argc</span>, <span class="kw">char</span> **<span class="param">argv</span>) {
+    <span class="kw">if</span> (<span class="fn">VIPS_INIT</span>(<span class="param">argv</span>[<span class="num">0</span>]))                <span class="cmt">// 初始化 libvips</span>
+        <span class="kw">return</span> <span class="num">1</span>;
+
+    <span class="fn">vips_concurrency_set</span>(<span class="num">4</span>);               <span class="cmt">// 线程池大小 = 4</span>
+    <span class="fn">vips_cache_set_max_mem</span>(<span class="num">100</span> <span class="op">*</span> <span class="num">1024</span> <span class="op">*</span> <span class="num">1024</span>);   <span class="cmt">// 操作缓存上限 100 MiB</span>
+
+    <span class="type">VipsImage</span> *out <span class="op">=</span> <span class="kw">NULL</span>;
+    <span class="kw">if</span> (<span class="fn">vips_thumbnail</span>(<span class="param">argv</span>[<span class="num">1</span>], <span class="op">&amp;</span>out, <span class="num">200</span>, <span class="kw">NULL</span>))   <span class="cmt">// 缩到 200 宽</span>
+        <span class="kw">return</span> <span class="num">1</span>;
+    <span class="kw">if</span> (<span class="fn">vips_image_write_to_file</span>(out, <span class="param">argv</span>[<span class="num">2</span>], <span class="kw">NULL</span>))
+        <span class="kw">return</span> <span class="num">1</span>;
+
+    <span class="fn">g_object_unref</span>(out);                    <span class="cmt">// 释放图像对象</span>
+    <span class="fn">vips_thread_shutdown</span>();                <span class="cmt">// 多线程程序收尾</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>设计任何图像处理并行方案前，先回答三个问题：数据怎么切（条带还是分块）？谁在算（线程池还是每次现建）？账怎么算（峰值内存多少）？三问有答案，再写代码。</p>
+  </div>
+
+  <!-- ========== 15.7 SIMD 简述 ========== -->
+  <h2>15.7 顺风加速：SIMD 与向量化简述</h2>
+
+  <p>最后借一阵东风：<strong>SIMD</strong>（Single Instruction, Multiple Data，单指令多数据）。多线程是「核间并行」，SIMD 是「核内并行」：一条指令同时处理多个数据。x86 的 SSE/AVX 有 128/256 位寄存器，ARM 的 NEON 同理——AVX2 一次能装 32 个 uint8，灰度化、色彩转换这种「每个像素做同样运算」的操作，理论上一条指令顶 32 条。第 11、12 章 CUDA 的 warp 是同一思路的极致版（SIMT），GPU 把 SIMD 的规模放大到成千上万个线程——本章讲的是 CPU 上的那一层。</p>
+
+  <p>上手路径有三条，难度递增：①<strong>编译器自动向量化</strong>——编译时加 <code>-O2</code> 或 <code>-O3</code> 与 <code>-march=native</code>，让 GCC/Clang 自己把循环变成 SIMD 指令，大部分场景够用；②<strong>手写 intrinsics</strong>——用 <code>_mm_add_epi8</code> 这类内建函数精确控制，收益大但可读性差；③<strong>让库替你向量化</strong>——OpenCV 的 Universal Intrinsics（cv::hal 层）做跨平台向量化，libvips 用 ORC 在运行时生成 SIMD 代码（第 7 章依赖矩阵里那个 orc 就是干这个的）。三条路都可以和多线程叠加：SIMD 吃单核内的数据并行，线程吃核间的任务并行，两层叠加才是满配。</p>
+
+  <p>把第 15 章串一遍：先测后优立规矩（15.1），chrono 掐表（15.2），内存账本（15.3），缓存局部性（15.4），线程池任务并行（15.5），libvips 需求驱动与水平线程的完整设计（15.6），SIMD 锦上添花（15.7）。第 7 章存档的「需求驱动、水平线程」至此正式结题；第 11、12 章的 CUDA 是这套并行思路在 GPU 上的延伸；而第 16 章生态收尾，会把格式、解码、处理、加速、排错、性能这条全链路完整回顾一遍。</p>
+
+  <pre><code><span class="cmt"># 让编译器替你向量化：-O2/-O3 + -march=native</span>
+<span class="fn">gcc</span> -O2 -march=native -o gray gray.c
+
+<span class="cmt"># -march=native：按本机 CPU 生成指令，x86 用 SSE/AVX，ARM 用 NEON</span>
+<span class="cmt"># 查看哪些循环被向量化了（GCC 打印优化信息）</span>
+<span class="fn">gcc</span> -O2 -march=native -fopt-info-vec -o gray gray.c
+<span class="cmt"># gray.c:12:5: note: loop vectorized      ← 第 12 行那个循环向量化了</span></code></pre>
+
+  <pre><code><span class="cmt">// 标量版：一次处理 1 个像素（每像素一次加法、一次移位）</span>
+<span class="kw">for</span> (<span class="kw">int</span> <span class="param">x</span> <span class="op">=</span> <span class="num">0</span>; <span class="param">x</span> <span class="op">&lt;</span> <span class="param">n</span>; <span class="param">x</span><span class="op">++</span>)
+    <span class="param">dst</span>[<span class="param">x</span>] <span class="op">=</span> (<span class="param">src</span>[<span class="param">x</span>] <span class="op">+</span> <span class="num">10</span>) <span class="op">&gt;&gt;</span> <span class="num">1</span>;   <span class="cmt">// 右移 1 位等价于除以 2</span>
+
+<span class="cmt">// SIMD 版（概念）：AVX2 的 256 位寄存器一次装 32 个 uint8，一条指令全算完</span>
+<span class="cmt">// 图像处理「每个像素做同样的运算」，是 SIMD 最理想的场景</span></code></pre>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① 测过基线之后才能谈优化；② steady_clock 受系统时间调整影响，所以测耗时要用 system_clock；③ 4000×3000 的 RGB 8bit 图解码后约 36MB；④ 列优先遍历通常比行优先遍历更快；⑤ 线程越多，程序一定越快。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 15.1 节先测后优、15.2 节两种时钟的区别、15.3 节内存公式、15.4 节行优先与局部性、15.5 节阿姆达尔定律。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 对——先测后优是方法论第一条（15.1 节）；② 错——steady_clock 单调递增不受系统时间影响，system_clock 才跟着墙上时间跳，测耗时用 steady_clock（15.2 节）；③ 对——4000×3000×3×1 = 36,000,000 字节 ≈ 34.3 MiB（15.3 节）；④ 错——位图行优先存储，行优先遍历内存连续、缓存友好，列优先常慢 5 到 10 倍（15.4 节）；⑤ 错——阿姆达尔定律决定串行部分封顶，线程过多还有创建与调度开销（15.5 节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：内存账本 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>一张 3600×2400 的 RGBA 16bit 位图，解码后占多少 MiB？这张图存成 JPEG 文件约 4MB，请解释文件大小与解码内存为什么差这么多，并说明服务端在处理前算这笔账的意义。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>套用 15.3 节公式：宽 × 高 × 通道数 × 每通道字节数，注意 16bit 每通道 2 字节、RGBA 是 4 通道；JPEG 是有损压缩格式（第 2 章），解码必须还原像素矩阵。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>3600×2400×4×2 = 69,120,000 字节，除以 1048576 得约 65.9 MiB。JPEG 的有损压缩（DCT 等，第 2 章）把像素间的冗余压掉，文件只存压缩码流；而任何处理库都要先把码流解回完整的像素矩阵才能计算，所以内存账按解码后的 65.9 MiB 算（15.3 节）。服务端意义：并发请求数 × 单图内存 = 真实内存预算，账算不清，进程随时 OOM。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：缓存与并行 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你要给一张 8000×6000 的图写灰度化，写了两个版本：版本 A 外层循环按行、内层按列；版本 B 外层按列、内层按行。① 哪个通常更快？为什么？② 若要进一步用满 8 核机器，任务怎么切？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>位图是行优先存储（15.4 节），循环顺序决定内存访问顺序；多核切分参考 15.5 节「按行分条带」，条带数约等于逻辑核数。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 版本 A 快——外层按行内层按列就是行优先遍历，内存连续、缓存行利用充分；版本 B 每读一个像素都跨整行，缓存行利用率极低，实测常慢 5 到 10 倍（15.4 节）。② 按行切成 8 条带（总行数 ÷ 8），每条带交给一个线程，每线程内部仍保持行优先；用 std::async 或线程池投递，全部算完再合并（15.5 节）。注意别切成每像素一个任务。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：方案设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>你在 8 核机器上部署一个批量缩略图服务：输入是 4000×3000 的 JPEG，输出 200 宽小图，单图峰值内存预算 100MB。用 libvips 设计这套方案：① VIPS_CONCURRENCY 设多少？② 为什么用 thumbnail 而不是「先全量解码再缩放」？③ vips_cache_set_max_mem 怎么定？④ 结合阿姆达尔定律说明为什么并行不是线性加速。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>并发数参考 15.5 节硬件并发与超线程的讨论；内存预算对照 15.3 节公式与 15.6 节需求驱动的峰值内存结论；缓存上限是「内存预算 − 工作内存」的余额；加速比公式见 15.5 节。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① VIPS_CONCURRENCY 设为 8 起步（逻辑核数），若机器有超线程再按实测往 4 到 8 调——线程数超过物理核反而因调度竞争变慢（15.5 节）；② thumbnail 是需求驱动：能 shrink-on-load 就先缩小再解码，峰值内存 ≈ 输出图 + 当前条带，远小于全量解码的约 34.3 MiB 起步的整图内存（15.3 节、15.6 节）；③ 缓存上限定在预算余额附近，例如 64 到 96 MiB，让最近处理过的小图结果复用、避免重复计算，同时给并发工作流留出余量（15.6 节）；④ 阿姆达尔定律 S = 1 / ((1 − P) + P / N)：即使可并行比例 P = 95%，8 核理论加速也只有约 6.1 倍，加上线程同步与缓存竞争，实测往往更低——所以先测后优，别指望 8 核就快 8 倍（15.1 节、15.5 节）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第13章：图像库的依赖与链接排错 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter13.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第13章：图像库的依赖与链接排错 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter13.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="13" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第13章：图像库的依赖与链接排错</h1>
+  <p class="chapter-subtitle">当你排除了所有不可能，剩下的就是真相——把依赖树、ldd、ldconfig 与 -rpath 装进工具箱，正式结掉第 7 章那桩 fribidi 悬案</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「排除所有不可能的情况，剩下的，不管多么难以置信，都是真相。这一章我们接手第 7 章存档的那桩悬案——<code>fribidi_get_par_embedding_levels_ex</code> 的 undefined reference。办案步骤先定下来：把涉案的库画成依赖树（13.1），用 ldd 给现场拍 X 光（13.2），盘点链接错误的三大根因（13.3），然后正式结案（13.4）；再学动态链接器到底按什么顺序找库（13.5）、-rpath 这类编译期指路术（13.6），最后给你一套让案子根本不发生的预防清单（13.7）。记住：不要急着怀疑，先取证。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 13.1 依赖树概念 ========== -->
+  <h2>13.1 依赖树：一个库背后站着一片库</h2>
+
+  <p>先回到第 7 章 7.6 节存档的现场：编译 libvips 时，链接阶段抛出 <code>libpango-1.0.so: undefined reference to 'fribidi_get_par_embedding_levels_ex'</code>。福尔摩斯接手案子的第一件事不是盯着这行报错看，而是把涉案的所有库画成一张关系图。软件世界里没有孤立的库：libvips 依赖 pango（在图上写字、渲染 SVG 文本都要它），pango 又依赖 fribidi、glib、fontconfig……一张图展开就是一棵树。把「A 需要 B」画成 A 指向 B 的边，从你的程序或主库出发一路画到叶子，就是<strong>依赖树</strong>。为什么排错前要先画它？因为报错几乎从来不出现在你直接写的那层——这桩案子的报错写在 libpango 名下，病根却埋在 fribidi 身上，隔着两层。</p>
+
+  <p>依赖要分清楚几个维度。<strong>直接依赖</strong>是你代码里直接调用、链接命令里直接写 <code>-l</code> 的库；<strong>传递依赖</strong>是你依赖的库又依赖的库——pango 对 libvips 是直接依赖，fribidi 对 libvips 就是传递依赖。另一个维度是<strong>编译期与运行期</strong>：编译期依赖提供头文件与符号声明（发行版里通常叫 xxx-devel 或 libxxx-dev 包），运行期依赖提供真正的动态库文件（.so）。还要分清静态库与动态库：静态库（.a）在链接时把代码直接复制进可执行文件，之后与库再无瓜葛；动态库（.so）在运行期由动态链接器加载，多个程序共享同一份内存。本章排错的对象，主要是动态库这条线——因为它加载什么、从哪里加载，运行时才见分晓，坑全藏在这里。</p>
+
+  <pre><code><span class="cmt"># 方法一：问发行版包管理器，pango 依赖哪些库（素材环境 CentOS）</span>
+<span class="fn">rpm</span> -qR pango
+<span class="cmt"># 示例输出（节选）：</span>
+<span class="cmt"># libfribidi.so.0()(64bit)      libglib-2.0.so.0()(64bit)</span>
+<span class="cmt"># libpangoft2-1.0.so.0()(64bit) libthai.so.0()(64bit)</span>
+<span class="cmt"># Debian/Ubuntu 对应：apt-cache depends libpango-1.0-0</span></code></pre>
+
+  <pre><code><span class="cmt"># 方法二：构建期依赖用 pkg-config 问——libvips 自己就是靠它探测库的</span>
+<span class="fn">pkg-config</span> --print-requires vips
+<span class="cmt"># 示例输出（8.x，节选）：</span>
+<span class="cmt"># glib-2.0</span>
+<span class="cmt"># gobject-2.0</span>
+<span class="cmt"># gio-2.0</span>
+<span class="cmt"># cairo</span>
+<span class="cmt"># pango</span>
+<span class="cmt"># libjpeg</span>
+<span class="cmt"># libheif</span>
+<span class="cmt"># 一行一个直接依赖——沿着 pango 再往下挖，fribidi 就在下一层</span></code></pre>
+
+  <table>
+    <tr><th>分类</th><th>含义</th><th>排错时的意义</th></tr>
+    <tr><td>直接依赖</td><td>代码直接调用、链接命令直接写 -l</td><td>缺了它第一个报错，最好查</td></tr>
+    <tr><td>传递依赖</td><td>依赖的库又依赖的库</td><td>报错常藏在两层之外（pango 到 fribidi）</td></tr>
+    <tr><td>编译期依赖</td><td>头文件、符号声明（-devel/-dev 包）</td><td>缺失报 fatal error: xxx.h: No such file</td></tr>
+    <tr><td>运行期依赖</td><td>动态库 .so 文件</td><td>缺失报 undefined reference 或找不到库</td></tr>
+  </table>
+
+  <!-- ========== 13.2 ldd 用法 ========== -->
+  <h2>13.2 ldd：给可执行文件拍一张 X 光片</h2>
+
+  <p>把依赖树画出来之后，下一步是核实「实际解析」——树上写着 pango 依赖 fribidi，但运行那一刻 fribidi 到底加载了哪一份文件？<strong>ldd</strong> 就是干这个的取证工具。对任何一个可执行文件或 .so 执行 <code>ldd</code>，它会列出运行这个文件所需的所有动态库，以及每个库最终解析到的绝对路径。输出是标准三列：库的 soname（逻辑名）箭头指向解析出的绝对路径，括号里是加载基址。第 7 章存档的现场取证用的正是 <code>ldd /usr/lib64/libpango-1.0.so | grep fribidi</code>——一个命令就把「pango 抓了哪份 fribidi」拍了个正着。</p>
+
+  <p>ldd 的原理和限制要说清楚：它本身只是个包装，本质是让动态链接器以调试模式加载目标文件、打印解析结果。因此它只能解析<strong>当前机器、当前架构能加载</strong>的文件——对交叉编译产物或别的架构的库，ldd 会报「not a dynamic executable」或直接拒绝，这时改用 <code>readelf -d</code> 看 NEEDED 条目（只读 ELF 头，不加载文件）。另一个值得记住的输出是 <code>not found</code>：某个库在全部搜索路径里都找不到——这是 ldd 最有价值的一句话，直接指向「路径没配」这类问题。素材环境是 CentOS（库在 /lib64），现行 Debian/Ubuntu 的库多在 /usr/lib/x86_64-linux-gnu，机制完全一样，路径不同而已。</p>
+
+  <pre><code><span class="cmt"># 体检对象：第 7 章装好的 vips 可执行文件</span>
+<span class="fn">ldd</span> /usr/local/vips/bin/vips
+<span class="cmt"># 示例输出（节选）：名字 =&gt; 绝对路径 (基址)</span>
+linux-vdso.so.1 (0x00007fff...)
+libvips.so.42 <span class="op">=&gt;</span> /usr/local/lib/libvips.so.42 (0x00007f...)
+libglib-2.0.so.0 <span class="op">=&gt;</span> /lib64/libglib-2.0.so.0 (0x00007f...)
+libjpeg.so.62 <span class="op">=&gt;</span> /lib64/libjpeg.so.62 (0x00007f...)
+libheif.so.1 <span class="op">=&gt;</span> /lib64/libheif.so.1 (0x00007f...)
+libpango-1.0.so.0 <span class="op">=&gt;</span> /lib64/libpango-1.0.so.0 (0x00007f...)
+libc.so.6 <span class="op">=&gt;</span> /lib64/libc.so.6 (0x00007f...)
+<span class="cmt"># 全绿：每一行都能解析到真实存在的文件，且路径合理</span></code></pre>
+
+  <pre><code><span class="cmt"># 第 7 章存档的现场取证：pango 到底抓了哪份 fribidi？</span>
+<span class="fn">ldd</span> /usr/lib64/libpango-1.0.so <span class="op">|</span> <span class="fn">grep</span> fribidi
+<span class="cmt"># 素材观察到的（有问题的解析）：</span>
+<span class="cmt"># libfribidi.so.0 =&gt; /usr/local/lib/libfribidi.so.0 (0x00007f...)</span>
+<span class="cmt">#                   ^^ 自己源码手编装进 /usr/local 的那份——不是系统库！</span>
+
+<span class="cmt"># 交叉架构或无法直接加载的文件，用 readelf 看 NEEDED 条目</span>
+<span class="fn">readelf</span> -d /lib64/libpango-1.0.so.0 <span class="op">|</span> <span class="fn">grep</span> NEEDED
+<span class="cmt">#  0x0000000000000001 </span><span class="ann">(NEEDED)</span><span class="cmt">  Shared library: [libfribidi.so.0]</span>
+<span class="cmt">#  readelf 只读 ELF 头不加载文件——ldd 的替代取证手段</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>ldd 输出出现「不是系统路径」的解析结果，就是案子的第一道裂缝。取证三连问：①这个文件是我的程序能加载的吗（架构对不对）？②解析到的路径合理吗（为什么会在 /usr/local）？③有没有 not found（路径根本丢了）？三问之后，方向基本就锁定了。</p>
+  </div>
+
+  <!-- ========== 13.3 undefined reference 根因 ========== -->
+  <h2>13.3 undefined reference：链接错误的三宗罪</h2>
+
+  <p><strong>undefined reference</strong> 是链接器在说人话：这个符号你要用，但我手里没有。福尔摩斯办案先列嫌疑人，链接错误的头号嫌疑人清单只有三个——这正是「排除不可能」的用武之地。第一宗罪：<strong>版本不匹配</strong>。库的提供方和使用方版本错位，使用方要的新符号在提供方里不存在（第 7 章的 fribidi 案就是这一宗）。第二宗罪：<strong>符号缺失</strong>。库没装、没链接（漏了 <code>-l</code>）、或者链接的库太旧，符号压根没编译进去。第三宗罪：<strong>链接顺序</strong>。静态库（.a）对顺序敏感，被依赖的库必须放在依赖它的库<strong>后面</strong>，顺序反了，前面的符号在链接时还没被「看见」，照样报 undefined reference。</p>
+
+  <p>怎么排除？三宗罪各有一件对应的取证工具：版本不匹配用 <code>ldd</code> 加 <code>nm</code> 对比「解析到哪份、符号在不在」；符号缺失用 <code>nm -D</code> 直接查动态符号表，顺便检查 <code>-l</code> 写全没有；链接顺序则把 <code>-l</code> 的顺序调过来再编一次。注意一个共性：<strong>症状一模一样</strong>——都是 undefined reference，只有靠取证才能区分是哪一宗，这正是「不要急着怀疑，先取证」的意义。下面的代码块把三宗罪逐一演示：</p>
+
+  <pre><code><span class="cmt"># 案发现场（和第 7 章存档同款）：链接期报 undefined reference</span>
+<span class="fn">gcc</span> -o demo demo.c <span class="op">$(</span><span class="fn">pkg-config</span> --cflags --libs pango<span class="op">)</span>
+<span class="cmt"># /usr/bin/ld: /usr/lib64/libpango-1.0.so: </span><span class="kw">undefined</span> reference <span class="kw">to</span> `<span class="fn">fribidi_get_par_embedding_levels_ex</span>&#x27;
+<span class="cmt"># collect2: error: ld returned 1 exit status</span></code></pre>
+
+  <pre><code><span class="cmt"># 罪状一与罪状二：符号到底在不在？—— nm 查动态符号表</span>
+<span class="fn">nm</span> -D /usr/lib64/libfribidi.so.0 <span class="op">|</span> <span class="fn">grep</span> fribidi_get_par_embedding_levels
+<span class="cmt"># 新版 fribidi：</span><span class="num">0000000000002a30</span> <span class="type">T</span><span class="cmt"> fribidi_get_par_embedding_levels_ex</span>
+<span class="cmt"># 旧版 fribidi：（空输出）符号不存在 —— 版本太旧，或没链接这份库</span>
+
+<span class="cmt"># 罪状二补充：漏写 -l 也会报 undefined reference</span>
+<span class="fn">gcc</span> -o demo demo.c              <span class="cmt"># 报 undefined reference to `fribidi_...'</span>
+<span class="fn">gcc</span> -o demo demo.c <span class="op">-</span>lfribidi   <span class="cmt"># 补上库名，编译通过</span>
+
+<span class="cmt"># 罪状三：静态库顺序敏感 —— 被依赖的库放后面</span>
+<span class="fn">gcc</span> -o app app.o libB.a libA.a  <span class="cmt"># 通过：app 调 B、B 调 A，A 在后</span>
+<span class="fn">gcc</span> -o app app.o libA.a libB.a  <span class="cmt"># 报 undefined reference：A 的符号先被丢弃</span></code></pre>
+
+  <table>
+    <tr><th>根因</th><th>典型症状</th><th>验证工具</th><th>解法</th></tr>
+    <tr><td>版本不匹配</td><td>undefined reference，库名看着对</td><td>ldd 看解析路径 + nm 看符号</td><td>统一全系统同一版本，重装系统版</td></tr>
+    <tr><td>符号缺失</td><td>undefined reference，库没装或太旧</td><td>nm -D 查符号；检查 -l 是否齐全</td><td>装对版本、补 -l</td></tr>
+    <tr><td>链接顺序</td><td>静态库场景的 undefined reference</td><td>调换 -l 顺序重编</td><td>被依赖的库放后面</td></tr>
+  </table>
+
+  <!-- ========== 13.4 素材案例复盘 ========== -->
+  <h2>13.4 案例复盘：fribidi 的版本冲突现场（悬念解开）</h2>
+
+  <p>现在正式结掉第 7 章 7.6 节那桩悬案。素材笔记原文一字不改：「检查 ldd /usr/lib64/libpango-1.0.so 发现，有一个 libfribidi.so.0 =&gt; /lib64/libfribidi.so.0 链接开始链接的是我自己的，有问题，改回来就好了，可能是版本冲突的原因，需要保证链接库的版本一致。」把背景补齐：fribidi 是处理<strong>双向文本（BiDi）</strong>的库——阿拉伯文、希伯来文这类从右往左书写的文字，排版方向全靠它计算；pango 排版文本时调用 fribidi，所以 fribidi 是 pango 的传递依赖。而 <code>fribidi_get_par_embedding_levels_ex</code> 是<strong>较新版本才提供的接口</strong>（带 _ex 的版本会回传段落方向，旧版只有不带 _ex 的函数）——版本不够新，符号就不存在。</p>
+
+  <p>福尔摩斯开始排除不可能：库在不在？在——ldd 有输出。文件名对不对？对——soname 就是 libfribidi.so.0。那符号在不在？<code>nm -D</code> 一查：<strong>不在</strong>。而「自己装的那份」正好是源码手编的旧版。剩下的唯一可能：pango 链接到的这份 fribidi，不是系统原本的那份，而是作者自己编译安装、把系统版顶掉（或挤占了解析路径）的版本——同一时刻系统里存在两份 fribidi，链接器抓错了人。这就是<strong>版本冲突</strong>：符号名存在而库文件里没有，病根是「链接库的版本不一致」。解法正如素材所说：改回来——让 pango 链接回系统那份完整的 fribidi，重新编译即通过。这桩案子的全部线索，其实 7.6 节的 ldd 一行输出里就齐了。</p>
+
+  <pre><code><span class="cmt"># 报错原文（素材，2020，CentOS）：</span>
+/usr/lib64/libpango-1.0.so: <span class="kw">undefined</span> reference <span class="kw">to</span> `<span class="fn">fribidi_get_par_embedding_levels_ex</span>&#x27;
+
+<span class="cmt"># 现场取证（ldd 查 pango 抓到哪份 fribidi）：</span>
+<span class="fn">ldd</span> /usr/lib64/libpango-1.0.so <span class="op">|</span> <span class="fn">grep</span> fribidi
+<span class="cmt"># 有问题的解析：libfribidi.so.0 =&gt; /usr/local/lib/libfribidi.so.0 (0x00007f...)</span>
+<span class="cmt">#               ^^^^^^^^^^^^^^^^ 自己源码装的那份，缺 _ex 符号，版本太旧</span></code></pre>
+
+  <pre><code><span class="cmt"># 修正动作：把系统版 fribidi 找回来，让 pango 链接系统库</span>
+<span class="fn">yum</span> reinstall fribidi fribidi-devel   <span class="cmt"># 发行版包管理器重装，顶掉源码版</span>
+<span class="cmt"># 或：确认 /usr/local/lib 里多余的源码版不再被搜到（13.5 讲搜索规则）</span>
+<span class="fn">ls</span> -l /usr/local/lib/libfribidi*
+
+<span class="cmt"># 重新验证：解析回到系统路径，符号齐全</span>
+<span class="fn">ldd</span> /usr/lib64/libpango-1.0.so <span class="op">|</span> <span class="fn">grep</span> fribidi
+<span class="cmt"># 正确的解析：libfribidi.so.0 =&gt; /lib64/libfribidi.so.0 (0x00007f...)</span>
+<span class="fn">nm</span> -D /lib64/libfribidi.so.0 <span class="op">|</span> <span class="fn">grep</span> fribidi_get_par_embedding_levels_ex
+<span class="cmt"># </span><span class="num">0000000000002a30</span> <span class="type">T</span><span class="cmt"> fribidi_get_par_embedding_levels_ex   &lt;- 符号在，版本对了</span>
+
+<span class="cmt"># 然后重新编译 libvips，链接阶段一路绿灯——结案</span></code></pre>
+
+  <pre><code><span class="cmt">/* 补一个背景：fribidi.h 里新版接口的签名（旧版只有不带 _ex 的版本） */</span>
+<span class="type">FriBidiParType</span> <span class="fn">fribidi_get_par_embedding_levels_ex</span>(
+    <span class="kw">const</span> <span class="type">FriBidiChar</span>    *<span class="param">bidi_str</span>,
+    <span class="kw">const</span> <span class="type">FriBidiStrIndex</span> <span class="param">len</span>,
+    <span class="type">FriBidiLevel</span>         *<span class="param">embedding_levels</span>,
+    <span class="type">FriBidiParType</span>       *<span class="param">pbase_dir</span>);</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>把这条推理链背下来，它适用于所有链接排错：库在不在（ldd）？名字对不对（soname）？符号在不在（nm -D）？版本对不对（对比两份库的符号表）？四问走完，剩下的就是真相。本案四问的答案分别是：在、对、不在、不对——版本冲突，实锤。</p>
+  </div>
+
+  <!-- ========== 13.5 ldconfig 与缓存 ========== -->
+  <h2>13.5 ldconfig 与动态链接器：库到底从哪里找</h2>
+
+  <p>上一节留下一个问题：为什么「自己装的那份」会被 pango 抓到？这要讲运行期动态库的查找机制。程序启动时，动态链接器 ld.so 负责把 ELF 里记录的每个 soname 解析成绝对路径，它的搜索路径来自三处：ELF 里嵌入的 RPATH/RUNPATH（13.6 节讲）、环境变量 <code>LD_LIBRARY_PATH</code>、以及全局缓存 <code>/etc/ld.so.cache</code>。缓存由 <strong>ldconfig</strong> 生成：它扫描 <code>/etc/ld.so.conf</code> 里列出的所有目录，把里面的库编成一张索引表，动态链接器按表快速定位——这解释了「文件明明在，程序却说找不到」：<code>make install</code> 把库装进 /usr/local/lib 后没跑 ldconfig，缓存里没这条记录，链接器自然看不见。</p>
+
+  <p>反过来，如果手编的库被放进了系统目录、或者 LD_LIBRARY_PATH 指到了自己的目录，它就会在缓存/环境变量层面<strong>顶掉系统库</strong>——素材里「链接开始链接的是我自己的」正是这种路径污染：两份 fribidi 同时存在，解析规则决定抓哪份。ldconfig 的常用姿势：裸命令全量刷新（读 /etc/ld.so.conf）；带目录只扫指定路径（<code>ldconfig /usr/local/lib</code>）；<code>-p</code> 打印当前缓存（相当于一张「当前系统认哪些库」的清单）；<code>-v</code> 详细输出。动态链接器最终按这个优先级从高到低找库：ELF 内 RPATH 到 LD_LIBRARY_PATH 到 ELF 内 RUNPATH 到 ld.so.cache，最后兜底默认目录 /lib 与 /usr/lib。</p>
+
+  <pre><code><span class="cmt"># 动态链接器的搜索路径配置（素材环境 CentOS）</span>
+<span class="fn">cat</span> /etc/ld.so.conf
+<span class="cmt"># include ld.so.conf.d/*.conf</span>
+<span class="fn">ls</span> /etc/ld.so.conf.d/
+<span class="cmt"># libc.conf  mariadb-x86_64.conf  ...</span>
+
+<span class="cmt"># 当前缓存里 fribidi 的解析情况（相当于 ldd 的查询表）</span>
+<span class="fn">ldconfig</span> -p <span class="op">|</span> <span class="fn">grep</span> fribidi
+<span class="cmt"># libfribidi.so.0 </span><span class="ann">(libc6,x86-64)</span><span class="cmt"> =&gt; /lib64/libfribidi.so.0</span>
+<span class="cmt"># libfribidi.so </span><span class="ann">(libc6,x86-64)</span><span class="cmt"> =&gt; /lib64/libfribidi.so</span></code></pre>
+
+  <pre><code><span class="cmt"># make install 把新库装进 /usr/local/lib 之后，先刷新缓存</span>
+<span class="fn">ldconfig</span> /usr/local/lib   <span class="cmt"># 只扫指定目录</span>
+<span class="cmt"># 或全量刷新（读 /etc/ld.so.conf 全部目录）</span>
+<span class="fn">ldconfig</span>
+
+<span class="cmt"># 验证：缓存里能看到新装的库了（之前是查不到的）</span>
+<span class="fn">ldconfig</span> -p <span class="op">|</span> <span class="fn">grep</span> -E <span class="str">"fribidi|heif"</span>
+<span class="cmt"># libheif.so.1 </span><span class="ann">(libc6,x86-64)</span><span class="cmt"> =&gt; /usr/local/lib/libheif.so.1</span></code></pre>
+
+  <table>
+    <tr><th>优先级</th><th>来源</th><th>说明</th></tr>
+    <tr><td>1</td><td>DT_RPATH（旧式，仅当无 RUNPATH 时）</td><td>老工具链 -Wl,-rpath 写入</td></tr>
+    <tr><td>2</td><td>LD_LIBRARY_PATH</td><td>环境变量，临时改路，调试常用</td></tr>
+    <tr><td>3</td><td>DT_RUNPATH（现行 -rpath 写入）</td><td>13.6 节的主角</td></tr>
+    <tr><td>4</td><td>/etc/ld.so.cache</td><td>ldconfig 生成的全局缓存</td></tr>
+    <tr><td>5</td><td>默认目录 /lib、/usr/lib</td><td>兜底</td></tr>
+  </table>
+
+  <!-- ========== 13.6 -rpath/-L 链接参数 ========== -->
+  <h2>13.6 -L 与 -rpath：编译期把路指对</h2>
+
+  <p>排错要分清两个时间面：<strong>链接期</strong>（编译时，链接器按 <code>-L</code> 目录、<code>-l</code> 名字找库文件）与<strong>运行期</strong>（加载时，动态链接器按 13.5 节的顺序找库）。<code>-L</code> 告诉链接器去哪里找库文件，比如 <code>-L/usr/local/lib -lfribidi</code> 表示去 /usr/local/lib 下找 libfribidi.so（<code>-l</code> 后的名字会自动补 lib 前缀与 .so 后缀）；它只在链接那一下生效。第 7 章素材里 myconfig.sh 的 <code>-L${commonlib}</code>（commonlib=/usr/lib64）就是干这个的——把编译时的库搜索目录指到系统 64 位库目录。</p>
+
+  <p>但 <code>-L</code> 有个大坑：链接期找到了，不代表运行期找得到——比如库装在 /usr/local/lib 而缓存里没有，程序编出来了，一启动就报找不到。把运行期路径<strong>写进可执行文件</strong>的办法是 <code>-rpath</code>：<code>-Wl,-rpath,/usr/local/lib</code> 让链接器把目录写进 ELF 的 DT_RUNPATH，运行期动态链接器优先按它找（优先级高于缓存，见 13.5 表格）。<code>-Wl,</code> 前缀表示「把后面的参数原样传给链接器」。验证写没写进去用 <code>readelf -d</code>。一句话总结：<code>-L</code> 管链接期的路，<code>-rpath</code> 管运行期的路，ldconfig 管全局的默认路。</p>
+
+  <pre><code><span class="cmt"># 链接期：-L 指目录，-l 指库名（lib 前缀与 .so 后缀自动补）</span>
+<span class="fn">gcc</span> -o demo demo.c <span class="op">-</span>L/usr/local/lib <span class="op">-</span>lfribidi
+<span class="cmt"># 等价于让链接器去 /usr/local/lib 找 libfribidi.so</span>
+<span class="cmt"># 素材 myconfig.sh 里的 -L${commonlib} 就是同款技巧</span>
+
+<span class="cmt"># 更稳的做法：让 pkg-config 吐出 cflags 和 libs，别手写路径</span>
+<span class="fn">gcc</span> -o demo demo.c <span class="op">$(</span><span class="fn">pkg-config</span> --cflags --libs vips<span class="op">)</span>
+<span class="cmt"># pkg-config 输出示例：-I/usr/local/include -L/usr/local/lib -lvips</span></code></pre>
+
+  <pre><code><span class="cmt"># 运行期：把查找路径写进可执行文件 —— -rpath</span>
+<span class="fn">gcc</span> -o demo demo.c <span class="op">-</span>L/usr/local/lib <span class="op">-</span>lfribidi <span class="op">-</span>Wl,-rpath,/usr/local/lib
+<span class="cmt"># -Wl, 表示把后面的参数原样传给链接器；链接器写入 DT_RUNPATH</span>
+
+<span class="cmt"># 验证写进去了没有</span>
+<span class="fn">readelf</span> -d demo <span class="op">|</span> <span class="fn">grep</span> -E <span class="str">"RPATH|RUNPATH"</span>
+<span class="cmt">#  0x000000000000001d </span><span class="ann">(RUNPATH)</span><span class="cmt">  Library runpath: [/usr/local/lib]</span></code></pre>
+
+  <table>
+    <tr><th>手段</th><th>生效阶段</th><th>作用</th><th>例子</th></tr>
+    <tr><td>-L</td><td>链接期</td><td>加库搜索目录</td><td>gcc -L/usr/local/lib</td></tr>
+    <tr><td>-l</td><td>链接期</td><td>指定库名</td><td>-lfribidi</td></tr>
+    <tr><td>-Wl,-rpath</td><td>链接期写入，运行期生效</td><td>嵌入 DT_RUNPATH</td><td>-Wl,-rpath,/usr/local/lib</td></tr>
+    <tr><td>LD_LIBRARY_PATH</td><td>运行期</td><td>临时加搜索路径</td><td>export LD_LIBRARY_PATH=/usr/local/lib</td></tr>
+    <tr><td>ldconfig</td><td>运行期（全局）</td><td>刷新缓存</td><td>ldconfig /usr/local/lib</td></tr>
+  </table>
+
+  <!-- ========== 13.7 预防 ========== -->
+  <h2>13.7 预防：ldd 体检与系统库优先</h2>
+
+  <p>福尔摩斯的原则：最好的案子是没有案子。把本章的知识倒过来用，就是一套预防清单。第一条，<strong>系统库优先</strong>：能用发行版包管理器装的库就不要源码手编——yum/apt 保证版本一致、依赖完整、可查询（rpm -qR），这正是素材案例里「版本冲突」的根治办法。第二条，<strong>手编库装独立前缀</strong>：源码编译默认 /usr/local 即可，不要装进系统目录顶掉系统库；非要共存就彻底隔离并想清楚解析优先级。第三条，<strong>装完立即 ldd 体检</strong>：可执行文件全绿（无 not found、无意外解析到非系统路径）才算装好。第四条，<strong>用 pkg-config 当统一入口</strong>：头文件与链接参数由它输出，别手写 -I/-L，减少路径漂移。第五条，<strong>版本一致</strong>：同一个库全系统只保留一个版本，或明确隔离——素材的原话「需要保证链接库的版本一致」就是这条。</p>
+
+  <p>回到办案方法论，把本章串一遍：画依赖树定方向（13.1）→ ldd 拍 X 光看实际解析（13.2）→ 三宗罪逐一排除（13.3）→ fribidi 案结案（13.4）→ 搞懂 ld.so 的搜索规则（13.5）→ 用 -rpath/-L 把路指对（13.6）→ 预防清单让案子不再发生（13.7）。第 7 章 7.6 节那个「只提现象、解法留到第 13 章」的悬念，到这里正式关闭。下一章《调试实战：版本与崩溃》是同一思路在编译器层面的延续——第 6 章 LibRaw 留下的 g++ 版本崩溃现场，会在那里用 gdb 与 core dump 破案；而第 16 章生态收尾，会把这条「格式到排错」的全链路再串一遍。</p>
+
+  <pre><code><span class="cmt"># 体检一：可执行文件全绿检查——not found 一个都不能有</span>
+<span class="fn">ldd</span> /usr/local/vips/bin/vips <span class="op">|</span> <span class="fn">grep</span> <span class="str">"not found"</span>
+<span class="cmt"># （无输出 = 全绿）</span>
+
+<span class="cmt"># 体检二：盯住容易出事的解析行——手编库的路径要心里有数</span>
+<span class="fn">ldd</span> /usr/local/vips/bin/vips <span class="op">|</span> <span class="fn">grep</span> -E <span class="str">"fribidi|heif|jpeg"</span>
+<span class="cmt"># libfribidi.so.0 =&gt; /lib64/libfribidi.so.0          &lt;- 系统库，放心</span>
+<span class="cmt"># libheif.so.1 =&gt; /usr/local/lib/libheif.so.1        &lt;- 手编的，确认过版本</span></code></pre>
+
+  <pre><code><span class="cmt"># 统一入口：pkg-config 替你把 -I/-L/-l 都算好</span>
+<span class="fn">pkg-config</span> --cflags --libs vips
+<span class="cmt"># -I/usr/local/include -L/usr/local/lib -lvips</span>
+<span class="fn">PKG_CONFIG_PATH</span>=/usr/local/lib/pkgconfig <span class="fn">pkg-config</span> --modversion vips
+<span class="cmt"># </span><span class="num">8.18.0</span>
+
+<span class="cmt"># 装完三步验证：版本、链接体检、真实跑一次</span>
+<span class="fn">vips</span> --version
+<span class="fn">ldd</span> <span class="op">$(</span><span class="fn">which</span> vips<span class="op">)</span> <span class="op">|</span> <span class="fn">grep</span> <span class="str">"not found"</span>
+<span class="fn">vips</span> copy photo.heic out.jpg</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>预防清单浓缩成一句口头禅：「系统库优先、独立前缀、装完即检、pkg-config 指路、版本一致」。每次 make install 完一个新库，花十秒钟跑一次 ldd 体检——十秒钟的检查，省下的是 13.4 节那种整晚的排查。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① ldd 只能查看可执行文件的依赖，不能查 .so 库文件；② undefined reference 一定是因为库没安装；③ ldconfig 的作用是刷新动态链接器缓存 /etc/ld.so.cache；④ 静态库链接时 -l 的顺序无所谓；⑤ -rpath 只在链接期生效，运行期没有作用。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 13.2 节 ldd 的对象、13.3 节三宗罪、13.5 节 ldconfig 的作用、13.3 节静态库顺序、13.6 节 -rpath 写入的 DT_RUNPATH 在运行期生效。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 错——ldd 对可执行文件和 .so 都能用（13.2 节）；② 错——还可能是版本不匹配、符号缺失或链接顺序（13.3 节三宗罪）；③ 对——ldconfig 扫描 /etc/ld.so.conf 里的目录生成 /etc/ld.so.cache（13.5 节）；④ 错——静态库顺序敏感，被依赖的库必须放在后面（13.3 节罪状三）；⑤ 错——-rpath 把路径写进 ELF 的 DT_RUNPATH，由运行期的动态链接器按它找库（13.6 节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读 ldd 输出 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>某程序启动报错 <code>undefined reference</code> 相关的问题，你执行 <code>ldd /usr/bin/player | grep fribidi</code> 得到：<code>libfribidi.so.0 =&gt; /usr/local/lib/libfribidi.so.0 (0x00007f...)</code>，而系统包管理器显示系统库在 /lib64。请判断：① 这一行输出说明了什么？② 下一步该用什么命令验证「这份库缺不缺符号」？③ 修正方向是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 13.2 节「不是系统路径的解析结果就是裂缝」；符号验证用 nm；修正方向参考 13.4 节结案流程与 13.5 节搜索规则。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 说明 fribidi 被解析到了 /usr/local/lib 里自己手编的那份，而不是系统 /lib64 的版本——两份库并存且解析抓错了人，这是版本冲突的现场（13.2 节、13.4 节）；② 用 <code>nm -D /usr/local/lib/libfribidi.so.0 | grep 需要的符号名</code>，对比系统版 <code>nm -D /lib64/libfribidi.so.0 | grep 需要的符号名</code>——哪个没有符号，哪个就是罪魁（13.3 节）；③ 让程序链接回系统版：优先用发行版包管理器重装系统库顶掉手编版（13.4 节），并检查是不是 LD_LIBRARY_PATH 或 ldconfig 缓存把路径指偏了（13.5 节），必要时用 -rpath 明确运行期路径（13.6 节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：三宗罪对号入座 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面三个场景分别对应 undefined reference 的哪一宗罪？① 编译 demo 时写了 <code>-lfribidi</code> 但没写它依赖的库，报 undefined reference；② 链接静态库时 <code>gcc -o app app.o libA.a libB.a</code> 报 undefined reference，调换顺序后通过；③ 系统里 fribidi 是旧版，程序调用了新版才有的 <code>_ex</code> 接口，报 undefined reference。并写出每个场景的验证命令。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回到 13.3 节三宗罪表格：符号缺失（漏 -l）、链接顺序、版本不匹配——各配一件验证工具。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 符号缺失（漏链接传递依赖）——检查 -l 是否齐全，或让 pkg-config 输出完整链接参数（13.3 节罪状二）；② 链接顺序——被依赖的库 libB 里的符号在 libA 之前被丢弃，把顺序调成 <code>app.o libB.a libA.a</code>，验证方式就是调序重编（13.3 节罪状三）；③ 版本不匹配——用 <code>nm -D</code> 对比新旧两份 fribidi 的符号表，确认旧版没有 <code>fribidi_get_par_embedding_levels_ex</code>（13.3 节罪状一、13.4 节结案现场）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：排错流程设计 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>场景：你 make install 了新版 libfoo 到 /usr/local/lib，某程序启动时报 <code>libfoo.so.1: cannot open shared object file: No such file or directory</code>，但 <code>ls /usr/local/lib/libfoo.so.1</code> 明明存在。按福尔摩斯的排除法，设计完整的定位与解决流程：① 为什么「文件在」不等于「链接器找得到」？② 依次用什么命令、检查什么？③ 至少给出三种让程序找到它的办法，并说明各自的适用场景。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>「文件在」只是文件系统层面，链接器看的是搜索路径；答案覆盖 ldconfig 刷新、ldconfig -p 验证、LD_LIBRARY_PATH、-rpath、readelf -d 验证，对应 13.5 节查找顺序表与 13.6 节参数对照表。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 动态链接器按 13.5 节的顺序（RPATH 到 LD_LIBRARY_PATH 到 RUNPATH 到缓存到默认目录）找库，/usr/local/lib 不在任何一层里，文件存在也等于不存在——「文件在」是文件系统事实，「找得到」是链接器搜索规则的结果；② 流程：先 <code>ldconfig /usr/local/lib</code> 把新目录刷进缓存，再 <code>ldconfig -p | grep libfoo</code> 验证缓存里有没有、路径对不对，接着 <code>ldd 程序</code> 看解析结果，最后 <code>readelf -d 程序 | grep -E "RPATH|RUNPATH"</code> 看 ELF 里写没写路径；③ 三种办法：a. <code>ldconfig /usr/local/lib</code> 或把目录加进 /etc/ld.so.conf 后全量 ldconfig——全局生效，最推荐（13.5 节）；b. 启动前 <code>export LD_LIBRARY_PATH=/usr/local/lib</code>——临时调试方便，但每次启动都要设，容易污染环境（13.5 节）；c. 编译时加 <code>-Wl,-rpath,/usr/local/lib</code> 把路径写进 ELF 的 DT_RUNPATH——一劳永逸且只影响这个程序，适合自编库的部署（13.6 节）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

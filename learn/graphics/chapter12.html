@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第12章：CUDA 图像处理：内核与内存模型 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter12.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第12章：CUDA 图像处理：内核与内存模型 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter12.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="12" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第12章：CUDA 图像处理：内核与内存模型</h1>
+  <p class="chapter-subtitle">第 11 章装好了环境，这一章让 GPU 真正开始处理图像。从第一性原理出发：一条 for 循环如何变成几十万个线程、线程如何编组成 grid/block/thread、数据如何住在 global/shared/寄存器三级内存里——最后亲手编译运行两个真正的图像内核：像素翻转与灰度转换</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「我不能创造的东西，我就不理解。这一章我们从'一个像素的独立运算'出发，一步步推导出 CUDA 的整个骨架：12.1 把循环拆成内核，12.2 看清线程的 grid/block/thread 编组，12.3 用二维索引把像素坐标算出来，12.4 搞懂 global/shared/寄存器三级内存与数据搬运，12.5 亲手写出像素翻转与灰度转换两个图像内核，12.6 用 nvcc 编译运行并学会查错。先懂'为什么'，再谈'怎么做'。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 12.1 从循环到内核 ========== -->
+  <h2>12.1 第一性原理：从循环到内核</h2>
+
+  <p>上一章我们把 CUDA 环境立了起来：驱动在跑、nvcc 就位、deviceQuery 打出 <code>Result = PASS</code>。工具备好，这一章开始真正的 CUDA 图像处理。先亮出方法论——费曼的第一性原理：<strong>不问"CUDA 的 API 怎么背"，先问"图像处理最底层的运算是什么"</strong>。答案朴素得很：对每个像素做同一件独立的事——取反、变灰、找边缘。第 11 章 11.1 节已经算过这笔账：一张 1920×1080 的图约 207 万像素，逐像素独立运算，天然适合并行。CPU 版是一条 for 循环串行扫 200 万次，GPU 版是把循环体交给 200 万个线程同时执行。第一性原理的推论水到渠成：<strong>把"循环体"变成"内核函数体"，把"循环变量"变成"线程编号"，一条 for 循环就翻译成了 CUDA 内核。</strong></p>
+
+  <p>官方编程指南（CUDA C++ Programming Guide）对内核（kernel）的定义很朴素：<strong>在 GPU 上执行的函数就叫内核，启动内核（launch）相当于同时启动成百上千万个线程并行执行同一段代码</strong>。语法上内核有两条硬规矩：① 用 <code>__global__</code> 修饰——告诉编译器这个函数在设备端执行、由主机端启动；② 返回类型必须是 <code>void</code>——官方明说，内核无法直接返回值，计算结果只能写进全局内存（显存），再由主机用 CUDA API 拷回。还要先建立 host/device 这对概念：<strong>host 指 CPU 及其内存，device 指 GPU 及其显存</strong>（第 11 章提过"异构计算"，这里给出官方定义）；程序永远从 CPU 启动，主机代码负责拷贝数据、启动内核、等待完成。下面把第 11 章 11.1 节那个"像素取反"的伪代码变成第一个真内核。</p>
+
+  <pre><code><span class="cmt">// invert_kernel.cu —— 第一个真内核：灰度图像素取反</span>
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">invert</span>(<span class="type">unsigned char</span>* data, <span class="kw">int</span> n) {
+    <span class="cmt">// 一维索引：本线程在整个网格中的全局编号（12.2 节详解）</span>
+    <span class="kw">int</span> i = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">if</span> (i <span class="op">&lt;</span> n) {               <span class="cmt">// 边界检查：网格可能比数据大</span>
+        data[i] = <span class="num">255</span> - data[i]; <span class="cmt">// 取反：亮度 255 变 0，0 变 255</span>
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">// kernel_min.cu —— 最小可运行 CUDA 程序：一维数组取反</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>stdio.h<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>cuda_runtime.h<span class="op">&gt;</span>
+
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">invert</span>(<span class="type">unsigned char</span>* data, <span class="kw">int</span> n) {
+    <span class="kw">int</span> i = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">if</span> (i <span class="op">&lt;</span> n) data[i] = <span class="num">255</span> - data[i];
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const</span> <span class="kw">int</span> N = <span class="num">1024</span>;                       <span class="cmt">// 一维"图像"：1024 个像素</span>
+    <span class="type">unsigned char</span>* h = (<span class="type">unsigned char</span>*)malloc(N);
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i <span class="op">&lt;</span> N; <span class="op">++</span>i) h[i] = i % <span class="num">256</span>; <span class="cmt">// 造一条渐变数据</span>
+
+    <span class="type">unsigned char</span>* d = <span class="kw">NULL</span>;
+    cudaMalloc(<span class="op">&amp;</span>d, N);                         <span class="cmt">// 1. 在显存分配</span>
+    cudaMemcpy(d, h, N, <span class="type">cudaMemcpyHostToDevice</span>);   <span class="cmt">// 2. 拷入显存</span>
+    invert<span class="op">&lt;&lt;&lt;</span><span class="num">1</span>, <span class="num">256</span><span class="op">&gt;&gt;&gt;</span>(d, N);               <span class="cmt">// 3. 启动内核：1 个块 256 线程</span>
+    cudaMemcpy(h, d, N, <span class="type">cudaMemcpyDeviceToHost</span>);   <span class="cmt">// 4. 结果拷回内存</span>
+    cudaFree(d);                                   <span class="cmt">// 5. 释放显存</span>
+
+    printf(<span class="str">"h[0]=%d h[255]=%d (期望 255, 0)\n"</span>, h[<span class="num">0</span>], h[<span class="num">255</span>]);
+    free(h);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>对照第 11 章 11.1 节的两个代码块：CPU 版把"取反"写进两层 for 循环，GPU 版把它写进 <code>invert</code> 函数体；CPU 版的循环边界是 <code>y &lt; H</code>、<code>x &lt; W</code>，GPU 版的"循环边界"变成了 <code>blockIdx * blockDim + threadIdx</code> 与一个 if 守卫。核心思想一句话：<strong>循环是串行的枚举，内核是并行的枚举</strong>。剩下的问题全是工程细节：线程怎么编组（12.2）、像素坐标怎么算（12.3）、数据放在哪（12.4）、怎么编译运行（12.6）。</p>
+
+  <!-- ========== 12.2 线程层次 ========== -->
+  <h2>12.2 线程层次：grid、block 与 thread</h2>
+
+  <p>内核一启动就是几十万上百万个线程，它们不是散兵游勇，而是有严格的编组——官方叫线程层次（thread hierarchy）：<strong>线程（thread）组成线程块（thread block），线程块组成网格（grid）</strong>，网格与块都可以是一维、二维或三维。为什么中间要夹一层"块"？这是从硬件事实推出来的（第一性原理）：GPU 由若干流式多处理器（SM）组成，<strong>一个线程块的所有线程被调度到同一个 SM 上执行，块是调度的基本单位</strong>；而 GPU 上的 SM 只有几十上百个，网格里的块可能有几十万个，所以官方明确要求：块之间没有执行顺序保证、不得互相依赖——这样任意块都可以按任意顺序塞进任意 SM。推论很重要：<strong>块内可以协作（共享内存、同步），块间必须各自独立</strong>，这决定了内核的写法。</p>
+
+  <p>每个线程靠四个内置变量认清自己是谁：<code>threadIdx</code>（本线程在块内的编号）、<code>blockIdx</code>（本块在网格中的编号）、<code>blockDim</code>（块的大小，每维多少线程）、<code>gridDim</code>（网格的大小，每维多少块），各自带 <code>.x/.y/.z</code> 三个分量。一维配置下，线程的全局唯一编号 = <code>blockIdx.x * blockDim.x + threadIdx.x</code>。还有一个硬件细节要记住：线程按 32 个一组组成 warp，同一 warp 的线程按 SIMT 模式齐步执行指令（官方术语），所以<strong>块大小最好取 32 的倍数</strong>（比如 256 = 8 个 warp），否则最后一个 warp 会空转；官方还给出硬上限：每块最多 1024 个线程（设备属性 <code>maxThreadsPerBlock</code>）。下面用两个小程序把层次"看"出来。</p>
+
+  <pre><code><span class="cmt">// whoami.cu —— 每个线程报出自己的"住址"：块号、块内号、全局号</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>stdio.h<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>cuda_runtime.h<span class="op">&gt;</span>
+
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">whoami</span>() {
+    <span class="kw">int</span> block = blockIdx.x;     <span class="cmt">// 本线程所在块：0 .. gridDim.x-1</span>
+    <span class="kw">int</span> thread = threadIdx.x;   <span class="cmt">// 块内线程号：0 .. blockDim.x-1</span>
+    <span class="kw">int</span> global = block * blockDim.x + thread; <span class="cmt">// 全局唯一编号</span>
+    printf(<span class="str">"block %d, thread %d -&gt; global %d\n"</span>, block, thread, global);
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    whoami<span class="op">&lt;&lt;&lt;</span><span class="num">2</span>, <span class="num">4</span><span class="op">&gt;&gt;&gt;</span>();      <span class="cmt">// 2 个块、每块 4 个线程，共 8 个线程</span>
+    cudaDeviceSynchronize(); <span class="cmt">// 内核异步执行，等它跑完再退出（12.6 节详讲）</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// vec_invert.cu —— 一维大数组：网格大小按数据量计算</span>
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">invert</span>(<span class="type">unsigned char</span>* data, <span class="kw">int</span> n) {
+    <span class="kw">int</span> i = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">if</span> (i <span class="op">&lt;</span> n) data[i] = <span class="num">255</span> - data[i];
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const</span> <span class="kw">int</span> N = <span class="num">1</span> <span class="op">&lt;&lt;</span> <span class="num">20</span>;        <span class="cmt">// 1M 个像素（约 100 万）</span>
+    <span class="kw">int</span> blockSize = <span class="num">256</span>;          <span class="cmt">// 每块 256 线程 = 8 个 warp（32 的倍数）</span>
+    <span class="kw">int</span> gridSize = (N + blockSize - <span class="num">1</span>) / blockSize; <span class="cmt">// 上取整：4096 块</span>
+    <span class="cmt">// ... 分配与拷贝略（12.4 节给完整五步流程）</span>
+    invert<span class="op">&lt;&lt;&lt;</span>gridSize, blockSize<span class="op">&gt;&gt;&gt;</span>(d, N);
+    <span class="cmt">// ... 回拷与验证略</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>注意 vec_invert 里网格大小的算法：<code>(N + blockSize - 1) / blockSize</code> 是"上取整"——N 除以 blockSize 有余数时，也得凑够一个块，多出来的线程靠 if 守卫跳过。块数远超 SM 数没关系：SM 跑完一个块就接下一个，官方保证"任意大的网格都能在任意小的 GPU 上跑"。不过对图像来说，一维编号还不够直观——像素天生是二维的，下一节把网格也变成二维。</p>
+
+  <!-- ========== 12.3 二维索引 ========== -->
+  <h2>12.3 二维索引：把像素坐标算出来</h2>
+
+  <p>图像是二维数据：宽 W、高 H，在内存里按行优先排成一维数组（第 9 章讲 Mat 时就是这个布局，这里复用）。要把"线程"和"像素"对上号，最自然的做法是让网格和块都取二维：块里 16×16 个线程，网格里若干块铺满整张图。每个线程的像素坐标由两行公式算出：<code>x = blockIdx.x * blockDim.x + threadIdx.x</code>、<code>y = blockIdx.y * blockDim.y + threadIdx.y</code>，再折算回一维下标 <code>idx = y * width + x</code>——这正是第 11 章 11.1 节伪代码里那两个公式的正式版。官方编程指南明确说，网格与块支持多维，<strong>目的就是方便把线程映射到二维数据上</strong>。</p>
+
+  <p>二维映射立刻暴露一个新手必踩的坑：<strong>图像尺寸往往不是块大小的整数倍</strong>。640×480 的图配 16×16 的块，网格上取整后是 40×30 块，多出来的线程对应"不存在的像素"——如果放任不管，就会越界读写显存，轻则数据损坏、重则崩溃（官方术语叫未定义行为）。标准解法是边界守卫：<code>if (x &lt; width &amp;&amp; y &lt; height)</code>，越界的线程直接跳过。启动配置里网格同样用上取整公式：<code>dim3 grid((W + 15) / 16, (H + 15) / 16)</code>。下面先写带边界检查的二维取反内核，再写一个"画棋盘"的内核——把 <code>(x + y)</code> 的奇偶映射成黑白，跑完直接得到一张肉眼可见的 PGM 图片，索引算得对不对一目了然。</p>
+
+  <pre><code><span class="cmt">// invert2d.cu —— 二维网格/块：一个线程负责一个像素（含边界守卫）</span>
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">invert</span>(<span class="type">unsigned char</span>* img, <span class="kw">int</span> width, <span class="kw">int</span> height) {
+    <span class="kw">int</span> x = blockIdx.x * blockDim.x + threadIdx.x; <span class="cmt">// 像素列</span>
+    <span class="kw">int</span> y = blockIdx.y * blockDim.y + threadIdx.y; <span class="cmt">// 像素行</span>
+    <span class="kw">if</span> (x <span class="op">&lt;</span> width <span class="op">&amp;&amp;</span> y <span class="op">&lt;</span> height) {     <span class="cmt">// 越界守卫</span>
+        <span class="kw">int</span> idx = y * width + x;     <span class="cmt">// 行优先：二维坐标折算成一维下标</span>
+        img[idx] = <span class="num">255</span> - img[idx];
+    }
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const</span> <span class="kw">int</span> W = <span class="num">640</span>, H = <span class="num">480</span>;
+    <span class="cmt">// ... 造图、cudaMalloc、cudaMemcpy 略（12.5 节给完整程序）</span>
+    <span class="type">dim3</span> block(<span class="num">16</span>, <span class="num">16</span>);                    <span class="cmt">// 每块 16x16 = 256 线程（8 个 warp）</span>
+    <span class="type">dim3</span> grid((W + <span class="num">15</span>) / <span class="num">16</span>, (H + <span class="num">15</span>) / <span class="num">16</span>); <span class="cmt">// 上取整：40 x 30 = 1200 块</span>
+    invert<span class="op">&lt;&lt;&lt;</span>grid, block<span class="op">&gt;&gt;&gt;</span>(d_img, W, H);
+    <span class="cmt">// ... 回拷、验证、释放略</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// checker.cu —— 用 (x + y) 的奇偶生成棋盘并写成 PGM，肉眼验证二维索引</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>stdio.h<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>cuda_runtime.h<span class="op">&gt;</span>
+
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">checker</span>(<span class="type">unsigned char</span>* img, <span class="kw">int</span> width, <span class="kw">int</span> height) {
+    <span class="kw">int</span> x = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">int</span> y = blockIdx.y * blockDim.y + threadIdx.y;
+    <span class="kw">if</span> (x <span class="op">&lt;</span> width <span class="op">&amp;&amp;</span> y <span class="op">&lt;</span> height) {
+        <span class="kw">int</span> idx = y * width + x;
+        img[idx] = ((x + y) % <span class="num">2</span> == <span class="num">0</span>) ? <span class="num">255</span> : <span class="num">0</span>; <span class="cmt">// 奇偶交替：黑一格白一格</span>
+    }
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const</span> <span class="kw">int</span> W = <span class="num">256</span>, H = <span class="num">256</span>;
+    <span class="type">unsigned char</span>* h = (<span class="type">unsigned char</span>*)malloc(W * H);
+    <span class="type">unsigned char</span>* d = <span class="kw">NULL</span>;
+    cudaMalloc(<span class="op">&amp;</span>d, W * H);
+
+    <span class="type">dim3</span> block(<span class="num">16</span>, <span class="num">16</span>);
+    <span class="type">dim3</span> grid((W + <span class="num">15</span>) / <span class="num">16</span>, (H + <span class="num">15</span>) / <span class="num">16</span>); <span class="cmt">// 16 x 16 = 256 块</span>
+    checker<span class="op">&lt;&lt;&lt;</span>grid, block<span class="op">&gt;&gt;&gt;</span>(d, W, H);
+    cudaMemcpy(h, d, W * H, <span class="type">cudaMemcpyDeviceToHost</span>);
+
+    <span class="type">FILE</span>* f = fopen(<span class="str">"checker.pgm"</span>, <span class="str">"wb"</span>); <span class="cmt">// PGM P5：文本头 + 二进制像素</span>
+    fprintf(f, <span class="str">"P5\n%d %d\n255\n"</span>, W, H);
+    fwrite(h, <span class="num">1</span>, W * H, f);
+    fclose(f);
+    cudaFree(d);
+    free(h);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>跑完 checker.cu 用图片查看器打开 checker.pgm，应该是一张 256×256 的黑白棋盘。如果棋盘错位、花屏，多半是下标折算错了——这就是"可见的调试"：<strong>用图案验证索引，比打印一万个数字直观得多</strong>。二维索引掌握后，任意"逐像素独立"的运算（取反、调亮度、加噪声）都能照这个模板写。但还有一个大问题没解决：像素数据在内存里，GPU 怎么拿到？下一节讲内存层次与数据搬运。</p>
+
+  <!-- ========== 12.4 内存层次 ========== -->
+  <h2>12.4 内存层次：global、shared 与寄存器</h2>
+
+  <p>数据放在哪、多快能取到，是 GPU 编程的命门。官方内存模型把 GPU 的内存分成几层——第一性原理的推论：<strong>内存离计算单元越近就越快、也越小</strong>。从快到慢排：<strong>寄存器（register）</strong>在 SM 片上，线程私有，编译器自动分配，放线程的局部变量，最快；<strong>共享内存（shared）</strong>也在 SM 片上，块内所有线程可见，比全局快一个数量级，官方说它与 L1 缓存共用同一块物理资源；<strong>全局内存（global）</strong>是 GPU 板载 DRAM，整个网格所有线程都能访问，容量最大但延迟最高，官方原话：全局内存的分配持续到程序结束或调用 <code>cudaFree</code>。官方内存类型表还列出另外两种：<strong>常量内存（constant）</strong>，网格可见的只读数据，典型 64KB，适合所有人共用的参数；<strong>局部内存（local）</strong>，逻辑上线程私有、物理上却在显存——寄存器不够用时编译器会把变量"溢出"到这里，访问它跟访问全局一样慢。</p>
+
+  <table>
+    <thead>
+      <tr><th>内存类型</th><th>作用域</th><th>生命周期</th><th>物理位置</th><th>速度（相对）</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>寄存器 register</td><td>线程私有</td><td>内核执行期</td><td>SM 片上</td><td>最快</td></tr>
+      <tr><td>共享 shared</td><td>块内共享</td><td>内核执行期</td><td>SM 片上（与 L1 同资源）</td><td>快</td></tr>
+      <tr><td>全局 global</td><td>网格可见</td><td>程序结束 / cudaFree</td><td>板载 DRAM</td><td>慢</td></tr>
+      <tr><td>常量 constant</td><td>网格可见（只读）</td><td>程序结束</td><td>板载 DRAM</td><td>慢（带缓存）</td></tr>
+      <tr><td>局部 local</td><td>线程私有</td><td>内核执行期</td><td>板载 DRAM（逻辑私有）</td><td>慢（寄存器溢出的后备）</td></tr>
+    </tbody>
+  </table>
+
+  <p>host 与 device 内存物理分离，数据进出 GPU 全靠三个运行时 API（官方文档逐一核实）：<code>cudaMalloc(&amp;devPtr, size)</code> 在显存分配 size 字节线性内存，把指针写进 devPtr（官方原话：分配的内存<strong>不清零</strong>）；<code>cudaMemcpy(dst, src, count, kind)</code> 拷贝 count 字节，第四个参数 kind 指定方向——<code>cudaMemcpyHostToDevice</code>（内存到显存）、<code>cudaMemcpyDeviceToHost</code>（显存到内存），另有 HostToHost 与 DeviceToDevice；<code>cudaFree(devPtr)</code> 释放，与 cudaMalloc 一一对应。标准流程五步：<strong>分配 → 拷入 → 启动内核 → 拷回 → 释放</strong>，下面的 mem_flow 就是这个骨架。共享内存用 <code>__shared__</code> 声明（数组大小编译期定死），块内线程共享，配合 <code>__syncthreads()</code> 做块内同步——官方语义：阻塞块内所有线程，直到大家都执行到这一行，防止"我还没写你就来读"的竞态。</p>
+
+  <pre><code><span class="cmt">// mem_flow.cu —— 显存生命周期：分配 -&gt; 拷贝 -&gt; 内核 -&gt; 回拷 -&gt; 释放</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const</span> <span class="kw">int</span> BYTES = <span class="num">640</span> * <span class="num">480</span>;        <span class="cmt">// 一张 640x480 灰度图</span>
+    <span class="type">unsigned char</span>* h_in = (<span class="type">unsigned char</span>*)malloc(BYTES);
+    <span class="type">unsigned char</span>* h_out = (<span class="type">unsigned char</span>*)malloc(BYTES);
+    <span class="cmt">// ... 读图/造图省略（12.5 节给完整程序）</span>
+
+    <span class="type">unsigned char</span>* d_in = <span class="kw">NULL</span>;
+    <span class="type">unsigned char</span>* d_out = <span class="kw">NULL</span>;
+    cudaMalloc(<span class="op">&amp;</span>d_in, BYTES);            <span class="cmt">// 分配显存（不清零，官方原话）</span>
+    cudaMalloc(<span class="op">&amp;</span>d_out, BYTES);
+    cudaMemcpy(d_in, h_in, BYTES, <span class="type">cudaMemcpyHostToDevice</span>);   <span class="cmt">// 内存 -&gt; 显存</span>
+    kernel<span class="op">&lt;&lt;&lt;</span>grid, block<span class="op">&gt;&gt;&gt;</span>(d_in, d_out, W, H);  <span class="cmt">// 内核读写显存</span>
+    cudaMemcpy(h_out, d_out, BYTES, <span class="type">cudaMemcpyDeviceToHost</span>); <span class="cmt">// 显存 -&gt; 内存</span>
+    cudaFree(d_in);                      <span class="cmt">// 释放，与 cudaMalloc 一一对应</span>
+    cudaFree(d_out);
+    <span class="cmt">// ... 验证 h_out 并收尾</span>
+}</code></pre>
+
+  <pre><code><span class="cmt">// shared_demo.cu —— __shared__：块内共享内存（块内可见、生命周期同内核）</span>
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">tile_invert</span>(<span class="type">unsigned char</span>* img, <span class="kw">int</span> width, <span class="kw">int</span> height) {
+    <span class="ann">__shared__</span> <span class="type">unsigned char</span> tile[<span class="num">16</span>][<span class="num">16</span>]; <span class="cmt">// 静态声明，编译期定大小</span>
+
+    <span class="kw">int</span> x = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">int</span> y = blockIdx.y * blockDim.y + threadIdx.y;
+    <span class="kw">int</span> idx = y * width + x;
+
+    <span class="cmt">// 1. 全体线程协作：把各自的像素读进共享内存</span>
+    <span class="kw">if</span> (x <span class="op">&lt;</span> width <span class="op">&amp;&amp;</span> y <span class="op">&lt;</span> height) {
+        tile[threadIdx.y][threadIdx.x] = img[idx];
+    }
+    __syncthreads(); <span class="cmt">// 2. 同步：等块内所有线程写完 tile 再继续（官方语义）</span>
+
+    <span class="cmt">// 3. 从共享内存读（快），取反后写回全局内存</span>
+    <span class="kw">if</span> (x <span class="op">&lt;</span> width <span class="op">&amp;&amp;</span> y <span class="op">&lt;</span> height) {
+        <span class="type">unsigned char</span> v = tile[threadIdx.y][threadIdx.x]; <span class="cmt">// v 放寄存器</span>
+        img[idx] = <span class="num">255</span> - v;
+    }
+}</code></pre>
+
+  <p>老实说，这个 tile_invert 用共享内存并没有提速——每个像素只被读一次，直接读写全局就够了。它的价值是展示语法与心智模型：<strong>共享内存是"块内协作的工作台"，寄存器是"你手上的便签"，全局内存是"大家共用的仓库"</strong>。什么时候真正需要工作台？当多个线程反复用同一批数据、或块内要先算局部结果再合并时——这正是第 15 章性能优化方法论的系统主题，这里先埋个钩子。</p>
+
+  <!-- ========== 12.5 图像内核实战 ========== -->
+  <h2>12.5 图像处理内核实战：像素翻转与灰度转换</h2>
+
+  <p>理论齐了，动手。第一个内核：<strong>灰度图像素翻转（取反）</strong>，公式 <code>out = 255 - in</code>，对每个像素独立成立，负片效果。完整程序走一遍五步流程：主机端造一张 640×480 的渐变测试图 → <code>cudaMalloc</code> 分配显存 → <code>cudaMemcpy</code> 拷入 → 二维网格启动内核 → <code>cudaDeviceSynchronize</code> 等内核跑完（<strong>内核启动是异步的</strong>，官方明说 launch 立即返回，回拷前必须等它完成）→ 拷回验证 → 释放。运行后打印两个像素：h[0] = 255（原值 0 取反）、h[100] = 155（原值 100 取反），即成功。</p>
+
+  <pre><code><span class="cmt">// invert.cu —— 完整程序：灰度图取反（合成渐变测试图 + 打印验证）</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>stdio.h<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>cuda_runtime.h<span class="op">&gt;</span>
+
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">invert</span>(<span class="type">unsigned char</span>* img, <span class="kw">int</span> width, <span class="kw">int</span> height) {
+    <span class="kw">int</span> x = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">int</span> y = blockIdx.y * blockDim.y + threadIdx.y;
+    <span class="kw">if</span> (x <span class="op">&lt;</span> width <span class="op">&amp;&amp;</span> y <span class="op">&lt;</span> height) {
+        img[y * width + x] = <span class="num">255</span> - img[y * width + x];
+    }
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const</span> <span class="kw">int</span> W = <span class="num">640</span>, H = <span class="num">480</span>;
+    <span class="type">unsigned char</span>* h = (<span class="type">unsigned char</span>*)malloc(W * H);
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i <span class="op">&lt;</span> W * H; <span class="op">++</span>i) h[i] = i % <span class="num">256</span>; <span class="cmt">// 横向渐变</span>
+
+    <span class="type">unsigned char</span>* d = <span class="kw">NULL</span>;
+    cudaMalloc(<span class="op">&amp;</span>d, W * H);
+    cudaMemcpy(d, h, W * H, <span class="type">cudaMemcpyHostToDevice</span>);
+
+    <span class="type">dim3</span> block(<span class="num">16</span>, <span class="num">16</span>);
+    <span class="type">dim3</span> grid((W + <span class="num">15</span>) / <span class="num">16</span>, (H + <span class="num">15</span>) / <span class="num">16</span>);
+    invert<span class="op">&lt;&lt;&lt;</span>grid, block<span class="op">&gt;&gt;&gt;</span>(d, W, H);
+    cudaDeviceSynchronize();            <span class="cmt">// 等内核跑完（启动是异步的）</span>
+    cudaMemcpy(h, d, W * H, <span class="type">cudaMemcpyDeviceToHost</span>);
+
+    printf(<span class="str">"h[0]=%d h[100]=%d (期望 255, 155)\n"</span>, h[<span class="num">0</span>], h[<span class="num">100</span>]);
+    cudaFree(d);
+    free(h);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>第二个内核：<strong>彩色转灰度</strong>。RGB 图每个像素占 3 个字节（本节按 R,G,B 连续排的自定义布局；第 9 章 OpenCV 的 Mat 是 BGR 顺序——本质一样，只是通道顺序不同，接 OpenCV 时要注意，这是它的老传统），灰度图每像素 1 字节。转换公式用 BT.601 亮度公式：<code>Y = 0.299R + 0.587G + 0.114B</code>——OpenCV 的 <code>cvtColor</code> 用的就是这套系数，呼应第 9、10 章。内核里每个线程负责一个像素：用二维索引算出像素号 <code>px</code> 与通道偏移 <code>off = px * 3</code>，读出三个通道，加权求和写进灰度数组。注意：这个内核同样逐像素独立、不需要共享内存——<strong>什么时候该上共享内存、块内协作怎么组织，留给第 15 章的性能方法论</strong>。</p>
+
+  <pre><code><span class="cmt">// rgb2gray.cu —— 彩色转灰度：每个线程处理一个像素的 3 个字节</span>
+<span class="cmt">// 布局：按像素连续存 RGB（R,G,B,R,G,B,...），灰度图每像素 1 字节</span>
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">rgb2gray</span>(<span class="kw">const</span> <span class="type">unsigned char</span>* rgb, <span class="type">unsigned char</span>* gray,
+                          <span class="kw">int</span> width, <span class="kw">int</span> height) {
+    <span class="kw">int</span> x = blockIdx.x * blockDim.x + threadIdx.x;
+    <span class="kw">int</span> y = blockIdx.y * blockDim.y + threadIdx.y;
+    <span class="kw">if</span> (x <span class="op">&lt;</span> width <span class="op">&amp;&amp;</span> y <span class="op">&lt;</span> height) {
+        <span class="kw">int</span> px = y * width + x;    <span class="cmt">// 第 px 个像素</span>
+        <span class="kw">int</span> off = px * <span class="num">3</span>;         <span class="cmt">// 三个通道的起始字节</span>
+        <span class="type">unsigned char</span> r = rgb[off + <span class="num">0</span>];
+        <span class="type">unsigned char</span> g = rgb[off + <span class="num">1</span>];
+        <span class="type">unsigned char</span> b = rgb[off + <span class="num">2</span>];
+        <span class="cmt">// BT.601 亮度公式（OpenCV cvtColor 同款系数）：</span>
+        gray[px] = (<span class="type">unsigned char</span>)(<span class="num">0.299f</span> * r + <span class="num">0.587f</span> * g + <span class="num">0.114f</span> * b);
+    }
+}
+
+<span class="cmt">// 启动配置与 invert.cu 完全一样：</span>
+<span class="cmt">//   dim3 block(16, 16);  dim3 grid((W + 15) / 16, (H + 15) / 16);</span>
+<span class="cmt">//   rgb2gray&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d_rgb, d_gray, W, H);</span></code></pre>
+
+  <p>两个内核一灰一彩，覆盖了图像处理最基础的两种"逐像素映射"：单字节变换（取反）与多字节聚合（三通道加权）。它们都用同样的骨架：二维索引 + 边界守卫 + 一个公式。记住这个骨架，本系列的绝大多数图像算子（亮度、对比度、阈值、噪声）都能往里套。接下来的问题是：写好了、怎么变成能跑的程序？</p>
+
+  <!-- ========== 12.6 编译运行 ========== -->
+  <h2>12.6 编译运行：nvcc 与启动配置</h2>
+
+  <p>编译靠 <code>nvcc</code>——第 11 章装好的 Toolkit 编译器，一条命令出可执行文件：<code>nvcc -o invert invert.cu</code>。它内部是两段式的：先调宿主 gcc 编译 CPU 部分，再用自己的编译器把内核编成 GPU 代码，最后链接成一个二进制——所以你只需要记住 nvcc 一个命令。运行 <code>./invert</code> 直接看输出。如果报 <code>nvcc: command not found</code>，回到第 11 章检查 PATH（工具早已备好，别让环境问题挡住实验）。常用选项：<code>-O2</code> 开优化、<code>-arch=sm_XX</code> 指定目标架构（如 <code>-arch=sm_86</code> 对应 Ampere 代显卡；不指定也能跑，只是没吃满新架构特性）。</p>
+
+  <pre><code><span class="cmt"># 编译：nvcc 一条命令完成 host 部分（调 gcc）与 device 部分的编译链接</span>
+<span class="fn">nvcc</span> -o invert invert.cu
+
+<span class="cmt"># 运行：内核异步执行，但程序里的 cudaMemcpy 回拷会隐式等内核完成</span>
+./<span class="fn">invert</span>
+<span class="cmt"># 输出示例：</span>
+<span class="cmt">#   h[0]=255 h[100]=155 (期望 255, 155)</span>
+
+<span class="cmt"># 常用选项：-arch 指定目标架构，-O2 优化（细节见 nvcc 官方文档）</span>
+<span class="fn">nvcc</span> -arch=sm_86 -O2 -o invert invert.cu</code></pre>
+
+  <p>启动配置 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code> 是内核调用里最容易写错的部分，拆开看：<strong>第一参数是网格维度，第二参数是块维度</strong>，类型是内置向量类型 <code>dim3</code>——只写一个数时等价于一维（<code>dim3 block(16, 16)</code> 是二维块，没写的那维默认 1）。两条硬约束再强调一遍：块内线程数不超过 1024，且最好是 32 的倍数。还有个新手最迷惑的点：<strong>内核启动是异步的，launch 那一行本身不报执行错误</strong>——启动配置非法（比如块太大）也只会在之后暴露。所以官方推荐用 <code>cudaGetLastError()</code> 查启动是否合法、用 <code>cudaDeviceSynchronize()</code> 等内核结束并捕获执行期错误。把它们包进一个 CHECK 函数，每步都查——这是 CUDA 工程的基本功，也是后面排错的前提（编译报错、链接失败怎么解，第 13 章系统讲；运行期崩溃怎么调，第 14 章调试实战）。</p>
+
+  <pre><code><span class="cmt">// check_cuda.c —— 把错误检查包成函数：任何 CUDA 调用失败立即报错退出</span>
+<span class="kw">void</span> <span class="fn">check</span>(<span class="type">cudaError_t</span> err, <span class="kw">const</span> <span class="kw">char</span>* file, <span class="kw">int</span> line) {
+    <span class="kw">if</span> (err != <span class="type">cudaSuccess</span>) {
+        fprintf(stderr, <span class="str">"CUDA error %s at %s:%d\n"</span>,
+                cudaGetErrorString(err), file, line);
+        exit(<span class="num">1</span>);
+    }
+}
+
+<span class="kw">#define</span> <span class="fn">CHECK</span>(call) check((call), <span class="ann">__FILE__</span>, <span class="ann">__LINE__</span>)
+
+<span class="cmt">// 用法：</span>
+<span class="cmt">//   CHECK(cudaMalloc(&amp;d, N));           // 分配失败立刻报错</span>
+<span class="cmt">//   invert&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d, W, H); // 内核启动本身不报错</span>
+<span class="cmt">//   CHECK(cudaGetLastError());          // 官方推荐：查启动配置是否合法</span>
+<span class="cmt">//   CHECK(cudaDeviceSynchronize());     // 等内核结束，查执行期错误</span></code></pre>
+
+  <p>这一章我们从"一个像素的独立运算"出发（12.1），推导出线程的 grid/block/thread 编组（12.2）、二维像素索引（12.3）、global/shared/寄存器三级内存与数据搬运（12.4），并亲手编译运行了像素翻转与灰度转换两个图像内核（12.5、12.6）。环境装好了、内核跑通了，接下来的问题开始浮出水面：编译报错找不到符号怎么办？——第 13 章讲依赖与链接排错；程序崩溃怎么定位？——第 14 章调试实战；想让内核更快？共享内存、缓存友好与多线程的性能方法论，第 15 章系统展开。<strong>第一性原理的收益就在这里：你不再背 API，而是从"像素与独立运算"出发，自己推导出 CUDA 的每一块拼图。</strong></p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① 内核函数必须用 __global__ 修饰，且返回类型必须是 void；② threadIdx.x 给出线程在整个网格中的全局编号；③ 一个线程块内的线程可能被调度到不同的 SM 上执行；④ cudaMemcpy 的拷贝方向由第四个参数 kind（如 cudaMemcpyHostToDevice）决定；⑤ 块内线程数可以是任意值，不受限制。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 12.1 节内核两条硬规矩、12.2 节内置变量与块内同 SM 的硬件事实、12.4 节 cudaMemcpy 方向参数、12.6 节启动配置约束。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 对——__global__ 修饰、void 返回（12.1 节官方规定）；② 错——threadIdx 是块内编号，全局编号要 blockIdx * blockDim + threadIdx（12.2 节）；③ 错——块内所有线程被调度到同一个 SM 执行，块才是调度单位（12.2 节）；④ 对（12.4 节）；⑤ 错——上限 1024 且建议取 32 的倍数（12.6 节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：索引计算 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>图像 640×480，启动配置 dim3 block(16, 16)、dim3 grid(40, 30)。对于线程 blockIdx=(2, 1)、threadIdx=(3, 5)：① 它负责的像素坐标 (x, y) 是多少？② 该像素在行优先一维数组中的下标 idx（y * width + x）是多少？③ 若图像换成 1000×700、块改成 32×8，grid 应是多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>套 12.3 节公式 x = blockIdx.x * blockDim.x + threadIdx.x，y 同理；网格用上取整公式。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① x = 2*16 + 3 = 35，y = 1*16 + 5 = 21；② idx = 21*640 + 35 = 13475；③ grid.x = (1000+31)/32 = 32，grid.y = (700+7)/8 = 88，即 dim3 grid(32, 88)；块内 32×8 = 256 线程 = 8 个 warp，符合 32 倍数约定。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：补全水平镜像内核 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>给定输入灰度图 in 与输出图 out（同尺寸），补全下面内核的函数体，使 out 为 in 的水平镜像（像素 (x, y) 应取 in 的 (width-1-x, y)），并写出对应的启动配置：<code>__global__ void mirror(const unsigned char* in, unsigned char* out, int width, int height) { ... }</code></p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先算二维坐标 (x, y) 并做边界守卫；镜像列 x' = width - 1 - x；out 的下标用 (x, y)，in 的下标用 (x', y)。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>函数体：int x = blockIdx.x * blockDim.x + threadIdx.x; int y = blockIdx.y * blockDim.y + threadIdx.y; if (x &lt; width &amp;&amp; y &lt; height) { int x2 = width - 1 - x; out[y * width + x] = in[y * width + x2]; }。启动配置：dim3 block(16, 16); dim3 grid((W + 15) / 16, (H + 15) / 16); mirror&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d_in, d_out, W, H);——注意这个内核需要两块显存（输入输出分离），镜像不能原地做，否则一边写一边读会互相干扰。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：综合思考 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>① 12.4 节 shared_demo 里，为什么必须在"写 tile"之后、"读 tile"之前调用 __syncthreads()？去掉它会怎样？② 640×480 的图用 40×30 的网格、不加边界守卫，会发生什么？③ 内核返回类型为什么必须是 void，计算结果怎么"带出来"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>竞态条件的来源在 12.4 节；越界行为与守卫在 12.3 节；void 与结果回传在 12.1 节官方原话。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 块内线程执行进度不同步：没有栅栏时，A 线程可能已经去读 tile[x]，而写 tile[x] 的 B 线程还没执行到写入——读到旧值或垃圾，就是竞态条件；__syncthreads() 让块内所有线程在栅栏处对齐（官方语义：阻塞直到全部到达），保证"先写后读"。② 越界读写是未定义行为：可能写坏相邻块负责的数据、踩到非法地址导致崩溃，而且症状随机、极难复现——所以边界守卫必须写。③ 官方规定内核返回 void，结果通过写全局内存"带出"，主机再 cudaMemcpy 拷回（12.1 节）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

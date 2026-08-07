@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第11章：CUDA 入门：GPU 加速环境 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter11.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第11章：CUDA 入门：GPU 加速环境 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter11.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="11" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：CUDA 入门：GPU 加速环境</h1>
+  <p class="chapter-subtitle">特征检测为什么慢？因为 CPU 在用一个"脑子"数 200 万个像素。这一章搭起 GPU 加速环境：驱动与 Toolkit 的关系、runfile 交互安装、环境配置与三连验证，再把 CUDA 十年的版本演进看个明白</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「工欲善其事，必先利其器——鲁班的工具箱里没有废铁。这一章我们给图像处理架上 GPU 这条快车道：11.1 先回答'特征检测为什么慢'（像素级并行天生该上 GPU），11.2 把驱动与 Toolkit 这对'两半'分清楚，11.3 做前置检查并下载安装包，11.4 走完 runfile 交互流程，11.5 配置环境并用 nvidia-smi、nvcc、deviceQuery 三连验证，11.6 排掉 nouveau、内核头这些老坑，顺带看看 CUDA 十年的版本演进。工具备齐，第 12 章就能写第一个内核。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 11.1 特征检测为什么慢 ========== -->
+  <h2>11.1 特征检测为什么慢：像素级并行与 GPU</h2>
+
+  <p>上一章我们跑通了 Harris 角点检测与 Canny 边缘检测。它们效果不错，但你有没有想过一个问题：<strong>为什么处理一张图要等那么久？</strong>拆开看，特征检测的工作量惊人——一张 1920×1080 的图有约 207 万个像素，Harris 要对每个像素算梯度、构造结构张量、求角点响应；Canny 要先做高斯模糊、再算 Sobel 梯度、做非极大值抑制、最后双阈值连接。每一步都是"对每个像素做同一套运算"，而且<strong>每个像素的运算互不依赖</strong>——第 (x, y) 个像素的响应不需要等第 (x+1, y) 个像素算完。</p>
+
+  <p>问题恰恰出在这里：CPU 是"一个极其聪明的工人"——单核主频三四 GHz，能处理复杂分支，但<strong>一个核心同一时刻只能执行一条指令流</strong>。207 万像素 × 多阶段运算，就是几千万次串行迭代。GPU 则是"一万个普通工人"——单个核心远不如 CPU 快，但可以同时铺开成千上万个线程，207 万像素一人分一个，一轮齐活。这就是<strong>吞吐量（throughput）vs 延迟（latency）</strong>的哲学：CPU 优化单任务的延迟，GPU 牺牲单线程速度换取整批任务的吞吐。图像处理正是典型的"数据并行"负载：同样的指令、海量的数据、互相独立——教科书级的 GPU 使用场景。官方对 CUDA 的定义也印证了这点：它是 NVIDIA 的并行计算平台，通过给 C 语言加一小套扩展，让开发者把算法的并行部分交给 GPU，串行部分留在 CPU（heterogeneous computation，异构计算）。</p>
+
+  <pre><code><span class="cmt">// serial_harris.c —— 伪代码：CPU 上串行扫过每个像素</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>stdio.h<span class="op">&gt;</span>
+<span class="kw">#define</span> <span class="ann">W</span> <span class="num">1920</span>
+<span class="kw">#define</span> <span class="ann">H</span> <span class="num">1080</span>
+
+<span class="kw">float</span> <span class="param">response</span>[<span class="ann">H</span>][<span class="ann">W</span>];   <span class="cmt">// 每个像素一个角点响应值</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// CPU 单核：逐像素循环，约 200 万次迭代，串行执行</span>
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">y</span> = <span class="num">0</span>; <span class="param">y</span> <span class="op">&lt;</span> <span class="ann">H</span>; <span class="op">++</span><span class="param">y</span>) {
+        <span class="kw">for</span> (<span class="kw">int</span> <span class="param">x</span> = <span class="num">0</span>; <span class="param">x</span> <span class="op">&lt;</span> <span class="ann">W</span>; <span class="op">++</span><span class="param">x</span>) {
+            <span class="cmt">// 算梯度 Ix、Iy，构造结构张量，求角点响应</span>
+            <span class="param">response</span>[<span class="param">y</span>][<span class="param">x</span>] = <span class="fn">harris_response</span>(<span class="param">x</span>, <span class="param">y</span>);
+        }
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// gpu_idea.cu —— 伪代码：同一个算法，每个像素分给一个 GPU 线程</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>stdio.h<span class="op">&gt;</span>
+<span class="kw">#define</span> <span class="ann">W</span> <span class="num">1920</span>
+<span class="kw">#define</span> <span class="ann">H</span> <span class="num">1080</span>
+
+<span class="cmt">// __global__ 标记：这个函数由 GPU 执行，每个线程各跑一份</span>
+<span class="ann">__global__</span> <span class="kw">void</span> <span class="fn">harris_kernel</span>(<span class="kw">float</span>* <span class="param">response</span>) {
+    <span class="cmt">// 线程用内置变量算出自己负责的像素坐标（第 12 章细讲）</span>
+    <span class="kw">int</span> <span class="param">x</span> = <span class="param">threadIdx</span>.<span class="param">x</span> <span class="op">+</span> <span class="param">blockIdx</span>.<span class="param">x</span> <span class="op">*</span> <span class="param">blockDim</span>.<span class="param">x</span>;
+    <span class="kw">int</span> <span class="param">y</span> = <span class="param">threadIdx</span>.<span class="param">y</span> <span class="op">+</span> <span class="param">blockIdx</span>.<span class="param">y</span> <span class="op">*</span> <span class="param">blockDim</span>.<span class="param">y</span>;
+    <span class="kw">if</span> (<span class="param">x</span> <span class="op">&lt;</span> <span class="ann">W</span> <span class="op">&amp;&amp;</span> <span class="param">y</span> <span class="op">&lt;</span> <span class="ann">H</span>) {
+        <span class="param">response</span>[<span class="param">y</span> <span class="op">*</span> <span class="ann">W</span> <span class="op">+</span> <span class="param">x</span>] = <span class="fn">harris_response</span>(<span class="param">x</span>, <span class="param">y</span>);
+    }
+}</code></pre>
+
+  <p>两个代码块做的是同一件事，差别在分配方式：CPU 版本是一个工人干 200 万件活，GPU 版本是 200 万个工人各干一件。这个"把循环体变成每个像素一个线程"的转变，就是 CUDA 编程的核心心法，第 12 章会系统讲。但在此之前，得先把"GPU 加速环境"本身立起来——正如鲁班说的，工欲善其事，必先利其器。<strong>驱动装没装、Toolkit 装没装、装完怎么验证，直接决定你后面写的内核能不能跑起来。</strong></p>
+
+  <!-- ========== 11.2 驱动与 Toolkit ========== -->
+  <h2>11.2 驱动与 CUDA Toolkit：一台机器的两半</h2>
+
+  <p>很多人第一次装 CUDA 就栽在概念混淆上：<strong>显卡驱动（NVIDIA Driver）和 CUDA Toolkit 是两个独立的东西，各管一段</strong>。驱动负责"让系统认识 GPU 并驱动它干活"：操作系统通过它调度显卡，<code>nvidia-smi</code> 这个监控命令就由驱动提供，底层对应 CUDA 驱动 API（libcuda.so）。没有驱动，GPU 只是一块点亮屏幕的显示卡，算不了数。CUDA Toolkit 则负责"让你能开发"：它包含 <code>nvcc</code> 编译器、CUDA 运行时库（libcudart）、数学库（cuBLAS/cuFFT 等）和调试工具。一句话：<strong>驱动管"跑"，Toolkit 管"编"</strong>——驱动让你能运行 CUDA 程序，Toolkit 让你能把 CUDA 程序编译出来。</p>
+
+  <p>两者还有一层版本约束关系。驱动是向下兼容的：<strong>新版驱动支持旧版 Toolkit</strong>（NVIDIA 官方的兼容性表里，驱动的最低版本要求随 Toolkit 版本升高而升高），<code>nvidia-smi</code> 右上角显示的 "CUDA Version" 不是说你装了 CUDA，而是说<strong>当前驱动最高支持到哪个 CUDA 版本</strong>。所以推荐的做法是：先装驱动，再用 <code>nvidia-smi</code> 确认驱动正常，然后按驱动支持的版本上限选择 Toolkit 版本。装好驱动后第一件事就是跑 <code>nvidia-smi</code>，看到显卡型号、驱动版本和 CUDA Version 三行信息，驱动才算过关。</p>
+
+  <pre><code><span class="cmt"># nvidia-smi 输出示例（Quadro P2000，素材里的老伙计）</span>
++-----------------------------------------------------------------------------+
+| <span class="type">NVIDIA-SMI</span> 550.54.15    <span class="type">Driver Version</span>: 550.54.15    <span class="type">CUDA Version</span>: 12.4     |
+|-------------------------------+----------------------+----------------------+
+| <span class="type">GPU</span>  Name        <span class="type">Persistence-M</span>| <span class="type">Bus-Id</span>        <span class="type">Disp.A</span> | <span class="type">Volatile Uncorr. ECC</span> |
+| <span class="type">Fan</span>  Temp  <span class="type">Perf</span>  <span class="type">Pwr:Usage/Cap</span>|         <span class="type">Memory-Usage</span> | <span class="type">GPU-Util</span>  <span class="type">Compute M.</span> |
+|===============================+======================+======================|
+|   <span class="num">0</span>  Quadro P2000        <span class="type">Off</span>  | <span class="num">00000000:01:00.0</span> <span class="type">Off</span> |                  <span class="type">N/A</span> |
+| <span class="num">31</span>%   <span class="num">38</span>C    <span class="type">P0</span>    <span class="num">20</span>W /  <span class="num">75</span>W |    <span class="num">356</span>MiB /  <span class="num">5120</span>MiB |      <span class="num">0</span>%      <span class="type">Default</span> |
+|                               |                      |                  <span class="type">N/A</span> |
++-------------------------------+----------------------+----------------------+</code></pre>
+
+  <pre><code><span class="cmt"># 查显卡型号：lspci 由 pciutils 软件包提供</span>
+<span class="fn">lspci</span> | <span class="fn">grep</span> -i nvidia
+<span class="cmt"># 输出示例：01:00.0 VGA compatible controller: NVIDIA Corporation GP106GL [Quadro P2000]</span>
+
+<span class="cmt"># 查驱动是否已加载、版本是否正常（驱动装好的标志性命令）</span>
+<span class="fn">nvidia-smi</span></code></pre>
+
+  <p>弄清了"两半"的分工，就能理解下面这个重要的历史变化：<strong>2020 年的 CUDA 10.0 时代，驱动和 Toolkit 是"打包"的</strong>——素材笔记里下载的 <code>cuda_10.0.130_410.48_linux.run</code> 一个安装包同时包含 410.48 驱动和 Toolkit，运行后安装器会问你"是否安装驱动"（素材里答 y，因为之前没单独装驱动）。而<strong>现行 CUDA 12.x 的官方指南把驱动安装独立成册</strong>（Driver Installation Guide），runfile 安装器默认只管 Toolkit。这个差异是本章后面交互流程的根源，也是理解版本演进的钥匙。</p>
+
+  <!-- ========== 11.3 前置检查与下载 ========== -->
+  <h2>11.3 动手前：前置检查与下载</h2>
+
+  <p>官方安装指南（CUDA Installation Guide for Linux）在正式安装前列了一串前置动作（Pre-installation Actions），核心是四查一选：<strong>查显卡</strong>（是不是 CUDA 兼容的 NVIDIA GPU）、<strong>查系统</strong>（发行版与内核是否在支持列表）、<strong>查编译器</strong>（宿主 gcc 必须就位，Toolkit 编译时要调用它）、<strong>选安装方式</strong>。安装方式官方推荐包管理器（apt/dnf 装 RPM、deb 包，能跟着系统自动升级），而<strong>runfile（.run 独立安装器）的优势是"发行版无关"</strong>——素材里的 CentOS 7 系统太老、仓库里没有新包，用 runfile 反而最省事，这也是素材当年选它的原因。四查一选的命令如下。</p>
+
+  <p>显卡检查的标准姿势是 <code>lspci | grep -i nvidia</code>（找不到命令就装 pciutils；Ubuntu 上是 <code>sudo apt install pciutils</code>，CentOS 上是 <code>yum install pciutils</code>）。看到显卡后，去 NVIDIA 官方的 CUDA-GPU 兼容列表（developer.nvidia.com/cuda-gpus）确认型号在列——素材里的 Quadro P2000 是 Pascal 架构的专业卡，完全兼容。系统版本用 <code>uname -a</code> 看内核、<code>cat /etc/os-release</code> 看发行版；gcc 用 <code>gcc --version</code> 查。下载则去官方下载页 <strong>developer.nvidia.com/cuda-downloads</strong>，选操作系统、架构、发行版、安装方式，会得到对应的安装包或仓库配置命令。下载完用官方发布的 MD5 校验和核对文件完整性，防止传输损坏——这是官方指南明确要求的一步。</p>
+
+  <pre><code><span class="cmt"># 1. 查显卡（pciutils 提供 lspci；输出里应看到 NVIDIA 型号）</span>
+<span class="fn">lspci</span> | <span class="fn">grep</span> -i nvidia
+
+<span class="cmt"># 2. 查系统：内核版本与发行版（对照官方支持列表）</span>
+<span class="fn">uname</span> -a
+<span class="fn">cat</span> /etc/os-release
+
+<span class="cmt"># 3. 查宿主编译器：nvcc 编译时需要 gcc 配合</span>
+<span class="fn">gcc</span> --version</code></pre>
+
+  <pre><code><span class="cmt"># 4. 下载后校验 MD5（官方下载页会给出对应校验和）</span>
+<span class="fn">md5sum</span> cuda_12.4.1_550.54.15_linux.run
+<span class="cmt"># 与官网公布的值一致才算下载完整；不一致需重新下载</span>
+
+<span class="cmt"># 5. 下载页 developer.nvidia.com/cuda-downloads 的选择路径示例：</span>
+<span class="cmt">#    Operating System: Linux -&gt; x86_64 -&gt; Ubuntu -&gt; 22.04 -&gt; runfile (local)</span>
+<span class="cmt">#    得到 cuda_12.4.1_550.54.15_linux.run 这类安装包（版本号随当时最新版变化）</span></code></pre>
+
+  <p>这里有个素材的真实经验值得记住：<strong>旧系统装新版驱动往往要补内核头</strong>。素材里安装时遇到过 <code>/usr/bin/perl: bad interpreter</code> 报错，根因是系统缺 gcc 和 perl；还有一次因为内核源码头文件（kernel-devel）与当前内核版本不匹配，驱动编译失败。官方指南同样强调：<strong>先装好 gcc 和与 <code>uname -r</code> 完全同版本的 kernel-devel/kernel-headers</strong>，再开始装驱动——这个坑 11.6 节会展开。前置检查都过了，才进入真正的安装环节。</p>
+
+  <!-- ========== 11.4 runfile 交互安装 ========== -->
+  <h2>11.4 runfile 安装：交互流程实战</h2>
+
+  <p>现行版本的 runfile 安装流程以<strong>驱动已单独装好</strong>为前提（11.2 节说的"两半分离"）。下载到的 <code>cuda_12.4.1_550.54.15_linux.run</code> 是一个自解压安装器，官方指南说明它通过交互式 ncurses 界面引导安装。第一步 <code>chmod +x</code> 加执行权限，然后建议用 <code>sudo sh</code> 运行——官方指南特别指出：安装 Toolkit 到系统目录、创建 <code>/usr/local/cuda</code> 软链接这两步需要 root 权限，直接 sudo 省得中途被问密码。运行后按回车翻页读完 EULA 协议，输入 <code>accept</code> 接受，接下来就是一连串问答。</p>
+
+  <p>问答的核心是四件事：<strong>是否装驱动（选 n，驱动已单独装好）→ 是否装 Toolkit（选 y）→ Toolkit 安装路径（回车用默认）→ 是否创建 /usr/local/cuda 软链接（选 y）</strong>。官方指南明确：Toolkit 默认装到 <code>/usr/local/cuda-12.4</code>（带版本号），而 <code>/usr/local/cuda</code> 是一个指向它的软链接——有了这个链接，以后升级到 12.6、13.x，项目的编译配置一行都不用改，永远指向"当前最新"。官方指南还提到 Samples 现在不再随安装包内置，改放在 GitHub 的 NVIDIA/cuda-samples 仓库里，需要时单独拉取编译——所以安装器里看到 Samples 相关选项可以直接跳过。完整问答如下。</p>
+
+  <pre><code><span class="cmt"># 给安装包执行权限，并用 sudo 运行（runfile 是发行版无关的独立安装器）</span>
+<span class="fn">chmod</span> +x cuda_12.4.1_550.54.15_linux.run
+<span class="fn">sudo sh</span> cuda_12.4.1_550.54.15_linux.run</code></pre>
+
+  <pre><code><span class="cmt"># 交互问答（现行 12.x，驱动已单独装好的情况）：</span>
+<span class="cmt">#   EULA 协议：按回车翻页读完，输入 accept 接受</span>
+<span class="cmt">#   是否安装 NVIDIA 驱动？        -&gt; n   （驱动已单独装好，别再装第二份）</span>
+<span class="cmt">#   是否安装 CUDA Toolkit？       -&gt; y</span>
+<span class="cmt">#   Toolkit 安装路径？            -&gt; 直接回车，默认 /usr/local/cuda-12.4</span>
+<span class="cmt">#   是否创建 /usr/local/cuda 软链接？ -&gt; y  （项目统一引用这个链接）</span>
+<span class="cmt">#   是否安装 CUDA Samples？       -&gt; n   （需要时从 GitHub 单独拉取）</span></code></pre>
+
+  <p>对比一下素材里 2020 年的 CUDA 10.0 问答，就能直观看到版本演进的痕迹。当年 <code>cuda_10.0.130_410.48_linux.run</code> 的问答是：accept 协议 → 是否安装驱动（答 y，因为 10.0 的 runfile 自带 410.48 驱动，且当时没单独装过）→ 是否安装 OpenGL（答 n）→ 是否安装 x-config（答 n）→ 是否安装 Toolkit（答 y）→ 安装路径（回车默认）→ 是否创建软链接（答 y）→ 是否安装示例（答 n，省空间）。<strong>多出来的"驱动/OpenGL/x-config"三个问题，正是当年驱动与 Toolkit 打包在一起的证据</strong>；现在的安装器不再问这些，因为驱动早已独立成册。素材还留下两条血泪警告：<strong>千万不要重复安装显卡驱动，会导致系统损坏；升级 CUDA 前必须把旧版本卸载干净</strong>——这两条对现行版本依然成立，11.6 节细说。</p>
+
+  <pre><code><span class="cmt"># 2020 年 CUDA 10.0 的 runfile 问答（素材实录，历史对照）：</span>
+<span class="cmt">#   accept 协议 -&gt; 是否安装驱动？y（10.0 自带 410.48 驱动，当时没单独装）</span>
+<span class="cmt">#   -&gt; 是否安装 OpenGL？n -&gt; 是否安装 x-config？n</span>
+<span class="cmt">#   -&gt; 是否安装 Toolkit？y -&gt; 安装路径？回车默认 /usr/local/cuda-10.0</span>
+<span class="cmt">#   -&gt; 是否创建软链接？y -&gt; 是否安装示例？n（省空间）</span>
+<span class="cmt"># 结论：多出的"驱动/OpenGL/x-config"三问 = 当年驱动与 Toolkit 打包的证据</span></code></pre>
+
+  <!-- ========== 11.5 环境配置与三连验证 ========== -->
+  <h2>11.5 环境配置与验证：PATH、nvcc 与 deviceQuery</h2>
+
+  <p>安装完成不等于能用——官方指南把接下来的步骤叫 Post-installation Actions（安装后动作），分"必做"和"推荐"两级。<strong>必做的是环境变量配置</strong>：把 Toolkit 的 bin 目录加进 <code>PATH</code>（让 <code>nvcc</code> 命令随处可用），把 lib64 目录加进 <code>LD_LIBRARY_PATH</code>（让运行库能被找到）。素材当年的做法是编辑 <code>/etc/profile</code> 追加两行 export 再 <code>source</code>，现行版本完全一样，只把路径里的 10.0 换成 12.4——注意这里有个细节：<strong>PATH 里建议写 <code>/usr/local/cuda/bin</code>（走软链接），而不是 <code>/usr/local/cuda-12.4/bin</code></strong>，这样升级 Toolkit 版本后配置不用改；而官方指南同时提醒，runfile 安装下 LD_LIBRARY_PATH 必须显式包含 lib64，因为 runfile 不像包管理器那样自动配置。</p>
+
+  <p>配置完就是验证环节，官方指南推荐用三个层次的检查。第一层 <code>nvidia-smi</code>：确认驱动在、显卡在、版本匹配（11.2 节已见）。第二层 <code>nvcc --version</code>：确认编译器就位——<code>nvcc</code> 输出 "Cuda compilation tools, release 12.4" 这样的版本行，注意 <code>nvcc</code> 来自 Toolkit，和驱动无关，所以"nvidia-smi 正常但 nvcc 报 command not found"是新手最常见的情况，原因就是环境变量没配或 Toolkit 没装。第三层是<strong>编译运行官方样例</strong>：从 GitHub 拉下 NVIDIA/cuda-samples，编译运行 <code>deviceQuery</code>，它会让 CUDA 运行时真正去探测 GPU，输出结尾必须是 <code>Result = PASS</code>——官方指南原话强调，它验证"Toolkit 能否找到并正确通信 CUDA 硬件"，是"装好了"的最终裁定。三层全过，环境才算真正立起来。</p>
+
+  <pre><code><span class="cmt"># 必做：编辑 /etc/profile（或 ~/.bashrc），追加两行</span>
+<span class="fn">sudo vim</span> /etc/profile
+
+<span class="kw">export</span> <span class="param">PATH</span>=/usr/local/cuda/bin:<span class="op">$</span><span class="param">PATH</span>
+<span class="kw">export</span> <span class="param">LD_LIBRARY_PATH</span>=/usr/local/cuda/lib64:<span class="op">$</span><span class="param">LD_LIBRARY_PATH</span>
+
+<span class="cmt"># 使配置立即生效（新开的终端自动带上，不用再 source）</span>
+<span class="fn">source</span> /etc/profile</code></pre>
+
+  <pre><code><span class="cmt"># 验证 1：驱动与显卡（nvidia-smi 由驱动提供）</span>
+<span class="fn">nvidia-smi</span>
+
+<span class="cmt"># 验证 2：编译器就位（nvcc 由 Toolkit 提供）</span>
+<span class="fn">nvcc</span> --version
+<span class="cmt"># 输出含：Cuda compilation tools, release 12.4, V12.4.131</span>
+
+<span class="cmt"># 验证 3：官方样例 deviceQuery——让运行时真实探测 GPU</span>
+<span class="fn">git clone</span> https://github.com/NVIDIA/cuda-samples
+<span class="fn">cd</span> cuda-samples/Samples/1_Utilities/deviceQuery
+<span class="fn">make</span>
+./<span class="fn">deviceQuery</span>
+<span class="cmt"># 结尾必须是 Result = PASS，才算 Toolkit 与硬件通信成功</span></code></pre>
+
+  <p>素材里的验证命令和今天一模一样：<code>lspci | grep VGA</code> 查显卡、<code>nvidia-smi</code> 查安装成功。差别只在细节：当年 <code>nvcc --version</code> 前面还多了一步"yum 装 pciutils/gcc/perl"的补课，而现在主流发行版默认都有。还有一点值得记住：<strong>deviceQuery 报"找不到设备"而 nvidia-smi 正常时，多半是 /dev/nvidia* 设备文件缺失或权限不对</strong>（官方指南的明确提示），通常重装驱动或重启即可恢复——这类"驱动在、工具链在、就是探测不到"的谜题，排错思路在下一节收尾。</p>
+
+  <!-- ========== 11.6 排错与版本演进 ========== -->
+  <h2>11.6 排错、卸载与 CUDA 十年版本演进</h2>
+
+  <p>素材笔记的排错三连今天依然通用，按频率排：<strong>① nouveau 开源驱动冲突</strong>——某些发行版内核默认加载开源的 nouveau 驱动，它和 NVIDIA 闭源驱动抢设备，症状是装驱动时"找不到设备"或装完起不来图形界面。解法是写黑名单文件禁用 nouveau、备份并重建 initramfs、重启后用 <code>lsmod | grep nouveau</code> 确认没有输出。② <strong>内核头不匹配</strong>——驱动编译需要与当前内核完全同版本的 kernel-devel，用 <code>yum install kernel-devel-$(uname -r)</code>（Ubuntu 对应 linux-headers-$(uname -r)）精确安装。③ <strong>缺 gcc/perl</strong>——素材里的 <code>/usr/bin/perl: bad interpreter</code> 就是这类，装上 gcc 和 perl 即解。</p>
+
+  <p>卸载与升级同样有纪律。官方卸载路径分两条：Toolkit 用 <code>sudo /usr/local/cuda/bin/cuda-uninstaller</code>，单独安装的驱动用 <code>sudo /usr/bin/nvidia-uninstall</code>（包管理器装的则用 apt/dnf 卸）。升级前的铁律来自素材的血泪教训：<strong>先卸干净旧版本，再装新版本</strong>——CUDA 的多个版本组件（库、头文件、软链接）会互相踩踏，混装新旧版本是"意想不到的错误"的头号来源。同时<strong>绝不要重复安装显卡驱动</strong>，驱动安装器每次都会重写内核模块，重复装轻则黑屏、重则系统损坏。把这两条刻进脑子，CUDA 环境的日常维护就不会翻车。</p>
+
+  <pre><code><span class="cmt"># 排错 1：禁用 nouveau 开源驱动（某些发行版需要）</span>
+<span class="fn">sudo vim</span> /etc/modprobe.d/nvidia-installer-disable-nouveau.conf
+<span class="cmt"># 文件内容：</span>
+<span class="cmt">#   blacklist nouveau</span>
+<span class="cmt">#   options nouveau modeset=0</span>
+
+<span class="cmt"># 备份并重建 initramfs，然后重启</span>
+<span class="fn">sudo mv</span> /boot/initramfs-<span class="op">$(</span><span class="fn">uname</span> -r<span class="op">)</span>.img /boot/initramfs-<span class="op">$(</span><span class="fn">uname</span> -r<span class="op">)</span>.img.bak
+<span class="fn">sudo dracut</span> /boot/initramfs-<span class="op">$(</span><span class="fn">uname</span> -r<span class="op">)</span>.img <span class="op">$(</span><span class="fn">uname</span> -r<span class="op">)</span>
+<span class="fn">sudo reboot</span>
+
+<span class="cmt"># 重启后确认：无输出 = nouveau 已禁用成功</span>
+<span class="fn">lsmod</span> | <span class="fn">grep</span> nouveau</code></pre>
+
+  <pre><code><span class="cmt"># 排错 2：内核头与当前内核完全同版本（CentOS/RHEL 系）</span>
+<span class="fn">sudo yum install</span> kernel-devel-<span class="op">$(</span><span class="fn">uname</span> -r<span class="op">)</span> kernel-headers-<span class="op">$(</span><span class="fn">uname</span> -r<span class="op">)</span>
+<span class="cmt"># Ubuntu/Debian 系对应：sudo apt install linux-headers-$(uname -r)</span>
+
+<span class="cmt"># 卸载：Toolkit 与驱动各走各的卸载器</span>
+<span class="fn">sudo</span> /usr/local/cuda/bin/cuda-uninstaller
+<span class="fn">sudo</span> /usr/bin/nvidia-uninstall
+
+<span class="cmt"># 铁律：升级前先卸干净旧版本；绝不重复安装显卡驱动</span></code></pre>
+
+  <p>最后把 CUDA 十年的版本演进串一遍，你就知道素材笔记的价值了。2010 年代早期 CUDA 初代（1.x）只支持 Tesla 架构；2016 年 Pascal 架构（Quadro P2000 就在这代）伴随 CUDA 8；2020 年 CUDA 10.x 时代驱动与 Toolkit 打包在同一个 runfile 里（本章素材），同时也为 Ampere 架构埋下伏笔；<strong>从 CUDA 11 起 NVIDIA 把驱动与 Toolkit 正式分离</strong>，runfile 不再捆绑驱动，安装问答里的"OpenGL/x-config"问题随之消失；2023-2024 年 CUDA 12.x（素材重写的目标版本）进一步把官方推荐路径收敛到包管理器（deb/rpm），runfile 成为"发行版无关"的备用选项，Samples 移入 GitHub 仓库独立管理；2025 年后 CUDA 13.x 延续同一套流程。变的是版本号与安装形态，不变的是<strong>驱动管跑、Toolkit 管编、nvidia-smi 验驱动、nvcc 验编译、deviceQuery 验通信</strong>这套骨架。</p>
+
+  <pre><code><span class="cmt"># CUDA 版本演进速查（历史时间线，用于对照素材）</span>
+<span class="cmt">#   CUDA 8.x   (2016)  Pascal 架构；Quadro P2000 属此代</span>
+<span class="cmt">#   CUDA 10.x  (2020)  驱动与 Toolkit 打包在 runfile 中（本章素材）</span>
+<span class="cmt">#   CUDA 11.x  (2020+) 驱动与 Toolkit 正式分离，runfile 不再捆绑驱动</span>
+<span class="cmt">#   CUDA 12.x  (2023+) 官方推荐包管理器；Samples 移入 GitHub 仓库</span>
+<span class="cmt">#   CUDA 13.x  (2025+) 延续同一套安装与验证流程</span>
+<span class="cmt"># 骨架不变：nvidia-smi 验驱动 / nvcc 验编译 / deviceQuery 验通信</span></code></pre>
+
+  <p>这一章我们完成了从"特征检测为什么慢"到"GPU 加速环境就绪"的跨越：理解了像素级并行与吞吐量哲学（11.1），分清了驱动与 Toolkit 这对"两半"（11.2），走完前置检查与下载（11.3），实战了 runfile 交互安装（11.4），配置环境并三连验证（11.5），最后排掉 nouveau、内核头等老坑并看清十年版本演进（11.6）。两个钩子留给后面：一是本章反复提到的 <code>threadIdx</code>/<code>blockIdx</code>/<code>blockDim</code> 与 <code>__global__</code> 内核，正是第 12 章"内核与内存模型"的主题；二是环境立起来之后，第 12 章就能把 11.1 节那个像素取反的思路真正编译运行——<strong>工具已磨好，第 12 章开始用它切图像。</strong></p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① 显卡驱动与 CUDA Toolkit 是同一个软件；② nvidia-smi 右上角的 "CUDA Version" 表示系统已安装的 CUDA 版本；③ CUDA 10.0 时代 runfile 会询问是否安装驱动、OpenGL、x-config；④ 现行 CUDA 12.x 的 runfile 安装器默认捆绑安装驱动；⑤ deviceQuery 样例的最终裁定是输出 "Result = PASS"。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 11.2 节"驱动管跑、Toolkit 管编"的分工、11.4 节的交互问答对照、11.5 节的三层验证。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 错——驱动和 Toolkit 是独立的两半（11.2 节）；② 错——它表示当前驱动最高支持到哪个 CUDA 版本，不代表装了 CUDA；③ 对——这是 10.0 时代驱动与 Toolkit 打包的证据（素材实录）；④ 错——CUDA 11 起驱动与 Toolkit 分离，12.x 的 runfile 默认只管 Toolkit（11.4 节问答里驱动选 n）；⑤ 对——deviceQuery 结尾必须 "Result = PASS" 才说明 Toolkit 与硬件通信成功。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：驱动与 Toolkit <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 用一句话分别说出驱动与 CUDA Toolkit 的职责；② 为什么 PATH 里建议写 /usr/local/cuda/bin 而不是 /usr/local/cuda-12.4/bin？③ 某台机器 nvidia-smi 正常输出，但运行 nvcc --version 报 command not found，最可能的原因是什么？写出排查顺序。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>职责在 11.2 节；软链接的意义在 11.4 节；nvcc 归属哪一半在 11.5 节开头。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 驱动让系统认识 GPU 并驱动它干活（提供 nvidia-smi 与 libcuda），Toolkit 提供 nvcc 编译器与运行时库（管开发）；② /usr/local/cuda 是指向当前版本的软链接，写它升级版本后配置不用改（11.4 节）；③ nvcc 来自 Toolkit，命令找不到说明环境变量没配或 Toolkit 没装——先检查 /usr/local/cuda/bin/nvcc 是否存在，存在则补 PATH 并 source，不存在则补装 Toolkit（11.5 节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：安装流程设计 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在一台全新 CentOS 7 服务器（无桌面）上安装 CUDA 12.x，请排出正确操作顺序并说明理由：a) 运行 cuda_12.4.1_550.54.15_linux.run；b) 安装 gcc 与 kernel-devel；c) 编辑 /etc/profile 加 PATH；d) 用 lspci 确认 NVIDIA 显卡；e) 安装 NVIDIA 驱动；f) 运行 nvcc --version 验证；g) 重启。提示：注意 11.2 节的"两半分离"与 11.3 节的前置检查。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>前置检查（11.3）→ 驱动（11.2）→ Toolkit（11.4）→ 环境（11.5）；内核头要在驱动前装好。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>正确顺序：d → b → e → g → a → c → f。理由：先确认硬件（d）；再补编译器与内核头（b，驱动编译的前置）；装驱动（e）并重启（g，让内核模块加载）；然后装 Toolkit（a，runfile 问答中驱动选 n）；配置 PATH（c）；最后 nvcc --version 验证（f）。若把 a 放 e 前，runfile 里驱动选项答 n 会导致缺少驱动，答 y 则可能重复安装驱动（素材警告过会损坏系统）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：排错实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>某服务器装驱动后重启黑屏，命令行模式排查发现 lsmod | grep nouveau 有输出；另一次装 CUDA Toolkit 后 nvidia-smi 正常但编译样例时报 /usr/bin/perl: bad interpreter。① 针对 nouveau 冲突，写出完整的禁用流程；② 针对 perl 报错，说明根因与解法；③ 如果 deviceQuery 报"找不到 CUDA 设备"而 nvidia-smi 正常，按官方指南最可能的原因是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>nouveau 流程在 11.6 节代码块：黑名单文件 + initramfs 重建 + 重启 + lsmod 验证；perl 报错根因在素材与 11.3 节；deviceQuery 提示在 11.5 节结尾。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 写 /etc/modprobe.d/nvidia-installer-disable-nouveau.conf（blacklist nouveau 与 options nouveau modeset=0），备份 initramfs 后用 dracut 重建（命令带 $(uname -r)），重启后 lsmod | grep nouveau 无输出即成功（11.6 节）；② 根因是系统缺 gcc/perl 解释器（素材实录），装上 gcc 与 perl 即解；③ /dev/nvidia* 设备文件缺失或权限不对——官方指南明确提示，通常重装驱动或重启恢复（11.5 节）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

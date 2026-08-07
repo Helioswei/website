@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第2章：图像文件格式：从 JPEG/PNG 到 TIFF - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter02.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第2章：图像文件格式：从 JPEG/PNG 到 TIFF - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter02.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="2" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：图像文件格式：从 JPEG/PNG 到 TIFF</h1>
+  <p class="chapter-subtitle">在把像素交给磁盘之前，先回答三个问题：要不要丢信息、要不要透明、要存多深——JPEG、PNG、TIFF 就是三种不同的答案</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「一幅画的美，一半靠笔触，一半靠画布与颜料。图像文件格式就是数字世界的画布：选对了，作品历久弥新；选错了，再好的像素也会在存储与传输中褪色。这一章我们既当画家、又当工程师，把 JPEG、PNG、TIFF 三块画布的材质——有损与无损、DCT 与量化、调色板与标签——一块块摸透。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 2.1 有损与无损：压缩的本质是"丢什么" ========== -->
+  <h2>2.1 有损与无损：压缩的本质是"丢什么"</h2>
+
+  <p>第 1 章我们说过，一张 4000×3000 的 24 位照片，裸数据就要 36 MB。为什么磁盘上的 .jpg 往往只有几 MB？因为<strong>压缩</strong>（compression）在做减法。而减法分成两种境界：<strong>无损压缩</strong>（lossless）是"只删冗余、不伤内容"——解压后和压缩前<strong>逐字节相同</strong>，一个像素都不差；<strong>有损压缩</strong>（lossy）是"删掉人眼几乎察觉不到的信息"——解压后是<strong>近似</strong>，肉眼看着差不多，但数据已经永久丢失，无法还原。</p>
+
+  <p>无损压缩删的"冗余"到底是什么？想象一行像素"AAAAABBBBCCCC"：与其把 13 个字符一个个写下来，不如记账写成"5 个 A、4 个 B、4 个 C"。这种把重复内容"记账"的思路叫<strong>行程编码</strong>（RLE，Run-Length Encoding），是最朴素的无损压缩；PNG 用的 DEFLATE（LZ77 + Huffman 编码）原理更精巧，但本质相同——<strong>找重复、记差异</strong>。有损压缩则更进一步：它发现人眼对"亮度"远比"颜色"敏感、对"大面积平缓变化"远比"高频细节"敏感，于是专挑你<strong>看不出来</strong>的部分下手。一句话说人话：<strong>无损是"抄笔记"，有损是"画重点"</strong>。</p>
+
+  <p>怎么快速看出一个文件有没有被压缩过？打开它的十六进制头部——每种格式的<strong>魔数</strong>（magic number，文件开头用于标识格式的固定字节序列）是身份证：JPEG 以 <code>FF D8</code> 开头，PNG 有 8 字节固定签名，TIFF 以 <code>II</code> 或 <code>MM</code> 加版本号 42 开头。这些特征后面几节逐个拆解，先混个脸熟：</p>
+
+  <pre><code><span class="cmt"># xxd 查看三种格式的文件头（前 16 字节）</span>
+xxd -l <span class="num">16</span> photo.jpg
+<span class="cmt"># 00000000: ffd8 ffe0 0010 4a46 4946 0001 0101 0048  .......JFIF.....H</span>
+<span class="cmt"># ff d8 = SOI 标记（Start Of Image），JPEG 文件的身份证</span>
+
+xxd -l <span class="num">16</span> icon.png
+<span class="cmt"># 00000000: 8950 4e47 0d0a 1a0a 0000 000d 4948 4452  .PNG........IHDR</span>
+<span class="cmt"># 89 50 4e 47 = 固定签名，后面 IHDR 是第一个数据块</span>
+
+xxd -l <span class="num">16</span> scan.tiff
+<span class="cmt"># 00000000: 4949 2a00 0800 0000 3b01 0400 0100 0000  II*.........;....</span>
+<span class="cmt"># 49 49 = "II"（小端序），2a 00 = 版本号 42，见 2.4 节</span></code></pre>
+
+  <p>把行程编码亲手写一遍，是理解"无损"最快的方式——注意第二个例子的反直觉之处：<strong>压缩不是每次都变小</strong>，数据没有重复时反而会变大，这正是"选对格式"重要性的第一课：</p>
+
+  <pre><code><span class="cmt"># run_length.py —— 行程编码：无损压缩的最小演示</span>
+<span class="kw">def</span> <span class="fn">rle</span>(data: <span class="type">str</span>) <span class="op">-&gt;</span> <span class="type">str</span>:
+    <span class="kw">if</span> <span class="kw">not</span> data:
+        <span class="kw">return</span> <span class="str">""</span>
+    out, run, prev = [], <span class="num">1</span>, data[<span class="num">0</span>]
+    <span class="kw">for</span> ch <span class="kw">in</span> data[<span class="num">1</span>:]:
+        <span class="kw">if</span> ch <span class="op">==</span> prev:
+            run <span class="op">+=</span> <span class="num">1</span>
+        <span class="kw">else</span>:
+            out.append(<span class="str">"{}{}"</span>.<span class="fn">format</span>(run, prev))
+            run, prev = <span class="num">1</span>, ch
+    out.append(<span class="str">"{}{}"</span>.<span class="fn">format</span>(run, prev))
+    <span class="kw">return</span> <span class="str">""</span>.join(out)
+
+<span class="fn">print</span>(<span class="fn">rle</span>(<span class="str">"AAAAABBBBCCCC"</span>))   <span class="cmt"># 5A4B4C：13 个字符 -> 6 个字符</span>
+<span class="fn">print</span>(<span class="fn">rle</span>(<span class="str">"ABCDEFGH"</span>))       <span class="cmt"># 1A1B1C1D1E1F1G1H：没有重复，反而变长</span></code></pre>
+
+  <table>
+    <tr><th>维度</th><th>无损压缩</th><th>有损压缩</th></tr>
+    <tr><td>能否还原</td><td>逐字节还原，分毫不差</td><td>只能还原近似图像</td></tr>
+    <tr><td>原理</td><td>消除统计冗余（重复、可预测）</td><td>丢弃人眼不敏感的信息</td></tr>
+    <tr><td>典型压缩比</td><td>2:1 ~ 5:1（视内容而定）</td><td>10:1 以上仍可接受</td></tr>
+    <tr><td>典型格式</td><td>PNG、TIFF（LZW 压缩）、GIF</td><td>JPEG、WebP（有损模式）、HEIC</td></tr>
+    <tr><td>适用场景</td><td>截图、线稿、图标、存档</td><td>照片、网页、传输</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>判断"该不该用无损"，问自己一个问题：<strong>这份图像还要不要再编辑？</strong>要编辑就存无损（PNG/TIFF），最终发布时再转有损（JPEG）。记住一个铁律：<strong>有损压缩的每一次保存，都在永久丢失信息</strong>——这就是"数字一代损失"（digital generation loss），2.2 节会讲到它为什么可怕。</p>
+  </div>
+
+  <!-- ========== 2.2 JPEG：DCT 变换与量化 ========== -->
+  <h2>2.2 JPEG：DCT 变换与量化，有损压缩的教科书</h2>
+
+  <p>JPEG（Joint Photographic Experts Group，联合图像专家组）是 1992 年发布的图像压缩标准，二十多年来一直是数字照片的事实标准——相机拍的、网页传的、手机存的，绝大多数是它。它的核心是有损压缩，典型能力是<strong>10:1 压缩率下肉眼几乎看不出区别</strong>。但 JPEG 有一个致命弱点：<strong>不适合文字、线稿、图标这类边缘锐利的图像</strong>——相邻像素的剧烈反差会暴露它的压缩痕迹，出现明显的"块状脏边"。</p>
+
+  <p>JPEG 凭什么敢丢信息？它押注在人眼的两个生理特性上：第一，<strong>人眼对亮度比对颜色敏感得多</strong>；第二，<strong>人眼对大面积平缓变化敏感，对高频细节（细碎纹理）迟钝</strong>。压缩就顺着这两条线索展开。标准的 baseline JPEG 编码流程分六步，每一步"丢不丢信息"清清楚楚：先把 RGB 转成 YCbCr（亮度 Y + 两个色度 Cb/Cr），接着对色度做<strong>下采样</strong>（最常见的是 4:2:0，色度在水平和垂直方向各减半——反正你看不出）；然后把每个通道切成 <strong>8×8 像素块</strong>；每个块做 <strong>DCT 变换</strong>（离散余弦变换，把"空间域的像素值"变成"频率域的系数"）；最关键的一步是<strong>量化</strong>（quantization）——把每个系数除以量化表里的数再取整，高频系数往往被除成 0；最后对量化结果做 zigzag 扫描 + 行程编码 + Huffman 编码，这一步是无损的。</p>
+
+  <table>
+    <tr><th>步骤</th><th>操作</th><th>丢信息吗？</th></tr>
+    <tr><td>1. 颜色变换</td><td>RGB → YCbCr，亮度与色度分离</td><td>否（数学可逆）</td></tr>
+    <tr><td>2. 色度下采样</td><td>Cb/Cr 按 4:2:0 减半</td><td>是（人眼难辨）</td></tr>
+    <tr><td>3. 分块</td><td>每个通道切成 8×8 像素块</td><td>否</td></tr>
+    <tr><td>4. DCT 变换</td><td>空间域 → 频率域（能量集中低频）</td><td>否（数学可逆）</td></tr>
+    <tr><td>5. 量化</td><td>系数除以量化表数值并取整</td><td>是（<strong>主要损失都在这里</strong>）</td></tr>
+    <tr><td>6. 熵编码</td><td>zigzag 扫描 + RLE + Huffman</td><td>否（无损压缩）</td></tr>
+  </table>
+
+  <p>整个流程里，第 5 步<strong>量化</strong>是唯一的"信息漏斗"，也是 JPEG 质量参数的真正含义。量化表（quantization table）是一张 8×8 的数表，左上角数字小（低频系数保留得精细）、右下角数字大（高频系数被除得很粗）。编码器的 <code>quality</code> 参数（比如独立 JPEG 组 IJG 库常用的 0-100 尺度）就是用来缩放这张表的：质量越低，除数越大，被除成 0 的系数越多，文件越小、画质越差。高频系数大量归零后，图像就显出两种典型伪影：<strong>块效应</strong>（blockiness，8×8 块的边界清晰可见）和<strong>振铃</strong>（ringing，锐利边缘旁出现波纹状虚影）。</p>
+
+  <p>用代码亲手做一次"质量实验"，比读十段理论都直观——同样的原图，质量从 95 降到 20，体积急剧缩小，而人眼在屏幕上往往要到 50 以下才明显察觉：</p>
+
+  <pre><code><span class="cmt"># quality.py —— 同一张原图按不同质量保存，观察体积变化</span>
+<span class="kw">from</span> PIL <span class="kw">import</span> Image
+<span class="kw">import</span> os
+
+img = Image.<span class="fn">open</span>(<span class="str">"origin.png"</span>)   <span class="cmt"># 一张无损原图</span>
+<span class="kw">for</span> q <span class="kw">in</span> (<span class="num">95</span>, <span class="num">80</span>, <span class="num">50</span>, <span class="num">20</span>):
+    img.<span class="fn">save</span>(<span class="str">"out_{}.jpg"</span>.<span class="fn">format</span>(q), <span class="param">quality</span>=q)   <span class="cmt"># quality 取值 0-100</span>
+    size = os.path.<span class="fn">getsize</span>(<span class="str">"out_{}.jpg"</span>.<span class="fn">format</span>(q))
+    <span class="fn">print</span>(<span class="str">"quality={} size={} bytes"</span>.<span class="fn">format</span>(q, size))
+
+<span class="cmt"># 输出示例（具体数字随图像内容变化）：</span>
+<span class="cmt"># quality=95 size=2123456 bytes</span>
+<span class="cmt"># quality=80 size=789012 bytes</span>
+<span class="cmt"># quality=50 size=321000 bytes</span>
+<span class="cmt"># quality=20 size=118000 bytes</span></code></pre>
+
+  <p>用 ImageMagick 的 <code>identify</code> 或 FFmpeg 的 <code>ffprobe</code>，可以查看一张现成 JPEG 的编码信息——注意 <code>4:2:0</code> 这个采样字样，它直接决定了一张 JPEG 的"省钱程度"：</p>
+
+  <pre><code><span class="cmt"># ImageMagick：查看 JPEG 的编码参数</span>
+identify -verbose photo.jpg | head -<span class="num">25</span>
+
+<span class="cmt"># ffprobe（FFmpeg 自带）：同样能读出编码器、像素格式与质量</span>
+ffprobe photo.jpg
+<span class="cmt"># 输出节选：</span>
+<span class="cmt">#   Stream #0:0: Video: mjpeg, yuvj420p(pc, bt470bg/unknown/unknown), 4000x3000</span>
+<span class="cmt"># yuvj420p 中的 420 就是 4:2:0 色度下采样</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：JPEG 文件每被"打开-保存"一次，就会重新走一遍编码流程、再丢一轮信息——这就是<strong>数字一代损失</strong>。来回保存十几次后，即使每次都是高质量，画面也会明显发糊、出现块状斑。所以工作流必须是：<strong>编辑阶段存 PNG/TIFF，只有最终交付才转 JPEG</strong>。另外，JPEG 的"无损旋转/裁剪"只在尺寸恰好是 16 像素（4:2:0 下采样时的 MCU 块）整数倍时才成立，其余情况仍会重编码丢画质。</p>
+  </div>
+
+  <!-- ========== 2.3 PNG：调色板与透明通道 ========== -->
+  <h2>2.3 PNG：无损、调色板与透明通道</h2>
+
+  <p>PNG（Portable Network Graphics，便携式网络图形）诞生于 1995 年，起因是一桩著名的专利纠纷：1994 年底 GIF 格式使用的 LZW 压缩算法被宣布需要缴纳专利费，社区决定做一个<strong>免费开源、且更强大</strong>的替代品。PNG 于 1996 年成为 W3C 推荐标准，1997 年发布为 RFC 2083，2004 年成为 ISO/IEC 15948 国际标准。它的定位非常明确：<strong>无损、支持透明、适合网络传输</strong>——图标、UI 元素、截图、图表，都是它的主场。PNG 至今不原生支持动画（动画要用 APNG/MNG 扩展），也不支持 CMYK 印刷色。</p>
+
+  <p>PNG 的文件结构是"8 字节签名 + 一串数据块（chunk）"。签名固定为 <code>89 50 4E 47 0D 0A 1A 0A</code>（前两个字节特意与 ASCII 和常见传输协议避开，防止文件被误当成文本处理）。每个 chunk 的布局是：<strong>4 字节长度 + 4 字节类型 + 数据 + 4 字节 CRC 校验</strong>。四个关键 chunk 撑起整个文件：<code>IHDR</code>（图像头，必须是第一个，13 字节固定内容：宽、高、位深、颜色类型等）、<code>PLTE</code>（调色板）、<code>IDAT</code>（图像数据，DEFLATE 压缩流，可拆成多个）、<code>IEND</code>（结束标记）。解码器遇到不认识的 chunk 可以安全跳过——这正是 PNG 能持续扩展的原因。</p>
+
+  <p>PNG 的<strong>调色板</strong>（palette）是它区别于 JPEG 的一大杀器：颜色类型 3（索引色）的图像，每个像素只存一个"色号"（1/2/4/8 位），真正的颜色放在 PLTE 调色板里，256 色以下的图标/UI 图因此能压得极小。<strong>透明</strong>则是第二大杀器：要么用 tRNS chunk 给调色板逐项指定透明度、或声明某个像素值全透明，要么直接用带 alpha 通道的颜色类型（4=灰度+alpha，6=RGBA），支持 0-255 任意程度的半透明。压缩上 PNG 全部采用 <strong>DEFLATE 无损压缩</strong>（LZ77 + Huffman），并在压缩前对每行像素做<strong>滤波预测</strong>（5 种滤波器，用左/上/左上邻像素预测当前值、只存差值），让数据更"好压"。位深最高支持每通道 16 位——远超 JPEG 的 8 位。</p>
+
+  <table>
+    <tr><th>Chunk</th><th>全称</th><th>作用</th></tr>
+    <tr><td><code>IHDR</code></td><td>Image Header</td><td>宽/高/位深/颜色类型等 13 字节，必须排第一</td></tr>
+    <tr><td><code>PLTE</code></td><td>Palette</td><td>调色板，索引色（类型 3）必需</td></tr>
+    <tr><td><code>IDAT</code></td><td>Image Data</td><td>图像数据，DEFLATE 压缩流</td></tr>
+    <tr><td><code>tRNS</code></td><td>Transparency</td><td>透明信息：调色板逐项 alpha，或声明单色全透明</td></tr>
+    <tr><td><code>IEND</code></td><td>Image End</td><td>结束标记，数据区为空</td></tr>
+  </table>
+
+  <p>用十六进制编辑器直接看一个真实 PNG 的 chunk 序列——签名之后紧跟 IHDR，长度 <code>00 00 00 0D</code>（十进制 13）正好对应 IHDR 的 13 字节数据：</p>
+
+  <pre><code><span class="cmt"># 解析 PNG 文件头：签名 + 第一个 chunk</span>
+xxd -l <span class="num">32</span> icon.png
+<span class="cmt"># 00000000: 8950 4e47 0d0a 1a0a 0000 000d 4948 4452  .PNG........IHDR</span>
+<span class="cmt"># 89 50 4e 47 0d 0a 1a 0a = 8 字节签名（固定不变）</span>
+<span class="cmt"># 00 00 00 0d            = chunk 数据长度：13 字节</span>
+<span class="cmt"># 49 48 44 52            = chunk 类型："IHDR"</span>
+<span class="cmt"># 再往后 13 字节是 IHDR 数据：宽(4) + 高(4) + 位深(1) + 颜色类型(1) + 压缩(1) + 滤波(1) + 隔行(1)</span>
+
+<span class="cmt"># 颜色类型字段取值（IHDR 第 9 字节偏移处）：</span>
+<span class="cmt"># 0 = 灰度，2 = 真彩色 RGB，3 = 索引色（调色板），4 = 灰度+alpha，6 = RGBA</span></code></pre>
+
+  <p>用 Python Pillow 生成"调色板 PNG"和"RGBA 透明 PNG"两种典型形态——前者是图标优化的关键，后者是 Web 半透明贴图的基础：</p>
+
+  <pre><code><span class="cmt"># make_png.py —— 生成调色板 PNG 与 RGBA 透明 PNG</span>
+<span class="kw">from</span> PIL <span class="kw">import</span> Image
+
+<span class="cmt"># 形态一：索引色 PNG（颜色类型 3，调色板）</span>
+rgb = Image.<span class="fn">new</span>(<span class="type">"RGB"</span>, (<span class="num">2</span>, <span class="num">2</span>))
+rgb.<span class="fn">putdata</span>([(<span class="num">255</span>,<span class="num">0</span>,<span class="num">0</span>), (<span class="num">0</span>,<span class="num">255</span>,<span class="num">0</span>), (<span class="num">0</span>,<span class="num">0</span>,<span class="num">255</span>), (<span class="num">255</span>,<span class="num">255</span>,<span class="num">0</span>)])
+pal = rgb.<span class="fn">convert</span>(<span class="type">"P"</span>, <span class="param">palette</span>=Image.ADAPTIVE, <span class="param">colors</span>=<span class="num">4</span>)  <span class="cmt"># 自适应生成 4 色调色板</span>
+pal.<span class="fn">save</span>(<span class="str">"palette.png"</span>)
+
+<span class="cmt"># 形态二：RGBA PNG（颜色类型 6，带 alpha 透明通道）</span>
+rgba = Image.<span class="fn">new</span>(<span class="type">"RGBA"</span>, (<span class="num">2</span>, <span class="num">2</span>))
+rgba.<span class="fn">putdata</span>([(<span class="num">255</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">255</span>), (<span class="num">0</span>,<span class="num">255</span>,<span class="num">0</span>,<span class="num">128</span>), (<span class="num">0</span>,<span class="num">0</span>,<span class="num">255</span>,<span class="num">0</span>), (<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>)])
+<span class="cmt"># 每像素四通道 (R, G, B, A)，A=255 不透明，A=0 全透明</span>
+rgba.<span class="fn">save</span>(<span class="str">"rgba.png"</span>)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>PNG 的缺点也要认清：<strong>照片类图像存 PNG 会非常大</strong>——真实世界的照片几乎找不到可预测的重复，DEFLATE 无从发挥，体积常常是 JPEG 的 5-10 倍。所以口诀是：<strong>照片找 JPEG，图形找 PNG</strong>。另外，PNG 的 Adam7 隔行扫描（interlace）允许边下载边显示低分辨率预览，但会略微增大体积，非必要不开启。</p>
+  </div>
+
+  <!-- ========== 2.4 TIFF：标签结构的容器哲学 ========== -->
+  <h2>2.4 TIFF：标签结构的容器哲学</h2>
+
+  <p>TIFF（Tag Image File Format，标签图像文件格式）诞生于 1986 年，由 Aldus 公司（后并入 Adobe）为桌面出版和扫描仪行业设计。它的理念和 JPEG/PNG 截然不同：JPEG/PNG 是"规定好的盒子"，TIFF 是<strong>"一块可以无限贴标签的画板"</strong>——一切信息都以<strong>标签</strong>（tag）的形式存在，图像数据本身也靠标签指明位置和格式。这种极度灵活的设计让它成为印刷、扫描、医学影像、科学摄影的事实标准，但也带来一句著名的玩笑：TIFF 是 <strong>"Thousands of Incompatible File Formats"（成千上万种互不兼容的文件格式）</strong>。为此 1992 年的 TIFF 6.0 规范划分了所有实现都必须支持的 <strong>Baseline TIFF</strong>（基线）与可选的 <strong>TIFF Extensions</strong>（扩展）。</p>
+
+  <p>一个 TIFF 文件的结构是：<strong>8 字节文件头 + 一个或多个 IFD</strong>。文件头前两个字节是字节序标记：<code>II</code>（小端，Intel 风格）或 <code>MM</code>（大端，Motorola 风格）；接下来两个字节是版本号，<strong>永远是 42</strong>（十六进制 2A，各版本从未变过）；再往后 4 字节指向第一个 IFD 的偏移。<strong>IFD</strong>（Image File Directory，图像文件目录）是 TIFF 的灵魂：它先写一个 2 字节的"条目数量"，然后是若干条固定 12 字节的条目，最后 4 字节指向下一个 IFD（没有就写 0）——一个文件可以含多个 IFD，从而实现<strong>多页 TIFF</strong>（如传真文档）。每个 12 字节条目由四部分组成：2 字节 Tag 编号 + 2 字节数据类型 + 4 字节数量 + 4 字节"值或偏移"。</p>
+
+  <p>标签编号是裸数字（如 256 表示宽度），规范只规定"编号对应的含义"——这正是"标签化"的设计精髓：<strong>不认识某个标签的阅读器可以直接跳过它</strong>，格式因此可以无限扩展而不破坏兼容性。图像数据按<strong>strip</strong>（条带）组织：整幅图按行切成若干条，每条独立压缩、独立存储，由 <code>StripOffsets</code>（273）等标签给出位置和长度。压缩方案五花八门：不压缩、无损的 LZW 和 PackBits、有损的 JPEG，还有传真用的 CCITT Group 4——基线 TIFF 只强制支持无压缩、PackBits 和 CCITT 三种。数据类型也有讲究：除了常见的 BYTE(1)/ASCII(2)/SHORT(3)/LONG(4)/RATIONAL(5)，扩展还支持浮点数样本——这让 TIFF 能保存科学相机 CCD 采到的 16 位甚至更高精度的数据。</p>
+
+  <table>
+    <tr><th>Tag 编号</th><th>名称</th><th>含义</th></tr>
+    <tr><td>256</td><td>ImageWidth</td><td>图像宽度（像素）</td></tr>
+    <tr><td>257</td><td>ImageLength</td><td>图像高度（像素）</td></tr>
+    <tr><td>258</td><td>BitsPerSample</td><td>每通道位数（如 8、16）</td></tr>
+    <tr><td>259</td><td>Compression</td><td>压缩方案：1=无、5=LZW、7=JPEG、32773=PackBits</td></tr>
+    <tr><td>262</td><td>PhotometricInterpretation</td><td>颜色模型：0/1=黑白、2=RGB、3=调色板</td></tr>
+    <tr><td>273</td><td>StripOffsets</td><td>每个 strip 数据在文件中的偏移</td></tr>
+    <tr><td>277</td><td>SamplesPerPixel</td><td>每像素通道数（RGB=3，RGBA=4）</td></tr>
+    <tr><td>278</td><td>RowsPerStrip</td><td>每个 strip 包含多少行</td></tr>
+    <tr><td>279</td><td>StripByteCounts</td><td>每个 strip 占多少字节</td></tr>
+  </table>
+
+  <p>亲手解码一个 TIFF 文件头，把"标签哲学"落到实处——注意 <code>2a 00</code> 这个版本号，以及第 9 字节起那个指向 IFD 的偏移：</p>
+
+  <pre><code><span class="cmt"># 解析 TIFF 文件头（小端序示例）</span>
+xxd -l <span class="num">16</span> scan.tiff
+<span class="cmt"># 00000000: 4949 2a00 0800 0000 3b01 0400 0100 0000  II*.........;....</span>
+<span class="cmt"># 49 49          = "II"：小端字节序（Intel 风格；"MM" 则为大端）</span>
+<span class="cmt"># 2a 00          = 42：TIFF 版本号，所有版本都是 42</span>
+<span class="cmt"># 08 00 00 00    = 8：第一个 IFD 在文件中的偏移（本例在偏移 8）</span>
+
+<span class="cmt"># 一个 IFD 条目固定 12 字节：</span>
+<span class="cmt"># 偏移 0-1: Tag 编号（0x0100 = 256 = ImageWidth）</span>
+<span class="cmt"># 偏移 2-3: 数据类型（1=BYTE 2=ASCII 3=SHORT 4=LONG 5=RATIONAL）</span>
+<span class="cmt"># 偏移 4-7: 数量 Count（该类型元素个数）</span>
+<span class="cmt"># 偏移 8-11: 值；超过 4 字节时这里存"指向真实数据的文件偏移"</span></code></pre>
+
+  <p>libtiff 自带的 <code>tiffinfo</code> 命令可以把一个 TIFF 的全部标签"翻译"成人话——对照上表，你能在输出里认出每一个字段的来历：</p>
+
+  <pre><code><span class="cmt"># 安装 libtiff 工具后（Ubuntu: sudo apt install libtiff-tools）</span>
+tiffinfo scan.tiff
+<span class="cmt"># 输出节选（以一张 1600x1200 无压缩 RGB 扫描件为例）：</span>
+<span class="cmt">#   TIFF Directory at offset 0x8 (8)</span>
+<span class="cmt">#     Image Width: 1600 Image Length: 1200</span>
+<span class="cmt">#     Bits/Sample: 8</span>
+<span class="cmt">#     Compression Scheme: None</span>
+<span class="cmt">#     Photometric Interpretation: RGB</span>
+<span class="cmt">#     Samples/Pixel: 3</span>
+<span class="cmt">#     Rows/Strip: 1200</span>
+<span class="cmt">#     Strip Byte Counts: 5760000</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>TIFF 的"标签容器"思想影响深远：<strong>TIFF/EP</strong>（ISO 12234-2，电子摄影标准）在 TIFF 6.0 基础上扩展了传感器相关的私有标签，而相机 RAW 格式与 Adobe 的 <strong>DNG</strong>（Digital Negative，数字底片）都建立在 TIFF 结构之上——这为下一章埋下了伏笔：<strong>为什么相机 RAW 文件长着一副 TIFF 的样子？第 3 章拆开给你看。</strong></p>
+  </div>
+
+  <!-- ========== 2.5 格式选型：工程里的取舍 ========== -->
+  <h2>2.5 格式选型：工程里的取舍</h2>
+
+  <p>学到这儿，三种格式的性格已经清楚了：<strong>JPEG 是"照片专家"</strong>——有损但体积小，人眼买账；<strong>PNG 是"图形专家"</strong>——无损、支持透明、适合图标和 UI；<strong>TIFF 是"档案管理员"</strong>——无损、可多页、可存高精度科学数据，但体积大、结构复杂。选型的本质不是"哪个最好"，而是<strong>"你的场景最不能容忍失去什么"</strong>。第 1 章提到的服务端图像处理场景（转码、预览、缩略图）尤其吃这套决策：上游用户上传的可能是任何格式，下游产品要的是"网页缩略图要 JPEG、头像透明底要 PNG、原始存档要原样保留"。</p>
+
+  <table>
+    <tr><th>维度</th><th>JPEG</th><th>PNG</th><th>TIFF</th></tr>
+    <tr><td>压缩方式</td><td>有损（默认）</td><td>无损（DEFLATE）</td><td>均可：无 / LZW / JPEG 等</td></tr>
+    <tr><td>透明支持</td><td>不支持</td><td>支持（tRNS / alpha 通道）</td><td>支持（额外通道）</td></tr>
+    <tr><td>位深</td><td>8 位/通道（baseline）</td><td>最高 16 位/通道</td><td>最高 32 位浮点（扩展）</td></tr>
+    <tr><td>多页支持</td><td>不支持</td><td>不支持</td><td>支持（多个 IFD）</td></tr>
+    <tr><td>典型用途</td><td>照片、网页、传输</td><td>图标、UI、截图、透明贴图</td><td>扫描、印刷、科学数据、存档</td></tr>
+    <tr><td>文件体积</td><td>小</td><td>中（照片上会很大）</td><td>大（常不压缩）</td></tr>
+  </table>
+
+  <p>工程上的第一步永远是"先搞清楚手上是什么"。<code>file</code> 命令按内容识别格式（不信任扩展名——服务器上最常见的坑就是 <code>.png</code> 的文件其实是 JPEG），ImageMagick 的 <code>identify</code> 给出更多细节。下面是服务端转码管线的两个最小命令：</p>
+
+  <pre><code><span class="cmt"># 按文件内容识别格式（不信任扩展名）</span>
+file photo.jpg icon.png scan.tiff
+<span class="cmt"># photo.jpg:  JPEG image data, JFIF standard 1.01, resolution (72x72)</span>
+<span class="cmt"># icon.png:   PNG image data, 32 x 32, 8-bit/color RGBA, non-interlaced</span>
+<span class="cmt"># scan.tiff:  TIFF image data, little-endian, big-endian, RGB</span>
+
+<span class="cmt"># 批量把 PNG 转成 JPEG（ImageMagick 6 用 convert，7 用 magick）</span>
+<span class="kw">for</span> f <span class="kw">in</span> *.png; <span class="kw">do</span>
+    identify <span class="str">"$f"</span>                                 <span class="cmt"># 转码前先看格式与尺寸</span>
+    convert <span class="str">"$f"</span> -quality <span class="num">85</span> <span class="str">"${f%.png}.jpg"</span>   <span class="cmt"># 转成 quality=85 的 JPEG</span>
+<span class="kw">done</span></code></pre>
+
+  <p>最后给一个"选型决策"的骨架伪代码——它概括了本章全部要点，也是第 5 章"六库选型"方法论的小型预演。注意它把<strong>透明需求</strong>放在最优先：一旦需要透明，JPEG 直接出局，只能在 PNG 与 TIFF 之间选：</p>
+
+  <pre><code><span class="cmt"># choose_format —— 格式选型决策（伪代码）</span>
+<span class="kw">def</span> <span class="fn">choose_format</span>(need_alpha: <span class="type">bool</span>, need_lossless: <span class="type">bool</span>, target: <span class="type">str</span>) <span class="op">-&gt;</span> <span class="ann">str</span>:
+    <span class="kw">if</span> need_alpha <span class="kw">and</span> need_lossless:
+        <span class="kw">return</span> <span class="str">"PNG"</span>          <span class="cmt"># 透明 + 无损：UI 图标、头像、贴图</span>
+    <span class="kw">if</span> need_lossless:
+        <span class="kw">return</span> <span class="str">"TIFF"</span>         <span class="cmt"># 无损存档、科学数据、印刷原稿</span>
+    <span class="kw">if</span> target == <span class="str">"web"</span>:
+        <span class="kw">return</span> <span class="str">"JPEG"</span>         <span class="cmt"># 照片类网页图：体积优先</span>
+    <span class="kw">return</span> <span class="str">"TIFF"</span>              <span class="cmt"># 印刷 / 存档兜底</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别用 JPEG 做"中间产物"。转码管线的正确姿势是：<strong>原始上传文件原样存档（PNG/TIFF/RAW 不动），所有尺寸/质量不同的下游产物从原始文件现算</strong>。一旦让"JPEG 转 JPEG"发生，每一层都会叠加一代损失，第 16 章回顾全链路时你会再见到这条铁律。至于 AVIF、WebP、HEIC 这些新格式——它们正在蚕食 JPEG/PNG 的地盘，第 16 章的格式演进会专门讲。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念连线 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边的概念与右边最贴切的解释配对：① 无损压缩；② 有损压缩；③ DCT 变换；④ 量化。候选解释：A. 把空间域像素变成频率域系数；B. 逐字节还原，不丢任何信息；C. 除以量化表数值取整，信息主要丢在这里；D. 丢弃人眼不敏感的信息，只还原近似图像。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 2.1 节的"抄笔记 vs 画重点"比喻，以及 2.2 节六步编码表里"丢信息吗"那一列。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 无损压缩 → B；② 有损压缩 → D；③ DCT 变换 → A；④ 量化 → C。注意 DCT 本身数学可逆，真正的信息损失发生在量化这一步——这也是 JPEG 质量参数只影响量化表的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：格式侦探 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>某目录下有三个文件，扩展名分别是 a.jpg、b.png、c.tiff，但其中有一个文件的真实格式与扩展名不符。用 <code>xxd -l 8 文件</code> 查看文件头，得到如下十六进制：(a) <code>ffd8 ffe0 0010 4a46</code>；(b) <code>8950 4e47 0d0a 1a0a</code>；(c) <code>4949 2a00 0800 0000</code>。请判断哪个文件"名不副实"。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 2.1 节三种格式的魔数：JPEG 以 FF D8 开头，PNG 是 89 50 4E 47 0D 0A 1A 0A，TIFF 是 49 49 2A 00（或 4D 4D 00 2A）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(b) 是 PNG 签名、(c) 是 TIFF 头（II + 版本 42），都名实相符；只有 (a) 的头部 <code>ffd8 ffe0</code> 是 JPEG 的 SOI 标记，但它挂着 .png 的扩展名——实际上 (a) 是扩展名为 .png 的 JPEG 文件。这正是 <code>file</code> 命令按内容而非扩展名识别格式的原因，服务端处理用户上传时尤其要防这一手。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：一代损失 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>小明把一张照片存成 JPEG 后，每次用画图软件"打开再另存"一次，如此往复二十次。请解释为什么最后画面明显发糊，并给出正确的编辑工作流。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 2.2 节"数字一代损失"：JPEG 每次保存都要重新走一遍 6 步编码，哪一步在重复丢信息？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>每次另存都会重新执行"量化"步骤，把已经量化过的系数再除一遍、再取整一遍，误差逐代累积，二十次后块效应和振铃就非常明显了。正确工作流：编辑阶段用 PNG/TIFF 等无损格式保存中间版本，所有编辑完成后再导出一次 JPEG 用于交付——这样只承受一次有损损失。同理，服务端转码管线绝不能让"JPEG 转 JPEG"发生。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：动手三连 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用 Python Pillow 完成三次递进实验：① 任选一张照片，按 quality=95/50/20 各存一份 JPEG，打印文件大小对比；② 生成一张带透明通道的 RGBA PNG，再用 <code>xxd</code> 查看它的签名和前两个 chunk 的类型；③ 用 <code>file</code> 和 <code>identify</code> 检查你生成的所有文件，确认格式与预期一致。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>JPEG 质量实验参考 2.2 节的 <code>quality.py</code>；RGBA PNG 参考 2.3 节的 <code>make_png.py</code>；格式识别参考 2.5 节的 <code>file</code>/<code>identify</code> 命令。chunk 类型应该看到 IHDR 和 IDAT。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 体积应随 quality 下降明显变小（具体数值因图而异），quality=20 时肉眼可见块效应；② 文件头应为 <code>8950 4e47 0d0a 1a0a</code> 加 IHDR chunk，<code>xxd -l 32</code> 能看到 <code>4948 4452</code>（IHDR）字样；③ <code>file</code> 应报告 JPEG image data / PNG image data，<code>identify</code> 能读出尺寸与色深。三关全过，你就掌握了本章的全部技能点。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

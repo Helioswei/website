@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第9章：OpenCV 第一个程序与 Mat 核心 - 图像与视觉实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/graphics/chapter09.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第9章：OpenCV 第一个程序与 Mat 核心 - 图像与视觉实战",
+  "url": "https://aigcwei.cn/learn/graphics/chapter09.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-graphics" data-track="graphics" data-chapter="9" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：OpenCV 第一个程序与 Mat 核心</h1>
+  <p class="chapter-subtitle">从第一个能跑的程序出发，把 Mat 这个核心数据结构从头拆到尾：头与数据、类型系统、像素访问、图像保存，以及新手必踩的坑</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「费曼的办法是：把一件事拆到不能再拆的基本砖块，再从砖块重新推导。图像是什么？对计算机来说，图像只是一堆按规律排列的数字。Mat 就是装这堆数字的'标准抽屉'。这一章我们从第一性原理出发：先跑起第一个程序（9.1），拆开 Mat 的头与数据（9.2），解码 CV_8UC3 这个类型密码（9.3），比较三种像素访问方式（9.4），学会把结果存回文件（9.5），最后把最常见的坑排一遍（9.6）。把 Mat 弄透，第 10 章的特征检测就有地基了。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 第一个程序 ========== -->
+  <h2>9.1 从零跑通：第一个 OpenCV 程序</h2>
+
+  <p>第 8 章我们把 OpenCV 从源码装进了系统，现在到了验收时刻。第一性原理的第一问：<strong>一个图像程序最少要做哪几件事？</strong>答案是三件：把图片文件读进内存、在屏幕上显示、等用户看完后按一个键退出。OpenCV 为此准备了四个函数，全都在官方教程《Getting Started with Images》里：<code>cv::imread</code> 负责读文件，<code>cv::imshow</code> 负责显示，<code>cv::waitKey</code> 负责"等待按键"，<code>cv::destroyAllWindows</code> 负责关闭窗口。第 8 章装好的库在这一刻开始变成能跑的程序。</p>
+
+  <p>逐一看这四个函数。第一性原理的第二问：<strong>每个函数在跟谁打交道？</strong><code>cv::imread</code> 有两个参数——文件路径和读取方式（flags），常用方式有 <code>IMREAD_COLOR</code>（默认，读成 3 通道 BGR 彩色图）、<code>IMREAD_GRAYSCALE</code>（单通道灰度图）和 <code>IMREAD_UNCHANGED</code>（保留文件原有的通道数与位深）；它返回一个 <code>cv::Mat</code>——本章主角。<code>cv::imshow</code> 第一个参数是窗口标题，第二个是要显示的 Mat。<code>cv::waitKey</code> 参数是毫秒数：<code>0</code> 表示无限等待直到用户按键（官方文档原话 "Zero means to wait forever"），返回键值。<code>cv::destroyAllWindows</code> 关闭程序开过的全部窗口。<code>cv::namedWindow</code> 可选：不调用它 <code>cv::imshow</code> 也会自动建窗，只有想控制窗口属性（如 <code>WINDOW_NORMAL</code> 允许拉伸）时才显式调用。</p>
+
+  <pre><code><span class="cmt">// first.cpp —— OpenCV 第一个程序：读图、显示、按键退出</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> <span class="param">argc</span>, <span class="kw">char</span>** <span class="param">argv</span>) {
+    <span class="kw">if</span> (<span class="param">argc</span> <span class="op">&lt;</span> <span class="num">2</span>) {
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"用法: ./first 图片路径"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="cmt">// imread：把文件读成 Mat。第二参数 IMREAD_COLOR 表示读成 3 通道 BGR 彩色图</span>
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="param">argv</span>[<span class="num">1</span>], <span class="ann">cv::IMREAD_COLOR</span>);
+    <span class="kw">if</span> (<span class="param">img</span>.<span class="fn">empty</span>()) {          <span class="cmt">// 读失败返回空 Mat，不抛异常</span>
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"读图失败: "</span> <span class="op">&lt;&lt;</span> <span class="param">argv</span>[<span class="num">1</span>] <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="fn">cv::imshow</span>(<span class="str">"原图"</span>, <span class="param">img</span>);      <span class="cmt">// 显示：第一个参数是窗口标题</span>
+    <span class="fn">cv::waitKey</span>(<span class="num">0</span>);                 <span class="cmt">// 0 = 无限等待，直到用户按任意键</span>
+    <span class="fn">cv::destroyAllWindows</span>();       <span class="cmt">// 关闭所有 HighGUI 窗口</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译：pkg-config 自动给出头文件路径与链接库（opencv4 对应 OpenCV 4.x）</span>
+<span class="fn">g++</span> -std=c++11 first.cpp -o first $(<span class="fn">pkg-config</span> --cflags --libs opencv4)
+
+<span class="cmt"># 运行：把任意一张图片喂给它</span>
+./first lenna.jpg
+
+<span class="cmt"># 确认装的是哪个版本：OpenCV 4.x 系列（第 8 章从源码安装的版本）</span>
+<span class="fn">pkg-config</span> --modversion opencv4</code></pre>
+
+  <pre><code><span class="cmt">// version.cpp —— 用 CV_VERSION 宏在程序里自报版本</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/core/version.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"OpenCV "</span> <span class="op">&lt;&lt;</span> <span class="ann">CV_VERSION</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把 <code>imread</code>、<code>imshow</code>、<code>waitKey</code> 三个函数连起来想，就是一个"读-显-等"的最小循环：<strong>读</strong>把文件变成内存里的数字矩阵，<strong>显</strong>把矩阵画到屏幕，<strong>等</strong>让程序停下来等用户。任何图像程序——包括第 10 章的特征检测——都跑不出这个循环的变体。先把这个循环刻进脑子，后面的内容都是往循环里塞东西。</p>
+  </div>
+
+  <!-- ========== 9.2 Mat 的本质 ========== -->
+  <h2>9.2 Mat 的本质：头与数据</h2>
+
+  <p>第一性原理的第三问：<strong>cv::imread 返回的 Mat 到底是什么？</strong>官方文档《Mat - The Basic Image Container》说得很清楚：<strong>Mat 是一个由两部分组成的类——矩阵头（matrix header）和指向像素数据的指针</strong>。头里装着元信息：矩阵尺寸（行 rows、列 cols）、存储方式（type，下一节细讲）、数据地址（data 指针）和步长 step；真正占内存的像素数据则是独立于头的一大块内存。这个"头小数据大"的划分是关键洞察：头的大小固定，数据的大小随图像变化、通常比头大几个数量级。</p>
+
+  <p>为什么要拆成两半？因为图像处理程序要把图像传来传去，每次传参都复制整块像素数据，性能会灾难性地下降。OpenCV 的解法是<strong>引用计数（reference counting）</strong>：每个 Mat 有自己的头，但多个 Mat 可共享同一块像素数据——拷贝运算符只复制头和指针，不复制数据；每次拷贝头，数据引用计数加一，最后一个头销毁时数据才被释放（官方文档原话 "copy operators will only copy the headers and the pointer to the large matrix, not the data itself"）。所以 <code>cv::Mat B = A;</code> 之后，改 B 的像素也会改 A；要独立副本就用 <code>cv::Mat::clone()</code> 或 <code>cv::Mat::copyTo()</code>。另一个重要细节：<strong>彩色图在内存里按 BGR 顺序存储</strong>（蓝、绿、红），不是我们熟悉的 RGB——OpenCV 的祖传约定，忘了它，像素访问时会把红蓝颠倒。</p>
+
+  <pre><code><span class="cmt">// mat_info.cpp —— 拆开 Mat 的头，看看里面装着什么</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"rows    = "</span> <span class="op">&lt;&lt;</span> <span class="param">img</span>.rows   <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"cols    = "</span> <span class="op">&lt;&lt;</span> <span class="param">img</span>.cols   <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"channels= "</span> <span class="op">&lt;&lt;</span> <span class="param">img</span>.<span class="fn">channels</span>() <span class="op">&lt;&lt;</span> std::endl;
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"type    = "</span> <span class="op">&lt;&lt;</span> <span class="param">img</span>.<span class="fn">type</span>()    <span class="op">&lt;&lt;</span> std::endl;
+    <span class="cmt">// data 是像素数据首地址；空 Mat 的 data 为 nullptr</span>
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"data    = "</span> <span class="op">&lt;&lt;</span> (<span class="kw">void</span>*)<span class="param">img</span>.data <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 示例输出（数值因机器而异）：</span>
+<span class="cmt">// rows = 512, cols = 512, channels = 3, type = 16, data = 0x7f9c...</span>
+<span class="cmt">// type = 16 就是 CV_8UC3 的整数值——9.3 节解码它</span></code></pre>
+
+  <pre><code><span class="cmt">// copy_semantics.cpp —— 引用计数：拷贝头 vs 拷贝数据</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">A</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>);
+    <span class="type">cv::Mat</span> <span class="param">B</span> = <span class="param">A</span>;              <span class="cmt">// 只拷贝头：A、B 共享同一块像素数据</span>
+    <span class="type">cv::Mat</span> <span class="param">C</span> = <span class="param">A</span>.<span class="fn">clone</span>();      <span class="cmt">// 深拷贝：C 拥有独立的数据副本</span>
+
+    <span class="cmt">// 验证：把 B 的 (0,0) 像素改成白色</span>
+    <span class="param">B</span>.<span class="fn">at</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>(<span class="num">0</span>, <span class="num">0</span>) = <span class="type">cv::Vec3b</span>(<span class="num">255</span>, <span class="num">255</span>, <span class="num">255</span>);
+    <span class="cmt">// A 的同一个像素也变成白色（共享数据）；C 不受影响（独立副本）</span>
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> (<span class="kw">int</span>)<span class="param">A</span>.<span class="fn">at</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>(<span class="num">0</span>, <span class="num">0</span>)[<span class="num">0</span>] <span class="op">&lt;&lt;</span> <span class="str">" "</span>
+         <span class="op">&lt;&lt;</span> (<span class="kw">int</span>)<span class="param">C</span>.<span class="fn">at</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>(<span class="num">0</span>, <span class="num">0</span>)[<span class="num">0</span>] <span class="op">&lt;&lt;</span> std::endl;
+    <span class="cmt">// 输出：255 与原来的值（如 35）——证明共享与独立并存</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// roi.cpp —— 利用"头可共享"的特性，零拷贝截取感兴趣区域（ROI）</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>);
+    <span class="cmt">// Rect(x, y, 宽, 高)：新头只描述原图的一个子矩形，数据仍然共享</span>
+    <span class="type">cv::Rect</span> <span class="param">roi</span>(<span class="num">100</span>, <span class="num">100</span>, <span class="num">200</span>, <span class="num">200</span>);
+    <span class="type">cv::Mat</span> <span class="param">patch</span> = <span class="param">img</span>(<span class="param">roi</span>);
+    <span class="cmt">// 修改 patch 会改动 img 对应区域——想独立就用 patch.clone()</span>
+    <span class="fn">cv::imwrite</span>(<span class="str">"patch.png"</span>, <span class="param">patch</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 9.3 类型系统 ========== -->
+  <h2>9.3 类型系统：CV_8UC3 到底是什么意思</h2>
+
+  <p>第一性原理的第四问：<strong>一个像素在内存里占几个字节？</strong>这取决于 Mat 的类型。OpenCV 用一个宏体系来编码"位深 + 通道数"，格式是 <code>CV_&lt;位深&gt;&lt;类型&gt;C&lt;通道数&gt;</code>：8/16/32/64 指每个通道占多少位（bit）；U/S/F 指类型——U 是无符号整数（unsigned）、S 是有符号整数（signed）、F 是浮点数（float）；最后的 C 加数字是通道数，1 到 4 都有预定义。官方文档的例子：<strong>CV_8UC3 表示"8 位无符号整数、每个像素 3 个通道"</strong>，也就是最常见的 24 位彩色图（每像素 3 字节，BGR）。CV_8UC1 是 8 位灰度图，CV_32FC1 是单通道 32 位浮点图（很多算法中间结果用它），CV_8UC4 是带 Alpha 通道的图。</p>
+
+  <p>类型不只是给人类看的名字，它在内存里是一个整数编码，规则是：<strong>低 3 位放位深编号（CV_8U=0、CV_8S=1、CV_16U=2、CV_16S=3、CV_32S=4、CV_32F=5、CV_64F=6），高位移位放"通道数减一"</strong>。所以 CV_8UC3 的整数值是 (3-1) 左移 3 位加 0，等于 16——正是 9.2 节 type() 打出的 16。<code>img.type()</code> 拿整数，<code>img.channels()</code> 拿通道数，<code>img.depth()</code> 拿位深。类型错配是新手第一杀手：Mat 实际是 CV_8UC3，却用 <code>at&lt;float&gt;</code> 去读，读出来的是把三个字节拼成浮点数的垃圾。理解了编码规则，这个坑就不攻自破。内存占用直接算：<strong>宽 × 高 × 通道数 × 每通道字节数</strong>——1920×1080 的 CV_8UC3 图占 1920×1080×3 = 6220800 字节，约 5.9 MB。</p>
+
+  <pre><code><span class="cmt">// type_decode.cpp —— 把 type() 的整数按规则解码回人话</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> <span class="param">t</span> = <span class="ann">CV_8UC3</span>;
+    <span class="kw">int</span> <span class="param">depth</span>     = <span class="param">t</span> <span class="op">&amp;</span> <span class="num">7</span>;              <span class="cmt">// 低 3 位 = 位深编号</span>
+    <span class="kw">int</span> <span class="param">channels</span> = <span class="num">1</span> <span class="op">+</span> (<span class="param">t</span> <span class="op">&gt;&gt;</span> <span class="num">3</span>);        <span class="cmt">// 高位移 3 位 = 通道数减一</span>
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"CV_8UC3 = "</span> <span class="op">&lt;&lt;</span> <span class="param">t</span> <span class="op">&lt;&lt;</span> <span class="str">", depth="</span>
+         <span class="op">&lt;&lt;</span> <span class="param">depth</span> <span class="op">&lt;&lt;</span> <span class="str">", channels="</span> <span class="op">&lt;&lt;</span> <span class="param">channels</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="cmt">// 输出：CV_8UC3 = 16, depth=0, channels=3</span>
+
+    <span class="cmt">// 运行时自查：读进来的图是不是我预期的类型？</span>
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+    <span class="kw">if</span> (<span class="param">img</span>.<span class="fn">type</span>() <span class="op">!=</span> <span class="ann">CV_8UC3</span>) {
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"类型不对，预期 CV_8UC3"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <table>
+    <tr><th>类型宏</th><th>含义</th><th>每像素字节数</th><th>典型用途</th></tr>
+    <tr><td>CV_8UC1</td><td>8 位无符号，单通道</td><td>1</td><td>灰度图、二值掩膜</td></tr>
+    <tr><td>CV_8UC3</td><td>8 位无符号，三通道 BGR</td><td>3</td><td>最常见彩色图</td></tr>
+    <tr><td>CV_8UC4</td><td>8 位无符号，四通道 BGRA</td><td>4</td><td>带透明通道</td></tr>
+    <tr><td>CV_16UC1</td><td>16 位无符号，单通道</td><td>2</td><td>深度图（0-65535）</td></tr>
+    <tr><td>CV_32FC1</td><td>32 位浮点，单通道</td><td>4</td><td>算法中间结果、滤波核</td></tr>
+    <tr><td>CV_64FC1</td><td>64 位浮点，单通道</td><td>8</td><td>高精度计算（相机标定）</td></tr>
+  </table>
+
+  <pre><code><span class="cmt">// create_mat.cpp —— 亲手造一个 Mat，而不是只靠 imread</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// 全黑图像：3 行 4 列、3 通道，初始化为全 0（黑色）</span>
+    <span class="type">cv::Mat</span> <span class="param">black</span> = <span class="type">cv::Mat</span>::<span class="fn">zeros</span>(<span class="num">3</span>, <span class="num">4</span>, <span class="ann">CV_8UC3</span>);
+
+    <span class="cmt">// 全白图像：Scalar(B, G, R) = (255, 255, 255)</span>
+    <span class="type">cv::Mat</span> <span class="param">white</span>(<span class="num">3</span>, <span class="num">4</span>, <span class="ann">CV_8UC3</span>, <span class="type">cv::Scalar</span>(<span class="num">255</span>, <span class="num">255</span>, <span class="num">255</span>));
+
+    <span class="cmt">// Mat::ones 造全 1 矩阵；Mat::eye 造单位矩阵（适合数学运算）</span>
+    <span class="type">cv::Mat</span> <span class="param">one</span> = <span class="type">cv::Mat</span>::<span class="fn">ones</span>(<span class="num">3</span>, <span class="num">3</span>, <span class="ann">CV_32FC1</span>);
+    <span class="fn">cv::imwrite</span>(<span class="str">"black.png"</span>, <span class="param">black</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 9.4 像素访问三式 ========== -->
+  <h2>9.4 像素访问三式：at、ptr 与迭代器</h2>
+
+  <p>第一性原理的第五问：<strong>拿到 Mat 之后，怎么读写每一个像素？</strong>官方教程《How to scan images》给了三种方式并附实测性能对比。第一种是 <code>at&lt;T&gt;(row, col)</code>：<strong>随机访问</strong>，按行列坐标现场计算地址并返回引用，官方文档说它"为了随机访问单个元素而设计"；debug 模式下会做越界检查，最安全也最慢。第二种是 <code>ptr&lt;T&gt;(row)</code>：<strong>按行取指针</strong>，先拿某行首地址，再用 C 风格 <code>[]</code> 下标扫过去；官方文档称它 "the efficient way"，是最快的通用扫描方式。第三种是迭代器 <code>MatIterator_&lt;T&gt;</code>：用 <code>begin()</code>/<code>end()</code> 像 STL 容器一样遍历，自动跳过行尾间隙，比 ptr 略慢但更安全、代码更优雅。</p>
+
+  <p>三种方式怎么选？看场景：<strong>全图扫描选 ptr（或迭代器），随机改几个点选 at</strong>。官方教程用 2560×1600 彩色图实测（100 次平均）：指针方式 79.47 毫秒，迭代器 83.72 毫秒，at 随机访问 93.79 毫秒，而直接用 OpenCV 的 LUT 查表函数只要 32.58 毫秒——结论是"能调库函数就别自己写扫描"。另外两个细节：一是访问彩色图要用 <code>Vec3b</code>（三个 uchar 的短向量），下标 [0] 是蓝通道、[1] 绿、[2] 红，正是 9.2 节说的 BGR 顺序；二是多数图像在内存里<strong>连续存储</strong>（行间无空隙），用 <code>img.isContinuous()</code> 判断，连续时可以把整幅图当一维数组扫，省掉逐行取指针的开销。</p>
+
+  <pre><code><span class="cmt">// invert_ptr.cpp —— 指针方式：灰度图像素取反（最推荐的扫描方式）</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">void</span> <span class="fn">invert_gray</span>(<span class="type">cv::Mat</span> <span class="param">gray</span>) {
+    <span class="cmt">// 按行取指针，一行一行扫；取反 = 255 减原值</span>
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">r</span> = <span class="num">0</span>; <span class="param">r</span> <span class="op">&lt;</span> <span class="param">gray</span>.rows; <span class="op">++</span><span class="param">r</span>) {
+        <span class="type">uchar</span>* <span class="param">p</span> = <span class="param">gray</span>.<span class="fn">ptr</span><span class="op">&lt;</span><span class="type">uchar</span><span class="op">&gt;</span>(<span class="param">r</span>);
+        <span class="kw">for</span> (<span class="kw">int</span> <span class="param">c</span> = <span class="num">0</span>; <span class="param">c</span> <span class="op">&lt;</span> <span class="param">gray</span>.cols; <span class="op">++</span><span class="param">c</span>) {
+            <span class="param">p</span>[<span class="param">c</span>] = <span class="num">255</span> <span class="op">-</span> <span class="param">p</span>[<span class="param">c</span>];
+        }
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">// invert_at.cpp —— at 方式：彩色图像素取反，随机访问风格</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">void</span> <span class="fn">invert_color_at</span>(<span class="type">cv::Mat</span> <span class="param">img</span>) {
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">r</span> = <span class="num">0</span>; <span class="param">r</span> <span class="op">&lt;</span> <span class="param">img</span>.rows; <span class="op">++</span><span class="param">r</span>) {
+        <span class="kw">for</span> (<span class="kw">int</span> <span class="param">c</span> = <span class="num">0</span>; <span class="param">c</span> <span class="op">&lt;</span> <span class="param">img</span>.cols; <span class="op">++</span><span class="param">c</span>) {
+            <span class="type">cv::Vec3b</span> <span class="param">px</span> = <span class="param">img</span>.<span class="fn">at</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>(<span class="param">r</span>, <span class="param">c</span>);
+            <span class="param">px</span>[<span class="num">0</span>] = <span class="num">255</span> <span class="op">-</span> <span class="param">px</span>[<span class="num">0</span>];   <span class="cmt">// 蓝通道</span>
+            <span class="param">px</span>[<span class="num">1</span>] = <span class="num">255</span> <span class="op">-</span> <span class="param">px</span>[<span class="num">1</span>];   <span class="cmt">// 绿通道</span>
+            <span class="param">px</span>[<span class="num">2</span>] = <span class="num">255</span> <span class="op">-</span> <span class="param">px</span>[<span class="num">2</span>];   <span class="cmt">// 红通道</span>
+            <span class="param">img</span>.<span class="fn">at</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>(<span class="param">r</span>, <span class="param">c</span>) = <span class="param">px</span>;
+        }
+    }
+}
+
+<span class="cmt">// invert_iter.cpp —— 迭代器方式：同一件事的 STL 风格写法</span>
+<span class="kw">void</span> <span class="fn">invert_color_iter</span>(<span class="type">cv::Mat</span> <span class="param">img</span>) {
+    <span class="type">cv::MatIterator_</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span> <span class="param">it</span>  = <span class="param">img</span>.<span class="fn">begin</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>();
+    <span class="type">cv::MatIterator_</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span> <span class="param">end</span> = <span class="param">img</span>.<span class="fn">end</span><span class="op">&lt;</span><span class="type">cv::Vec3b</span><span class="op">&gt;</span>();
+    <span class="kw">for</span> (<span class="op">;</span> <span class="param">it</span> <span class="op">!=</span> <span class="param">end</span>; <span class="op">++</span><span class="param">it</span>) {
+        <span class="type">cv::Vec3b</span> <span class="param">px</span> = <span class="op">*</span><span class="param">it</span>;
+        <span class="op">*</span><span class="param">it</span> = <span class="type">cv::Vec3b</span>(<span class="num">255</span> <span class="op">-</span> <span class="param">px</span>[<span class="num">0</span>], <span class="num">255</span> <span class="op">-</span> <span class="param">px</span>[<span class="num">1</span>], <span class="num">255</span> <span class="op">-</span> <span class="param">px</span>[<span class="num">2</span>]);
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt">// invert_fast.cpp —— 连续存储优化：把整幅图当一维数组扫</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+
+<span class="kw">void</span> <span class="fn">invert_fast</span>(<span class="type">cv::Mat</span> <span class="param">img</span>) {
+    <span class="kw">if</span> (<span class="op">!</span><span class="param">img</span>.<span class="fn">isContinuous</span>()) {      <span class="cmt">// 不连续就退回逐行版本</span>
+        <span class="fn">invert_fast</span>(<span class="param">img</span>.<span class="fn">clone</span>());  <span class="cmt">// 简化演示：深拷贝后必然连续</span>
+        <span class="kw">return</span>;
+    }
+    <span class="cmt">// data 是首像素地址；连续时 rows*cols*3 个 uchar 首尾相连</span>
+    <span class="type">uchar</span>* <span class="param">p</span> = <span class="param">img</span>.data;
+    <span class="type">size_t</span> <span class="param">total</span> = (<span class="type">size_t</span>)<span class="param">img</span>.rows <span class="op">*</span> <span class="param">img</span>.cols <span class="op">*</span> <span class="param">img</span>.<span class="fn">channels</span>();
+    <span class="kw">for</span> (<span class="type">size_t</span> <span class="param">i</span> = <span class="num">0</span>; <span class="param">i</span> <span class="op">&lt;</span> <span class="param">total</span>; <span class="op">++</span><span class="param">i</span>) {
+        <span class="param">p</span>[<span class="param">i</span>] = <span class="num">255</span> <span class="op">-</span> <span class="param">p</span>[<span class="param">i</span>];
+    }
+</code></pre>
+
+<!-- ========== 9.5 图像保存 ========== -->
+  <h2>9.5 图像保存：imwrite 与内存编解码</h2>
+
+  <p>处理的中间结果怎么落盘？第一性原理的第六问：<strong>写文件需要知道什么？</strong>答案是格式——而 <code>cv::imwrite</code> 的判断依据是<strong>文件扩展名</strong>：写 <code>.jpg</code> 按 JPEG 编码，写 <code>.png</code> 按 PNG 编码（官方文档原话 "the image format is determined by the file extension"）。它的签名是 <code>bool cv::imwrite(filename, img, params)</code>，返回 <code>bool</code> 表示是否成功——很多新手忽略这个返回值，磁盘写满、目录不可写时程序照跑，文件根本没生成。第三个参数 <code>params</code> 是格式相关的编码参数：JPEG 用 <code>IMWRITE_JPEG_QUALITY</code>（0-100，默认 95），PNG 用 <code>IMWRITE_PNG_COMPRESSION</code>（0-9，默认 3，越大越压缩但越慢）。</p>
+
+  <p>与 imread/imwrite 配对的还有一对内存版函数：<code>cv::imencode</code> 把 Mat 编码进内存缓冲区（<code>std::vector&lt;uchar&gt;</code>），<code>cv::imdecode</code> 把内存缓冲区解码成 Mat。它们不走文件系统，适合把图片塞进网络请求、数据库或消息队列——服务端图像处理的典型姿势。这对函数还有实战用途：<code>cv::imread</code> 在 Windows 上遇到中文路径经常读失败（9.6 节细讲），绕开它的办法就是自己用 <code>std::ifstream</code> 把文件读成字节，再交给 <code>cv::imdecode</code>。同样的思路：想精细控制 JPEG 压缩质量、又不想污染磁盘，就 imencode 到内存再手动写文件。</p>
+
+  <pre><code><span class="cmt">// save.cpp —— 保存图像并检查返回值，同时控制编码质量</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>);
+
+    <span class="cmt">// JPEG：质量 90（质量越高文件越大）；扩展名决定编码格式</span>
+    std::<span class="type">vector</span><span class="op">&lt;</span><span class="kw">int</span><span class="op">&gt;</span> <span class="param">jpg_params</span> = {<span class="ann">cv::IMWRITE_JPEG_QUALITY</span>, <span class="num">90</span>};
+    <span class="kw">bool</span> <span class="param">ok1</span> = <span class="fn">cv::imwrite</span>(<span class="str">"out_q90.jpg"</span>, <span class="param">img</span>, <span class="param">jpg_params</span>);
+
+    <span class="cmt">// PNG：压缩级别 9（最大压缩，适合无损场景）</span>
+    std::<span class="type">vector</span><span class="op">&lt;</span><span class="kw">int</span><span class="op">&gt;</span> <span class="param">png_params</span> = {<span class="ann">cv::IMWRITE_PNG_COMPRESSION</span>, <span class="num">9</span>};
+    <span class="kw">bool</span> <span class="param">ok2</span> = <span class="fn">cv::imwrite</span>(<span class="str">"out.png"</span>, <span class="param">img</span>, <span class="param">png_params</span>);
+
+    <span class="kw">if</span> (<span class="op">!</span><span class="param">ok1</span> <span class="op">||</span> <span class="op">!</span><span class="param">ok2</span>) {        <span class="cmt">// 返回值必须检查！</span>
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"保存失败"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"保存成功"</span> <span class="op">&lt;&lt;</span> std::endl;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// memio.cpp —— 不落盘：内存里完成编码/解码（服务端传图的标准姿势）</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>vector<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>);
+
+    <span class="cmt">// 编码：Mat -&gt; 内存字节（比如准备发 HTTP 响应）</span>
+    std::<span class="type">vector</span><span class="op">&lt;</span><span class="type">uchar</span><span class="op">&gt;</span> <span class="param">buf</span>;
+    <span class="fn">cv::imencode</span>(<span class="str">".jpg"</span>, <span class="param">img</span>, <span class="param">buf</span>);   <span class="cmt">// 注意：扩展名写在第一个参数</span>
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> <span class="str">"JPEG 字节数: "</span> <span class="op">&lt;&lt;</span> <span class="param">buf</span>.<span class="fn">size</span>() <span class="op">&lt;&lt;</span> std::endl;
+
+    <span class="cmt">// 解码：内存字节 -&gt; Mat（比如从网络请求里收到图片）</span>
+    <span class="type">cv::Mat</span> <span class="param">decoded</span> = <span class="fn">cv::imdecode</span>(<span class="param">buf</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+    <span class="kw">if</span> (<span class="param">decoded</span>.<span class="fn">empty</span>()) {
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"解码失败"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="fn">cv::imwrite</span>(<span class="str">"roundtrip.png"</span>, <span class="param">decoded</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <!-- ========== 9.6 常见错误 ========== -->
+  <h2>9.6 常见错误与排错手册</h2>
+
+  <p>第一性原理的最后一问：<strong>读图失败时，OpenCV 会怎么"通知"你？</strong>答案可能反直觉：<code>cv::imread</code> <strong>不抛异常</strong>，路径写错、文件损坏、格式不支持时，它只返回一个空 Mat（data 指针为空）。所以第一条排错铁律是：<strong>imread 之后立刻检查 <code>img.empty()</code></strong>，9.1 节已示范。常见读图失败原因有三类：路径不对（相对路径的工作目录和你想的不一样）、文件不是 OpenCV 支持的格式、以及中文路径。第三类在 Windows 上尤其常见：imread 内部走 C 的 <code>fopen</code>，对非 ASCII 路径支持很差；Linux/macOS 的 UTF-8 路径一般没问题（官方维护者在 GitHub issue #4292 里确认过）。绕法就是 9.5 节提过的：用 <code>std::ifstream</code> 读成字节数组，再 <code>cv::imdecode</code>。</p>
+
+  <p>第二个高频坑是<strong>类型错配</strong>：用 <code>at&lt;float&gt;</code> 读 CV_8UC3 的图，或反过来用 <code>at&lt;uchar&gt;</code> 读 CV_32FC1——读出来全是垃圾值，还不报错。规则：<code>at</code> 的模板参数必须和 Mat 类型一致（彩色图用 <code>Vec3b</code>，灰度图用 <code>uchar</code>，浮点图用 <code>float</code>），不确定先 <code>type()</code>/<code>channels()</code> 自查。第三个坑是<strong>无显示器环境跑 GUI 函数</strong>：素材场景是 Linux 服务器，通常没有 X 显示，<code>cv::imshow</code>/<code>cv::waitKey</code> 会失败或挂起——服务端程序用 imwrite/imencode 输出结果，把 imshow 留给有桌面的调试机。第四个坑是 9.2 节的<strong>浅拷贝陷阱</strong>：<code>Mat B = A</code> 后以为改了 B 不影响 A，结果共享数据、互相污染——需要独立数据就 clone。</p>
+
+  <pre><code><span class="cmt">// robust_load.cpp —— 中文路径的通用绕法：ifstream + imdecode</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>fstream<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>vector<span class="op">&gt;</span>
+
+<span class="type">cv::Mat</span> <span class="fn">load_any_path</span>(<span class="kw">const</span> std::<span class="type">string</span>&amp; <span class="param">path</span>) {
+    <span class="cmt">// 1) 先用标准库读文件（标准库能正确处理 UTF-8 路径）</span>
+    std::<span class="fn">ifstream</span> <span class="param">f</span>(<span class="param">path</span>, std::ios::binary);
+    <span class="kw">if</span> (<span class="op">!</span><span class="param">f</span>) <span class="kw">return</span> <span class="type">cv::Mat</span>();
+    std::<span class="type">vector</span><span class="op">&lt;</span><span class="type">uchar</span><span class="op">&gt;</span> <span class="param">buf</span>((std::<span class="fn">istreambuf_iterator</span><span class="op">&lt;</span><span class="kw">char</span><span class="op">&gt;</span>(<span class="param">f</span>)),
+                                std::<span class="fn">istreambuf_iterator</span><span class="op">&lt;</span><span class="kw">char</span><span class="op">&gt;</span>());
+    <span class="cmt">// 2) 字节交给 imdecode，绕开 imread 的路径问题</span>
+    <span class="kw">return</span> <span class="fn">cv::imdecode</span>(<span class="param">buf</span>, <span class="ann">cv::IMREAD_COLOR</span>);
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">load_any_path</span>(<span class="str">"测试图片/合影.jpg"</span>);
+    <span class="kw">if</span> (<span class="param">img</span>.<span class="fn">empty</span>()) {
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"读图失败"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt">// type_guard.cpp —— 类型自查 + 空指针防护的完整范式</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>opencv2/opencv.hpp<span class="op">&gt;</span>
+<span class="kw">#include</span> <span class="op">&lt;</span>iostream<span class="op">&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">cv::Mat</span> <span class="param">img</span> = <span class="fn">cv::imread</span>(<span class="str">"lenna.jpg"</span>, <span class="ann">cv::IMREAD_GRAYSCALE</span>);
+
+    <span class="cmt">// 防护 1：空 Mat 直接退，别碰 data 指针</span>
+    <span class="kw">if</span> (<span class="param">img</span>.<span class="fn">empty</span>()) {
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"空 Mat，data 为 nullptr"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="cmt">// 防护 2：灰度图必须用 uchar 访问，彩色图必须用 Vec3b</span>
+    <span class="kw">if</span> (<span class="param">img</span>.<span class="fn">type</span>() <span class="op">!=</span> <span class="ann">CV_8UC1</span>) {
+        std::<span class="fn">cerr</span> <span class="op">&lt;&lt;</span> <span class="str">"类型不是 CV_8UC1，别用 at&lt;uchar&gt; 乱读"</span> <span class="op">&lt;&lt;</span> std::endl;
+        <span class="kw">return</span> <span class="num">1</span>;
+    }
+    <span class="type">uchar</span> <span class="param">v</span> = <span class="param">img</span>.<span class="fn">at</span><span class="op">&lt;</span><span class="type">uchar</span><span class="op">&gt;</span>(<span class="num">0</span>, <span class="num">0</span>);
+    std::<span class="fn">cout</span> <span class="op">&lt;&lt;</span> (<span class="kw">int</span>)<span class="param">v</span> <span class="op">&lt;&lt;</span> std::endl;   <span class="cmt">// uchar 直接输出会变字符，转 int</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+</code></pre>
+
+<p>这一章我们完成了从"装好库"到"能用库"的跨越：跑通了读-显-等的最小循环（9.1），拆开了 Mat 的头与数据（9.2），解码了 CV_8UC3 的类型密码（9.3），比较了三种像素访问（9.4），学会了 imwrite 与内存编解码（9.5），最后把新手必踩的坑排了一遍（9.6）。三个钩子留给后面：一是本章的 Mat 浅拷贝与引用计数，是第 15 章"图像内存占用计算"的基础；二是"像素级操作慢、能调库就别手写"这个结论，第 11 章会用 GPU 加速把它推到极致；三是最重要的——<strong>像素访问、Mat 类型、ROI，正是第 10 章特征检测（Harris 角点与 Canny 边缘）的输入输出载体</strong>。Mat 就是你手里那张"数字地图"，接下来的章节全是拿这张地图做文章。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对错判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法对错：① imread 读图失败时会抛出异常；② CV_8UC3 表示 8 位有符号整数、每像素 3 个通道；③ 彩色图在 OpenCV 内存里按 RGB 顺序存储；④ Mat B = A 之后，修改 B 的像素会同时改变 A；⑤ waitKey(0) 表示无限等待用户按键。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 9.1 节的"读-显-等"循环、9.2 节的引用计数与 BGR 顺序、9.3 节的类型命名规则。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 错——imread 不抛异常，读失败只返回空 Mat，要靠 empty() 检查；② 错——U 是无符号（unsigned），CV_8UC3 是 8 位无符号三通道；③ 错——OpenCV 按 BGR 顺序存储，这是祖传约定（9.2 节）；④ 对——Mat B = A 只拷贝头、共享像素数据，是浅拷贝，改 B 会影响 A；⑤ 对——waitKey 的参数是毫秒数，0 表示无限等待（官方文档 "Zero means to wait forever"）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：类型与内存 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 写出 CV_16UC1 的含义，并说明它每像素占几个字节、适合存什么图像；② 计算一张 1920×1080 的 CV_8UC3 图像占多少字节（约多少 MB）；③ type() 返回 16 时，按 9.3 节的编码规则反推出位深与通道数。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>命名规则是 CV_&lt;位深&gt;&lt;类型&gt;C&lt;通道数&gt;；内存 = 宽 × 高 × 通道 × 每通道字节；编码规则是低 3 位位深、高位移 3 位为通道数减一。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 16 位无符号整数、单通道，每像素 2 字节，适合存深度图（0-65535 级）；② 1920×1080×3×1 = 6220800 字节，约 5.9 MB；③ 16 = (3-1) 左移 3 位 + 0，位深编号 0 即 CV_8U，通道数 3，所以是 CV_8UC3。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：像素访问选型 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>① 官方实测中三种像素访问方式的性能排序是什么？为什么 at 最慢？② 什么场景下迭代器比 ptr 更合适？③ 为什么官方教程的结论是"能调库函数（如 LUT）就别自己写扫描"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>性能数字在 9.4 节正文里（79.47 / 83.72 / 93.79 / 32.58 毫秒）；at 在 debug 模式有越界检查；LUT 用了多线程（Intel TBB）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① ptr（79.47ms）快于迭代器（83.72ms）快于 at（93.79ms）；at 慢是因为它每访问一个像素都现场计算地址，debug 模式还做越界检查；② 追求代码安全与可读性、不在乎那几毫秒时，迭代器自动处理跨行间隙，更不易写错；③ 库函数经过多线程优化且实现经过千锤百炼（LUT 仅 32.58ms），性能更好、代码更少、错误更少。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：综合实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个完整程序：读入一张彩色图 → 转成灰度图（提示：cv::cvtColor，参数 cv::COLOR_BGR2GRAY）→ 用指针方式把灰度图取反 → 保存为 PNG。要求：imread 后检查 empty()；imwrite 后检查返回值；如果图片在 Windows 中文路径下，给出绕过 imread 的方案。延伸思考：为什么服务端程序里应该用 imwrite/imencode 而不是 imshow？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按"读-检查-处理-存-检查"五步组织；中文路径方案在 9.6 节；服务端无显示器的问题在 9.6 节排错表最后一行。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>流程：① imread 读图，empty() 检查；② cvtColor(img, gray, cv::COLOR_BGR2GRAY) 转灰度；③ 双循环 + ptr&lt;uchar&gt;(r) 按行取反（p[c] = 255 - p[c]）；④ imwrite("gray_inv.png", gray)，检查 bool 返回值；⑤ Windows 中文路径时改用 ifstream 读字节 + imdecode。延伸：服务端通常没有 X 显示，imshow/waitKey 会失败或挂起；imwrite 落盘、imencode 进内存才是服务端输出结果的正确姿势——这也呼应了本教程素材里"Linux 服务端转码预览"的真实场景。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="bottom-nav" id="bottom-nav"></div>
+</div>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>
