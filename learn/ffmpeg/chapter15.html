@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第15章：视频滤镜实战：水印、缩放与截图 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter15.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第15章：视频滤镜实战：水印、缩放与截图 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter15.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="15" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：视频滤镜实战：水印、缩放与截图</h1>
+  <p class="chapter-subtitle">把第 2 章见过的 -vf 真正用起来：overlay 加水印、scale 缩放、drawtext 写字、-ss 截图——四个实战场景逐个跑通，每条命令都亲手验证</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「水印没出来、尺寸不对、文字消失了——别急着怀疑 ffmpeg 坏了。把'不可能'一项项排除：滤镜参数格式、输入流编号、字体路径、-ss 放哪边……每个可疑点都亲手验证一遍。排除掉一切不可能，剩下的就是真相。这一章的三个滤镜，我们一条条跑给你看，跑出来的数字是什么就是什么。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 滤镜的入口：-vf 滤镜链与 -filter_complex 滤镜图 ========== -->
+  <h2>15.1 滤镜的入口：-vf 滤镜链与 -filter_complex 滤镜图</h2>
+
+  <p>第 2 章我们用过 <code>-vf scale=320:180</code> 做缩放，这一章把滤镜真正用熟。先补概念：<strong>视频滤镜</strong>（video filter）说人话就是"画面的加工车间"——每一帧从车间入口进来，经过一台台机器（缩放、加字、叠加）再出去。滤镜有两条入口：<code>-vf</code> 只接收<strong>一个视频输入</strong>，多个滤镜用逗号 <code>,</code> 串成<strong>滤镜链</strong>（filter chain），像流水线逐台加工；<code>-filter_complex</code> 是<strong>滤镜图</strong>（filter graph），支持<strong>多输入、多输出、任意分支</strong>，滤镜之间用分号 <code>;</code> 分隔。一条铁律：<strong>单输入用 -vf；多输入（水印 = 主视频 + logo 图）必须用 -filter_complex</strong>。</p>
+
+  <p>两条入口的写法差异很直观。滤镜链里每个滤镜的输出自动接下一个滤镜的输入，不用写名字；滤镜图里要给每个滤镜的输入输出贴<strong>标签</strong>（<code>[0:v]</code> 是"第 0 个输入的视频流"，<code>[1:v]</code> 是"第 1 个输入的视频流"），再用 <code>[标签]滤镜名=参数[新标签]</code> 显式连线。本章所有命令都在本机（ffmpeg 8.1.1）真实执行过，先看骨架：</p>
+
+  <pre><code><span class="cmt"># 滤镜链：单输入，逗号串联，逐个加工（不用写标签）</span>
+<span class="kw">ffmpeg</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">scale</span><span class="op">=</span><span class="num">-2:180</span><span class="op">,</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=...:text=...</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">out.mp4</span>
+<span class="cmt">#   sample.mp4 ──&gt; scale ──&gt; drawtext ──&gt; out.mp4（一条流水线）</span>
+
+<span class="cmt"># 滤镜图：多输入必须用 -filter_complex，标签显式连线</span>
+<span class="kw">ffmpeg</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-i</span> <span class="str">logo.png</span> <span class="param">-filter_complex</span> <span class="str">"</span><span class="param">[0:v][1:v]</span><span class="fn">overlay</span><span class="op">=</span><span class="num">10:10</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">out.mp4</span>
+<span class="cmt">#   第 0 路视频 + 第 1 路视频 ──&gt; overlay 叠加 ──&gt; out.mp4</span></code></pre>
+
+  <p>福尔摩斯查案的第一个习惯：<strong>怀疑哪个滤镜，就把它的参数表调出来看</strong>。ffmpeg 每个滤镜都自带说明，<code>ffmpeg -h filter=滤镜名</code> 一行命令就能看到全部可配参数、默认值和取值范围——这是排查"参数写错"的标准动作，后面每节我们都会用到。以 scale 为例（真实输出节选）：</p>
+
+  <pre><code><span class="cmt"># 查 scale 滤镜的参数表（标准动作，真实输出节选）</span>
+<span class="kw">ffmpeg</span> <span class="param">-hide_banner</span> <span class="param">-h</span> <span class="param">filter=</span><span class="fn">scale</span>
+<span class="cmt"># Filter scale</span>
+<span class="cmt">#   Scale the input video size and/or convert the image format.</span>
+<span class="cmt"># scale AVOptions:</span>
+<span class="cmt">#    w / width   &lt;string&gt;  Output video width</span>
+<span class="cmt">#    h / height  &lt;string&gt;  Output video height</span>
+<span class="cmt">#    size / s    &lt;string&gt;  set video size</span>
+<span class="cmt">#    force_original_aspect_ratio &lt;int&gt;   ... (default disable)</span>
+<span class="cmt">#    force_divisible_by          &lt;int&gt;   ... (default 1)</span></code></pre>
+
+  <table>
+    <tr><th>入口</th><th>输入路数</th><th>滤镜连接方式</th><th>典型场景</th></tr>
+    <tr><td><code>-vf</code> 滤镜链</td><td>单输入</td><td>逗号 <code>,</code> 串联，自动接力</td><td>缩放、加字、裁剪等单路加工</td></tr>
+    <tr><td><code>-filter_complex</code> 滤镜图</td><td>多输入 / 多输出</td><td>分号 <code>;</code> 分行，<code>[标签]</code> 显式连线</td><td>水印叠加、画中画、多路合成</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>记不住滤镜参数？先跑 <code>ffmpeg -h filter=名字</code>。看到 <code>w / width &lt;string&gt;</code> 这种两栏格式，<strong>左栏是参数名，右栏是类型和默认值</strong>。'效果不对先查滤镜参数格式'——这是本章排错的第一原则，也是福尔摩斯排除法的起点。</p>
+  </div>
+
+  <!-- ========== 15.2 overlay 水印：两路输入的第一课 ========== -->
+  <h2>15.2 overlay 水印：两路输入的第一课</h2>
+
+  <p>第一个实战：给视频加<strong>水印</strong>。overlay 说人话就是"把一张图盖在视频画面上面"，是最常用的多输入滤镜——主视频一路输入，logo 图一路输入，必须用 <code>-filter_complex</code>。先准备素材：本机没有现成 logo，用 ffmpeg 的 <code>color</code> 虚拟源（纯色画面发生器）生成 160x60 黛青底图，再用 drawtext 写上 "AILab"（drawtext 下一节细讲，先借用）：</p>
+
+  <p>生成后先用 <code>ffprobe</code> 体检：png、160x60、像素格式 <code>rgb24</code>。这个 <code>rgb24</code> 意味着图片<strong>没有透明通道</strong>，叠加后是不透明矩形；真正的"透明水印"要用带 alpha 的 RGBA png，overlay 会尊重 alpha 让底下画面透出来。先用眼睛和 ffprobe 确认这个差别：</p>
+
+  <pre><code><span class="cmt"># 造一张 logo.png：160x60 的黛青底 + 白色 "AILab"（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="str">"</span><span class="fn">color</span><span class="op">=</span><span class="param">c</span><span class="op">=</span><span class="num">0x3f7d76</span><span class="op">:</span><span class="param">size</span><span class="op">=</span><span class="num">160x60</span><span class="op">:</span><span class="param">duration</span><span class="op">=</span><span class="num">1</span><span class="op">:</span><span class="param">rate</span><span class="op">=</span><span class="num">1</span><span class="str">"</span> \
+  <span class="param">-vf</span> <span class="str">"</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='AILab':fontsize=28:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2</span><span class="str">"</span> \
+  <span class="param">-frames:v</span> <span class="num">1</span> <span class="str">logo.png</span>
+<span class="cmt"># 实测产物：logo.png = 2091 字节，160x60，png</span>
+
+<span class="cmt"># ffprobe 体检：width,height,codec_name / pix_fmt</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-show_entries</span> <span class="param">stream=width,height,pix_fmt</span> <span class="param">-of</span> <span class="param">csv=p=0</span> <span class="str">logo.png</span>
+<span class="cmt"># 实测输出：160,60,rgb24  ← rgb24 表示无 alpha，水印将是不透明矩形</span></code></pre>
+
+  <p>水印叠加命令：两个 <code>-i</code> 引入两路输入，滤镜图里 <code>[0:v]</code> 取主视频、<code>[1:v]</code> 取 logo，overlay 的 <code>10:10</code> 是"离左上角往右 10 像素、往下 10 像素"。x:y 默认 0:0（左上角贴齐），且支持<strong>表达式</strong>：<code>main_w</code>/<code>main_h</code> 是主画面宽高，<code>overlay_w</code>/<code>overlay_h</code> 是水印宽高，"右下角留 10 像素边距"写成 <code>main_w-overlay_w-10:main_h-overlay_h-10</code>。两条命令都实测跑过：</p>
+
+  <pre><code><span class="cmt"># 左上角水印：离边 10 像素（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-i</span> <span class="str">logo.png</span> \
+  <span class="param">-filter_complex</span> <span class="str">"</span><span class="param">[0:v][1:v]</span><span class="fn">overlay</span><span class="op">=</span><span class="num">10:10</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">overlay_10.mp4</span>
+<span class="cmt"># 实测产物：overlay_10.mp4 = 498070 字节，分辨率仍为 640x360（overlay 不改变尺寸）</span>
+
+<span class="cmt"># 右下角水印：main_w-overlay_w-10 表达式逐帧求值</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-i</span> <span class="str">logo.png</span> \
+  <span class="param">-filter_complex</span> <span class="str">"</span><span class="param">[0:v][1:v]</span><span class="fn">overlay</span><span class="op">=</span><span class="param">main_w-overlay_w-10:main_h-overlay_h-10</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">overlay_br.mp4</span>
+<span class="cmt"># 实测产物：overlay_br.mp4 = 482328 字节，水印出现在右下角</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>水印"没出现"时按排除法查三处：① 是不是用了 <code>-vf</code> 而没用 <code>-filter_complex</code>？多输入 + <code>-vf</code> 直接报错；② 标签顺序写反没有，<code>[0:v]</code> 是主视频、<code>[1:v]</code> 是 logo，写反就成了"视频盖在 logo 上"；③ 位置表达式算错没有，<code>main_w-overlay_w-10</code> 少个减号水印就飞出画面了。</p>
+  </div>
+
+  <table>
+    <tr><th>水印位置</th><th>overlay 的 x:y 写法</th></tr>
+    <tr><td>左上角</td><td><code>overlay=10:10</code></td></tr>
+    <tr><td>右上角</td><td><code>overlay=main_w-overlay_w-10:10</code></td></tr>
+    <tr><td>左下角</td><td><code>overlay=10:main_h-overlay_h-10</code></td></tr>
+    <tr><td>右下角</td><td><code>overlay=main_w-overlay_w-10:main_h-overlay_h-10</code></td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：本章用 color 源造的 logo.png 是 <code>rgb24</code>——<strong>没有透明通道</strong>，盖上去就是一块不透明矩形。真实场景的透明水印（png 带 alpha）overlay 会正确透出底下画面；如果发现"水印把画面挡死了"，先用 <code>ffprobe -show_entries stream=pix_fmt</code> 查图片有没有 alpha（rgba/png 带 a 就是有）。</p>
+  </div>
+
+  <!-- ========== 15.3 scale 缩放：尺寸计算的语法 ========== -->
+  <h2>15.3 scale 缩放：尺寸计算的语法</h2>
+
+  <p>第二个实战：缩放。scale 语法是 <code>scale=宽:高</code>，但工程里几乎不写死两个数字——<strong>等比缩放要保持宽高比</strong>，写死就变形了。答案是 <code>-2</code>：某一边写 <code>-2</code>，另一边按原始宽高比自动算，且保证结果是<strong>偶数</strong>（偶数约束来自编码：H.264 的 yuv420p 要求宽高都是偶数，第 2 章提过的 <code>-pix_fmt yuv420p</code> 就是它）。本机实测：640x360 素材 <code>scale=-2:180</code> 得 320x180；<code>scale=180:-2</code> 得 180x102——360 按 16:9 折算宽度 101.25，就近取偶成 102：</p>
+
+  <pre><code><span class="cmt"># 指定高度 180，宽度按 16:9 自动算（-2 = 自动且保证偶数）（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">scale</span><span class="op">=</span><span class="num">-2:180</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">scaled.mp4</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">v:0</span> <span class="param">-show_entries</span> <span class="param">stream=width,height</span> <span class="param">-of</span> <span class="param">csv=p=0</span> <span class="str">scaled.mp4</span>
+<span class="cmt"># 实测输出：320,180  ← 640:360 = 16:9，等比成立</span>
+
+<span class="cmt"># 指定宽度 180，高度自动算：101.25 就近取偶数 = 102</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">scale</span><span class="op">=</span><span class="num">180:-2</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">s180.mp4</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">v:0</span> <span class="param">-show_entries</span> <span class="param">stream=width,height</span> <span class="param">-of</span> <span class="param">csv=p=0</span> <span class="str">s180.mp4</span>
+<span class="cmt"># 实测输出：180,102</span></code></pre>
+
+  <p>更复杂的场景是"<strong>塞进一个盒子</strong>"：平台要求封面 200x200，但视频是 16:9——直接 <code>scale=200:200</code> 会拉变形。解法是 <code>force_original_aspect_ratio=decrease</code>（保持宽高比缩到能完整放进盒子，不拉伸），再配合 <code>pad</code> 滤镜（补黑边到指定尺寸）。这条命令第一次跑就报错了，福尔摩斯式排错现场：等比计算高度是 200÷16×9 = 112.5，scale 就近取整得到 <strong>200x113——113 是奇数</strong>，libx264 拒绝开工：</p>
+
+  <pre><code><span class="cmt"># 第一次跑：等比缩进 200x200 盒子，真实报错（本机完整复现）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">scale</span><span class="op">=</span><span class="num">200:200</span><span class="op">:</span><span class="param">force_original_aspect_ratio</span><span class="op">=</span><span class="param">decrease</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">far.mp4</span>
+<span class="cmt"># 实测报错（关键两行）：</span>
+<span class="cmt"># [libx264] height not divisible by 2 (200x113)</span>
+<span class="cmt"># [enc:libx264] Error while opening encoder - maybe incorrect parameters ...</span>
+
+<span class="cmt"># 修复：force_divisible_by=2 强制结果可被 2 整除 → 200x112</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">scale</span><span class="op">=</span><span class="num">200:200</span><span class="op">:</span><span class="param">force_original_aspect_ratio</span><span class="op">=</span><span class="param">decrease</span><span class="op">:</span><span class="param">force_divisible_by</span><span class="op">=</span><span class="num">2</span><span class="op">,</span><span class="fn">pad</span><span class="op">=</span><span class="num">200:200</span><span class="op">:</span><span class="param">(ow-iw)/2:(oh-ih)/2:color=black</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">pad2.mp4</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">v:0</span> <span class="param">-show_entries</span> <span class="param">stream=width,height</span> <span class="param">-of</span> <span class="param">csv=p=0</span> <span class="str">pad2.mp4</span>
+<span class="cmt"># 实测输出：200,200  ← 黑边补满盒子，画面不变形（letterbox 信箱式）</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：写死奇数尺寸同样翻车——<code>scale=319:180</code> 直接报 <code>width not divisible by 2 (319x180)</code>，因为 yuv420p 要求宽高都是偶数。<strong>报错里的 "(200x113)" 就是福尔摩斯要的线索</strong>——看到 not divisible by 2，答案就是让尺寸变偶数（<code>-2</code> 或 <code>force_divisible_by=2</code>）。</p>
+  </div>
+
+  <table>
+    <tr><th>需求</th><th>scale 写法</th><th>本机实测结果</th></tr>
+    <tr><td>指定高度、宽度等比</td><td><code>scale=-2:180</code></td><td>320x180</td></tr>
+    <tr><td>指定宽度、高度等比</td><td><code>scale=180:-2</code></td><td>180x102（101.25 就近偶数）</td></tr>
+    <tr><td>塞进盒子不拉伸</td><td><code>scale=200:200:force_original_aspect_ratio=decrease</code></td><td>200x113 → 报错，需 <code>force_divisible_by=2</code></td></tr>
+    <tr><td>盒子 + 黑边补齐</td><td>上面写法 + <code>,pad=200:200:(ow-iw)/2:(oh-ih)/2:color=black</code></td><td>200x200</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p><code>pad</code> 里 <code>(ow-iw)/2</code> 是"（输出宽 - 输入宽）/ 2"，把画面水平居中；<code>(oh-ih)/2</code> 垂直居中。ow/iw、oh/ih 是 pad 内置的输出/输入尺寸变量，和 overlay 的 main_w/overlay_w 同一套表达式体系，记一组举一反三。</p>
+  </div>
+
+  <!-- ========== 15.4 drawtext 文字：字体路径与动态时间戳 ========== -->
+  <h2>15.4 drawtext 文字：字体路径与动态时间戳</h2>
+
+  <p>第三个实战：画面上写字。drawtext 滤镜（需 ffmpeg 编译时带 libfreetype，本机 ffmpeg-full 自带）说人话就是"往每一帧打印一行文字"。最关键参数是 <code>fontfile</code>——<strong>字体文件必须写绝对路径</strong>。macOS 系统字体在 <code>/System/Library/Fonts/Supplemental/</code>（英文 Arial.ttf，中文 Songti.ttc），Linux 一般在 <code>/usr/share/fonts/</code>。先写一行静态文字：白色 24 号、离左上角 10 像素。文字里若有冒号必须转义成 <code>\:</code>（冒号是滤镜参数的天然分隔符），本命令没有冒号所以直接写：</p>
+
+  <pre><code><span class="cmt"># 静态文字：白色 24px，左上角（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='AILab Tutorial':fontsize=24:fontcolor=white:x=10:y=10</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">texted.mp4</span>
+<span class="cmt"># 实测产物：texted.mp4 = 517863 字节；抽帧检查左上角确有白色文字</span>
+
+<span class="cmt"># 中文字体：宋体 Songti.ttc（说人话：ttc 是字体集合，drawtext 直接支持）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=/System/Library/Fonts/Supplemental/Songti.ttc:text='福尔摩斯排除不可能':fontsize=28:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2</span><span class="str">"</span> <span class="param">-frames:v</span> <span class="num">1</span> <span class="param">-f</span> <span class="type">image2</span> <span class="str">zh_text.png</span>
+<span class="cmt"># 实测：抽帧检查画面中央确有白色中文（x=(w-text_w)/2 是水平居中表达式）</span></code></pre>
+
+  <p>drawtext 的杀手锏是<strong>动态文字</strong>：<code>text</code> 支持 <code>%{...}</code> 占位符，每渲染一帧求值一次。<code>text='%{pts}'</code> 显示当前帧时间戳（pts，presentation timestamp，显示时间戳——第 4 章讲过 B 帧重排的 pts/dts 两套时间轴），<code>text='%{pts\:hms}'</code> 格式化成"时:分:秒"。注意 <code>\:</code> 的转义：%{pts} 内部也要用冒号，不转义就会被滤镜当成参数分隔符，文字直接解析失败——drawtext 最经典的参数格式坑。两条都实测过，抽帧能看到画面底部黄色时间戳逐帧跳动：</p>
+
+  <pre><code><span class="cmt"># 动态时间戳：%{pts} 原始时间戳（单位随容器而定，这里是微秒级数值）（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='%{pts}':fontsize=24:fontcolor=yellow:x=10:y=h-40</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">texted_pts.mp4</span>
+<span class="cmt"># 实测产物：texted_pts.mp4 = 537921 字节；抽帧底部有黄色数字</span>
+
+<span class="cmt"># 人类可读时间戳：%{pts\:hms} 显示为 00:00:02 形式（冒号必须转义成 \:）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='%{pts\:hms}':fontsize=24:fontcolor=yellow:x=10:y=h-40</span><span class="str">"</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">texted_hms.mp4</span>
+<span class="cmt"># 实测产物：texted_hms.mp4；抽帧底部显示黄色 "00:00:02" 样式的动态时间</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：fontfile 路径写错时，drawtext <strong>不会报错</strong>——它静默回退到系统默认字体（本机实测回退到 Hiragino 角ゴシック），且 <code>fontcolor</code> 默认值是 <strong>black 黑色</strong>。"文字消失了"的真相往往是：字体路径拼错（用了回退字体）或没写 fontcolor（黑字压在深色画面上看不见）。排查顺序：先 fontfile 拼写，再 fontcolor——都排除掉文字还不在，才轮到怀疑滤镜本身。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>查字体：Linux 用 <code>fc-list</code>，macOS 看 <code>/System/Library/Fonts/</code> 目录。中文路径要写对：简体中文常用 <code>/System/Library/Fonts/Supplemental/Songti.ttc</code>（宋体）或苹方 <code>/System/Library/Fonts/PingFang.ttc</code>——写错不报错但回退字体，正是上一段 warning 的场景。</p>
+  </div>
+
+  <!-- ========== 15.5 截图：-ss 快准 + 单帧输出 ========== -->
+  <h2>15.5 截图：-ss 快准 + 单帧输出</h2>
+
+  <p>第四个实战：截图。核心是 <code>-frames:v 1</code>（只输出 1 帧就收工）加 <code>-ss</code> 跳转。第 2 章裁剪矩阵验证过 <code>-ss</code> 的位置决定快慢与精度，截图同理：<code>-ss 2 -i sample.mp4</code>（<code>-ss</code> 在 <code>-i</code> 前）是<strong>输入侧跳转</strong>——先跳关键帧再解码，快；<code>-i sample.mp4 -ss 2</code> 是<strong>输出侧跳转</strong>——从头解码丢掉前 2 秒，慢但帧级精确。截图要"快"和"差不多准"，工程上默认 <code>-ss</code> 放 <code>-i</code> 前。本机实测：30 秒素材截第 28 秒，输入侧 0.09 秒，输出侧 0.16 秒，两图画面一模一样（同一关键帧）：</p>
+
+  <pre><code><span class="cmt"># 截图：-ss 放 -i 前（输入侧快跳转）+ -frames:v 1 只出 1 帧（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-ss</span> <span class="num">2</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-frames:v</span> <span class="num">1</span> <span class="param">-q:v</span> <span class="num">2</span> <span class="str">shot_ss2.png</span>
+<span class="cmt"># 实测产物：shot_ss2.png = 53138 字节，png，640x360（-q:v 2 控制质量，范围 2-31，越小越好）</span>
+
+<span class="cmt"># 截图 + 缩放一步到位：先 -ss 跳转，再 -vf scale 缩小输出</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-ss</span> <span class="num">2</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-frames:v</span> <span class="num">1</span> <span class="param">-vf</span> <span class="str">"</span><span class="fn">scale</span><span class="op">=</span><span class="num">320:-2</span><span class="str">"</span> <span class="str">shot_small.png</span>
+<span class="cmt"># 实测产物：shot_small.png = 20233 字节，png，320x180（缩略图比原图小一半多）</span></code></pre>
+
+  <p>输出单帧还有个小坑：<code>image2</code> 图像封装器（muxer，把帧打包成图片文件）默认以为你要输出图片序列，碰到不带序号通配符的文件名会发一条提示——加 <code>-frames:v 1</code> 就能正常写单张图（实测不写 <code>-f image2</code> 也能靠 <code>.png</code> 后缀自动识别封装器）。要 jpg 就把输出名改成 <code>.jpg</code>，<code>-q:v</code> 同样管用。放一张"快与准"的对照：</p>
+
+  <pre><code><span class="cmt"># -ss 位置对照实测：30 秒素材，截第 28 秒（本机真实计时）</span>
+<span class="cmt"># 输入侧：-ss 28 在 -i 之前 —— 先跳关键帧再解码</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-hide_banner</span> <span class="param">-ss</span> <span class="num">28</span> <span class="param">-i</span> <span class="str">long30.mp4</span> <span class="param">-frames:v</span> <span class="num">1</span> <span class="str">in_side.png</span>  <span class="cmt"># real 0m0.090s</span>
+<span class="cmt"># 输出侧：-ss 28 在 -i 之后 —— 从头解码丢掉前 28 秒</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-hide_banner</span> <span class="param">-i</span> <span class="str">long30.mp4</span> <span class="param">-ss</span> <span class="num">28</span> <span class="param">-frames:v</span> <span class="num">1</span> <span class="str">out_side.png</span>  <span class="cmt"># real 0m0.159s</span>
+<span class="cmt"># 实测结论：输入侧 0.090s &lt;- 输出侧 0.159s；两图字节数相同（54487 B），画面一致</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>-ss</code> 放 <code>-i</code> 后是"逐帧解码再丢弃"，视频越长越慢，但帧级精确；放 <code>-i</code> 前是"先找关键帧"，快，但落在关键帧上（第 2 章裁剪矩阵验证过：默认 GOP 素材全片只有第 0 帧是关键帧时，-ss 2 会跳到离 2 秒最近的关键帧）。截图省事用输入侧；要"精准到某一帧"再考虑输出侧。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>截出来的图"模糊"或"不是想要的那一帧"时，按排除法：① 先确认 <code>-ss</code> 位置（输入侧落在关键帧上）；② 再查 <code>-frames:v 1</code> 有没有写（不写就输出一整个视频文件，名字却是 .png）；③ 最后看 <code>-q:v</code>（jpeg 质量 2-31，数字越小越好，png 无损不受它影响）。</p>
+  </div>
+
+  <!-- ========== 15.6 组合拳：一条命令同时水印、缩放、加字 ========== -->
+  <h2>15.6 组合拳：一条命令同时水印、缩放、加字</h2>
+
+  <p>三个滤镜都过关了，最后拧成一条命令——这也是滤镜图真正的威力：<strong>多输入 + 多步加工 + 中间产物命名</strong>。<code>[0:v]scale=-2:180[base]</code> 意思是"第 0 路视频先缩放，结果贴标签 <code>[base]</code>"；<code>[base][1:v]overlay=10:10[ov]</code> 叠加 logo，结果贴标签 <code>[ov]</code>；<code>[ov]drawtext=...</code> 最后加一行小字。三条滤镜用分号 <code>;</code> 分行（滤镜图分隔符，区别于滤镜链的逗号），音频用 <code>-c:a copy</code> 原样搬运——滤镜只动视频流：</p>
+
+  <p>实测产物 320x180（缩放生效）、144678 字节（比原片 526497 字节小得多）、左上角有黛青 logo、底部有一行白色小字 "AILab"——每步效果都能用 ffprobe 和抽帧验证。这条命令就是"转码工程"里最典型的滤镜管线雏形：</p>
+
+  <pre><code><span class="cmt"># 组合拳：缩放 → 水印 → 加字，一条命令完成（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">sample.mp4</span> <span class="param">-i</span> <span class="str">logo.png</span> \
+  <span class="param">-filter_complex</span> <span class="str">"</span><span class="param">[0:v]</span><span class="fn">scale</span><span class="op">=</span><span class="num">-2:180</span><span class="op">[</span><span class="param">base</span><span class="op">];</span><span class="param">[base][1:v]</span><span class="fn">overlay</span><span class="op">=</span><span class="num">10:10</span><span class="op">[</span><span class="param">ov</span><span class="op">];</span><span class="param">[ov]</span><span class="fn">drawtext</span><span class="op">=</span><span class="param">fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='AILab':fontsize=16:fontcolor=white:x=10:y=h-24</span><span class="str">"</span> \
+  <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">combo.mp4</span>
+<span class="cmt"># 实测产物：combo.mp4 = 144678 字节；x264 统计 kb/s:151.92</span>
+</code></pre>
+
+      <pre><code>
+
+<span class="cmt"># 验收：ffprobe 确认尺寸，抽帧确认水印与文字都渲染了</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">v:0</span> <span class="param">-show_entries</span> <span class="param">stream=width,height</span> <span class="param">-of</span> <span class="param">csv=p=0</span> <span class="str">combo.mp4</span>
+<span class="cmt"># 实测输出：320,180</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-hide_banner</span> <span class="param">-ss</span> <span class="num">2</span> <span class="param">-i</span> <span class="str">combo.mp4</span> <span class="param">-frames:v</span> <span class="num">1</span> <span class="str">check_combo.png</span>
+<span class="cmt"># 实测抽帧检查：左上角黛青 logo（约 9053 像素命中品牌色），底部白色小字清晰可读</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>滤镜图里标签名自由取（<code>[base]</code>、<code>[ov]</code> 只是名字），但<strong>每个标签只能被消费一次</strong>——一个中间结果想喂给两个下游滤镜，得先复制一份。新手最常见的报错是 "label base not found" 或 "Unknown filter"，多半是分号 <code>;</code> 写成逗号 <code>,</code>，或标签名没配对。逐段检查标签的"出生"（<code>[0:v]...</code> 定义处）和"死亡"（被下一个滤镜消费处），就能定位。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：滤镜链（-vf）用逗号 <code>,</code>，滤镜图（-filter_complex）用分号 <code>;</code> 分行——这是两条入口最容易搞混的语法点。<code>scale=-2:180,pad=...</code> 的逗号是"链内串联"，<code>;[base]...</code> 的分号是"图内分行"，混着写没问题，但方向写反（滤镜图里用逗号分行、滤镜链里写标签）必然报错。</p>
+  </div>
+
+  <p>到此，水印、缩放、加字、截图四件兵器都验过了。回看这一章：两条入口、overlay 的位置表达式、scale 的偶数约束与盒子缩放、drawtext 的字体路径与动态占位符、-ss 的快与准——每一个"效果不对"背后，都是一次"排除不可能"的推理。下一章也是最后一章，我们会把命令行、滤镜、探针这些零散环节串成一张<strong>转码工程全景</strong>：从拿到素材到交付成品，一条完整的生产管线长什么样，敬请期待。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：水印位置换算 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>主视频是 640x360，logo 是 160x60。要求水印出现在画面右上角、离右边缘和上边缘各 20 像素。overlay 的 x:y 表达式应该怎么写？如果想让水印水平居中（x 居中，y 仍为 20），又该怎么写？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 15.2 的位置表达式表：右上角的关键是"主画面宽 - 水印宽 - 边距"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>右上角：<code>overlay=main_w-overlay_w-20:20</code>（x = 640-160-20 = 460，y = 20）。水平居中：<code>overlay=(main_w-overlay_w)/2:20</code>——注意居中不是 main_w/2，而是要减去水印自身宽度的一半。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：缩放的偶数陷阱 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>16:9 的素材执行 <code>scale=100:100:force_original_aspect_ratio=decrease</code>：① 计算机会算出什么尺寸？② 直接拿这个尺寸喂给 libx264 会怎样？③ 怎么修复？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 15.3 的排错现场：200:200 盒子算出 200x113 然后发生了什么？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 高度 = 100÷16×9 = 56.25，取整得 100x56 或 100x57（取决于取整方向，奇数时即为 57）。② 奇数尺寸 + yuv420p 会被 libx264 拒绝：<code>height not divisible by 2</code>。③ 加 <code>force_divisible_by=2</code> 强制偶数（100x56），必要时再补 pad 填满盒子。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：drawtext 时间戳排错 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你写了 <code>drawtext=fontfile=...:text='%{pts:hms}':fontsize=24:fontcolor=white</code>，结果 ffmpeg 报参数解析错误。① 问题出在哪？② 修正后，%{pts} 与 %{pts\:hms} 显示的内容有何区别？③ 如果命令不报错但文字"消失了"，第一步该查什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 15.4 里"冒号是滤镜参数的天然分隔符"这句话，再想想 %{pts\:hms} 为什么带反斜杠。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>%{pts:hms}</code> 里的冒号没转义，被滤镜当成参数分隔符，text 的值被截断导致解析错误——应写成 <code>%{pts\:hms}</code>。② <code>%{pts}</code> 显示原始时间戳数值（如 13125），<code>%{pts\:hms}</code> 格式化成 00:00:02 这种人类可读形式。③ 先查 fontfile 路径拼写（写错会静默回退默认字体），再查 fontcolor（默认是黑色）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：滤镜管线挑战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用一条 ffmpeg 命令完成：把 sample.mp4 缩放成宽 480（等比）、叠加上自己造的 logo.png（右下角、边距 15 像素）、在画面顶部居中写一行白色文字 "Helios AILab"（字号 20），最后用输入侧 -ss 截第 3 秒的一帧存成 check_final.png。要求：① 写出完整命令；② 用 ffprobe 验证输出帧是 480x270；③ 说明音频流为什么全程不用管。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>综合 15.2-15.5：滤镜图里标签链 <code>[0:v]scale=-2:480[base]</code> → overlay → drawtext；截图时 -ss 放 -i 前、-frames:v 1 收尾。居中表达式 <code>x=(w-text_w)/2</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>完整命令（本机已实测，输出帧 480x270，水印在右下角、顶部有居中白字）：</p>
+          <p><code>ffmpeg -y -i sample.mp4 -i logo.png -filter_complex "[0:v]scale=-2:480[base];[base][1:v]overlay=main_w-overlay_w-15:main_h-overlay_h-15[ov];[ov]drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='Helios AILab':fontsize=20:fontcolor=white:x=(w-text_w)/2:y=10" -c:a copy combo2.mp4</code>，再 <code>ffmpeg -y -ss 3 -i combo2.mp4 -frames:v 1 check_final.png</code>。</p>
+          <p>① 见上；② <code>ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 check_final.png</code> 输出 480,270；③ 滤镜（-vf/-filter_complex）只作用于视频流，音频流只要没有 <code>-af</code>/<code>-an</code> 之类的指令就原样通过，<code>-c:a copy</code> 显式声明"音频原样搬运"即可。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

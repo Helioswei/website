@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第2章：命令行转码入门：-i / -c / -b / -vf - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter02.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第2章：命令行转码入门：-i / -c / -b / -vf - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter02.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="2" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：命令行转码入门：-i / -c / -b / -vf</h1>
+  <p class="chapter-subtitle">从一条命令的骨架出发，亲手跑通转码、流复制、码率控制、滤镜与裁剪——把 -i / -c / -b / -vf 四件工具打磨顺手，后面的活儿才做得漂亮</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「做木工，先磨斧子；做音视频，先练命令行。这一章我们不谈高深的编解码原理，只把最常用的四件家伙——<code>-i</code>、<code>-c</code>、<code>-b</code>、<code>-vf</code>——一样样打磨到顺手。每一条命令我都会亲手跑给你看，跑出来的数字是什么就是什么：器顺手了，活才漂亮。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 2.1 命令的骨架：输入、输出与加工参数 ========== -->
+  <h2>2.1 命令的骨架：输入、输出与加工参数</h2>
+
+  <p>上一章我们把 ffmpeg 三兄弟迎进了门：ffmpeg 转码、ffprobe 探针、ffplay 播放。从这一章开始，主角只有一个——ffmpeg 命令行。任何一条转码命令，骨架都是同一个：<code>ffmpeg [全局参数] -i 输入文件 [输入参数] -map 流选择 输出参数 输出文件</code>。说人话：ffmpeg 就是一台音视频加工流水线，输入文件从左边进来，经过你指定的加工步骤，成品从最右边出来。全命令只有一条铁律：<strong>输入文件用 -i 引入，输出文件永远写在最后</strong>——ffmpeg 靠"位置"区分角色：-i 前面的选项是全局的，-i 后面、输出文件前面的选项都是输出选项，而 -map 可以手动挑选要输出哪些流（默认全选，本章先不碰它）。</p>
+
+  <p>不给任何加工参数，ffmpeg 也能转码——比如 <code>ffmpeg -i in.mp4 out.avi</code> 会根据输出文件的后缀 <code>.avi</code> 自动挑一套编码器。但工程上没人依赖这种"猜后缀"的默认行为：后缀猜错、编码器不合适都会翻车。规范的写法是像下面这样，用 <code>-c</code> 显式指定编码器、用 <code>-pix_fmt</code> 指定像素格式（像素格式，说人话就是"每个像素用几个字节、颜色怎么排"），再用 <code>-y</code> 允许覆盖同名输出文件。先认识骨架，再认识零件：</p>
+
+  <pre><code><span class="cmt"># ffmpeg 命令的"工位布局"：一条转码命令的骨架</span>
+<span class="kw">ffmpeg</span> [全局参数] <span class="param">-i</span> 输入文件 [输入参数] <span class="param">-map</span> 流选择 输出参数 输出文件
+<span class="cmt">#   │        │         │           │         │          │        │</span>
+<span class="cmt">#   │        │         │           │         │          │        └─ 输出文件：压轴登场</span>
+<span class="cmt">#   │        │         │           │         │          └─ 输出参数：-c:v / -b:v / -vf / -r / -s ...</span>
+<span class="cmt">#   │        │         │           │         └─ -map：手动挑选要输出的流（默认全选）</span>
+<span class="cmt">#   │        │         │           └─ 输入参数：作用于输入流，如 -ss 指定从第几秒读起</span>
+<span class="cmt">#   │        │         └─ -i 输入文件：可以有多个（多输入剪辑、混流都靠它）</span>
+<span class="cmt">#   │        └─ 全局参数：-y 覆盖输出、-hide_banner 精简日志</span>
+<span class="cmt">#   └─ 可执行名：ffmpeg / ffprobe / ffplay</span></code></pre>
+
+  <p>光说不练假把式。本章所有命令都在本机（ffmpeg 8.1.1）真实执行过。第一步是造一份测试素材——用 ffmpeg 内置的 <code>lavfi</code>（虚拟输入设备，可以凭空生成音视频信号）生成 5 秒彩条画面加 440Hz 正弦音：</p>
+
+  <pre><code><span class="cmt"># 造一份测试素材：5 秒彩条 + 440Hz 正弦音（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">testsrc=duration=5:size=640x360:rate=25</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">sine=frequency=440:duration=5</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-pix_fmt</span> <span class="type">yuv420p</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">in.mp4</span>
+<span class="cmt"># 实测产物：80757 字节；视频 h264 640x360@25fps，音频 aac 44100Hz，时长 5.000 秒</span>
+
+<span class="cmt"># 最简规范转码：显式指定视频/音频编码器（-y 允许覆盖同名文件）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">out.mp4</span>
+<span class="cmt"># 实测输出节选（125 帧全部转完）：</span>
+<span class="cmt"># frame=  125 fps=0.0 q=-1.0 Lsize=      79KiB time=00:00:04.92 bitrate= 131.3kbits/s</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>带冒号的选项都是"按流指定"：<code>-c:v</code> 里的 <code>v</code> 是 video（视频流）、<code>-c:a</code> 里的 <code>a</code> 是 audio（音频流）、<code>-c:s</code> 里的 <code>s</code> 是 subtitle（字幕流）。以后你还会遇到 <code>-b:v / -b:a</code>、<code>-r:v / -r:a</code>……记住这个规律，一半选项都能举一反三。</p>
+  </div>
+
+  <table>
+    <tr><th>参数位置</th><th>作用</th><th>常见选项</th></tr>
+    <tr><td>全局（-i 之前）</td><td>影响整条命令的行为</td><td><code>-y</code> 覆盖输出、<code>-hide_banner</code> 精简日志、<code>-loglevel</code> 日志级别</td></tr>
+    <tr><td>输入（-i 之后）</td><td>作用于输入流</td><td><code>-ss</code> 跳转起点、<code>-t</code> 限制读取时长、<code>-f</code> 强制输入格式</td></tr>
+    <tr><td>输出（输出文件之前）</td><td>决定成品长什么样</td><td><code>-c</code> 编码器、<code>-b</code> 码率、<code>-vf/-af</code> 滤镜、<code>-r/-s</code> 帧率/分辨率、<code>-t</code> 输出时长</td></tr>
+  </table>
+
+  <!-- ========== 2.2 -c 选择编码器：重新编码与流复制 ========== -->
+  <h2>2.2 -c 选择编码器：重新编码与流复制</h2>
+
+  <p><code>-c</code> 是 codec（编解码器）的缩写，<code>-c:v</code> 指定视频编码器、<code>-c:a</code> 指定音频编码器。编码器的值分两大类：<strong>具体编码器名</strong>（<code>libx264</code> 是 H.264 视频编码器，<code>aac</code> 是 AAC 音频编码器）和 <strong>copy</strong>。说人话：填具体编码器名 = 重新编码——把每一帧解码出来、再按新格式压缩一遍，CPU 全程干活，画质经历一次"有损"；填 copy = 流复制——不解码，把压缩好的数据原样搬进新容器，画质零损失、速度飞快。两者的差别，光听解释不如看实测数字。</p>
+
+  <p>同一份 5 秒测试视频，两种方式各跑一遍（本机真实执行）：重新编码耗时约 0.16 秒，流复制只花约 0.06 秒；而且流复制产物 out_copy.mp4 与输入 in.mp4 的大小完全一样（都是 80757 字节）——因为视频流、音频流根本没被重新压缩过，只是换了层"包装"。注意流复制进度条里那行 <code>speed=6.65e+03x</code>：处理速度是实时播放的 6650 倍，快到进度条来不及刷新。</p>
+
+  <pre><code><span class="cmt"># 重新编码：视频交给 libx264，音频交给 aac，逐帧解码重压（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">out.mp4</span>
+<span class="cmt"># 实测耗时：real 0m0.163s（含 ffmpeg 启动开销）</span>
+<span class="cmt"># 实测产物：out.mp4 = 81456 字节；x264 统计 kb/s:50.35（默认 CRF 23）</span></code></pre>
+
+  <pre><code><span class="cmt"># 流复制：视频、音频原样搬运，只换容器不重编码（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c:v</span> <span class="fn">copy</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">out_copy.mp4</span>
+<span class="cmt"># 实测耗时：real 0m0.055s（秒级完成，肉眼几乎无感）</span>
+<span class="cmt"># 实测产物：out_copy.mp4 = 80757 字节，与输入完全相同（流没被动过）</span>
+<span class="cmt"># 进度条：frame=  125 fps=0.0 q=-1.0 Lsize=      79KiB time=00:00:04.92 ... speed=6.65e+03x</span></code></pre>
+
+  <p>转码不是一瞬间的事——长视频重编码时，进度条会一帧帧往前爬。进度条那一行每个字段都有用：<code>frame</code> 是已处理帧数，<code>fps</code> 是实时处理帧率，<code>q</code> 是质量因子（-1 表示收尾），<code>size</code> 是已输出字节，<code>time</code> 是已处理时长，<code>speed</code> 是相对实时的速度倍数（大于 1 就是比实时快）。为了让进度条"爬"得足够慢、录到完整的真实输出，我把素材换成 720p 10 秒并用 <code>-preset veryslow</code>（最慢也最省码率的编码档位）重压——下面是真实记录：</p>
+
+  <pre><code><span class="cmt"># 720p 10 秒视频 + -preset veryslow，进度条逐帧刷新（本机真实记录节选）</span>
+<span class="cmt"># frame=  168 fps= 54 q=28.0 size=    1792KiB time=00:00:06.64 bitrate=2210.9kbits/s speed=2.14x</span>
+<span class="cmt"># frame=  214 fps= 58 q=28.0 size=    2304KiB time=00:00:08.48 bitrate=2225.8kbits/s speed=2.29x</span>
+<span class="cmt"># frame=  250 fps= 60 q=-1.0 Lsize=    2847KiB time=00:00:09.92 bitrate=2351.2kbits/s speed= 2.4x</span>
+<span class="cmt"># 进度条用回车符 \r 原地刷新；想要机器可读的进度，加 -progress pipe:1（键值对输出）：</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="param">-progress</span> <span class="param">pipe:1</span> <span class="param">-nostats</span> <span class="param">-loglevel</span> <span class="param">error</span> <span class="str">out_p.mp4</span>
+<span class="cmt"># 实测键值对输出（节选）：frame=125 / out_time=00:00:04.920000 / speed=45.4x / progress=end</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：copy 只负责"搬家"，不负责"改造"。想改分辨率、码率、帧率、像素格式，一律要重新编码；输入流编码与目标容器不兼容时（比如把某种编码 copy 进不支持的容器），ffmpeg 会直接报错。记住口诀：<strong>改内容就重编码，只换壳就流复制</strong>。</p>
+  </div>
+
+  <table>
+    <tr><th>编码器名</th><th>类型</th><th>说人话</th></tr>
+    <tr><td><code>libx264</code></td><td>视频</td><td>H.264 编码器，兼容性最好的"国民编码器"</td></tr>
+    <tr><td><code>libx265</code></td><td>视频</td><td>H.265/HEVC，同画质更小，但兼容性弱、编码慢</td></tr>
+    <tr><td><code>aac</code></td><td>音频</td><td>AAC 音频编码器，MP4 容器标配</td></tr>
+    <tr><td><code>copy</code></td><td>特殊值</td><td>流复制：不重新编码，原样搬运</td></tr>
+    <tr><td><code>h264_nvenc</code></td><td>视频</td><td>NVIDIA GPU 硬编码器（第 8 章主角）</td></tr>
+  </table>
+
+  <!-- ========== 2.3 -b 控制码率：目标不是承诺 ========== -->
+  <h2>2.3 -b 控制码率：目标不是承诺</h2>
+
+  <p>码率（bitrate）是"视频每秒用多少比特来存"，单位 kbit/s（千比特每秒）。码率是文件大小与画质之间的天平：码率越高画质越好、文件越大；码率越低画质越糊、文件越小。<strong>-b:v 设置视频目标码率，-b:a 设置音频目标码率</strong>。说人话：码率就是画面的"预算"——预算足，每一帧都画得精细；预算紧，只能省着花。</p>
+
+  <p>实测 <code>-b:v 500k</code>：转完后用 ffprobe 复查，输出文件的实际码率只有约 194 kbit/s——目标 500k 没花完。原因：测试画面（testsrc 彩条）太简单，编码器认为没必要花满预算。<strong>-b:v 是目标、不是承诺</strong>：实际码率由编码器的码率控制算法按内容复杂度决定，复杂画面会逼近甚至超过目标，简单画面会远低于目标。想要"画质优先、大小随缘"，改用 CRF 恒定质量：实测同一素材 CRF 18 产出 63.9 kbit/s、42.9 KB，默认 CRF 23 产出 50.4 kbit/s、34.5 KB——文件小了约 20%，肉眼几乎无差。</p>
+
+  <pre><code><span class="cmt"># 指定视频目标码率 500 kbit/s（ABR 平均码率模式），音频保持 aac（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-b:v</span> <span class="num">500k</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">out_500k.mp4</span>
+<span class="cmt"># 实测：x264 统计 kb/s:193.48，产物 170921 字节</span></code></pre>
+
+  <pre><code><span class="cmt"># 用 ffprobe 复查输出文件的"真实体检数据"（第 3 章主角，先混个脸熟）</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">v:0</span> <span class="param">-show_entries</span> <span class="param">stream=bit_rate,width,height</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out_500k.mp4</span>
+<span class="cmt"># 实测输出：</span>
+<span class="cmt"># width=640</span>
+<span class="cmt"># height=360</span>
+<span class="cmt"># bit_rate=194604   </span><span class="ann">&lt;- 约 194 kbit/s，明显低于 500k 的目标</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>日常做"画质优先"的转码，用 <code>-crf 23</code>（x264 默认值，范围 0-51，数值越小越清晰，18 以下肉眼基本无差）；要"文件大小可控"（上传平台限流、直播推流）才用 <code>-b:v</code>。两者不宜同时指定，后写的生效。编码器参数配置的艺术，第 10 章展开。</p>
+  </div>
+
+  <!-- ========== 2.4 -vf 视频滤镜：缩放、帧率与分辨率 ========== -->
+  <h2>2.4 -vf 视频滤镜：缩放、帧率与分辨率</h2>
+
+  <p><code>-vf</code> 是 video filter（视频滤镜）的缩写，后面跟一个或多个滤镜、用逗号串联。滤镜是 ffmpeg 的"加工车间"：缩放、旋转、加水印、调色、加字幕……全都靠它。入门第一课是 <code>scale</code>（缩放）：<code>-vf scale=320:180</code> 把每一帧缩放到指定宽高。说人话：滤镜就是"对每一帧画面执行的处理步骤"，-vf 后面写的就是处理配方。</p>
+
+  <p>实测：把 640x360 的测试视频缩到一半（320x180），用 ffprobe 验证输出确实是 320x180。另外两个"简便参数"：<code>-s 320x180</code> 是只设分辨率的快捷写法，<code>-r 12</code> 直接把输出帧率改成 12 帧每秒（原视频 25fps）。注意 -s / -r 是独立的输出参数，而 scale 滤镜可以和其他滤镜串成处理链——滤镜用逗号连接、从左到右依次执行：</p>
+
+  <pre><code><span class="cmt"># scale 滤镜缩放：每一帧都缩到 320x180（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-vf</span> <span class="fn">scale</span><span class="op">=</span><span class="num">320:180</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">out_small.mp4</span>
+<span class="cmt"># 实测验证（ffprobe）：width=320  height=180，产物 68523 字节</span></code></pre>
+
+  <pre><code><span class="cmt"># 滤镜链：先缩放、再改帧率（逗号分隔，从左到右执行）（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-vf</span> <span class="str">"scale=320:180,fps=12"</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-an</span> <span class="str">out_chain.mp4</span>
+<span class="cmt"># 实测：width=320  height=180  r_frame_rate=12/1</span>
+
+<span class="cmt"># 不用滤镜的等价写法：-s 设分辨率，-r 设帧率（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-s</span> <span class="num">320x180</span> <span class="param">-r</span> <span class="num">12</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-an</span> <span class="str">out_sr.mp4</span>
+<span class="cmt"># 实测：r_frame_rate=12/1（帧率确实从 25 改成了 12）</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p><code>scale</code> 的宽或高可以写 <code>-1</code> 表示"按原比例自动计算"：<code>-vf scale=320:-1</code> 会自动得到 180。注意这里的 -1 是"自动"的意思，不是"减一"。水印、文字、调色等进阶滤镜，第 15 章展开。</p>
+  </div>
+
+  <table>
+    <tr><th>滤镜</th><th>作用</th><th>语法示例</th></tr>
+    <tr><td><code>scale</code></td><td>缩放画面（本章已实测）</td><td><code>scale=320:180</code></td></tr>
+    <tr><td><code>fps</code></td><td>改变帧率（本章已实测）</td><td><code>fps=12</code></td></tr>
+    <tr><td><code>crop</code></td><td>裁掉画面边缘</td><td><code>crop=320:180:0:0</code></td></tr>
+    <tr><td><code>transpose</code></td><td>旋转 / 翻转</td><td><code>transpose=1</code></td></tr>
+    <tr><td><code>drawtext</code></td><td>叠加文字水印</td><td><code>drawtext=text='hi'</code></td></tr>
+  </table>
+
+  <!-- ========== 2.5 -ss / -t 裁剪：快与准的抉择 ========== -->
+  <h2>2.5 -ss / -t 裁剪：快与准的抉择</h2>
+
+  <p>裁剪是从长视频里取一段，两个主角：<strong>-ss 00:00:01</strong> 定起点（从第 1 秒开始），<strong>-t 1</strong> 定时长（持续 1 秒）。说人话：-ss 是"从哪儿开始"，-t 是"要多少"。它们的位置大有讲究：<strong>-ss / -t 放在 -i 前是"输入侧跳转"</strong>——解封装器（demuxer，负责把容器拆成流数据的组件）直接跳到目标位置附近，速度快；<strong>放在 -i 后是"输出侧跳转"</strong>——先完整解码再丢弃不需要的帧，慢但精确。</p>
+
+  <p>而 <strong>关键帧</strong>（keyframe，又称 I 帧，不依赖前后帧、能独立解码出完整画面的帧，是解码的"起点"）是流复制的命门：<strong>-c copy 只能从关键帧开始输出</strong>。我实测踩中了一个教科书级的坑：x264 默认每 250 帧设一个关键帧（约每 10 秒一个），而我们的测试视频只有 5 秒——全片只有第 0 帧一个关键帧。此时执行最常见的写法 <code>ffmpeg -i in.mp4 -ss 00:00:01 -t 1 -c copy out_cut.mp4</code>，产物 out_cut.mp4 <strong>只剩音频流、视频流整个丢了</strong>（ffprobe 实测只有 audio 一条流）！把 -ss / -t 挪到 -i 前面（输入侧跳转），视频回来了，但起点落在第 0 秒的关键帧上——切出的是"从开头开始的 1.12 秒"，而不是"第 1 秒到第 2 秒"。想要精确到帧的 1 秒，只有重新编码：实测切出时长恰好 1.000 秒、25 帧。完整实测矩阵如下：</p>
+
+  <pre><code><span class="cmt"># 坑①：-ss / -t 放 -i 后 + copy → 视频流丢失（本机 ffmpeg 8.1.1 真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-ss</span> <span class="num">00:00:01</span> <span class="param">-t</span> <span class="num">1</span> <span class="param">-c</span> <span class="fn">copy</span> <span class="str">out_cut.mp4</span>
+<span class="cmt"># ffprobe 复查：只剩 audio 一条流，时长 0.998s —— 视频不见了！</span>
+
+<span class="cmt"># 坑②：-ss / -t 放 -i 前 + copy → 从最近的关键帧（第 0 秒）开始</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-ss</span> <span class="num">00:00:01</span> <span class="param">-t</span> <span class="num">1</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c</span> <span class="fn">copy</span> <span class="str">F.mp4</span>
+<span class="cmt"># 实测：视频 start_time=0.000、52 帧、时长 1.12s —— 不是从第 1 秒起的！</span>
+
+<span class="cmt"># 修：-ss / -t 放 -i 前 + 重新编码 → 精确到帧（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-ss</span> <span class="num">00:00:01</span> <span class="param">-t</span> <span class="num">1</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">I.mp4</span>
+<span class="cmt"># 实测：时长 1.000s，视频恰好 25 帧 —— 精确命中第 1 秒到第 2 秒</span></code></pre>
+
+  <pre><code><span class="cmt"># 关键帧密集的素材（-g 25 = 每 25 帧一个关键帧，即每秒一个），copy 裁剪基本可用</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">testsrc=duration=5:size=640x360:rate=25</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">sine=frequency=440:duration=5</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-g</span> <span class="num">25</span> <span class="param">-pix_fmt</span> <span class="type">yuv420p</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="str">in_g25.mp4</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-ss</span> <span class="num">00:00:01</span> <span class="param">-t</span> <span class="num">1</span> <span class="param">-i</span> <span class="str">in_g25.mp4</span> <span class="param">-c</span> <span class="fn">copy</span> <span class="str">G.mp4</span>
+<span class="cmt"># 实测：video + audio 两条流齐全，时长 1.08s（关键帧对齐的近似结果）</span></code></pre>
+
+  <table>
+    <tr><th>写法</th><th>-c copy（流复制）</th><th>重新编码</th></tr>
+    <tr><td>-ss / -t 在 -i 前（输入侧，快）</td><td>关键帧对齐：默认 GOP 下从第 0 秒关键帧起（实测 52 帧、1.12s）；GOP=25 时从第 1 秒关键帧起（27 帧、1.08s）</td><td>精确到帧：实测 25 帧、时长 1.000s</td></tr>
+    <tr><td>-ss / -t 在 -i 后（输出侧，慢）</td><td>不可靠：默认 GOP 下实测视频流整个丢失（仅剩音频 0.998s）；GOP=25 时仅剩 2 帧</td><td>精确到帧：实测 25 帧、时长 1.000s</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：流复制裁剪不是"万能剪刀"，它的底线是——<strong>只能从关键帧开始切</strong>。素材关键帧稀疏时，copy 裁剪要么起点错位、要么直接丢流。实战口诀：<strong>讲究精确就重新编码，能接受关键帧对齐才用 copy</strong>；动手裁剪前，先用 ffprobe 数一数素材有几个关键帧——这正是下一章"体检报告"的用武之地。</p>
+  </div>
+
+  <!-- ========== 2.6 命令行能做什么：常用任务与 GPU 预告 ========== -->
+  <h2>2.6 命令行能做什么：常用任务与 GPU 预告</h2>
+
+  <p>把前面学到的零件拼起来，日常 90% 的转码需求都能用一条命令解决。再补两个"开关"：<strong>-an</strong>（disable audio，丢掉音频流）和 <strong>-vn</strong>（disable video，丢掉视频流）。实测：<code>-vn</code> 从 in.mp4 里提出纯音频（45231 字节），<code>-an</code> 提出纯视频（33952 字节）——提取音频、抠出视频、去音轨，都是这两个开关的活，配合 -c copy 秒级完成：</p>
+
+  <pre><code><span class="cmt"># 提取音频（丢掉视频流）：产物 out_audio.m4a = 45231 字节（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-vn</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">out_audio.m4a</span>
+
+<span class="cmt"># 提取视频（丢掉音频流）：产物 out_video.mp4 = 33952 字节（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-an</span> <span class="param">-c:v</span> <span class="fn">copy</span> <span class="str">out_video.mp4</span>
+
+<span class="cmt"># 转码 + 缩放 + 限码率 + 去音频，一条命令全干（本机真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-vf</span> <span class="fn">scale</span><span class="op">=</span><span class="num">320:180</span> <span class="param">-b:v</span> <span class="num">300k</span> <span class="param">-an</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="str">out_all.mp4</span>
+<span class="cmt"># 实测：width=320  height=180  bit_rate=156686（约 157 kbit/s），产物 100304 字节</span></code></pre>
+
+  <p>以上全部是"软件转码"（CPU 干活）。当素材变成 4K、要批量处理几十个文件时，CPU 就顶不住了——这时轮到 GPU 硬编解码上场。第 7 章会亲手编译带硬件加速的 ffmpeg，第 8 章实战部署。这里先看一眼"完整形态"的 GPU 转码命令长什么样（素材笔记里的真实命令，NVIDIA CUDA 环境）：注意解码器换成了 <code>h264_cuvid</code>、编码器换成了 <code>h264_nvenc</code>、滤镜换成了 GPU 版 <code>scale_npp</code>——但命令的骨架还是 2.1 学的那个，只是零件换了：</p>
+
+  <pre><code><span class="cmt"># 素材笔记里的真实 GPU 转码命令（NVIDIA 环境，第 8 章展开）</span>
+<span class="kw">ffmpeg</span> <span class="param">-hwaccel</span> <span class="fn">cuvid</span> <span class="param">-c:v</span> <span class="fn">h264_cuvid</span> <span class="param">-i</span> <span class="str">video/video-H264-AAC.mkv</span> <span class="param">-c:v</span> <span class="fn">h264_nvenc</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="fn">scale_npp</span><span class="op">=</span><span class="num">1280:-1</span> <span class="param">-y</span> <span class="str">/root/transcode.mp4</span>
+
+<span class="cmt"># 逐段解读：</span>
+<span class="cmt"># -hwaccel cuvid        全局参数：启用 cuvid 硬件加速</span>
+<span class="cmt"># -c:v h264_cuvid       输入侧：用 GPU 解码器解 H.264</span>
+<span class="cmt"># -c:v h264_nvenc       输出侧：用 GPU 编码器压 H.264</span>
+<span class="cmt"># -b:v 2048k            输出侧：目标码率 2 Mbit/s</span>
+<span class="cmt"># -vf scale_npp=1280:-1 输出侧：GPU 版缩放滤镜（宽 1280，高自动）</span>
+<span class="cmt"># 注意：GPU 滤镜叫 scale_npp，软件滤镜叫 scale —— 零件不同，骨架不变</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>工欲善其事，必先利其器——命令行就是 ffmpeg 的"器"，<code>-i</code> / <code>-c</code> / <code>-b</code> / <code>-vf</code> 是这把器的四件套。但本章只解决了"命令怎么写"，还没解决"素材是什么"。下一章，导师换成狄仁杰，我们用 ffprobe 把视频的编码、分辨率、码率、关键帧分布逐项体检——你会发现，本章所有参数选择，都能从那份体检报告里读出来。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：给命令分类 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把下面这条命令的各个部分归类：哪些是全局参数？哪些作用于输入？哪些作用于输出？<code>ffmpeg -y -i in.mp4 -vf scale=320:180 -b:v 500k -c:v libx264 out.mp4</code></p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 2.1 的骨架：-i 之前归全局；-i 之后、输出文件之前都是输出参数。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>全局参数：<code>-y</code>（允许覆盖输出）。输入侧：<code>-i in.mp4</code>。输出侧：<code>-vf scale=320:180</code>（滤镜）、<code>-b:v 500k</code>（目标码率）、<code>-c:v libx264</code>（视频编码器）、<code>out.mp4</code>（输出文件）。判断口诀：<strong>谁在 -i 前面谁全局，谁在输出文件前面谁管输出</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：copy 还是重编码？ <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以下四个场景，哪些可以用 <code>-c copy</code>（流复制），哪些必须重新编码？① mp4 改封装成 mkv（内容不变）② 1080p 缩小到 720p ③ 从视频里提取音频 ④ 给画面加旋转滤镜。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>问自己一个问题：这个操作"改没改流的内容"？copy 只会搬家，不会改造。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 和 ③ 可以 copy：只换容器 / 只取流，数据原样搬运，秒级完成；② 和 ④ 必须重新编码：缩放和旋转都改变了每一帧的像素内容。记住 2.2 的口诀：<strong>改内容就重编码，只换壳就流复制</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：码率之谜 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>同一份测试素材，执行 <code>-b:v 500k</code> 后实测实际码率只有约 194 kbit/s。为什么目标没被"花满"？如果我想"画质优先、文件大小随内容浮动"，应该改用哪个参数？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 2.3 的两个关键词："目标不是承诺"和 CRF。彩条画面的复杂度如何？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>-b:v</code> 是 ABR（平均码率）的<strong>目标值</strong>，实际码率由编码器按内容复杂度调节：testsrc 彩条画面极其简单，编码器认为没必要花满预算，所以实际只有约 194 kbit/s。想要画质优先，改用 <code>-crf 23</code>（数值越小越清晰），让编码器按恒定质量自定码率——本章实测 CRF 18 比默认 CRF 23 文件大 20%，但肉眼几乎无差。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：裁剪之谜 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>按 <code>ffmpeg -i in.mp4 -ss 00:00:01 -t 1 -c copy out_cut.mp4</code> 执行后，ffprobe 显示 out_cut.mp4 只有一条音频流，视频流不见了。请解释原因，并给出两种可行的修复方案。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 <code>ffprobe -v error -select_streams v:0 -show_entries frame=key_frame -of csv=p=0 in.mp4</code> 数一数 in.mp4 里到底有几个关键帧（输出 1 的才是关键帧）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>原因：x264 默认每 250 帧设一个关键帧，5 秒测试视频全片只有一个关键帧（第 0 帧）。<code>-c copy</code> 只能从关键帧开始输出，而 <code>-ss</code> 放在 -i 后是输出侧跳转，ffmpeg 在非关键帧位置"起不了步"，视频流被整个丢弃。<strong>修复一</strong>：把 <code>-ss / -t</code> 挪到 -i 前并重新编码——<code>ffmpeg -ss 00:00:01 -t 1 -i in.mp4 -c:v libx264 -c:a aac out.mp4</code>，实测精确切出 1.000 秒、25 帧。<strong>修复二</strong>：生成素材时用 <code>-g 25</code> 让关键帧密集（每秒一个），再用输入侧跳转 + copy 做关键帧对齐的近似裁剪（实测 1.08s）。结论：讲究精确就重新编码，能接受关键帧对齐才用 copy。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="tip">
+      <div class="tip-title">鲁班收尾</div>
+      <p>这一章的四件套——<code>-i</code> 认门、<code>-c</code> 选路、<code>-b</code> 控量、<code>-vf</code> 精修——全部亲手跑过、数字亲眼见过。工具已经磨好，下一站该"读图"了：第 3 章，狄仁杰带我们用 ffprobe 给视频做体检，把每一份素材的底细看得明明白白。</p>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第6章：依赖库逐个击破：x264 / opus / gnutls - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter06.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第6章：依赖库逐个击破：x264 / opus / gnutls - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter06.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="6" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：依赖库逐个击破：x264 / opus / gnutls</h1>
+  <p class="chapter-subtitle">源码编译 FFmpeg，八成时间都花在"喂饱依赖"上——configure 每报一个错，就是缺一个库。本章跟着包青天逐个断案：先看清 20+ 个依赖库怎么分类，再掌握排错主循环，用 x264 / gnutls / opus 三大经典案例练手，最后对照 brew / apt 包管理派的捷径</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私（证据链断案）</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案讲究证据链，编译排错也一样：configure 的每一行输出都是证词。一个『gnutls not found』背后，可能藏着没装、装错版本、依赖没装全、低版本残留四桩案子——不放过任何一条线索，也不冤枉任何一个库。记住口号：<strong>每一个报错都不能放过</strong>。学完本章，你看到任何 configure 报错，第一反应不再是『怎么办』，而是『它到底缺什么』。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 依赖库全家福：20+ 个零件各司其职 ========== -->
+  <h2>6.1 依赖库全家福：20+ 个零件各司其职</h2>
+
+  <p>上一章我们跑通了 <code>./configure</code> → <code>make</code> → <code>make install</code> 的主流程。但第 5 章用的是"最小配置"——真正的 FFmpeg 想要支持 H.264、H.265、Opus、MP3、字幕烧录、TLS 推流，背后要站着一大排第三方库。素材里（2019-2020 年，CentOS 7，FFmpeg n4.1.1）作者一口气解决了 20 多个依赖，光是 configure 就重跑了十几轮。这些库可以按职责分成五类：<strong>编解码库</strong>（负责把音视频压进/解出某种格式）、<strong>滤镜/字幕库</strong>（负责画面处理和字幕渲染）、<strong>网络库</strong>（负责 HTTPS/TLS 加密传输）、<strong>图像库</strong>（负责 JPEG 2000 等图像格式）、<strong>杂项</strong>（音频重采样、设备采集等边角功能）：</p>
+
+  <table>
+    <tr><th>分类</th><th>库</th><th>干什么的（说人话）</th><th>FFmpeg 配置开关</th></tr>
+    <tr><td>编解码</td><td>x264 / x265 / xvid / openh264</td><td>H.264、H.265 视频编码</td><td><code>--enable-libx264</code> 等</td></tr>
+    <tr><td>编解码</td><td>opus / vorbis / theora</td><td>音频 / 视频开源编码（Xiph 家族）</td><td><code>--enable-libopus</code> 等</td></tr>
+    <tr><td>编解码</td><td>gsm / opencore-amr / mp3lame</td><td>电话音频、AMR、MP3 编码</td><td><code>--enable-libmp3lame</code> 等</td></tr>
+    <tr><td>滤镜/字幕</td><td>libass / freetype</td><td>字幕渲染（ASS 字幕）、字体绘制</td><td><code>--enable-libass</code> 等</td></tr>
+    <tr><td>网络</td><td>gnutls / openssl</td><td>TLS 加密，HTTPS 拉流推流</td><td><code>--enable-gnutls</code></td></tr>
+    <tr><td>图像</td><td>openjpeg / opencv</td><td>JPEG 2000 编解码、图像处理</td><td><code>--enable-libopenjpeg</code></td></tr>
+    <tr><td>杂项</td><td>soxr / pulse / speex</td><td>高质量重采样、音频设备、降噪</td><td><code>--enable-libsoxr</code> 等</td></tr>
+  </table>
+
+  <p>先别急着背这 20 多个名字。包青天断案的第一步是"看现场"：<strong>configure 报错时，错误信息里会直接写出缺的库名</strong>——比如 <code>ERROR: libx264 not found</code>，你就去装 x264；装完重跑 configure，它可能又报下一个。这就像过一关解锁下一关。所以第 5 章末尾提到的"基础环境"那一条 yum 命令其实大有深意——它把最常见的一批开发库一次性装好，就是为了少过几关（素材实录，历史命令）：</p>
+
+  <pre><code><span class="cmt"># 素材实录（CentOS 7，yum）：先把基础编译工具链 + 常用依赖装齐</span>
+<span class="fn">yum</span> <span class="param">-y install</span> autoconf automake freetype-devel gcc gcc-c++ git \
+    libtool make <span class="type">nasm</span> pkgconfig zlib-devel bzip2 bzip2-devel</code></pre>
+
+  <pre><code><span class="cmt"># 素材实录：设置 PKG_CONFIG_PATH——让 pkg-config 能找到"自己编译"的库</span>
+<span class="kw">export</span> <span class="ann">PKG_CONFIG_PATH</span>=/usr/local/lib64/pkgconfig:/usr/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/lib/pkgconfig</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>这里藏着全章最重要的一课：<strong>FFmpeg 自己不实现 H.264 编码，它只是"请" x264 来干活</strong>。configure 的 <code>--enable-libx264</code> 不是开关，是"招聘启事"——前提是 x264 已经装好、并且 pkg-config 能找到它。而 <code>PKG_CONFIG_PATH</code> 就是告诉 pkg-config"去这些目录找简历"的路径清单。素材里这句 export 是后来所有源码编译能否被 ffmpeg 识别的前提，第 6.6 节实测时会再验证它的作用。</p>
+  </div>
+
+  <!-- ========== 6.2 排错主循环：configure 报错 → 缺库判断 → 安装 → 重试 ========== -->
+  <h2>6.2 排错主循环：configure 报错 → 缺库判断 → 安装 → 重试</h2>
+
+  <p>素材作者的原话值得抄下来："配置好 configure 之后，通过 make 可以一步步试探你缺少的库是什么，然后下载、编译。" 换句话说：<strong>源码编译 FFmpeg 的正确姿势不是"先装齐所有依赖再一次成功"，而是"跑 configure → 看报错 → 补依赖 → 重跑"这个循环</strong>。每轮循环你都会对"FFmpeg 到底依赖什么"多一分认识，十几轮下来，你就把依赖地图背下来了。这个循环四步走：① 读报错，确定缺什么；② 判断用包管理还是源码编译；③ 安装；④ 重跑 configure，看下一个报错。</p>
+
+  <p>报错信息的格式有规律可循。素材里最典型的两种：一种是 <code>ERROR: xxx not found using pkg-config</code>——库没装或者 pkg-config 找不到；另一种是 <code>ERROR: libxxx not found</code> 之后跟着一行提示"如果你要支持 xxx，请安装相应开发包"。注意 <code>./configure --help</code> 是免费的"题库"：所有 <code>--enable-xxx</code> 开关列得清清楚楚，你可以对照着看自己到底想开哪些功能，而不是被默认行为牵着走。素材里记录的 make 常用命令也一并列出（注意素材原文把 distclean 误写成了 disclean——这种笔误正好说明：素材会骗人，报错不会）：</p>
+
+  <pre><code><span class="cmt"># 排错主循环的第一现场：configure 的输出（格式如素材截图实录）</span>
+<span class="fn">./configure</span> <span class="param">--enable-gnutls --enable-libx264 --enable-libx265 --enable-libopus</span>
+<span class="cmt"># 报错样例 1：pkg-config 找不到库</span>
+ERROR: gnutls not found using pkg-config
+<span class="cmt"># 报错样例 2：找不到开发头文件</span>
+ERROR: libx264 not found
+
+<span class="cmt"># 每一轮循环的"三连"：改配置 → 编译 → 安装</span>
+<span class="fn">make</span> <span class="param">-j 10</span>      <span class="cmt"># 并行 10 核编译（素材原话：可自行调整）</span>
+<span class="fn">make install</span>   <span class="cmt"># 安装到 /usr/local</span>
+<span class="fn">make clean</span>     <span class="cmt"># 清除编译产物，重新来</span>
+<span class="fn">make distclean</span> <span class="cmt"># 还原 configure 状态（素材原文误写为 disclean）</span></code></pre>
+
+  <pre><code><span class="cmt"># configure --help：免费的"题库"，所有开关一览（真实选项，节选）</span>
+<span class="fn">./configure</span> <span class="param">--help</span>
+<span class="cmt">#   --enable-gnutls        enable GnuTLS, needed for https support</span>
+<span class="cmt">#   --enable-libx264       enable H.264 encoding via x264 [no]</span>
+<span class="cmt">#   --enable-libx265       enable HEVC encoding via x265 [no]</span>
+<span class="cmt">#   --enable-libopus       enable Opus decoding and encoding via libopus [no]</span>
+<span class="cmt">#   --disable-everything   disable all components</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：同一个报错 <code>xxx not found</code>，背后可能是四桩不同的案子，绝不可一刀切：① <strong>没装</strong>（最常见，装上即可）；② <strong>装了但 pkg-config 找不到</strong>（<code>PKG_CONFIG_PATH</code> 没配，或装到了非标准目录）；③ <strong>装了错误的版本</strong>（太老或太新，6.3 节的 gnutls 就是版本坑）；④ <strong>装了但残留低版本干扰</strong>（6.5 节的 opus 就是残留坑）。包青天的办案原则：<strong>先取证（看完整报错和 pkg-config --modversion 输出），再动手</strong>——每一条报错都不能放过，也不要用"重装一遍试试"掩盖真相。</p>
+  </div>
+
+  <!-- ========== 6.3 案例一：gnutls 的依赖链（nettle → gnutls，版本之坑） ========== -->
+  <h2>6.3 案例一：gnutls 的依赖链（nettle → gnutls，版本之坑）</h2>
+
+  <p>第一个经典案例是 gnutls——FFmpeg 的 <code>--enable-gnutls</code> 用来支持 HTTPS 拉流推流（说人话：让 FFmpeg 能访问 https:// 开头的地址）。素材里 configure 报 <code>ERROR: gnutls not found</code>，作者选择源码编译 gnutls。但 gnutls 不是光杆司令，它依赖 <strong>nettle</strong>（一个底层密码学库，提供 AES 等加密算法），所以安装顺序必须是 <strong>先 nettle、再 gnutls</strong>。素材原文这里有个笔误——"安装 gnutls 需要先安装 gnutls"，实际是"先安装 nettle"。这正好是包青天的教学时刻：<strong>素材也会出错，但 configure 的报错链不会，跟着报错链走就对了</strong>。</p>
+
+  <p>更关键的坑在版本：素材明确记录<strong>gnutls 3.5.19 是可以的，大于这个版本的有问题</strong>。在 2020 年的 CentOS 7 上，新版本 gnutls 与系统自带的 nettle/gmp 版本不匹配，configure 或运行时就会翻车。所以作者没有 yum install 最新的 gnutls，而是精确下载 <code>gnutls-3.5.19.tar.xz</code> 源码编译。这就是"依赖思维"的第一课：<strong>不是最新就好，匹配才好</strong>。完整过程（素材实录，历史命令）：</p>
+
+  <pre><code><span class="cmt"># 第 1 步：先装 nettle（gnutls 的密码学底层）</span>
+<span class="fn">wget</span> <span class="str">https://ftp.gnu.org/gnu/nettle/nettle-3.1.1.tar.gz</span>
+<span class="fn">tar</span> zxf nettle-3.1.1.tar.gz
+<span class="fn">cd</span> nettle-3.1.1
+<span class="fn">./configure</span> <span class="param">--enable-shared</span>
+<span class="fn">make</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span>
+
+<span class="cmt"># 第 2 步：装 gnutls 3.5.19——素材原话：3.5.19 可以，大于此版本有问题</span>
+<span class="fn">wget</span> <span class="str">https://www.gnupg.org/ftp/gcrypt/gnutls/v3.5/gnutls-3.5.19.tar.xz</span>
+<span class="fn">xz</span> <span class="param">-d</span> gnutls-3.5.19.tar.xz
+<span class="fn">tar</span> xf gnutls-3.5.19.tar
+<span class="fn">cd</span> gnutls-3.5.19
+<span class="fn">./configure</span> <span class="param">--enable-shared</span>
+<span class="fn">make</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span></code></pre>
+
+  <p>但 gnutls 的 configure 不是一次过的——素材里它接连报出 gmp、libtasn1、unistring、p11-kit、unbound 五个依赖错误，作者逐个 <code>yum install</code> 补齐；其中 libtasn1 和 unistring 还有"内置版"开关可以绕过系统库（<code>--with-included-libtasn1</code> 表示"用 gnutls 自带的 libtasn1，别去找系统的"）。这轮连环排错是 6.2 节主循环的最佳范本：<strong>每报一个错就补一个，补完重跑，直到 configure 说 "configuration succeeded"</strong>：</p>
+
+  <pre><code><span class="cmt"># gnutls configure 连环报错，逐个击破（素材实录）</span>
+ERROR: <span class="type">gmp</span> not found
+<span class="fn">yum</span> <span class="param">install</span> gmp-devel
+
+ERROR: <span class="type">libtasn1</span> not found
+<span class="fn">yum</span> <span class="param">install</span> libffi libffi-devel
+<span class="fn">./configure</span> <span class="param">--enable-shared --with-included-libtasn1</span>
+
+ERROR: <span class="type">libunistring</span> not found
+<span class="fn">yum</span> <span class="param">install</span> libunistring-devel
+<span class="fn">./configure</span> <span class="param">--enable-shared --with-included-unistring</span>
+
+ERROR: <span class="type">p11-kit</span> not found
+<span class="fn">yum</span> <span class="param">install</span> p11-kit-devel
+
+ERROR: <span class="type">dnssec</span> not found
+<span class="fn">yum</span> <span class="param">install</span> unbound unbound-devel unbound-libs</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：gnutls 的版本坑在今天依然存在，只是换了个形式——Homebrew 的 gnutls 与 macOS 系统自带的 OpenSSL 互不干扰，但如果你在旧系统上装新 gnutls，或者在一个系统里同时存在系统版和源码版 gnutls，pkg-config 就会"找错人"。通用对策：<strong>装库前先 <code>pkg-config --modversion gnutls</code> 查版本，装完后用 <code>pkg-config --cflags --libs gnutls</code> 验证能不能被找到</strong>——包青天办案，先验明正身。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>依赖链是有方向的：<strong>先装被依赖的，再装依赖别人的</strong>。nettle → gnutls，libogg → libtheora（素材里 theora 报错就靠 <code>yum install libogg*</code> 解决），libffi → libtasn1 → gnutls。这条链上的任何一环缺失，报错都会出现在"最上层"的库里——所以看到一个库报错，先问一句：<strong>它的底层装齐了吗？</strong></p>
+  </div>
+
+  <!-- ========== 6.4 案例二：构建工具之坑（x264 要 nasm，openjpeg 要 cmake） ========== -->
+  <h2>6.4 案例二：构建工具之坑（x264 要 nasm，openjpeg 要 cmake）</h2>
+
+  <p>第二个经典案例是 x264——FFmpeg 最常用的 H.264 编码器。素材里作者 <code>git clone</code> 源码编译 x264，configure、make、make install 一路顺利，<strong>结果 FFmpeg 那边一编译就报错，回头查才发现是 x264 的汇编优化需要 nasm</strong>（nasm，说人话：x86 汇编器，负责把 x264 里手写的汇编代码翻译成机器码，让编码速度翻倍）。没有 nasm，x264 编译时只能退化成 C 语言版本，甚至直接报错。于是作者又去源码编译了 nasm-2.13.02。这个故事告诉我们：<strong>缺库不只是缺"功能库"，还可能缺"工具库"——编译器、汇编器、构建系统本身也是依赖</strong>。</p>
+
+  <p>更隐蔽的一类是"构建方式不同"：素材里 <strong>openjpeg 没有 configure 脚本，必须用 cmake 构建</strong>（cmake，说人话：另一套自动化构建工具，和 autotools 的 configure/make 是竞争关系）。如果你习惯性 <code>./configure</code>，会直接得到 <code>No such file or directory</code>。x265 也一样走 cmake。所以判断一个源码包怎么装，先看它根目录有没有 <code>configure</code> 或 <code>CMakeLists.txt</code>——这就是包青天的"验尸"环节。素材实录：</p>
+
+  <pre><code><span class="cmt"># x264：git 拉源码编译（素材实录）</span>
+<span class="fn">git</span> <span class="param">clone --depth 1</span> <span class="str">http://git.videolan.org/git/x264</span>
+<span class="fn">cd</span> x264
+<span class="fn">./configure</span> <span class="param">--enable-shared</span>
+<span class="fn">make</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span>
+<span class="cmt"># 之后 FFmpeg 编译报错 → 追查发现缺 nasm（汇编优化必需）</span>
+
+<span class="cmt"># 补装 nasm 2.13.02（素材实录：源码编译）</span>
+<span class="fn">curl</span> <span class="param">-O -L</span> <span class="str">http://www.nasm.us/pub/nasm/releasebuilds/2.13.02/nasm-2.13.02.tar.bz2</span>
+<span class="fn">tar</span> <span class="param">-xjvf</span> nasm-2.13.02.tar.bz2
+<span class="fn">cd</span> nasm-2.13.02
+<span class="fn">./autogen.sh</span> <span class="op">&amp;&amp;</span> <span class="fn">./configure</span> <span class="param">--enable-shared</span>
+<span class="fn">make</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span></code></pre>
+
+  <pre><code><span class="cmt"># openjpeg：没有 configure，走 cmake（素材实录）</span>
+<span class="fn">git</span> <span class="param">clone</span> <span class="str">https://github.com/uclouvain/openjpeg.git</span>
+<span class="fn">mkdir</span> build <span class="op">&amp;&amp;</span> <span class="fn">cd</span> build
+<span class="fn">cmake</span> <span class="param">.. -DCMAKE_BUILD_TYPE=Release</span>
+<span class="fn">make</span> <span class="param">-j 10</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span>
+
+<span class="cmt"># x265：同样走 cmake（素材实录）</span>
+<span class="fn">git</span> <span class="param">clone --depth 1</span> <span class="str">https://github.com/videolan/x265.git</span>
+<span class="fn">cd</span> x265/build
+<span class="fn">cmake</span> <span class="param">../source</span> <span class="op">&amp;&amp;</span> <span class="fn">make</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span>
+
+<span class="cmt"># 连带案例：soxr 的 ./go 脚本内部也要用 cmake——报错就升级 cmake</span>
+<span class="cmt"># （素材：为此源码编译了 cmake-3.13.0-rc1）</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>判断"一个源码包怎么装"，看三个信号：① 根目录有 <code>configure</code> → autotools 老路子，<code>./configure &amp;&amp; make &amp;&amp; make install</code>；② 有 <code>CMakeLists.txt</code> → cmake 新路子，<code>mkdir build &amp;&amp; cd build &amp;&amp; cmake ..</code>；③ 有 <code>autogen.sh</code> → 源码树没生成 configure，先跑 <code>./autogen.sh</code>。素材里 vorbis 就是先 <code>./autogen.sh</code> 再 configure。记不住也没关系——<strong>ls 看一眼目录，比背文档快</strong>。</p>
+  </div>
+
+  <!-- ========== 6.5 案例三：opus 的低版本残留（yum remove 拉锯战） ========== -->
+  <h2>6.5 案例三：opus 的低版本残留（yum remove 拉锯战）</h2>
+
+  <p>第三个案例最刁钻：opus（说人话：新一代开源音频编码，VoIP 和 WebRTC 的标准音频格式，FFmpeg 的 <code>--enable-libopus</code> 就是请它来编 Opus 音频）。素材里作者源码编译了 <strong>opus-1.2.1</strong>，路径也配了，<code>PKG_CONFIG_PATH</code> 也设了——<strong>但 configure 依然报 opus 找不到</strong>。包青天式的追问来了：库在不在？在。路径对不对？对。那问题出在哪？<strong>系统里还残留着一个 yum 装的低版本 opus 1.0.2</strong>——两个版本打架，pkg-config 优先找到了旧的那个，而旧版本对 FFmpeg 来说"不够格"。</p>
+
+  <p>作者的处理方式很彻底：<strong>用 <code>yum remove</code> 把低版本连同它的工具链全部卸干净</strong>，只留源码编译的 1.2.1，再重跑 configure 就通过了。这个案例补全了 6.2 节 warning 里的第四桩案子：<strong>报错不一定代表"没有"，也可能是"有但被更差的顶替了"</strong>。这在今天同样常见——Homebrew 装了一版、源码又装了一版、系统还自带一版，三版共存时 pkg-config 只认它先找到的那个。素材实录：</p>
+
+  <pre><code><span class="cmt"># opus 1.2.1 源码安装（素材实录）</span>
+<span class="fn">wget</span> <span class="str">http://downloads.xiph.org/releases/opus/opus-1.2.1.tar.gz</span>
+<span class="fn">tar</span> <span class="param">-zxvf</span> opus-1.2.1.tar.gz
+<span class="fn">cd</span> opus-1.2.1
+<span class="fn">./configure</span> <span class="op">&amp;&amp;</span> <span class="fn">make</span> <span class="op">&amp;&amp;</span> <span class="fn">make install</span>
+
+<span class="cmt"># 一切就绪却仍报错 → 查残留：yum 装的低版本 opus 在捣乱（素材实录）</span>
+<span class="fn">yum</span> <span class="param">remove</span> opus-<span class="num">1.0.2</span>-6.el7.x86_64 opus-tools-<span class="num">0.1.6</span>-1.el7.x86_64 \
+    opusfile-<span class="num">0.5</span>-1.el7.x86_64 opus-devel-<span class="num">1.0.2</span>-6.el7.x86_64 \
+    opusfile-devel-<span class="num">0.5</span>-1.el7.x86_64
+
+<span class="cmt"># 卸干净后重跑 configure，opus 1.2.1 一次通过</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：排查"版本残留"有一个标准取证流程：<code>pkg-config --modversion opus</code> 看 pkg-config 认的是哪个版本；<code>ls /usr/lib64/libopus*</code>（或 <code>brew list --formula | grep opus</code>）看系统里到底躺着几个 opus；再用 <code>ldd</code> 或 <code>otool -L</code> 看最终链接到哪个。包青天办案原则：<strong>删库之前先取证，确认哪个版本是"主犯"，避免误删无辜</strong>。</p>
+  </div>
+
+  <pre><code><span class="cmt"># 版本残留标准取证流程（本机可跑，2026-08-08 实测）</span>
+<span class="fn">pkg-config</span> --modversion opus          <span class="cmt"># ① pkg-config 认的是哪个版本？</span>
+<span class="fn">brew</span> list --formula | <span class="fn">grep</span> opus      <span class="cmt"># ② Homebrew 装了几版？</span>
+<span class="fn">find</span> /opt/homebrew /usr/local -name <span class="str">'opus.pc'</span> 2&gt;/dev/null  <span class="cmt"># ③ 所有 .pc 文件的位置</span>
+<span class="fn">otool</span> -L $(<span class="fn">which</span> ffmpeg) | <span class="fn">grep</span> opus   <span class="cmt"># ④ 最终链接到哪个（Linux 用 ldd）</span></code></pre>
+
+  <!-- ========== 6.6 包管理派对照与本机实测 ========== -->
+  <h2>6.6 包管理派对照与本机实测：从 yum 到 brew / apt</h2>
+
+  <p>素材是 2019-2020 年的 CentOS 7 时代，那时 yum 仓库里的 x264、opus 等往往版本老旧甚至没有，逼得作者走"源码派"（手工下载源码、configure、make、make install）。而 2026 年的今天，macOS 的 <strong>Homebrew</strong> 和 Ubuntu 的 <strong>apt</strong> 都维护着最新版依赖，一条命令顶得上素材里半天的功夫——这是"<strong>包管理派</strong>"。但请务必理解：<strong>本章教的不是背命令，而是"依赖思维"</strong>。包管理派只是把"装库"这一步自动化了，分类、版本匹配、依赖链、残留排查这些判断，一条命令都省不掉。对照如下：</p>
+
+  <table>
+    <tr><th>依赖</th><th>源码派（素材，CentOS 7 / yum）</th><th>包管理派 macOS（brew）</th><th>包管理派 Ubuntu（apt）</th></tr>
+    <tr><td>H.264 编码</td><td>git clone x264 + nasm 源码编译</td><td><code>brew install x264</code></td><td><code>apt install libx264-dev</code></td></tr>
+    <tr><td>H.265 编码</td><td>x265 源码 cmake 编译</td><td><code>brew install x265</code></td><td><code>apt install libx265-dev</code></td></tr>
+    <tr><td>Opus 音频</td><td>opus-1.2.1 源码 + 清理残留</td><td><code>brew install opus</code></td><td><code>apt install libopus-dev</code></td></tr>
+    <tr><td>TLS/HTTPS</td><td>nettle + gnutls 3.5.19 源码链</td><td><code>brew install gnutls</code></td><td><code>apt install libgnutls28-dev</code></td></tr>
+    <tr><td>字幕/图像/杂项</td><td>libass / openjpeg / soxr 等逐个击破</td><td><code>brew install libass openjpeg soxr speex</code></td><td><code>apt install libass-dev libopenjp2-7-dev</code></td></tr>
+  </table>
+
+  <p>口说无凭，下面全部是本章写作时在本机（macOS，Homebrew）<strong>真实执行</strong>的实测。实测①：本机装了哪些依赖——注意 <code>gnutls / nasm / opus / x264 / x265</code> 五个全在，这正是"包管理派已把素材的源码活干完"的直接证据：</p>
+
+  <pre><code><span class="cmt"># 实测 ①：本机依赖清单（真实输出，2026-08-08）</span>
+$ <span class="fn">brew</span> <span class="param">list --formula</span> | <span class="op">grep</span> <span class="param">-E</span> <span class="str">'x264|x265|opus|gnutls|nasm'</span>
+gnutls
+nasm
+opus
+x264
+x265</code></pre>
+
+  <p>实测②：<code>ffmpeg -version</code> 的 <code>configuration</code> 行直接交代了这份 ffmpeg 编译时启用了哪些库——对比 6.1 节分类表，你会发现素材里 20 多个依赖几乎全部被 Homebrew 版 FFmpeg 收编了（<code>--enable-libx264</code>、<code>--enable-libx265</code>、<code>--enable-libopus</code>、<code>--enable-gnutls</code>、<code>--enable-libmp3lame</code>、<code>--enable-libopenjpeg</code>、<code>--enable-libass</code> 等）。这就是"断案看证据"：<strong>一个 ffmpeg 能干什么，configuration 行说了算</strong>：</p>
+
+  <pre><code><span class="cmt"># 实测 ②：ffmpeg 8.1.1 configuration 行（真实输出，节选）</span>
+$ <span class="fn">ffmpeg</span> <span class="param">-version</span>
+ffmpeg version <span class="num">8.1.1</span> Copyright (c) 2000-<span class="num">2026</span> the FFmpeg developers
+configuration: --prefix=/opt/homebrew/Cellar/ffmpeg-full/8.1.1 \
+  --enable-gnutls --enable-libx264 --enable-libx265 --enable-libopus \
+  --enable-libmp3lame --enable-libtheora --enable-libvorbis --enable-libxvid \
+  --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg \
+  --enable-libspeex --enable-libsoxr --enable-libass --enable-libfreetype \
+  --enable-videotoolbox --enable-audiotoolbox</code></pre>
+
+  <p>实测③和④是本节的"压轴大戏"：先用 <code>ffmpeg -encoders</code> 确认 <code>libx264</code>、<code>libx265</code>、<code>libopus</code> 真的可用（V 开头表示视频编码器，A 开头表示音频编码器），然后真实执行一次 H.265 转码——<code>libx265</code> 编码 20 帧耗时 0.02 秒（约 1027 fps），输出文件正常生成。没有 x265 依赖的 ffmpeg 到这里会直接报 <code>Unknown encoder 'libx265'</code>，就像实测⑤模拟的那样：</p>
+
+  <pre><code><span class="cmt"># 实测 ③：可用编码器（真实输出，grep 过滤）</span>
+$ <span class="fn">ffmpeg</span> <span class="param">-encoders</span> | <span class="op">grep</span> <span class="param">-E</span> <span class="str">'264|265|opus'</span>
+V....D libx264        libx264 H.264 / AVC / MPEG-4 AVC ... (codec h264)
+V....D libx265        libx265 H.265 / HEVC (codec hevc)
+A....D libopus        libopus Opus (codec opus)
+
+<span class="cmt"># 实测 ④：libx265 真实转码（真实输出）</span>
+$ <span class="fn">ffmpeg</span> <span class="param">-i in.mp4 -c:v libx265 -preset ultrafast -c:a copy</span> out_h265.mp4
+x265 [info]: frame B: 14, Avg QP:31.61  kb/s: 6.85
+encoded <span class="num">20</span> frames in <span class="num">0.02</span>s (<span class="num">1027.64</span> fps), <span class="num">39.50</span> kb/s, Avg QP:<span class="num">30.96</span>
+
+<span class="cmt"># 实测 ⑤：模拟"缺库"——用不存在的编码器，报错即"缺库"现场（真实输出）</span>
+$ <span class="fn">ffmpeg</span> <span class="param">-i in.mp4 -c:v libnonexistent</span> out.mp4
+[vost#0:0] Unknown encoder 'libnonexistent'
+[vost#0:0] Error selecting an encoder
+Error opening output file out.mp4.</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>把三节课串成一句话：<strong>依赖思维 = 分类（6.1）+ 排错循环（6.2）+ 三桩经典案例（6.3-6.5）</strong>。素材用十几个小时踩出来的坑，在包管理派手里就是一条 <code>brew install</code>；但如果你只记住命令而没记住思维，换个平台、换个版本、换个报错，你就又回到原点。下一章我们继续顺着这条线往下走——<strong>第 7 章《启用 GPU 硬编解码：configure 与版本匹配》</strong>，届时 nv-codec-headers 与 CUDA 的版本匹配，将是比 gnutls 3.5.19 更严格的一桩"铁案"。包青天把证据链先给你备好：硬件型号 → 驱动版本 → SDK 版本 → FFmpeg 开关，一环对不上就一环报错。我们第 7 章见。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：依赖分类配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把下列库归入五类之一：x264、libass、gnutls、openjpeg、soxr。候选分类：编解码库 / 滤镜·字幕库 / 网络库 / 图像库 / 杂项。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 6.1 节的分类表：每个库在 FFmpeg 里负责什么功能？H.264 编码、字幕渲染、HTTPS、JPEG 2000、音频重采样，各自对应谁？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>x264 → 编解码库（H.264 编码）；libass → 滤镜/字幕库（ASS 字幕渲染）；gnutls → 网络库（TLS/HTTPS）；openjpeg → 图像库（JPEG 2000）；soxr → 杂项（高质量音频重采样）。判断口诀：<strong>先问它服务哪种数据、哪种功能，再对号入座</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：排错主循环排序 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把下面五步排成正确的排错顺序，并说明每一步的目的：A. 安装/编译缺失的库；B. 重跑 configure 看下一个报错；C. 运行 ./configure 观察报错；D. 判断该用包管理还是源码编译；E. 从报错信息中确认缺的是哪个库。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>6.2 节的四步主循环：读报错 → 判断方案 → 安装 → 重试。五步只是把它拆得更细。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>C → E → D → A → B。C 先跑 configure 让错误暴露；E 从报错里锁定缺哪个库（如 <code>ERROR: gnutls not found</code>）；D 判断装法（yum/brew/apt 有现成的就用包管理，没有或版本不匹配才源码编译）；A 执行安装；B 重跑 configure——直到输出 configuration succeeded 才结束循环。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：gnutls 版本之坑分析 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材记录"gnutls 3.5.19 可以，大于这个版本的有问题"。请回答：① 为什么作者不直接 yum install gnutls 最新版？② 装 gnutls 之前必须先装哪个库？为什么？③ configure 报 <code>libtasn1 not found</code> 时，除了 yum install，还有什么备选方案？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 6.3 节：版本匹配 > 版本最新；依赖链有方向；素材里 libtasn1 有两个解法。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 仓库里的最新版与系统自带的 nettle/gmp 版本不匹配，configure 或运行时翻车——<strong>不是最新就好，匹配才好</strong>。② 必须先装 nettle（gnutls 的密码学底层，提供 AES 等算法），依赖链方向是"先装被依赖的"。③ 用 gnutls 自带的版本：<code>./configure --enable-shared --with-included-libtasn1</code>，绕开系统库。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手断一桩"缺库"案 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在本机真实执行：① <code>brew list --formula | grep -E 'x264|x265|opus|gnutls|nasm'</code>（或 apt 等价命令）确认依赖；② <code>ffmpeg -version</code> 查看 configuration 行，找出至少 5 个 --enable-libxxx；③ 用任意一个没被启用的编码器名（如 libnonexistent）执行 <code>ffmpeg -i 输入 -c:v 该名字 输出</code>，记录报错；④ 解释为什么会出现这个报错。把四步输出完整记录下来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>6.6 节实测 ① ② ⑤ 就是参考答案；注意 <code>-encoders</code> 列出的才是"有货"的编码器，不在列表里的名字一律 Unknown encoder。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 本机输出 gnutls/nasm/opus/x264/x265（本章实测）；② configuration 行含 --enable-libx264、--enable-libx265、--enable-libopus、--enable-gnutls、--enable-libopenjpeg 等；③ 报错为 <code>Unknown encoder 'libnonexistent'</code> → <code>Error selecting an encoder</code> → <code>Error opening output file</code>；④ 因为该 ffmpeg 编译时没有启用（或没编译进）这个编码器——<strong>编码器列表由 configure 时的依赖决定，缺库的后果就是"名单上没有它"</strong>。这就是源码编译时缺一个库，最终在命令行表现为一个 Unknown encoder 的完整证据链。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

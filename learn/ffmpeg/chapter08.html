@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第8章：GPU 转码实战与容器部署 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter08.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第8章：GPU 转码实战与容器部署 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter08.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="8" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：GPU 转码实战与容器部署</h1>
+  <p class="chapter-subtitle">转码从"吃 CPU"变成"吃显卡"：先解剖一条硬解硬编命令的每个选项，再用素材实测数据量化 6.4 倍的差距，最后把 GPU 能力安全地装进容器——每一步都要先看清细节</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「转码上 GPU，最怕的不是命令写不对，而是『看起来在加速、其实根本没加速』。ffprobe 先看清编码格式，nvidia-smi 再盯住显存占用，命令行的每一个选项都要问清楚它在替我们做什么——真相藏在细节里。学完本章，你拿到任何一条 GPU 转码命令，都能像拆案卷一样把它逐段拆开，也能在容器里『调不起显卡』的时候，按证据链一层层找出真凶。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 先看现场：你的 ffmpeg 到底有没有 GPU 能力 ========== -->
+  <h2>8.1 先看现场：你的 ffmpeg 到底有没有 GPU 能力</h2>
+
+  <p>转码的本质是<strong>用计算换体积</strong>：把每一帧画面从像素变成压缩码流，需要对画面做变换、量化、熵编码，一秒钟 25 帧、每帧上百万像素，全是重复劳动。CPU 是"少数几个全能工人"，每个核心串行执行指令；而 GPU（Graphics Processing Unit，图形处理器，说人话：原本为渲染画面设计、拥有上千个并行计算单元、特别擅长"同一套操作重复做很多份"的处理器）是"上千个专职流水线工人"。转码这种"帧与帧互不干扰、像素级重复计算"的任务，恰好是 GPU 最擅长的形状。但 GPU 不是想用就能用：<strong>编译时没启用、驱动不匹配、容器里摸不到显卡</strong>——任何一个环节断了，命令都可能"安静地退回 CPU"，你看着它跑完，还以为在加速。</p>
+
+  <p>所以狄仁杰办案的第一步是<strong>看现场</strong>：动手转码之前，先回答三个问题——① 这个 ffmpeg 编译时启用了哪些硬件加速方法（<code>-hwaccels</code>）；② 有没有 NVIDIA 的 GPU 编解码器（<code>-encoders</code> 里搜 <code>nvenc</code>/<code>cuvid</code>）；③ 机器上有没有 NVIDIA 驱动自带的状态工具 <code>nvidia-smi</code>。本机（macOS / Apple M1 / 8 核，Homebrew 编译的 ffmpeg 8.1.1）的实测结果如下——注意一个细节：<strong>有硬件加速方法 ≠ 有 NVIDIA GPU</strong>，videotoolbox 是苹果自家方案，跟素材里的 CUDA 是两回事：</p>
+
+  <pre><code><span class="cmt"># ① 本机实测：ffmpeg 编译时启用了哪些硬件加速方法</span>
+<span class="fn">ffmpeg</span> <span class="param">-hwaccels</span>
+<span class="cmt"># 输出（本机真实，ffmpeg 8.1.1）：</span>
+Hardware acceleration methods:
+videotoolbox
+vulkan</code></pre>
+
+  <pre><code><span class="cmt"># ② 本机实测：找 NVIDIA 的 GPU 编解码器——没有任何输出</span>
+<span class="fn">ffmpeg</span> <span class="param">-encoders</span> <span class="num">2&gt;/dev/null</span> <span class="op">|</span> <span class="fn">grep</span> <span class="param">-iE</span> <span class="str">'nvenc|cuvid'</span>
+
+<span class="cmt"># ③ 本机实测：nvidia-smi 不存在——这台机器没有 NVIDIA GPU</span>
+<span class="fn">nvidia-smi</span>
+<span class="cmt"># 输出：-bash: nvidia-smi: command not found</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>把"能力清单"先摸清，再谈加速：<code>-hwaccels</code> 列出<strong>编译期</strong>启用的加速方法，<code>-encoders</code> / <code>-decoders</code> 列出<strong>实际可用</strong>的编解码器，<code>nvidia-smi</code> 是 NVIDIA 驱动的<strong>运行期</strong>状态工具。三份清单合起来，就是这台机器的 GPU 体检报告。素材里的服务器是 2019 年 CentOS 7 + CUDA 10.0 的环境，<code>-hwaccels</code> 里能看到 <code>cuvid</code>；本机只有 <code>videotoolbox</code>——这就是本章所有"素材实录 vs 本机实测"差异的根源，也是后面每一处标注的来由。</p>
+  </div>
+
+  <!-- ========== 8.2 硬解转码命令解剖：-hwaccel 与 -c:v h264_cuvid 的分工 ========== -->
+  <h2>8.2 硬解转码命令解剖：-hwaccel 与 -c:v h264_cuvid 的分工</h2>
+
+  <p>素材原话值得原样抄下来：<strong>"用 GPU 进行转码的命令和软转码命令不太一样。CPU 转码的时候，我们可以依赖 ffmpeg 识别输入视频的编码格式并选择对应的解码器，但 ffmpeg 只会自动选择 CPU 解码器。要让 ffmpeg 使用 GPU 解码器，必须先用 ffprobe 识别出输入视频的编码格式，然后在命令行中指定对应的 GPU 解码器。"</strong>这句话是全章的地基：<strong>即使你开了硬件加速，FFmpeg 默认仍然选 CPU 解码器</strong>。所以标准流程是两段式——先探（ffprobe 确认编码格式，呼应第 3 章的"体检"），再转（按格式点名 GPU 解码器）。本机实测的探针步骤（用第 3 章的 <code>-show_entries</code> 精确取值）：</p>
+
+  <pre><code><span class="cmt"># 本机实测：转码前先用 ffprobe 识别视频流的编码格式（第 3 章体检报告复用）</span>
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries</span> <span class="param">stream</span>=<span class="param">codec_name,profile,width,height,pix_fmt,r_frame_rate</span> <span class="param">-of</span> <span class="param">default</span>=<span class="param">noprint_wrappers</span>=<span class="num">1</span> ch08_src.mp4
+<span class="cmt"># 输出（本机真实）：h264 High 1280x720 yuv420p 25fps —— 解码器就该选 h264_cuvid</span>
+<span class="param">codec_name</span>=<span class="type">h264</span>
+<span class="param">profile</span>=<span class="type">High</span>
+<span class="param">width</span>=<span class="num">1280</span>
+<span class="param">height</span>=<span class="num">720</span>
+<span class="param">pix_fmt</span>=<span class="type">yuv420p</span>
+<span class="param">r_frame_rate</span>=<span class="num">25</span>/<span class="num">1</span></code></pre>
+
+  <p>探明是 h264 之后，素材的 GPU 转码完整命令长这样——逐段解剖（素材实录，2019 年 CentOS 7 / CUDA 10.0）：<code>-hwaccel cuvid</code> 是<strong>全局解码加速开关</strong>，声明"这一趟解码走 cuvid 硬件加速"；<code>-c:v h264_cuvid</code> 是<strong>显式点名 GPU 解码器</strong>（h264 → h264_cuvid，hevc → hevc_cuvid，一一对应）；<code>-c:v h264_nvenc</code> 是输出编码器，用 NVIDIA 的 H.264 编码器；<code>-b:v 2048k</code> 是视频目标码率；<code>-vf scale_npp=1280:-1</code> 是 GPU 上的缩放滤镜（8.3 节细讲）；<code>-y</code> 覆盖输出。注意 <code>-c:v</code> 出现了<strong>两次</strong>：第一次管输入解码，第二次管输出编码——同一个选项在两个位置职责完全不同，这是新手最容易晕的地方：</p>
+
+  <pre><code><span class="cmt"># 素材实录：h264 源视频 → 指定尺寸和码率的 h264 输出（GPU 全程参与）</span>
+<span class="fn">ffmpeg</span> <span class="param">-hwaccel cuvid</span> <span class="param">-c:v</span> <span class="type">h264_cuvid</span> <span class="param">-i</span> <span class="str">video/video-H264-AAC.mkv</span> \
+       <span class="param">-c:v</span> <span class="type">h264_nvenc</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="type">scale_npp</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="param">-y</span> <span class="str">/root/transcode.mp4</span>
+
+<span class="cmt"># 逐段职责（狄仁杰式"笔录"）：</span>
+<span class="param">-hwaccel cuvid</span>   <span class="cmt"># 总开关：本趟转码启用 cuvid 硬件解码加速</span>
+<span class="param">-c:v h264_cuvid</span>  <span class="cmt"># 点名解码器：输入 h264 用 GPU 解码器（不点名 = 默认 CPU 解）</span>
+<span class="param">-c:v h264_nvenc</span>  <span class="cmt"># 输出编码器：NVIDIA 的 H.264 硬编码器</span>
+<span class="param">-b:v 2048k</span>      <span class="cmt"># 目标码率 2048 kbps</span>
+<span class="param">-vf scale_npp</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="cmt"># GPU 缩放：宽 1280，高按宽高比自动</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：两个最常见的"静默失效"陷阱。① <strong>只写 <code>-hwaccel cuvid</code>、不写 <code>-c:v h264_cuvid</code></strong>：总开关开了，但解码器还是 FFmpeg 默认按格式挑的 CPU 解码器——命令正常跑完，全程 CPU 解码，加速静默失效。② <strong>解码器与源编码不匹配</strong>：hevc 的源配上 <code>h264_cuvid</code>，解码阶段直接报错。判别口诀：<strong><code>-hwaccel</code> 是总开关，<code>-c:v xxx_cuvid</code> 才是点名的干活人</strong>；点名之前，先 ffprobe 看清编码格式。</p>
+  </div>
+
+  <!-- ========== 8.3 scale_npp 与 nvidia-smi：GPU 上的缩放器与观察窗 ========== -->
+  <h2>8.3 scale_npp 与 nvidia-smi：GPU 上的缩放器与观察窗</h2>
+
+  <p>缩放也分软硬两条路。软解转码里我们熟悉的是 <code>-vf scale=1280:-1</code>（第 2 章见过：CPU 逐像素重采样）；而 GPU 转码的命令里写的是 <code>-vf scale_npp=1280:-1</code>——<strong>npp 是 NVIDIA Performance Primitives（NVIDIA 性能原语库）的缩写</strong>，一个跑在 GPU 上的图像处理函数库。参数写法看起来几乎一样（<code>1280:-1</code> 都是"宽 1280、高按宽高比自动"），但内部走的是完全不同的路：<code>scale</code> 在 CPU 内存里算，<code>scale_npp</code> 在显存里算，数据不用从显卡搬回内存再搬回去。素材原话提醒："注意，这里和软解码时使用的 <code>-vf scale=x:x</code> 不一样。"</p>
+
+  <p>怎么确认 GPU 真的在干活，而不是又一次静默失效？<strong>转码期间另开一个终端，用 nvidia-smi 盯住显卡</strong>。素材实录：转码时能看到 ffmpeg 进程占用 GPU 显存和编解码单元——"转码期间使用 nvidia-smi 查看显卡状态，能够看到 ffmpeg 确实是在使用 GPU 进行转码"。nvidia-smi（NVIDIA System Management Interface，说人话：NVIDIA 驱动自带的"显卡体检仪"，显示每张卡的型号、温度、显存占用和正在跑的进程）是验证硬转码有没有生效的最直接证据：</p>
+
+  <pre><code><span class="cmt"># 素材实录：转码期间另开终端，每秒刷新一次显卡状态</span>
+<span class="fn">watch</span> <span class="param">-n 1</span> <span class="fn">nvidia-smi</span></code></pre>
+
+  <pre><code><span class="cmt"># nvidia-smi 输出（素材截图内容示意，型号与数值随显卡而异，非本机输出）：</span>
+<span class="op">+</span><span class="op">-----------------------------------------------------------------------------+</span>
+<span class="op">|</span> NVIDIA-SMI 410.48    Driver Version: 410.48    CUDA Version: 10.0           <span class="op">|</span>
+<span class="op">|-------------------------------+----------------------+----------------------|</span>
+<span class="op">|</span> GPU  Name        Persistence-M<span class="op">|</span> Bus-Id        Disp.A <span class="op">|</span> Volatile Uncorr. ECC <span class="op">|</span>
+<span class="op">|</span> Fan  Temp  Perf  Pwr:Usage/Cap<span class="op">|</span>         Memory-Usage <span class="op">|</span> GPU-Util  Compute M. <span class="op">|</span>
+<span class="op">|===============================+======================+======================|</span>
+<span class="op">|</span>   <span class="num">0</span>  GeForce GTX 1080     Off  <span class="op">|</span> <span class="num">00000000:01:00.0</span> Off <span class="op">|</span>                  N/A <span class="op">|</span>
+<span class="op">|</span> <span class="num">43</span>%  <span class="num">64</span>C    P0    <span class="num">82</span>W / <span class="num">180</span>W <span class="op">|</span>   <span class="num">1520</span>MiB /  <span class="num">8119</span>MiB <span class="op">|</span>     <span class="num">95</span>%      Default <span class="op">|</span>
+<span class="op">+-------------------------------+----------------------+----------------------+</span>
+<span class="op">|</span> Processes:                                                       GPU Memory <span class="op">|</span>
+<span class="op">|</span>  GPU       PID   Type   Process name                             Usage      <span class="op">|</span>
+<span class="op">|=============================================================================|</span>
+<span class="op">|</span>    <span class="num">0</span>    <span class="num">24123</span>      C   ffmpeg                                      <span class="num">1500</span>MiB <span class="op">|</span>
+<span class="op">+-----------------------------------------------------------------------------+</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>盯三样：<strong>GPU-Util</strong>（编解码单元利用率，转码时接近 100% 才正常）、<strong>Memory-Usage</strong>（显存占用，帧数据在显存里流转）、<strong>Processes 里的 ffmpeg</strong>（确认进程真的挂在显卡上）。如果转码跑得飞快、Processes 里却找不到 ffmpeg，那它多半在用 CPU 偷偷干——回到 8.2 节检查 <code>-c:v xxx_cuvid</code> 有没有点名。本机没有 NVIDIA 显卡，上面的表格是素材截图的<strong>内容示意</strong>：字段结构是真实的 nvidia-smi 格式，具体型号与数值以你自己的显卡为准。</p>
+  </div>
+
+  <!-- ========== 8.4 GPU vs CPU 转码实测：6.4 倍的证据 ========== -->
+  <h2>8.4 GPU vs CPU 转码实测：6.4 倍的证据</h2>
+
+  <p>素材在同一台机器上做了严格的对照实验：24 逻辑核（Intel Xeon E5-2620 v2 @ 2.10GHz）、64G 内存、CentOS 7.6，测试视频 <code>11.mkv</code> 大小 1.1G、1280x720、h264 High 视频流 + ac3 音频流，CPU 与 GPU 转码的目标完全一致（h264、2048k 码率、1280x720）。结果：<strong>软件转码 real 11m18.807s、CPU 占用平均 1600%</strong>（16 个核几乎跑满）；<strong>GPU 转码 real 1m45.228s、CPU 占用平均 90%</strong>。678 秒对 105 秒，约 <strong>6.4 倍提速</strong>，同时 CPU 占用从 1600% 掉到 90%——这就是"并行硬件 vs 串行 CPU"的结构性差距：转码是并行友好的任务，GPU 上千个并行单元各干各的，CPU 只负责调度和封装。</p>
+
+  <p>更有说服力的是第二组对照：素材作者自己写的两个小程序也做了同样的对比——软件实现 <code>./softhw</code> 跑 <strong>14m51.166s</strong>，硬件实现 <code>./hw</code> 跑 <strong>1m29.478s</strong>（CPU 占用 50%）。这说明提速不是 ffmpeg 命令行的特例，而是"同一份转码逻辑放在 GPU 上"的普适收益。注意 GPU 转码的 user 时间只有 1m15s——CPU 几乎全程空闲，重活全在显卡上。</p>
+
+  <p>本机实测 CPU 基准：本机没有 NVIDIA GPU，只能做对照组的"这一半"。用素材同款软转命令（<code>-c:v libx264 -b:v 2048k -vf scale=1280:-1</code>）转一个 90 秒、1280x720、h264+aac 的测试源（44MB），真实结果：<strong>real 0m7.702s，约 11.8 倍实时速度（约 295 fps）</strong>，输出 23MB。这个数字留给读者——将来在有 NVIDIA 的机器上，用同样的命令跑出 GPU 对照，就完成了本章实验的另一半：</p>
+
+  <pre><code><span class="cmt"># 素材实录（2019，24 核 E5-2620 v2，1.1G/1280x720 h264+ac3）：软件转码对照</span>
+<span class="fn">ffmpeg</span> <span class="param">-i</span> <span class="str">video/11.mkv</span> <span class="param">-c:v</span> <span class="type">libx264</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="type">scale</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="param">-y</span> <span class="str">/root/transcode.mp4</span>
+<span class="cmt"># 结果：real 11m18.807s  user 180m16.290s  sys 1m36.925s  CPU 占用平均 1600%</span>
+
+<span class="cmt"># 素材实录：同样的视频走 GPU 硬解硬编</span>
+<span class="fn">ffmpeg</span> <span class="param">-hwaccel cuvid</span> <span class="param">-c:v</span> <span class="type">h264_cuvid</span> <span class="param">-i</span> <span class="str">video/11.mkv</span> <span class="param">-c:v</span> <span class="type">h264_nvenc</span> \
+       <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="type">scale_npp</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="param">-y</span> <span class="str">/root/transcode.mp4</span>
+<span class="cmt"># 结果：real 1m45.228s  user 1m15.910s  sys 0m18.734s  CPU 占用平均 90%</span></code></pre>
+
+  <pre><code><span class="cmt"># 本机实测（2026，Apple M1 8 核，ffmpeg 8.1.1）：CPU 软转基准</span>
+<span class="cmt"># 源：90 秒 1280x720 h264+aac（testsrc2 + sine 生成，44MB）</span>
+<span class="kw">time</span> <span class="fn">ffmpeg</span> <span class="param">-i</span> <span class="str">ch08_src.mp4</span> <span class="param">-c:v</span> <span class="type">libx264</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="type">scale</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="param">-y</span> <span class="str">ch08_out.mp4</span>
+<span class="cmt"># 结果（真实）：frame=2250 fps=295 speed=11.8x  →  real 0m7.702s  user 0m51.708s  sys 0m0.892s</span>
+<span class="cmt"># 输出 23MB；本机无 NVIDIA GPU，GPU 对照请在有显卡的机器上复现</span></code></pre>
+
+  <table>
+    <tr><th>环境</th><th>方式</th><th>命令 / 程序</th><th>real 耗时</th><th>CPU 占用</th><th>提速</th></tr>
+    <tr><td>素材：1.1G / 1280x720 h264+ac3</td><td>CPU 软转</td><td><code>ffmpeg -c:v libx264</code></td><td>11m18.807s</td><td>平均 1600%</td><td>—</td></tr>
+    <tr><td>素材：同一视频</td><td>GPU 硬转</td><td><code>ffmpeg -c:v h264_cuvid/h264_nvenc</code></td><td>1m45.228s</td><td>平均 90%</td><td>约 6.4 倍</td></tr>
+    <tr><td>素材：作者自研程序</td><td>软件实现</td><td><code>./softhw</code></td><td>14m51.166s</td><td>平均 1600%</td><td>—</td></tr>
+    <tr><td>素材：作者自研程序</td><td>硬件实现</td><td><code>./hw</code></td><td>1m29.478s</td><td>50%</td><td>约 10 倍</td></tr>
+    <tr><td>本机：90s / 1280x720 h264+aac</td><td>CPU 软转</td><td><code>ffmpeg -c:v libx264</code></td><td>0m7.702s</td><td>约 670%（user/real）</td><td>11.8x 实时</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：实测数据有"保质期"和"环境属性"。素材是 2019 年的 CentOS 7 + CUDA 10.0 + 24 核 E5-2620 v2，本机是 2026 年的 Apple M1——跨机器、跨年份比绝对秒数没有意义（M1 单核性能远超 E5-2620），<strong>有意义的是同机对照的倍数与资源占用形态</strong>：CPU 转码把 CPU 吃满，GPU 转码把 CPU 释放出来。引用任何"实测"都必须注明环境，这是狄仁杰的办案原则——数据脱离环境，就只是传说。</p>
+  </div>
+
+  <!-- ========== 8.5 容器部署：让 Docker 里的 FFmpeg 摸到显卡 ========== -->
+  <h2>8.5 容器部署：让 Docker 里的 FFmpeg 摸到显卡</h2>
+
+  <p>转码服务迟早要打包部署，而容器是"隔离的进程"——它默认<strong>看不到宿主机的显卡设备节点和驱动库</strong>，就像隔着玻璃看仓库，看得见摸不着。素材作者在这里有一段刻骨铭心的记录：把自己的服务打包成镜像后，<strong>"开始没有设置环境变量，导致怎么都无法调用 NVIDIA 进行硬件的转码"，查了很多资料，才发现需要在 Dockerfile 里加一行 <code>ENV NVIDIA_DRIVER_CAPABILITIES video,compute,utility</code>，才能保证容器中使用成功</strong>。这个环境变量告诉 NVIDIA 容器运行时"容器需要显卡的哪些能力"：<code>video</code>（视频编解码单元）、<code>compute</code>（通用计算）、<code>utility</code>（nvidia-smi 等管理工具）——三样全要，转码才齐活。</p>
+
+  <p>运行时也要配套。老一代用 <code>nvidia-docker</code> 命令（nvidia-docker2 时代的标准写法）；Docker 19.03 之后内置了 <code>--gpus all</code> 参数，本质是 nvidia-container-toolkit（NVIDIA 官方的容器运行时插件，负责在容器启动时把显卡设备与驱动挂进去）在拦截请求。两条路都要求<strong>宿主机已装好 NVIDIA 驱动</strong>，镜像则基于 <code>nvidia/cuda</code> 基础镜像（里面带 CUDA 运行库，2019 年素材用的是 CUDA 10.0 自带驱动的版本）。完整链路（Dockerfile 中的 ENV 是素材实录，其余为通用写法）：</p>
+
+  <pre><code><span class="cmt"># Dockerfile —— 素材血泪教训：少了 ENV 这一行，容器里怎么都调不起 NVIDIA</span>
+<span class="kw">FROM</span> <span class="type">nvidia/cuda</span>:<span class="num">10.0</span>-devel-centos7
+<span class="kw">ENV</span> <span class="ann">NVIDIA_DRIVER_CAPABILITIES</span>=<span class="str">video,compute,utility</span>
+<span class="kw">COPY</span> ffmpeg <span class="str">/usr/local/bin/</span>
+<span class="kw">CMD</span> [<span class="str">"ffmpeg"</span>, <span class="str">"-hwaccel"</span>, <span class="str">"cuvid"</span>, <span class="str">"-c:v"</span>, <span class="str">"h264_cuvid"</span>, <span class="str">"-i"</span>, <span class="str">"/data/in.mkv"</span>, <span class="str">"-c:v"</span>, <span class="str">"h264_nvenc"</span>, <span class="str">"-b:v"</span>, <span class="str">"2048k"</span>, <span class="str">"-y"</span>, <span class="str">"/data/out.mp4"</span>]</code></pre>
+
+  <pre><code><span class="cmt"># 构建镜像</span>
+<span class="fn">docker</span> <span class="param">build -t</span> <span class="type">ffmpeg-gpu</span>:<span class="num">1.0</span> .
+
+<span class="cmt"># 方式一（推荐，Docker 19.03+）：--gpus all 把全部显卡挂进容器</span>
+<span class="fn">docker</span> <span class="param">run --gpus all</span> <span class="param">-v</span> <span class="str">/root/video:/data</span> <span class="type">ffmpeg-gpu</span>:<span class="num">1.0</span>
+
+<span class="cmt"># 方式二（老一代）：nvidia-docker 命令</span>
+<span class="fn">nvidia-docker</span> <span class="param">run</span> <span class="param">-v</span> <span class="str">/root/video:/data</span> <span class="type">ffmpeg-gpu</span>:<span class="num">1.0</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：容器里"调不起显卡"的排查要按三层来，任何一层断了，症状都一样——"明明命令没错，就是调不起 GPU"：① <strong>镜像层</strong>：<code>ENV NVIDIA_DRIVER_CAPABILITIES video,compute,utility</code> 有没有写（素材的坑就在这一层）；② <strong>运行时层</strong>：<code>docker run --gpus all</code>（或 nvidia-docker）有没有加，容器里 <code>nvidia-smi</code> 能不能跑；③ <strong>驱动层</strong>：宿主机驱动版本与镜像内 CUDA / nv-codec-headers 是否匹配（8.6 节的主题）。狄仁杰式排查顺序：先宿主机 <code>nvidia-smi</code> 正常吗 → 再容器里 <code>nvidia-smi</code> 能跑吗 → 最后才轮到 ffmpeg 命令本身。</p>
+  </div>
+
+  <!-- ========== 8.6 多卡指定与版本匹配：-hwaccel_device 与 nv-codec-headers ========== -->
+  <h2>8.6 多卡指定与版本匹配：-hwaccel_device 与 nv-codec-headers</h2>
+
+  <p>一台机器插多张显卡时，默认用哪张？cuvid 解码默认挑 0 号卡，需要指定时用 <code>-hwaccel_device</code> 选项——素材实录给出 0 号和 1 号卡的完整命令，两张卡的转码参数完全一样，只有设备号不同。多卡场景还能配合 <code>CUDA_VISIBLE_DEVICES</code> 环境变量做进程级隔离（说人话：让每个进程"只看得到"指定的那张卡，常用于多任务并行转码时互不抢显存）：</p>
+
+  <pre><code><span class="cmt"># 素材实录：-hwaccel_device 指定用 0 号卡转码</span>
+<span class="fn">ffmpeg</span> <span class="param">-hwaccel cuvid -hwaccel_device</span> <span class="num">0</span> <span class="param">-c:v</span> <span class="type">h264_cuvid</span> <span class="param">-i</span> <span class="str">/root/source_media/flv.flv</span> \
+       <span class="param">-c:v</span> <span class="type">h264_nvenc</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="type">scale_npp</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="param">-y</span> <span class="str">/root/flv.mp4</span>
+
+<span class="cmt"># 素材实录：换成 1 号卡，其余一字不差</span>
+<span class="fn">ffmpeg</span> <span class="param">-hwaccel cuvid -hwaccel_device</span> <span class="num">1</span> <span class="param">-c:v</span> <span class="type">h264_cuvid</span> <span class="param">-i</span> <span class="str">&lt;input&gt;</span> \
+       <span class="param">-c:v</span> <span class="type">h264_nvenc</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="type">scale_npp</span>=<span class="num">1280</span>:-<span class="num">1</span> <span class="param">-y</span> <span class="str">&lt;output&gt;</span></code></pre>
+
+  <p>版本匹配是另一座暗礁。素材作者编译 <strong>nv-codec-headers</strong>（说人话：NVIDIA 视频编解码 API 的头文件包，FFmpeg 编译 CUDA 支持时要用它）时，先用了当时最新的 9.1 版，<strong>编译出错</strong>。两条出路：一是把驱动升级到 430 以上（比较麻烦），二是把 nv-codec-headers 降到 8.1 版——作者选了后者，一次成功。原因很简单：头文件是"说明书"，新说明书里写的接口，老驱动（410.48）不一定认。素材环境的完整版本清单（实录）：ffmpeg <code>n4.1.1-3-g53f3f52</code>、CUDA <code>10.0.130</code>（这个版本自带驱动，可以不用单独装驱动）、驱动 <code>410.48</code>、nv-codec-headers <code>sdk/8.1</code>。</p>
+
+  <pre><code><span class="cmt"># 素材实录：nv-codec-headers 9.1 编译出错后的抉择</span>
+<span class="cmt"># 方案 A：升级驱动到 430+（麻烦，要动生产环境）</span>
+<span class="cmt"># 方案 B（作者的选择）：把 nv-codec-headers 降到 8.1，重新编译，成功</span>
+
+<span class="cmt"># 素材环境版本清单（2019，CentOS 7）：</span>
+<span class="param">ffmpeg</span>      <span class="type">n4.1.1-3-g53f3f52</span>
+<span class="param">cuda</span>       <span class="type">CUDA Version 10.0.130</span>   <span class="cmt"># 自带驱动，可不再单独装驱动</span>
+<span class="param">driver</span>     <span class="type">Driver Version 410.48</span>
+<span class="param">nv-codec-headers</span> <span class="type">sdk/8.1</span>           <span class="cmt"># 9.1 编译出错，降到 8.1 成功</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>版本匹配的通用原则一句话：<strong>nv-codec-headers 太新 + 驱动太老 = 必翻车</strong>。因为新版头文件声明的接口，可能用到比你的驱动更新的硬件功能。要么升级驱动，要么降头文件——素材选后者，因为降版本比重装驱动省事。另外预告一下：第 9 章进入 C API 编码流程后，你会看到 API 层同样能走 GPU——<code>avcodec_find_encoder_by_name("h264_nvenc")</code> 和命令行点名 <code>-c:v h264_nvenc</code> 是同一个道理。本章这套"先探测（ffprobe）→ 再点名（-c:v）→ 后验证（nvidia-smi）"的流程，在 API 层一字不差地复用。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念判断 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>以下说法正确的是（单选）：A. 只要加了 <code>-hwaccel cuvid</code>，FFmpeg 就会自动用 GPU 解码；B. GPU 转码前必须先用 ffprobe 确认编码格式，再指定对应的 GPU 解码器；C. <code>scale</code> 和 <code>scale_npp</code> 是同一个滤镜的两个名字，可以互换；D. Docker 容器里不设环境变量也能调用 NVIDIA 显卡。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 8.2 节的素材原话：FFmpeg 只会自动选择 CPU 解码器；再想想 8.3 节 scale 与 scale_npp 的区别，以及 8.5 节的血泪教训。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>B。A 错：<code>-hwaccel cuvid</code> 是总开关，解码器仍默认选 CPU 的，必须显式 <code>-c:v h264_cuvid</code> 点名。C 错：<code>scale</code> 走 CPU，<code>scale_npp</code> 走 GPU（NPP 库），参数写法相似但内部完全不同。D 错：必须在 Dockerfile 里设 <code>ENV NVIDIA_DRIVER_CAPABILITIES video,compute,utility</code>，否则容器里怎么都调不起 NVIDIA。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：补全 GPU 转码命令 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>源文件 <code>input.mkv</code> 是 HEVC 编码，目标输出 1280x720、码率 2048k 的 H.264 MP4。写出完整的 GPU 转码流程：① 转码前的前置探测命令；② 完整的转码命令（含 -hwaccel、解码器、编码器、缩放、覆盖输出）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>8.2 节的两段式流程：先 ffprobe 探格式，再按格式点名解码器——HEVC 对应的 cuvid 解码器叫什么？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1 input.mkv</code>，确认输出 <code>hevc</code>。② <code>ffmpeg -hwaccel cuvid -c:v hevc_cuvid -i input.mkv -c:v h264_nvenc -b:v 2048k -vf scale_npp=1280:-1 -y out.mp4</code>。要点：解码器必须与源编码一一对应（hevc → hevc_cuvid），编码器用 h264_nvenc，缩放必须用 scale_npp 而不是 scale。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：容器排障 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>你把转码服务打包进容器，运行 <code>docker run --gpus all</code> 后转码命令报"调不起 NVIDIA"。请按顺序列出要排查的三层，并写出每层的验证命令。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>8.5 节的 warning：镜像层 → 运行时层 → 驱动层。每层各有一个"试金石"命令。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 镜像层：检查 Dockerfile 有没有 <code>ENV NVIDIA_DRIVER_CAPABILITIES video,compute,utility</code>（素材的坑就在这）；② 运行时层：<code>docker run --gpus all &lt;镜像&gt; nvidia-smi</code>，容器里能出显卡信息才算挂上；③ 驱动层：宿主机 <code>nvidia-smi</code> 正常吗，驱动版本（素材 410.48）与镜像内 CUDA / nv-codec-headers 是否匹配。任何一层断了，症状都一样，必须从宿主机往容器一层层排除。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：本机实测 + 部署方案 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在本机真实执行：① <code>ffmpeg -hwaccels</code> 查看本机硬件加速方法；② 用 8.2 节的 ffprobe 命令探测任意一个视频文件，记录编码格式；③ 跑一次软件转码基准（<code>-c:v libx264 -b:v 2048k -vf scale=1280:-1</code>），记录 real 耗时；④ 若本机没有 NVIDIA GPU，写出一份"部署到有 GPU 服务器"的完整方案（ffprobe → GPU 转码命令 → Dockerfile → 运行命令），并说明素材的 6.4 倍数据为什么不能直接套用到你的机器。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>8.1 节是本机实测的参考答案；8.4 节 warning 解释了"实测数据的保质期"；8.5 节 Dockerfile 与运行命令可以直接抄。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 本机实测：<code>-hwaccels</code> 输出 videotoolbox / vulkan（Mac 无 NVIDIA）。② ffprobe 输出如 <code>codec_name=h264</code>、<code>width=1280</code>、<code>height=720</code>。③ 本机基准参考：90 秒 720p 源 real 0m7.702s（约 11.8x 实时）。④ 方案：先 ffprobe 确认编码 → 按格式写 <code>ffmpeg -hwaccel cuvid -c:v xxx_cuvid ... -c:v h264_nvenc -b:v 2048k -vf scale_npp=1280:-1 -y out.mp4</code> → Dockerfile 写 <code>ENV NVIDIA_DRIVER_CAPABILITIES video,compute,utility</code> → <code>docker run --gpus all</code> 运行。素材的 6.4 倍是同机对照（2019 年 CentOS 7 + 24 核 E5-2620），机器、年份、CPU 都不同，绝对秒数不可比，只能作为"GPU 转码显著释放 CPU"的方向性证据——到了自己的 GPU 机器上，要用同一命令各跑一遍再下结论。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

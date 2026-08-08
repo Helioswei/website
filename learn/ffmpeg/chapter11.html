@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第11章：send/receive 模式：告别丢帧 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter11.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第11章：send/receive 模式：告别丢帧 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter11.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="11" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第11章：send/receive 模式：告别丢帧</h1>
+  <p class="chapter-subtitle">一段 10 秒的视频转码后只剩 7 秒——丢掉的帧去了哪里？这一章我们当一回侦探：先看案发现场，再审 API 的设计，再用最小程序亲手复现丢帧，最后解剖生产代码。把"不可能"一项项排除，剩下的真相只有一个：receive 循环与 flush</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「排除一切不可能，剩下的就是真相。一个 10 秒的视频转码后只剩 7 秒——这不是玄学，是有一处确定的原因。帧不会自己消失：要么编码器根本没把它产出来，要么产出来了却没被取走、没被写进文件。这一章我们用最小程序把两种写法摆在桌上对比，让丢帧在你自己机器上现形。当你把'不可能'一项项排除干净，剩下的那个真相，就是 send/receive 的正确循环与结尾的 flush。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 11.1 案发现场：10 秒的视频，转码后只剩 7 秒 ========== -->
+  <h2>11.1 案发现场：10 秒的视频，转码后只剩 7 秒</h2>
+
+  <p>2020 年的一篇生产环境实录（本线素材笔记《ffmpeg-转码后丢帧的问题》）记录了一起经典事故：<strong>一段 10 秒的视频，经过转码后只剩 7 秒</strong>。整整 3 秒的画面凭空消失——不是卡顿、不是变慢，是彻底没有了。转码没有报错，文件能打开，但时长就是不对。用福尔摩斯的方法论先排除不可能：视频帧不会自己蒸发，它们要么<strong>没有被编码器产出来</strong>，要么<strong>产出来了却没被取走</strong>。生产转码器是用 FFmpeg 的 C API 手写的，嫌疑就集中在 API 的使用方式上。</p>
+
+  <p>先看历史。在 <code>send/receive</code> 模式出现之前，FFmpeg 提供的是"一次调用、一进一出"的旧 API：<code>avcodec_encode_audio2()</code>（编码一帧音频）、<code>avcodec_decode_video2()</code>（解码一帧视频）。每次调用塞一个输入、拿一个输出，输入输出一一对应。这个模型在 B 帧面前天然漏帧——还记得第 4 章的结论吗？B 帧是"事后诸葛"，要参考未来的帧，编码器必须把 B 帧攒在内部缓冲里等后面的帧到齐，一进一出的调用根本取不干净缓冲里的货。这套旧 API 已经彻底退役：本机 FFmpeg 8.1.1 的头文件里 <code>grep</code> 这两个名字，结果为零——连"已弃用"的声明都删干净了。</p>
+
+  <pre><code><span class="cmt"># 老 API 的历史签名（FFmpeg 4.x 时代，现行 8.1.1 头文件中已彻底删除）</span>
+<span class="cmt"># 设计缺陷：一次调用 = 一个输入 + 一个输出，没有"把缓冲吐完"的机制</span>
+int <span class="fn">avcodec_encode_audio2</span>(<span class="type">AVCodecContext</span> *avctx, <span class="type">AVPacket</span> *avpkt,
+                          const <span class="type">AVFrame</span> *frame, int *got_packet_ptr);
+int <span class="fn">avcodec_decode_video2</span>(<span class="type">AVCodecContext</span> *avctx, <span class="type">AVFrame</span> *picture,
+                          int *got_frame_ptr, const <span class="type">AVPacket</span> *avpkt);</code></pre>
+
+  <p>那么用现行 API 还会丢帧吗？会——如果你把"一进一出"的思维惯性带过来：每送一帧只 <code>receive</code> 一次，拿不到就当没有。下面这个错误写法就是 10 秒变 7 秒的现场还原（本章 11.4 节会把它编译出来实测）：</p>
+
+  <pre><code><span class="cmt">// 错误写法：send 后只 receive 一次 —— 丢帧现场（对应素材笔记的 10s→7s 事故）</span>
+<span class="kw">for</span> (int n = <span class="num">0</span>; n &lt; nframes; n++) {
+    <span class="fn">avcodec_send_frame</span>(ctx, frame);      <span class="cmt">// ① 送一帧进去</span>
+    <span class="kw">if</span> (<span class="fn">avcodec_receive_packet</span>(ctx, pkt) &gt;= <span class="num">0</span>)  <span class="cmt">// ② 只收一次！</span>
+        <span class="fn">fwrite</span>(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out);
+    <span class="cmt">// ③ 没收到？帧进缓冲了 —— 之后再也不管它</span>
+}
+<span class="cmt">// ④ 没有 flush —— 缓冲里攒的 B 帧和线程缓冲帧，全部丢失</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：丢帧不是随机发生的。编码器内部有一个缓冲（B 帧延迟 + 多线程 lookahead，11.2 节细讲），输入帧先排队、后产出。<code>receive</code> 返回"没有输出"时，帧不是丢了，是<strong>还在缓冲里等着</strong>——但如果你从此不再取它、结尾也不 flush，它就真的永远出不来了。10 秒变 7 秒，丢的就是这一批缓冲帧。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>素材笔记写于 2020 年，但它总结的规则和现行官方文档一字不差：<strong>"反复调用 receive 直到返回 EAGAIN 或其他错误"</strong>、<strong>"每个输入可能输出 0 个或者多于 1 个"</strong>。素材是官方文档的中文实践版——这条铁律十年没变，因为它描述的是编码器物理上怎么工作。</p>
+  </div>
+
+  <!-- ========== 11.2 新 API 的设计：send 与 receive 分离 ========== -->
+  <h2>11.2 新 API 的设计：send 与 receive 分离</h2>
+
+  <p>现行 FFmpeg 提供两组函数，分别负责解码和编码：解码用 <code>avcodec_send_packet()</code> + <code>avcodec_receive_frame()</code>，编码用 <code>avcodec_send_frame()</code> + <code>avcodec_receive_packet()</code>。官方文档（本机 avcodec.h 第 95 行起）第一句话就点明了设计意图：<strong>"decouples input and output"——把输入和输出解耦</strong>。说人话：送东西和取东西是两个独立的闸口。输入闸口一次只收一个输入；输出闸口你爱取几次取几次，直到它告诉你"暂时没货了"。</p>
+
+  <p>为什么必须解耦？因为 codec 内部有缓冲——这正是第 4 章 B 帧结论的延续。编码器要编 B 帧，就必须把 B 帧攒起来等后面的参考帧；x264 还有多线程 lookahead（提前几十帧做运动分析），进一步加深缓冲。于是官方文档给出了契约：<strong>每个输入帧/包，"通常"输出 1 个，"但也可以是 0 个或多于 1 个"</strong>（"it can also be 0 or more than 1"）。0 个：帧进缓冲了，还没轮到产出；多于 1 个：缓冲满了一次吐好几个，或 flush 时一次吐完剩余的全部。接受这个契约，循环写法就是唯一正确解。</p>
+
+  <pre><code><span class="cmt"># 两组 API 的真实签名（本机 /opt/homebrew/include/libavcodec/avcodec.h）</span>
+<span class="cmt"># 解码：喂压缩包，取未压缩帧</span>
+int <span class="fn">avcodec_send_packet</span>(<span class="type">AVCodecContext</span> *avctx, const <span class="type">AVPacket</span> *avpkt);   <span class="cmt">// 第 2364 行</span>
+int <span class="fn">avcodec_receive_frame</span>(<span class="type">AVCodecContext</span> *avctx, <span class="type">AVFrame</span> *frame);   <span class="cmt">// 第 2391 行</span>
+
+<span class="cmt"># 编码：喂未压缩帧，取压缩包</span>
+int <span class="fn">avcodec_send_frame</span>(<span class="type">AVCodecContext</span> *avctx, const <span class="type">AVFrame</span> *frame);  <span class="cmt">// 第 2427 行</span>
+int <span class="fn">avcodec_receive_packet</span>(<span class="type">AVCodecContext</span> *avctx, <span class="type">AVPacket</span> *avpkt);   <span class="cmt">// 第 2444 行</span></code></pre>
+
+  <pre><code><span class="cmt"># 数据流全貌：输入走一个闸口，输出走另一个闸口</span>
+<span class="ann">输入</span>                        <span class="type">codec</span>（内部缓冲）               <span class="ann">输出</span>
+frame <span class="op">--&gt;</span> send_frame ──► ┌──────────────────┐ ──► receive_packet <span class="op">--&gt;</span> packet（0 个 / 1 个 / 多个）
+                          │  B 帧延迟 + lookahead │
+NULL <span class="op">--&gt;</span> send_frame ──► │  draining 模式      │ ──► 剩余 packet 全部吐出 <span class="op">--&gt;</span> AVERROR_EOF</code></pre>
+
+  <table>
+    <tr><th>方向</th><th>输入</th><th>输出</th><th>成功返回值</th><th>说人话</th></tr>
+    <tr><td>解码</td><td><code>avcodec_send_packet()</code></td><td>压缩包 <code>AVPacket</code></td><td>0</td><td>喂一个压缩包进去</td></tr>
+    <tr><td>解码</td><td><code>avcodec_receive_frame()</code></td><td>未压缩帧 <code>AVFrame</code></td><td>0</td><td>取一帧原始画面出来</td></tr>
+    <tr><td>编码</td><td><code>avcodec_send_frame()</code></td><td>未压缩帧 <code>AVFrame</code></td><td>0</td><td>喂一帧原始画面进去</td></tr>
+    <tr><td>编码</td><td><code>avcodec_receive_packet()</code></td><td>压缩包 <code>AVPacket</code></td><td>0</td><td>取一个压缩包出来</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>记住两个返回值的语义，这是本章的破案钥匙：<strong>AVERROR(EAGAIN)</strong> = "缓冲空了，我需要新的输入才能产出新输出"（说人话：你喂下一帧吧，这不是错误）；<strong>AVERROR_EOF</strong> = "流结束了，我再也没有输出了"（只有进入 draining 模式后才会出现）。官方文档原话：<code>Repeat this call until it returns AVERROR(EAGAIN) or an error</code>（反复调用直到 EAGAIN 或错误）。</p>
+  </div>
+
+  <!-- ========== 11.3 编码循环模板：send 一帧，收尽所有输出 ========== -->
+  <h2>11.3 编码循环模板：send 一帧，收尽所有输出</h2>
+
+  <p>把 11.2 的契约翻译成代码，就是本线所有转码程序的地基：<strong>先 send 一个输入，然后反复 receive 直到 EAGAIN，处理每个拿到的输出，再送下一个输入</strong>。这个模板对编码、解码、音频、视频完全通用——差别只是 send/receive 的函数名换一换。下面是编码方向的模板，直接取自本章实测程序 enc_sr.c 的循环体（真实编译运行过，11.4 节完整展示）：</p>
+
+  <pre><code><span class="cmt">// 编码一帧的完整循环：send 之后，把 codec 吐出的所有包收干净</span>
+int ret = <span class="fn">avcodec_send_frame</span>(ctx, frame);      <span class="cmt">// ① 送一个输入</span>
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) { <span class="cmt">/* 真错误：送不进去 */</span> return ret; }
+
+<span class="kw">for</span> (;;) {
+    ret = <span class="fn">avcodec_receive_packet</span>(ctx, pkt);    <span class="cmt">// ② 取一个输出</span>
+    <span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span>) { ret = <span class="num">0</span>; <span class="kw">break</span>; }  <span class="cmt">// 缓冲空了，等下一个输入</span>
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;                        <span class="cmt">// EOF 或错误</span>
+    <span class="fn">fwrite</span>(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out);   <span class="cmt">// ③ 处理这个包（写文件/封装）</span>
+    got++;
+}</code></pre>
+
+  <p>把分支拆开看，receive 的返回值一共四路，素材笔记的生产代码（11.5 节）就是这四路的完整实现：<code>EAGAIN</code> 是"正常收尾，等下一个输入"；<code>AVERROR_EOF</code> 是"流结束"；负数且不是 EAGAIN/EOF 才是真错误，要打印出来；返回值 &gt;= 0 表示成功拿到一个包，<strong>处理完继续循环</strong>——因为同一次 send 可能触发多个输出，绝不能在拿了一个包后就跳出。开头编码时"吞帧"尤其容易让人误判：codec 可能连吃好几帧输入都不吐一个包（缓冲在攒货），这时 receive 返回 EAGAIN 是教科书级的正常现象。</p>
+
+  <pre><code><span class="cmt">// 四路分支的标准写法（含错误打印，素材同款风格）</span>
+int ret = <span class="fn">avcodec_receive_packet</span>(ctx, pkt);
+<span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span>) {
+    <span class="cmt">// 正常：codec 需要新输入，退出接收循环</span>
+    <span class="kw">break</span>;
+} <span class="kw">else if</span> (ret == <span class="param">AVERROR_EOF</span>) {
+    <span class="cmt">// 流结束：只有 draining mode（flush）后才会返回</span>
+    <span class="kw">break</span>;
+} <span class="kw">else if</span> (ret &lt; <span class="num">0</span>) {
+    <span class="fn">av_log</span>(NULL, <span class="param">AV_LOG_ERROR</span>, <span class="str">"Could not encode frame: %s\n"</span>,
+           <span class="fn">av_err2str</span>(ret));
+    return ret;
+}
+<span class="cmt">// ret &gt;= 0：成功拿到一个压缩包，处理它，然后继续循环</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：最阴险的写法是"<code>if (receive(&gt;= 0)) 处理</code>"——每帧只尝试收一次。在 x264 上它偶尔能"工作"（多数时候每 send 恰好触发一个输出），于是上线几个月都平安无事，直到某个素材的缓冲节奏一变，帧就悄悄丢了。官方契约写得明明白白：<strong>0 个或多于 1 个都是合法输出</strong>，把运气当设计，总有一天会踩雷。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>还有个细节：素材笔记说"对于每个输入的 packet 或 frame，codec 一般会输出一个，<strong>但是也有可能输出 0 个或者多于 1 个</strong>"。本章实测里"多于 1 个"最壮观的现场在 flush 阶段——<code>send_frame(NULL)</code> 只送了一个输入，receive 循环却连续吐出 36 个包（11.4 节表格）。一个输入 → 36 个输出，这就是契约里"多于 1 个"的实锤。</p>
+  </div>
+
+  <!-- ========== 11.4 实测：只 receive 一次，丢了 24% 的帧 ========== -->
+  <h2>11.4 实测：只 receive 一次，丢了 24% 的帧</h2>
+
+  <p>推理到这一步，需要物证。我们写一个最小 send/receive 编码器 <code>enc_sr.c</code>：程序内部生成 320×240 的 yuv420p 渐变画面（不需要任何外部素材文件），libx264 编码，GOP 25 帧、最多 3 个 B 帧，共 150 帧 = 6 秒（25 fps）。同一份代码支持两种模式：<code>once</code>（每帧 send 后只 receive 一次，不 flush——11.1 节的错误写法）和 <code>loop</code>（send 后 while receive 直到 EAGAIN，结尾 flush——11.3 节的正确模板）。先编译（本机实测命令）：</p>
+
+  <pre><code><span class="cmt"># 编译（macOS arm64，Homebrew ffmpeg-full 8.1.1 实测通过）</span>
+gcc -O2 -o enc_sr enc_sr.c $(pkg-config --cflags --libs libavcodec libavformat libavutil)</code></pre>
+
+  <span class="cmt">// enc_sr.c —— 最小 send/receive 编码器（完整源码，实测版本）</span>
+#include <span class="type">&lt;stdio.h&gt;</span>
+#include <span class="type">&lt;stdlib.h&gt;</span>
+#include <span class="type">&lt;string.h&gt;</span>
+#include <span class="type">&lt;libavcodec/avcodec.h&gt;</span>
+#include <span class="type">&lt;libavutil/imgutils.h&gt;</span>
+
+<span class="kw">static const int</span> W = <span class="num">320</span>, H = <span class="num">240</span>, FPS = <span class="num">25</span>, BFRAMES = <span class="num">3</span>;
+
+<span class="cmt">// 生成第 n 帧：水平渐变 + 亮度递增，保证每帧内容不同</span>
+<span class="kw">static void</span> <span class="fn">fill_frame</span>(<span class="type">AVFrame</span> *f, int n) {
+    <span class="kw">for</span> (int y = <span class="num">0</span>; y &lt; H; y++)
+        <span class="kw">for</span> (int x = <span class="num">0</span>; x &lt; W; x++)
+            f-&gt;data[<span class="num">0</span>][y * f-&gt;linesize[<span class="num">0</span>] + x] =
+                (x * <span class="num">255</span> / W + n * <span class="num">3</span>) &amp; <span class="num">0xff</span>;
+    memset(f-&gt;data[<span class="num">1</span>], <span class="num">128</span>, f-&gt;linesize[<span class="num">1</span>] * H / <span class="num">2</span>);
+    memset(f-&gt;data[<span class="num">2</span>], <span class="num">128</span>, f-&gt;linesize[<span class="num">2</span>] * H / <span class="num">2</span>);
+}
+
+int <span class="fn">main</span>(int argc, char **argv) {
+    int once = strcmp(argv[<span class="num">1</span>], <span class="str">"once"</span>) == <span class="num">0</span>;
+    int nframes = argc &gt; <span class="num">2</span> ? atoi(argv[<span class="num">2</span>]) : <span class="num">150</span>;
+
+    const <span class="type">AVCodec</span> *codec = <span class="fn">avcodec_find_encoder_by_name</span>(<span class="str">"libx264"</span>);
+    <span class="type">AVCodecContext</span> *ctx = <span class="fn">avcodec_alloc_context3</span>(codec);
+    ctx-&gt;width = W; ctx-&gt;height = H;
+    ctx-&gt;pix_fmt = <span class="param">AV_PIX_FMT_YUV420P</span>;
+    ctx-&gt;time_base = (<span class="type">AVRational</span>){<span class="num">1</span>, FPS};
+    ctx-&gt;framerate = (<span class="type">AVRational</span>){FPS, <span class="num">1</span>};
+    ctx-&gt;gop_size = <span class="num">25</span>;
+    ctx-&gt;max_b_frames = BFRAMES;      <span class="cmt">// 开 B 帧：让缓冲有货可丢</span>
+    <span class="fn">avcodec_open2</span>(ctx, codec, NULL);
+
+    <span class="type">FILE</span> *out = fopen(<span class="str">"out.h264"</span>, <span class="str">"wb"</span>);
+    <span class="type">AVFrame</span> *frame = <span class="fn">av_frame_alloc</span>();
+    frame-&gt;format = ctx-&gt;pix_fmt;
+    frame-&gt;width = W; frame-&gt;height = H;
+    <span class="fn">av_frame_get_buffer</span>(frame, <span class="num">32</span>);
+    <span class="type">AVPacket</span> *pkt = <span class="fn">av_packet_alloc</span>();
+    long sent = <span class="num">0</span>, got = <span class="num">0</span>, eagain = <span class="num">0</span>, flushed = <span class="num">0</span>;
+
+    <span class="kw">for</span> (int n = <span class="num">0</span>; n &lt; nframes; n++) {
+        <span class="fn">fill_frame</span>(frame, n);
+        frame-&gt;pts = n;
+        <span class="kw">if</span> (<span class="fn">avcodec_send_frame</span>(ctx, frame) &lt; <span class="num">0</span>) <span class="kw">break</span>;
+        sent++;
+
+        <span class="kw">if</span> (once) {                   <span class="cmt">// 错误版：只 receive 一次</span>
+            int ret = <span class="fn">avcodec_receive_packet</span>(ctx, pkt);
+            <span class="kw">if</span> (ret &gt;= <span class="num">0</span>) { fwrite(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out); got++; }
+            <span class="kw">else if</span> (ret == <span class="param">AVERROR(EAGAIN)</span>) eagain++;
+        } <span class="kw">else</span> {                     <span class="cmt">// 正确版：while receive 直到 EAGAIN</span>
+            <span class="kw">for</span> (<span class="op">;;</span>) {
+                int ret = <span class="fn">avcodec_receive_packet</span>(ctx, pkt);
+                <span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span>) { eagain++; <span class="kw">break</span>; }
+                <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+                fwrite(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out); got++;
+            }
+        }
+    }
+
+    <span class="kw">if</span> (!once) {                    <span class="cmt">// 结尾 flush：把缓冲里的帧全挤出来</span>
+        <span class="fn">avcodec_send_frame</span>(ctx, NULL);  <span class="cmt">// NULL = 进入 draining mode</span>
+        <span class="kw">for</span> (<span class="op">;;</span>) {
+            int ret = <span class="fn">avcodec_receive_packet</span>(ctx, pkt);
+            <span class="kw">if</span> (ret == <span class="param">AVERROR_EOF</span>) <span class="kw">break</span>;
+            <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+            fwrite(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out); got++; flushed++;
+        }
+    }
+
+    <span class="fn">printf</span>(<span class="str">"mode=%s frames=%d sent=%ld got=%ld (flush=%ld) eagain=%ld\n"</span>,
+           once ? <span class="str">"once"</span> : <span class="str">"loop"</span>, nframes, sent, got, flushed, eagain);
+    <span class="fn">printf</span>(<span class="str">"duration=%.2fs (got/fps)  期望 %.2fs\n"</span>,
+           (double)got / FPS, (double)nframes / FPS);
+    return <span class="num">0</span>;
+}
+
+  <p>运行两个模式，输出对比触目惊心（本机真实输出，节选 x264 统计后）——同一份输入，<strong>once 模式只拿到 114 个包（4.56 秒），loop 模式拿到 150 个包（6.00 秒），整整丢了 36 帧、24%</strong>。把同样的逻辑放到 10 秒素材上：10 × 24% ≈ 2.4 秒，正好是素材笔记"10s 变成 7s"的量级。丢掉的 36 帧不是随机帧，是 x264 统计里都没出现的帧——once 模式结束时 x264 只报告了 I:5 / P:109 共 114 帧，另外 36 帧还在缓冲里没编完，flush 一缺，全部蒸发。</p>
+
+  <pre><code><span class="cmt"># ./enc_sr once 150 —— 错误写法（真实输出，节选）</span>
+mode=once frames=<span class="num">150</span> sent=<span class="num">150</span> got=<span class="num">114</span> (flush=<span class="num">0</span>) eagain=<span class="num">36</span>
+duration=<span class="num">4.56</span>s (got/fps)  期望 <span class="num">6.00</span>s
+frame I:<span class="num">5</span>     Avg QP:<span class="num">28.97</span>  size:   <span class="num">296</span>
+frame P:<span class="num">109</span>   Avg QP:<span class="num">25.12</span>  size:    <span class="num">86</span>
+<span class="ann">&lt;-</span> 114 个包全是 I/P；36 帧还在缓冲里没编完，就永远没了</code></pre>
+
+  <pre><code><span class="cmt"># ./enc_sr loop 150 —— 正确写法（真实输出，节选）</span>
+mode=loop frames=<span class="num">150</span> sent=<span class="num">150</span> got=<span class="num">150</span> (flush=<span class="num">36</span>) eagain=<span class="num">150</span>
+duration=<span class="num">6.00</span>s (got/fps)  期望 <span class="num">6.00</span>s
+frame I:<span class="num">7</span>     Avg QP:<span class="num">29.60</span>  size:   <span class="num">260</span>
+frame P:<span class="num">143</span>   Avg QP:<span class="num">25.11</span>  size:    <span class="num">86</span>
+<span class="ann">&lt;-</span> flush 补出 36 个包；eagain=150 说明每次 send 后都正常等到缓冲空</code></pre>
+
+  <p>再深挖一步：缓冲到底有多深？缓冲里是什么？把线程数和 B 帧上限当成变量重跑（enc_threads 实验，同一渐变素材、150 帧），得到一张完整的"丢帧地图"（全部真实输出）：</p>
+
+  <table>
+    <tr><th>线程数</th><th>max_b_frames</th><th>once 输出</th><th>loop 输出</th><th>flush 补出</th><th>丢帧数</th></tr>
+    <tr><td>自动（多线程）</td><td>3</td><td>114</td><td>150</td><td>36</td><td>36</td></tr>
+    <tr><td>1（单线程）</td><td>3</td><td>124</td><td>150</td><td>26</td><td>26</td></tr>
+    <tr><td>2</td><td>3</td><td>119</td><td>150</td><td>31</td><td>31</td></tr>
+    <tr><td>4</td><td>3</td><td>117</td><td>150</td><td>33</td><td>33</td></tr>
+    <tr><td>自动</td><td>0</td><td>117</td><td>150</td><td>33</td><td>33</td></tr>
+    <tr><td>自动</td><td>5</td><td>112</td><td>150</td><td>38</td><td>38</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>这张表读三遍，破案就完成了：<strong>① loop 那一列永远等于 150</strong>——正确循环 + flush 在任何线程数、任何 B 帧设置下都一帧不丢，这是模板的可靠性证明；<strong>② once 丢的帧数恰好等于 flush 补出的帧数</strong>——丢的就是缓冲里没取走的货；<strong>③ 缓冲深度 = B 帧延迟 + 线程 lookahead</strong>——bframes 从 0 加到 5，丢帧从 33 涨到 38（B 帧贡献），而 bframes=0 时仍丢 33（多线程 lookahead 贡献，单线程则恒 26）。缓冲不是玄学，是可测量、可解释的。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：once 模式在本素材上"循环内恰好每 send 一个输出"，所以循环里没丢、全丢在 flush——但这不代表"只 receive 一次"安全。一旦素材节奏变化触发一次多输出（比如缓冲满时一次吐两包），第二个包当场丢失。官方契约"0 个或多于 1 个"是编码器的物理属性，不是可选项。<strong>用 while 循环 + flush，是唯一不需要赌运气的写法。</strong></p>
+  </div>
+
+  <!-- ========== 11.5 生产代码解剖：素材里的 while(true) 循环 ========== -->
+  <h2>11.5 生产代码解剖：素材里的 while(true) 循环</h2>
+
+  <p>回到素材笔记。当年那个生产转码器其实已经用上了正确模式——它的 <code>encodeMediaFrame()</code> 函数里有一个著名的 <code>while(true)</code> 循环（素材原文第 1514-1559 行）：send 一帧之后进入循环，反复 <code>avcodec_receive_packet()</code>，直到 EAGAIN 或 EOF 才 <code>goto cleanup</code> 返回。这个循环就是 11.3 节模板的生产形态：<strong>EAGAIN 走 cleanup 不是错误，而是"本次输入处理完毕，等下一个输入"的正常收尾</strong>。看懂它，生产级转码器的骨架就有了。</p>
+
+  <p>循环体里还有三件必做的正经事，逐一看：<strong>① <code>outputPacket.stream_index = streamIndex</code></strong>——封装器按流索引归类，多流文件（视频+音频）里漏设这行，包会被写进错误的流；<strong>② <code>av_packet_rescale_ts()</code></strong>——把包的时间戳从编码器刻度换算到容器刻度，这正是第 4 章预告的"丢帧排错第一嫌疑"：编码器用 1/25 刻度、MP4 容器用 1/12800，不换算，播放器按旧刻度读数，音画直接错乱；<strong>③ pts2ms 进度</strong>——<code>pts × av_q2d(time_base) × 1000</code> 把时间戳换算成毫秒，音视频两条轨取最大值，保证进度条单调向前。素材代码里的 <code>av_log("progress: %s")</code> 和 <code>sendProgress()</code> 就是在干这件事。</p>
+
+  <pre><code><span class="cmt">/* 素材真实代码（原文件 1514-1559 行），已去掉项目特有字段，逻辑未改 */</span>
+<span class="kw">while</span> (<span class="num">true</span>) {
+    <span class="cmt">// 每个输入 packet/frame 一般输出 1 个，但也可能 0 个或多于 1 个</span>
+    <span class="cmt">// 多于 1 个的情况，用 while 循环解决</span>
+    error = <span class="fn">avcodec_receive_packet</span>(encCtx, &amp;outputPacket);
+    <span class="kw">if</span> (error == <span class="param">AVERROR(EAGAIN)</span>) {      <span class="cmt">// 需要新输入</span>
+        error = <span class="num">0</span>;
+        <span class="kw">goto</span> cleanup;                  <span class="cmt">// 收尾返回，等下一个输入</span>
+    } <span class="kw">else if</span> (error == <span class="param">AVERROR_EOF</span>) {  <span class="cmt">// 流结束（draining 后）</span>
+        error = <span class="num">0</span>;
+        <span class="kw">goto</span> cleanup;
+    } <span class="kw">else if</span> (error &lt; <span class="num">0</span>) {         <span class="cmt">// 真错误</span>
+        <span class="fn">av_log</span>(NULL, <span class="param">AV_LOG_ERROR</span>, <span class="str">"Could not encode frame\n"</span>);
+        <span class="kw">goto</span> cleanup;
+    } <span class="kw">else</span> {
+        *dataPresent = <span class="num">1</span>;              <span class="cmt">// 有包写出（flush 循环靠它判断）</span>
+    }
+
+    outputPacket.stream_index = streamIndex;   <span class="cmt">// 封装器按流索引归类</span>
+
+    <span class="cmt">// 时间基换算：编码器刻度 -&gt; 容器刻度（第 4 章预告的钥匙）</span>
+    <span class="fn">av_packet_rescale_ts</span>(&amp;outputPacket, encCtx-&gt;time_base,
+                         ofmtCtx-&gt;streams[streamIndex]-&gt;time_base);
+
+    <span class="cmt">// 进度：pts 转毫秒，音视频两条轨取最大值保证一直向前</span>
+    pts2ms = outputPacket.pts *
+             <span class="fn">av_q2d</span>(ofmtCtx-&gt;streams[streamIndex]-&gt;time_base) * <span class="num">1000</span>;
+    <span class="kw">if</span> (pts2ms &gt; _pts2ms) _pts2ms = pts2ms;
+    <span class="fn">av_log</span>(NULL, <span class="param">AV_LOG_INFO</span>, <span class="str">"progress: %s\n"</span>, <span class="fn">printProgress</span>().c_str());
+
+    <span class="kw">if</span> (*dataPresent &amp;&amp;
+        (error = <span class="fn">av_interleaved_write_frame</span>(ofmtCtx, &amp;outputPacket)) &lt; <span class="num">0</span>) {
+        <span class="fn">av_log</span>(NULL, <span class="param">AV_LOG_ERROR</span>, <span class="str">"Could not write frame, %s\n"</span>,
+               <span class="fn">av_err2str</span>(error));
+        <span class="kw">goto</span> cleanup;
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt"># 两个换算工具的真实签名（本机头文件）</span>
+<span class="cmt"># /opt/homebrew/include/libavcodec/packet.h 第 930 行</span>
+void <span class="fn">av_packet_rescale_ts</span>(<span class="type">AVPacket</span> *pkt, <span class="type">AVRational</span> tb_src,
+                          <span class="type">AVRational</span> tb_dst);   <span class="cmt">// 把 pkt 的 pts/dts 从 tb_src 换到 tb_dst</span>
+
+<span class="cmt"># /opt/homebrew/include/libavutil/rational.h 第 104 行</span>
+<span class="kw">static inline double</span> <span class="fn">av_q2d</span>(<span class="type">AVRational</span> a) {
+    return a.num / (double)a.den;   <span class="cmt">// 分数转小数：{1,25} -&gt; 0.04</span>
+}</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别被 <code>goto cleanup</code> 吓到——在这里它几乎是"无害 goto"。EAGAIN 和 EOF 两条路径都把 <code>error</code> 置 0 再走，语义是"正常结束本轮"；只有第三条（真错误）才带着错误码退出。它的反面教材是把 EAGAIN 当成错误处理（打印、中断），那样 receive 循环就被打断了，缓冲里的输出再也取不出来——又一个丢帧现场。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p><code>dataPresent</code> 这个标记配合素材第 1653-1669 行的 flush 循环用：流结束时 <code>do { dataWritten = 0; encodeMediaFrame(NULL, ...); } while (dataWritten)</code>——反复以 NULL 调用编码函数，直到某轮一个包都没写出。<code>encodeMediaFrame</code> 内部收到 NULL 时调 <code>avcodec_send_frame(NULL)</code> 进入 draining mode，receive 循环吐完剩余缓冲、返回 EOF，循环自然结束。这就是生产环境里 flush 的完整形态，第 12 章我们会系统拆它。</p>
+  </div>
+
+  <!-- ========== 11.6 完整转码器：MP4 封装实测 ========== -->
+  <h2>11.6 完整转码器：MP4 封装实测</h2>
+
+  <p>最后把模板接到真实输出上：写一个完整转码器 <code>enc_mp4.c</code>，把渐变帧编码成 H.264 并封装成 MP4 文件。与 enc_sr 相比多了三样东西：<code>AVFormatContext</code>（输出容器）、<code>avformat_new_stream()</code> + <code>avcodec_parameters_from_context()</code>（把编码参数登记成流）、<code>avformat_write_header()</code>/<code>av_write_trailer()</code>（容器开合）。编码循环则原封不动套用 11.3 模板，再加上素材生产代码里的 stream_index、rescale_ts、pts 毫秒进度——三条线在这里汇合。</p>
+
+  <p>核心函数 <code>encode_one()</code> 接受"编码一帧或 flush（frame 为 NULL）"，内部就是 send + while receive 的标准循环，产出每个包都设置 stream_index、换算时间基、更新进度、写入容器（<code>av_interleaved_write_frame</code> 会按 dts 排序后写盘）：</p>
+
+  <pre><code><span class="cmt">// enc_mp4.c 核心函数（真实代码，实测编译运行）</span>
+<span class="cmt">// 编码一帧（或 flush，frame == NULL）：send 后反复 receive 直到 EAGAIN/EOF</span>
+static int <span class="fn">encode_one</span>(<span class="type">AVCodecContext</span> *enc, <span class="type">AVFormatContext</span> *ofmt,
+                      int stream_index, <span class="type">AVFrame</span> *frame,
+                      long *got, long *pts_ms) {
+    int ret = <span class="fn">avcodec_send_frame</span>(enc, frame);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) return ret;
+
+    <span class="type">AVPacket</span> *pkt = <span class="fn">av_packet_alloc</span>();
+    <span class="kw">for</span> (;;) {
+        ret = <span class="fn">avcodec_receive_packet</span>(enc, pkt);
+        <span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span> || ret == <span class="param">AVERROR_EOF</span>) { ret = <span class="num">0</span>; <span class="kw">break</span>; }
+        <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+
+        (*got)++;
+        pkt-&gt;stream_index = stream_index;   <span class="cmt">// 封装器按流索引归类</span>
+
+        <span class="cmt">// 时间基换算：编码器刻度 -&gt; 容器刻度</span>
+        <span class="fn">av_packet_rescale_ts</span>(pkt, enc-&gt;time_base,
+                             ofmt-&gt;streams[stream_index]-&gt;time_base);
+
+        <span class="cmt">// 进度：pts 换算成毫秒，取最大</span>
+        long ms = (long)(pkt-&gt;pts *
+                    <span class="fn">av_q2d</span>(ofmt-&gt;streams[stream_index]-&gt;time_base) * <span class="num">1000</span>);
+        <span class="kw">if</span> (ms &gt; *pts_ms) *pts_ms = ms;
+
+        ret = <span class="fn">av_interleaved_write_frame</span>(ofmt, pkt);   <span class="cmt">// 写容器（内部排序）</span>
+        <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+    }
+    <span class="fn">av_packet_free</span>(&amp;pkt);
+    return ret;
+}</code></pre>
+
+  <pre><code><span class="cmt">// main 中的关键片段（完整源码见 enc_mp4.c，fill_frame 等与 11.4 相同）</span>
+<span class="fn">avformat_alloc_output_context2</span>(&amp;ofmt, NULL, NULL, <span class="str">"out.mp4"</span>);
+<span class="type">AVStream</span> *st = <span class="fn">avformat_new_stream</span>(ofmt, NULL);
+<span class="fn">avcodec_parameters_from_context</span>(st-&gt;codecpar, enc);
+st-&gt;time_base = enc-&gt;time_base;
+<span class="fn">avio_open</span>(&amp;ofmt-&gt;pb, <span class="str">"out.mp4"</span>, <span class="param">AVIO_FLAG_WRITE</span>);
+<span class="fn">avformat_write_header</span>(ofmt, NULL);     <span class="cmt">// 返回值要检查！见下方警告</span>
+
+<span class="kw">for</span> (int n = <span class="num">0</span>; n &lt; nframes; n++) {
+    <span class="fn">fill_frame</span>(frame, n);
+    frame-&gt;pts = n;
+    <span class="kw">if</span> (<span class="fn">encode_one</span>(enc, ofmt, st-&gt;index, frame, &amp;got, &amp;pts_ms) &lt; <span class="num">0</span>) <span class="kw">break</span>;
+}
+<span class="fn">encode_one</span>(enc, ofmt, st-&gt;index, NULL, &amp;got, &amp;pts_ms);  <span class="cmt">// flush 收尾</span>
+<span class="fn">av_write_trailer</span>(ofmt);</code></pre>
+
+  <p>编译运行，再用 ffprobe 验尸（本机真实输出）：150 帧进、<strong>150 个包出</strong>，进度停在 5960 毫秒（最后一帧 pts = 149/25 秒 = 5.96 秒）——一帧不丢，且时间戳全部正确换算进了 MP4 的 1/12800 刻度。容器元数据 <code>nb_frames=150</code> 确认所有包都在文件里。解码冒烟测试用 <code>ffmpeg -f null</code>（解码全部帧但丢弃输出）比 ffplay 可靠：本机无图形会话时 ffplay 会报 <code>Failed to open file or configure filtergraph</code>——连 ffmpeg 命令行生成的文件它也打不开，是环境问题，不是文件问题。</p>
+
+  <pre><code><span class="cmt"># 编译 + 运行 + 验尸（本机真实输出）</span>
+$ gcc -O2 -o enc_mp4 enc_mp4.c $(pkg-config --cflags --libs libavcodec libavformat libavutil)
+enc_mp4.c:78:5: warning: ignoring return value of function declared with
+  'warn_unused_result' attribute [-Wunused-result]
+$ ./enc_mp4 150
+frames_in=<span class="num">150</span> packets_out=<span class="num">150</span> duration=<span class="num">6.00</span>s progress=<span class="num">5960</span>ms
+$ ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames,duration \
+    -of default=noprint_wrappers=1 out.mp4
+duration=<span class="num">5.960000</span>
+nb_frames=<span class="num">150</span>
+$ ffmpeg -v error -i out.mp4 -f null -        <span class="cmt"># 解码冒烟：无任何报错，退出码 0</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：上面的编译警告不是噪音——<code>avformat_write_header()</code> 的返回值没检查。磁盘满、目录不可写时它返回负数，不检查就继续写，产出一个残缺文件，ffprobe 都救不回来。生产代码里每个 API 的返回值都要检查，这是素材代码 <code>if ((error = ...) &lt; 0) goto cleanup</code> 写法的意义。本章练习 2 会考这一点。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>注意两个数字的微妙差异：进度 <code>5960ms</code> vs 期望 <code>6000ms</code>。150 帧的最后一帧 pts 是 149，149/25 = 5.96 秒——MP4 封装器记录的 duration 取的是最后一个包的起始时间，所以 <code>duration=5.960000</code> 而 <code>nb_frames=150</code> 帧数分毫不差。这个"最后一帧的收尾"细节，连同 draining mode 的完整机制，就是第 12 章《flush 与时间基：收尾的艺术》的主角——丢帧的另一个案发现场：<strong>不 flush，缓冲里的 B 帧就随进程一起消失</strong>。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：破案基本功 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>调用 <code>avcodec_receive_packet()</code> 返回 <code>AVERROR(EAGAIN)</code>，正确的理解是：(A) 编码出错，立即终止程序；(B) codec 需要新的输入才能产出新输出，继续送下一帧；(C) 流结束；(D) 缓冲区溢出。另外回答：官方契约里，一个输入帧对应几个输出包？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回看 11.2 节的 tip 和官方文档原话："Repeat this call until it returns AVERROR(EAGAIN) or an error"；输出数量是"typically 1, but 0 or more than 1"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>选 B。EAGAIN = "缓冲空了，需要新输入"，是正常状态不是错误；EOF 才是流结束（选 C 的陷阱：EOF 只在 draining 模式后出现）。输出契约：通常 1 个，但可能是 0 个（帧进缓冲）或多于 1 个（缓冲满一次吐多个、flush 时吐完剩余）——所以必须用 while 循环 receive 到 EAGAIN，再处理下一帧。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：现场找错 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面这段"转码"代码上线后，用户反馈输出视频时长忽长忽短。指出至少两处会导致丢帧或损坏文件的错误，并给出修复后的循环：</p>
+      <pre><code><span class="kw">for</span> (int n = <span class="num">0</span>; n &lt; nframes; n++) {
+    <span class="fn">avcodec_send_frame</span>(ctx, frame);
+    <span class="fn">avcodec_receive_packet</span>(ctx, pkt);      <span class="cmt">// 只调用，不检查返回值</span>
+    <span class="fn">fwrite</span>(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out);  <span class="cmt">// 直接写</span>
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 11.3 节模板：① receive 的返回值有四种情况，只调用不检查，EAGAIN 时 pkt 里是垃圾数据却照样 fwrite；② 一次 receive 只能拿一个输出，多输出会丢；③ 结尾没有 flush。三处全中才是完整答案。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>三处错误：<strong>① 不检查 receive 返回值</strong>——EAGAIN 时 pkt 没有有效数据，fwrite 写出垃圾字节；<strong>② 每帧只 receive 一次</strong>——一次 send 可能触发多个输出（尤其 flush 时），多余的包全丢；<strong>③ 没有 flush</strong>——缓冲里的 B 帧和线程缓冲帧永远出不来（11.4 实测：150 帧丢 36 帧）。修复 = 11.3 节模板：send 后 <code>while (receive(&gt;= 0)) 处理</code> 直到 EAGAIN，全部输入送完后 <code>send_frame(NULL)</code> 进入 draining 并 receive 到 EOF，每个返回值都判断。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：补全 flush <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面这段 flush 代码少了关键的一步，导致它永远不会结束。补全它，并说明 <code>AVERROR_EOF</code> 在这里起什么作用：</p>
+      <pre><code><span class="cmt">// 流结束时清空编码器缓冲（不完整版）</span>
+<span class="fn">avcodec_send_frame</span>(ctx, NULL);        <span class="cmt">// 进入 draining mode</span>
+<span class="kw">for</span> (;;) {
+    int ret = <span class="fn">avcodec_receive_packet</span>(ctx, pkt);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;              <span class="cmt">// 这里有问题</span>
+    <span class="fn">fwrite</span>(pkt-&gt;data, <span class="num">1</span>, pkt-&gt;size, out);
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>draining 模式下 receive 返回 EOF 之前，还会先返回 EAGAIN 吗？官方文档说不会——"unless you forgot to enter draining mode"。那么 <code>ret &lt; 0</code> 这一路可能包含两种不同的负值，它们的含义分别是什么？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>问题在于 <code>ret &lt; 0</code> 把 EAGAIN 和 EOF 混为一谈。draining 模式下不会返回 EAGAIN，但严谨写法要区分：<code>if (ret == AVERROR_EOF) break;</code>（正常收尾）；<code>if (ret &lt; 0) { 报错; break; }</code>（真错误）。EOF 在此处的语义 = "缓冲已清空，编码器确认没有更多输出了"，它是 flush 完成的信号。官方文档原话：draining 模式下 receive 不会返回 EAGAIN，<strong>除非你忘了进入 draining 模式</strong>——所以如果这里收到 EAGAIN，先回去检查 send(NULL) 有没有执行。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：复现与推演 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>把 enc_sr.c 的 <code>max_b_frames</code> 改成 0 和 5（其余不变，用默认多线程），分别重跑 once 模式，记录丢帧数。再回答：为什么 bframes=0 时仍然会丢帧？缓冲的构成是什么？（提示：参考 11.4 节的表格，跑完把三个数字对照 33 / 36 / 38。）</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>改一处常量重编译即可：<code>ctx-&gt;max_b_frames = 0</code> 和 <code>= 5</code>。观察 once 模式的 got 值。bframes=0 意味着编码器完全不编 B 帧，但 x264 多线程模式下还有 lookahead 缓冲（提前分析帧），它同样会延迟输出。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>本机实测：bframes=0 → 丢 33 帧；bframes=3 → 丢 36 帧；bframes=5 → 丢 38 帧（均为默认多线程、150 帧输入）。结论：<strong>缓冲 = B 帧延迟 + 线程 lookahead 两部分</strong>。B 帧上限每加 1，缓冲大约深 1 帧（3→5 多丢 2 帧）；但 bframes=0 时仍有 33 帧缓冲——那是 x264 多线程 lookahead 的贡献（单线程对照只有 26）。无论哪部分，once 写法丢的都是"flush 时才能取出的缓冲帧"，而正确循环 + flush 在三种设置下都输出完整 150 帧。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

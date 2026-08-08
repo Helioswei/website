@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第13章：自定义 IO：内存与流式输入输出 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter13.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "第13章：自定义 IO：内存与流式输入输出",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter13.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  },
+  "isPartOf": {
+    "@type": "CollectionPage",
+    "name": "FFmpeg 音视频实战"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="13" data-root="../" data-site="learn">
+<div id="site-header"></div>
+  <nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+  <div class="container">
+    <article class="chapter">
+      <h1>第13章：自定义 IO：内存与流式输入输出</h1>
+      <p class="chapter-subtitle">第 9-12 章把「打开输出 → 配编码器 → send/receive → flush」走通了，但管道的两头一直拴在磁盘文件上——这一章把「写到哪里、从哪里读」换成你自己的回调：内存区不落盘直传、网络流边下边转，用 avio_alloc_context 接管 FFmpeg 的输入输出</p>
+
+      <div class="mentor-card">
+        <div class="mentor-header">
+          <span class="mentor-icon">🪶</span>
+          <div class="mentor-info">
+            <h3>本章导师：诸葛亮</h3>
+            <p class="mentor-method">核心方法论：运筹帷幄</p>
+          </div>
+        </div>
+        <div class="mentor-quote">
+          <p>「运筹帷幄之中，决胜千里之外。转码的千军万马，都是围绕一条数据流在调度——而流的源头与归处，不过是两个回调函数。本章我们把 FFmpeg 的输入输出从『磁盘文件』换成『内存与网络』：管线一根不动，只换两头的机关，胜负即在其中。」</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <div class="tip-title">本章前置</div>
+        <p>需要第 9 章的输出骨架（avformat_alloc_output_context2 / avformat_new_stream / avcodec_parameters_from_context）、第 11 章的 send/receive 循环、第 12 章的 flush 收尾。本章是这条 C API 主线的收官战：<strong>把 avio_open 换成 avio_alloc_context，其余一切照旧</strong>——这正是自定义 IO 最大的价值。</p>
+      </div>
+
+      <!-- ========== 13.1 为什么需要自定义 IO ========== -->
+      <h2>13.1 为什么需要自定义 IO：从文件句柄到回调</h2>
+
+      <p>回顾第 9-12 章：我们的输出打开方式是 <code>avio_open(&amp;ofmt_ctx-&gt;pb, "out.mp4", AVIO_FLAG_WRITE)</code>——FFmpeg 帮你打开一个磁盘文件，之后所有封装数据都写进这个文件句柄。这是<strong>默认文件 IO</strong>：路径是磁盘路径，读写交给操作系统。它简单可靠，但有个隐含前提：<strong>你的数据必须能落盘</strong>。三个真实场景打破这个前提：</p>
+
+      <p><strong>① 内存区直传</strong>——视频在内存里，不想写临时文件再读回来；处理完的字节流要直接塞给下一步（加密、上传），根本不经过磁盘。<strong>② 网络流</strong>——素材原文的场景：从远程（S3 对象存储）读大文件，下载整个文件既占磁盘又费时间，不如边下边转：<code>read_packet</code> 从网络读、<code>write_packet</code> 往网络写。<strong>③ 加密/私有协议流</strong>——数据经过你自己的加解密层或私有协议，只有你的代码知道字节从哪来、到哪去。三个场景本质相同：<strong>数据源/去向不是文件，而是一个由你完全控制的函数</strong>。FFmpeg 为此准备了 <code>AVIOContext</code>（自定义 IO 上下文）和工厂函数 <code>avio_alloc_context</code>。</p>
+
+      <pre><code><span class="cmt">// 默认路径（第 9-12 章）：avio_open 打开磁盘文件</span>
+<span class="type">AVFormatContext</span> *ofmt = <span class="kw">NULL</span>;
+<span class="fn">avformat_alloc_output_context2</span>(&amp;ofmt, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="str">"out.mp4"</span>);
+<span class="cmt">// ...建流、配编码器、开编码器（第 9 章九步）...</span>
+<span class="fn">avio_open</span>(&amp;ofmt-&gt;pb, <span class="str">"out.mp4"</span>, AVIO_FLAG_WRITE);   <span class="cmt">// ← 默认文件 IO</span>
+<span class="fn">avformat_write_header</span>(ofmt, <span class="kw">NULL</span>);
+<span class="cmt">// ...send/receive 循环 + flush（第 11、12 章）...</span>
+<span class="fn">av_write_trailer</span>(ofmt);
+<span class="fn">avio_closep</span>(&amp;ofmt-&gt;pb);                              <span class="cmt">// ← 关闭文件句柄</span></code></pre>
+
+      <pre><code><span class="cmt">// 自定义路径（本章）：avio_alloc_context 接管 pb，文件相关行全部消失</span>
+<span class="type">AVFormatContext</span> *ofmt = <span class="kw">NULL</span>;
+<span class="fn">avformat_alloc_output_context2</span>(&amp;ofmt, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="str">"mem.mp4"</span>); <span class="cmt">// 名字只用来猜封装器</span>
+<span class="cmt">// ...建流、配编码器、开编码器（和默认路径一字不差）...</span>
+ofmt-&gt;pb = <span class="fn">avio_alloc_context</span>(<span class="param">iobuf</span>, <span class="param">IOBUF_SIZE</span>, <span class="num">1</span>,
+                                  <span class="param">&amp;mem</span>, <span class="kw">NULL</span>, <span class="param">mem_write</span>, <span class="param">mem_seek</span>);
+<span class="fn">avformat_write_header</span>(ofmt, <span class="kw">NULL</span>);                    <span class="cmt">// ← 之后完全相同</span>
+<span class="cmt">// ...send/receive 循环 + flush（一字不差）...</span>
+<span class="fn">av_write_trailer</span>(ofmt);</code></pre>
+
+      <p>注意 <code>avformat_alloc_output_context2</code> 的最后一个参数：我们仍然传 <code>"mem.mp4"</code>——但此时没有任何文件被打开，这个名字<strong>只用来让 FFmpeg 猜封装器</strong>（.mp4 → MP4 muxer）。对比两段代码，改动只有一行加一行：加 <code>avio_alloc_context</code> 替换 <code>avio_open</code>，删掉 <code>avio_closep</code>。中间的建流、配参、send/receive、flush 全部原封不动——<strong>自定义 IO 换的是「管道两端」，不是「管道本身」</strong>。这正是诸葛亮式的运筹：管线的千军万马不动，只在关口换将。</p>
+
+      <table>
+        <thead>
+          <tr><th>维度</th><th>默认文件 IO（avio_open）</th><th>自定义 IO（avio_alloc_context）</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>数据去向/来源</td><td>磁盘文件（系统句柄）</td><td>你的回调（内存/网络/私有协议）</td></tr>
+          <tr><td>落盘</td><td>必然落盘</td><td>完全不落盘（由你决定）</td></tr>
+          <tr><td>seek</td><td>文件可自由定位</td><td>取决于你的 seek 回调（可为空）</td></tr>
+          <tr><td>典型场景</td><td>本地转码、批处理</td><td>内存直传、S3/HTTP 流、加密流</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <div class="tip-title">诸葛亮提示</div>
+        <p>素材（2019 年博客《ffmpeg-内存io模式》）一句话点破动机：「当文件很大的时候会占用本地的磁盘空间，同时下载的时间也比较的长」——转码的基础逻辑不变，仅仅是输入输出的读取方式不同，需要自己实现输入输出的函数。这句话放到今天依然成立：<strong>先想清楚数据流，再动手写回调</strong>。</p>
+      </div>
+
+      <!-- ========== 13.2 avio_alloc_context 签名 ========== -->
+      <h2>13.2 avio_alloc_context：七个参数与 opaque 传令兵</h2>
+
+      <p>自定义 IO 的核心是 <code>avio_alloc_context</code>——它分配一个 <code>AVIOContext</code>（FFmpeg 内部的 IO 抽象：带缓冲的读写层），并把你的三个回调（读、写、定位）挂上去。之后你把 <code>ofmt-&gt;pb</code>（或输入侧 <code>fmt-&gt;pb</code>）指向它，封装器/解封装器的一切读写请求都会经过你的回调。先看完整签名（FFmpeg 8.1.1，逐参数注释）：</p>
+
+      <pre><code><span class="type">AVIOContext</span> *<span class="fn">avio_alloc_context</span>(
+    <span class="type">unsigned char</span> *buffer,    <span class="cmt">// ① 内部缓冲：FFmpeg 读写时的中转站（av_malloc 分配）</span>
+    <span class="type">int</span> buffer_size,           <span class="cmt">// ② 缓冲大小（如 32KB：1 &lt;&lt; 15）</span>
+    <span class="type">int</span> write_flag,            <span class="cmt">// ③ 方向开关：1 = 输出（写），0 = 输入（读）</span>
+    <span class="type">void</span> *opaque,              <span class="cmt">// ④ 用户数据指针：回调与主程序之间的"传令兵"</span>
+    <span class="type">int</span> (*<span class="fn">read_packet</span>)(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size),  <span class="cmt">// ⑤ 读回调</span>
+    <span class="type">int</span> (*<span class="fn">write_packet</span>)(<span class="type">void</span> *opaque, <span class="kw">const</span> <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size), <span class="cmt">// ⑥ 写回调</span>
+    <span class="type">int64_t</span> (*<span class="fn">seek</span>)(<span class="type">void</span> *opaque, <span class="type">int64_t</span> offset, <span class="type">int</span> whence));       <span class="cmt">// ⑦ 定位回调</span>
+<span class="cmt">// 注意：⑤⑥⑦ 三个回调都可以传 NULL（用不到就不提供）；</span>
+<span class="cmt">// 返回的 AVIOContext 用 avio_context_free() 释放（不是 avio_close！）</span></code></pre>
+
+      <p>四个参数先说人话。<strong>① buffer / ② buffer_size</strong>：FFmpeg 的 IO 是带缓冲的——封装器写小段数据时先攒进这块内存，攒够再一次性调用你的 write_packet，缓冲大小影响回调调用频率，32KB 是常见选择。<strong>③ write_flag</strong>：方向开关，读/写方向的缓冲管理与 flush 行为完全不同。<strong>④ opaque</strong>：一个裸 <code>void*</code>，<strong>原样传回你的每个回调</strong>。诸葛亮点破它的作用：</p>
+
+      <div class="tip">
+        <div class="tip-title">诸葛亮提示：opaque 是"传令兵"</div>
+        <p>回调函数活在 FFmpeg 的领地（由它调用），而你的数据（内存缓冲区、网络连接、S3 客户端）活在你的领地。两者之间怎么通信？靠 opaque——<strong>你把装着状态的指针交给 avio_alloc_context，FFmpeg 每次调用回调时原样递回</strong>。回调里第一行通常是 <code>MemBuf *m = opaque;</code>。这就是"传令兵"：只认令牌（指针），不认主人。</p>
+      </div>
+
+      <p>三个回调的契约（诸葛亮：回调即军令，规矩要立清楚）：<strong>read_packet</strong> 把最多 buf_size 字节从你的数据源拷进 buf，返回实际读到的字节数，读到尽头返回 <code>AVERROR_EOF</code>；<strong>write_packet</strong> 把 buf 里 buf_size 字节写到你的目的地，返回写入的字节数；<strong>seek</strong> 按 whence（SEEK_SET/CUR/END）定位，成功返回新位置，做不到返回 -1。三个函数都要求<strong>同步返回</strong>——FFmpeg 会阻塞等待，这也是回调式 IO 最简单的形态。</p>
+
+      <pre><code><span class="cmt">// 三个回调的函数指针类型（记住 const 的位置——8.x 的写回调带 const）</span>
+<span class="kw">typedef</span> <span class="type">int</span> (*<span class="fn">ReadFn</span>)(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size);
+<span class="kw">typedef</span> <span class="type">int</span> (*<span class="fn">WriteFn</span>)(<span class="type">void</span> *opaque, <span class="kw">const</span> <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size);
+<span class="kw">typedef</span> <span class="type">int64_t</span> (*<span class="fn">SeekFn</span>)(<span class="type">void</span> *opaque, <span class="type">int64_t</span> offset, <span class="type">int</span> whence);
+<span class="cmt">// 第 13.3 节实测：写回调漏写 const 会直接编译报错——</span>
+<span class="cmt">// error: incompatible function pointer types（我们修过一次）</span></code></pre>
+
+      <div class="warning">
+        <p><strong>注意</strong>：素材（2019 年）写作回调签名是 <code>int write_buffer(void *opaque, uint8_t *buf, int buf_size)</code>——没有 const。现行 FFmpeg（8.x）的 <code>write_packet</code> 参数是 <code>const uint8_t *buf</code>：你的回调必须带上 const，否则编译器直接拒绝（incompatible function pointer types）。这是典型的「素材能编译的年代 ≠ 你的年代」。</p>
+      </div>
+
+      <!-- ========== 13.3 内存输出模式 ========== -->
+      <h2>13.3 内存输出模式：write_packet 回调实战</h2>
+
+      <p>先跑输出侧——这是本章实测的主战场。思路：把第 11 章模板 <code>enc_mp4.c</code> 的 <code>avio_open</code> 换成 <code>avio_alloc_context</code> + 内存写回调，编码 50 帧到内存 buffer，最后一次性 <code>fwrite</code> 落盘验证。先定义"传令兵"结构体和写回调：</p>
+
+      <pre><code><span class="cmt">// 内存缓冲区：write 回调与主程序之间的"传令兵"载体</span>
+<span class="kw">typedef</span> <span class="kw">struct</span> <span class="type">MemBuf</span> {
+    <span class="type">uint8_t</span> *data;   <span class="cmt">// 累积的输出字节</span>
+    <span class="type">size_t</span>   size;   <span class="cmt">// 已写入字节数</span>
+    <span class="type">size_t</span>   cap;    <span class="cmt">// 容量</span>
+} <span class="type">MemBuf</span>;
+
+<span class="cmt">// write_packet 回调：把 FFmpeg 递来的 buf 追加进内存（按需扩容）</span>
+<span class="kw">static</span> <span class="type">int</span> <span class="fn">mem_write</span>(<span class="type">void</span> *opaque, <span class="kw">const</span> <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size) {
+    <span class="type">MemBuf</span> *m = (<span class="type">MemBuf</span> *)opaque;
+    <span class="kw">if</span> ((<span class="type">size_t</span>)buf_size &gt; m-&gt;cap - m-&gt;size) {        <span class="cmt">// 空间不够就翻倍扩容</span>
+        <span class="type">size_t</span> ncap = m-&gt;cap ? m-&gt;cap * <span class="num">2</span> : <span class="num">1</span> &lt;&lt; <span class="num">16</span>;
+        <span class="kw">while</span> (ncap - m-&gt;size &lt; (<span class="type">size_t</span>)buf_size) ncap *= <span class="num">2</span>;
+        <span class="type">uint8_t</span> *nd = <span class="fn">av_realloc</span>(m-&gt;data, ncap);
+        <span class="kw">if</span> (!nd) <span class="kw">return</span> -<span class="num">1</span>;
+        m-&gt;data = nd;
+        m-&gt;cap = ncap;
+    }
+    <span class="fn">memcpy</span>(m-&gt;data + m-&gt;size, buf, (<span class="type">size_t</span>)buf_size);
+    m-&gt;size += (<span class="type">size_t</span>)buf_size;
+    <span class="kw">return</span> buf_size;                       <span class="cmt">// 返回写入字节数——必须如实</span>
+}</code></pre>
+
+      <p>回调的契约很简单：<strong>把 buf_size 个字节收下，返回收到的字节数</strong>。扩容逻辑就是普通 C 的动态数组；<code>av_realloc</code> 是 libavutil 的内存函数（与 av_malloc 配套，后面 av_free 释放）。真正干活的 <code>memcpy</code> 只有一行——因为内存输出就是「把字节流攒进一块 buffer」。接着在主程序里替换 avio_open：</p>
+
+      <pre><code><span class="cmt">// 主程序中的关键替换：avio_open 换成 avio_alloc_context</span>
+<span class="type">MemBuf</span> mem = {<span class="num">0</span>};
+<span class="type">unsigned char</span> *iobuf = <span class="fn">av_malloc</span>(<span class="num">1</span> &lt;&lt; <span class="num">15</span>);          <span class="cmt">// 内部缓冲 32KB</span>
+<span class="type">AVIOContext</span> *pb = <span class="fn">avio_alloc_context</span>(
+    iobuf, (<span class="num">1</span> &lt;&lt; <span class="num">15</span>),                            <span class="cmt">// buffer + 大小</span>
+    <span class="num">1</span>,                                           <span class="cmt">// write_flag = 1：输出方向</span>
+    &amp;mem,                                         <span class="cmt">// opaque：传令兵</span>
+    <span class="kw">NULL</span>,                                         <span class="cmt">// read_packet：输出侧不读</span>
+    <span class="param">mem_write</span>,                                   <span class="cmt">// write_packet：攒进内存</span>
+    <span class="param">mem_seek</span>);                                   <span class="cmt">// seek：模拟网络流，拒绝定位</span>
+pb-&gt;seekable = <span class="num">0</span>;   <span class="cmt">// 关键！如实声明"不可寻址"（13.4 节讲为什么）</span>
+ofmt-&gt;pb = pb;        <span class="cmt">// 挂到输出上下文——之后的一切照旧</span></code></pre>
+
+      <p><code>pb-&gt;seekable = 0</code> 这一行是本节埋的伏笔，先照抄，13.4 节实测定性。编码循环、flush、<code>av_write_trailer</code> 与第 11、12 章完全一致；收尾时把内存 buffer 一次性落盘并验证：</p>
+
+      <pre><code><span class="cmt">// 收尾：内存 buffer 一次性落盘，验证字节流可播放</span>
+<span class="type">FILE</span> *fp = <span class="fn">fopen</span>(<span class="str">"mem.mp4"</span>, <span class="str">"wb"</span>);
+<span class="fn">fwrite</span>(mem.data, <span class="num">1</span>, mem.size, fp);
+<span class="fn">fclose</span>(fp);
+
+<span class="cmt">// 清理：注意是 avio_context_free 而不是 avio_closep！</span>
+<span class="fn">avio_context_free</span>(&amp;ofmt-&gt;pb);
+<span class="fn">avformat_free_context</span>(ofmt);
+<span class="fn">avcodec_free_context</span>(&amp;enc);
+<span class="fn">av_free</span>(mem.data);</code></pre>
+
+      <div class="warning">
+        <p><strong>注意</strong>：<code>avio_alloc_context</code> 创建的上下文，释放时必须用 <code>avio_context_free()</code>——<code>avio_close()</code> 是为 <code>avio_open</code> 打开的真实协议句柄准备的，它会尝试调用协议的 close 回调并可能做额外清理；对自定义内存上下文调用它属于误用。同理，内部的 iobuf 由 <code>avio_context_free</code> 一并释放，别手动 free 两次。</p>
+      </div>
+
+      <p>完整程序（<code>mem_enc.c</code>，基于第 11 章模板改动约 30 行）本机实测——编译命令与第 9 章同一套 <code>pkg-config</code> 三板斧：</p>
+
+      <pre><code><span class="cmt"># 编译（FFmpeg 8.1.1 / Apple clang 21 / arm64，2026-08-08 实测）</span>
+$ gcc mem_enc.c $(<span class="fn">pkg-config</span> --cflags --libs libavformat libavcodec libavutil) -o mem_enc
+
+<span class="cmt"># 先跑 plain 模式：普通 MP4 + 不可寻址内存流（预期报错，13.4 节的主角）</span>
+$ ./mem_enc <span class="num">50</span> plain
+[mp4 @ 0x8cec88000] muxer does not support non seekable output
+[FAIL] write_header: Invalid argument
+
+<span class="cmt"># 再跑 fmp4 模式：碎片化 MP4（预期成功）</span>
+$ ./mem_enc <span class="num">50</span> fmp4
+[mp4 @ 0xc0cd00000] Estimating the duration of the last packet in a fragment, consider setting the duration field in AVPacket instead.
+[ok  ] write_header (fmp4: frag_keyframe+empty_moov)
+frames_in=50 packets_out=50 bytes=6695 mem.mp4
+
+<span class="cmt"># ffprobe 验证内存产出的文件可播放</span>
+$ ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height mem.mp4
+codec_name=h264
+width=320
+height=240
+format_name=mov,mp4,m4a,3gp,3g2,mj2
+duration=2.000000
+size=6695</code></pre>
+
+      <p>50 帧 320x240 的 libx264 视频，全程没有碰过磁盘文件——<code>write_packet</code> 回调把 6695 字节的封装数据攒进内存，落盘发生在最后一次性 <code>fwrite</code>。ffprobe 能正常读出 h264 / 320x240 / 2.0 秒，这条「编码器 → 封装器 → 内存回调 → 落盘」链路完全可用。诸葛亮点评：<strong>「把写回调换成 S3 分块上传、换成 HTTP chunk、换成加密输出——代码改动不会超过回调函数体本身。运筹的是回调，决胜的是管道。」</strong></p>
+
+      <!-- ========== 13.4 非 seekable 的坑 ========== -->
+      <h2>13.4 非 seekable 的坑：从坏文件到 fmp4 解法</h2>
+
+      <p>素材记录了一个经典报错——「有一些封装格式不支持以流的方式作为输出，如 mp4」，错误信息是 <code>muxer does not support non seekable output</code>，解决办法是「将 mp4 文件进行碎片化，即生成 fmp4 格式」。本机 8.1.1 实测，这个坑比素材写的还要深三层，我们一层层拆（都是真实运行结果）：</p>
+
+      <p><strong>第一层：avio_alloc_context 默认谎报"可寻址"</strong>。你传了 seek 回调（哪怕它只会返回 -1），<code>avio_alloc_context</code> 就把上下文的 <code>seekable</code> 标志置为 <code>AVIO_SEEKABLE_NORMAL</code>——它认为「有 seek 回调 = 可以定位」。于是 mp4 封装器信以为真，走「先写 mdat、再回头写 moov」的常规路线：seek 回调返回 -1，moov 没写进去，文件只剩 ftyp + mdat。实测：程序「成功」退出，但 <code>ffprobe mem.mp4</code> 报 <code>moov atom not found</code>——<strong>最坏的情况不是报错，而是静默产出坏文件</strong>。</p>
+
+      <p><strong>第二层：素材的经典报错如约而至</strong>。声明不可寻址后，普通 MP4 封装器在 <code>avformat_write_header</code> 直接拒绝开工——这正是素材记录的 <code>muxer does not support non seekable output</code>。原因：MP4 的 moov 原子需要 seek 回文件头回填（记录每个样本的位置和时长），纯追加的流做不到。素材的解法是碎片化：</p>
+
+      <pre><code><span class="cmt"># 第二层实测：pb-&gt;seekable = 0 之后，plain 模式报出素材的经典错误</span>
+$ ./mem_enc <span class="num">50</span> plain
+[mp4 @ 0x8cec88000] muxer does not support non seekable output
+[FAIL] write_header: Invalid argument
+
+<span class="cmt"># 命令行对照：-movflags 参数在 C API 里就是一条 av_opt_set</span>
+<span class="cmt"># ffmpeg -i in.mp4 -c copy -movflags frag_keyframe+empty_moov out.mp4</span>
+<span class="fn">av_opt_set</span>(ofmt-&gt;priv_data, <span class="str">"movflags"</span>, <span class="str">"frag_keyframe+empty_moov"</span>, <span class="num">0</span>);</code></pre>
+
+      <p><strong>第三层：fmp4 也不白给——empty_moov 的 avcC 时机坑</strong>。加上 <code>frag_keyframe+empty_moov</code> 后 write_header 通过了，ffprobe 却报 <code>missing picture in access unit</code> / <code>No start code is found</code>。查文件发现 avcC box（存 SPS/PPS 解码参数）是空的：本构建的 libx264 在 <code>avcodec_open2</code> 时并不生成 extradata，而是把 SPS/PPS 塞进<strong>首个编码包的 side data</strong> 延迟送出。普通 MP4 的 moov 在结尾才写，赶得上；而 <code>empty_moov</code> 让 moov 在 <code>write_header</code> 时就写——此时 extradata 还是空的。修复：mp4 本来就是 GLOBALHEADER 封装器（第 9 章讲过判断），显式要求编码器把参数放进上下文：</p>
+
+      <pre><code><span class="cmt">// 第三层修复：AV_CODEC_FLAG_GLOBAL_HEADER 必须在 avcodec_open2 之前设置</span>
+<span class="cmt">// （第 9 章 9.6 节：if (ofmt-&gt;oformat-&gt;flags &amp; AVFMT_GLOBALHEADER) ...）</span>
+enc-&gt;flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    <span class="cmt">// 实测：open 后 extradata_size 0 → 38</span>
+<span class="fn">avcodec_open2</span>(enc, codec, <span class="kw">NULL</span>);</code></pre>
+
+      <pre><code><span class="cmt"># 三层全修之后的完整实测（13.3 节已展示）：</span>
+$ ./mem_enc <span class="num">50</span> fmp4
+[ok  ] write_header (fmp4: frag_keyframe+empty_moov)
+frames_in=50 packets_out=50 bytes=6695 mem.mp4
+$ ffmpeg -v error -i mem.mp4 -f null - &amp;&amp; echo decode OK
+decode OK     <span class="cmt">&lt;- 完整解码通过，文件健康</span></code></pre>
+
+      <table>
+        <thead>
+          <tr><th>层</th><th>现象（实测）</th><th>根因</th><th>对策</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>坑 1</td><td>plain「成功」但 ffprobe 报 <code>moov atom not found</code></td><td>avio_alloc_context 默认置 seekable，muxer 信任标志去 seek，回调返回 -1</td><td><code>pb-&gt;seekable = 0</code> 如实声明</td></tr>
+          <tr><td>坑 2</td><td><code>muxer does not support non seekable output</code>（素材经典报错）</td><td>普通 MP4 必须 seek 回填 moov</td><td>fmp4：<code>frag_keyframe+empty_moov</code></td></tr>
+          <tr><td>坑 3</td><td>fmp4 解码失败，avcC 为空</td><td>libx264 的 extradata 走首包 side data 延迟送出，empty_moov 等不到</td><td>open 前设 <code>AV_CODEC_FLAG_GLOBAL_HEADER</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <div class="tip-title">诸葛亮提示</div>
+        <p>三层坑串起来看，是同一个思维模型：<strong>封装器对 IO 能力的判断，只信标志，不试真章</strong>。seekable 标志是它的"军情报告"——谎报军情，它就会做出你以为它不会做的事（静默坏文件）。所以自定义 IO 的第一原则：<strong>能力如实申报</strong>（seekable 标志、回调是否 NULL），第二原则才是选对封装器（fmp4）。</p>
+      </div>
+
+      <!-- ========== 13.5 内存输入模式 ========== -->
+      <h2>13.5 内存输入模式：read_packet 回调实战</h2>
+
+      <p>输出侧跑通了，输入侧是同一套 API 的镜像：<code>write_flag = 0</code>，提供 <code>read_packet</code>，把文件读进内存后用 <code>avformat_open_input</code> 打开「内存文件」。素材里对应的就是 <code>fill_iobuffer</code>——它从 S3 拉数据；我们简化为从内存块读（真实场景：从网络/加密层读，回调体换成你的协议代码即可）。先定义读侧的数据源和回调：</p>
+
+      <pre><code><span class="cmt">// 内存输入：read_packet 的数据源（内存块 + 游标）</span>
+<span class="kw">typedef</span> <span class="kw">struct</span> <span class="type">MemSrc</span> {
+    <span class="kw">const</span> <span class="type">uint8_t</span> *data;
+    <span class="type">size_t</span>         size;
+    <span class="type">size_t</span>         pos;
+} <span class="type">MemSrc</span>;
+
+<span class="cmt">// read_packet：从内存拷 buf_size 字节给 FFmpeg，读尽返回 EOF</span>
+<span class="kw">static</span> <span class="type">int</span> <span class="fn">mem_read</span>(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size) {
+    <span class="type">MemSrc</span> *s = (<span class="type">MemSrc</span> *)opaque;
+    <span class="type">int</span> n = (<span class="type">int</span>)(s-&gt;size - s-&gt;pos);
+    <span class="kw">if</span> (n &lt;= <span class="num">0</span>) <span class="kw">return</span> AVERROR_EOF;        <span class="cmt">// 内存读尽 = 文件尾</span>
+    <span class="kw">if</span> (n &gt; buf_size) n = buf_size;
+    <span class="fn">memcpy</span>(buf, s-&gt;data + s-&gt;pos, (<span class="type">size_t</span>)n);
+    s-&gt;pos += (<span class="type">size_t</span>)n;
+    <span class="kw">return</span> n;                            <span class="cmt">// 返回实际读到的字节数</span>
+}</code></pre>
+
+      <p>读回调的契约镜像写回调：<strong>把最多 buf_size 字节放进 buf，返回实际放入的字节数；没数据可给时返回 <code>AVERROR_EOF</code></strong>。注意素材的 <code>fill_iobuffer</code> 里有个 <code>static uint64_t offset</code> 全局游标——我们用 <code>MemSrc.pos</code> 放进 opaque 里，更干净（也避免了多实例共享状态的隐患）。接着在打开输入时挂上：</p>
+
+      <pre><code><span class="cmt">// 把整个文件搬进内存（演示；真实场景数据来自网络/加密流）</span>
+<span class="type">uint8_t</span> *fdata = <span class="fn">av_malloc</span>((<span class="type">size_t</span>)fsize);
+<span class="fn">fread</span>(fdata, <span class="num">1</span>, (<span class="type">size_t</span>)fsize, fp);  <span class="cmt">// fsize 来自 fseek/ftell</span>
+
+<span class="type">MemSrc</span> src = { fdata, (<span class="type">size_t</span>)fsize, <span class="num">0</span> };
+
+<span class="type">AVFormatContext</span> *fmt = <span class="fn">avformat_alloc_context</span>();
+<span class="type">unsigned char</span> *iobuf = <span class="fn">av_malloc</span>(<span class="num">1</span> &lt;&lt; <span class="num">15</span>);
+fmt-&gt;pb = <span class="fn">avio_alloc_context</span>(
+    iobuf, (<span class="num">1</span> &lt;&lt; <span class="num">15</span>),                            <span class="cmt">// buffer + 大小</span>
+    <span class="num">0</span>,                                           <span class="cmt">// write_flag = 0：输入方向</span>
+    &amp;src,                                         <span class="cmt">// opaque：传令兵</span>
+    <span class="param">mem_read</span>,                                    <span class="cmt">// read_packet：从内存读</span>
+    <span class="kw">NULL</span>,                                         <span class="cmt">// write_packet：不写</span>
+    <span class="kw">NULL</span>);                                        <span class="cmt">// seek：不提供（内存顺序读）</span>
+
+<span class="type">int</span> ret = <span class="fn">avformat_open_input</span>(&amp;fmt, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="kw">NULL</span>);  <span class="cmt">// 文件名传 NULL</span>
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) { <span class="fn">printf</span>(<span class="str">"[FAIL] open_input: %s\n"</span>, <span class="fn">av_err2str</span>(ret)); <span class="kw">return</span> <span class="num">1</span>; }</code></pre>
+
+      <p>两个细节：<strong>① 文件名传 NULL</strong>——因为 pb 已经就位，解封装器直接从我们的回调读，不需要 <code>avio_open</code> 去猜协议；<strong>② seek 回调可以完全不提供</strong>（传 NULL）——只要你的数据源能顺序读（或像 mp4 这种需要 seek 的容器由解封装器自行处理——fmp4 的 moov 在最前，顺序读即可打开）。本机实测：</p>
+
+      <pre><code><span class="cmt"># 编译 + 运行（mem_dec.c，读入 13.3 节生成的 mem.mp4）</span>
+$ gcc mem_dec.c $(<span class="fn">pkg-config</span> --cflags --libs libavformat libavcodec libavutil) -o mem_dec
+$ ./mem_dec mem.mp4
+format=mov,mp4,m4a,3gp,3g2,mj2 duration=0.96s streams=1
+  stream 0: type=0 codec=h264</code></pre>
+
+      <p>解封装器成功从内存读出了容器格式和 h264 流——输入侧打通。<code>duration=0.96s</code> 是个有趣的细节：fmp4 的总时长信息在文件尾的 mfra 里，<code>avformat_find_stream_info</code> 只读了开头几个 fragment，所以只探到部分时长；这不影响解码，只影响时长显示。素材的 <code>fill_iobuffer</code> 换成 S3 之后，这个回调就是「从云端拉 buf_size 字节」——<strong>读回调的骨架，一分钱都不用改</strong>。</p>
+
+      <div class="tip">
+        <div class="tip-title">诸葛亮提示</div>
+        <p>官方仓库自带一个权威示例 <code>doc/examples/avio_reading.c</code>，就是本节程序的完整版（含 seek 回调）。写自定义 IO 前先读它——<strong>站在巨人的营寨上布阵，比自己从零扎营快十倍</strong>。</p>
+      </div>
+
+      <!-- ========== 13.6 素材对照与收尾 ========== -->
+      <h2>13.6 素材对照：2019 旧 API 与资源清理</h2>
+
+      <p>素材（2019 年）的两段回调代码，与现行 API 的差异正好是本章三个教学点。先看素材原文的写回调（它用 <code>fwrite</code> 把数据落盘，作为「验证 FFmpeg 支持自定义输出函数」的测试）：</p>
+
+      <pre><code><span class="cmt">// 素材原文（2019）：write_buffer —— 用 fwrite 落盘的"自定义输出"</span>
+<span class="type">int</span> <span class="fn">write_buffer</span>(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size) {
+    <span class="kw">if</span> (!<span class="fn">feof</span>(fp_write)) {
+        <span class="type">int</span> true_size = <span class="fn">fwrite</span>(buf, <span class="num">1</span>, buf_size, fp_write);
+        <span class="kw">return</span> true_size;
+    } <span class="kw">else</span> {
+        <span class="kw">return</span> -<span class="num">1</span>;
+    }
+}
+
+<span class="cmt">// 现行写法（13.3 节）：写进内存 buffer——回调体换成你的目标即可</span>
+<span class="cmt">// 差异 1：签名带 const（8.x 要求）</span>
+<span class="cmt">// 差异 2：fp_write 全局变量 → opaque 传令兵（MemBuf*）</span>
+<span class="cmt">// 差异 3：fwrite 落盘 → 攒进内存，落盘交给主程序一次性完成</span>
+</code></pre>
+
+      <pre><code><span class="cmt">// 素材原文输入侧：fill_iobuffer 用静态局部变量记位置（2019，C++ S3 client 版）</span>
+<span class="kw">static</span> <span class="type">int</span> fill_iobuffer(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int</span> buf_size) {
+    <span class="kw">static</span> <span class="type">int</span> offset = <span class="num">0</span>;   <span class="cmt">// 全局/静态游标——多路输入就会串</span>
+    <span class="cmt">// ... 从 S3 拉一段数据填进 buf，返回实际长度 ...</span>
+    <span class="kw">return</span> size;
+}
+
+<span class="cmt">// 现行写法（13.5 节）：游标放进 opaque 结构体，函数签名带 const</span>
+<span class="cmt">// 差异：静态变量 → opaque 传令兵（每个输入各带各的 MemSrc，互不串扰）</span></code></pre>
+
+      <p>素材的输入侧 <code>fill_iobuffer</code> 用 C++ 的 S3 client 拉数据、静态局部变量 <code>offset</code> 记位置——换成现行写法就是 13.5 节的 <code>MemSrc</code> + <code>mem_read</code>（游标放 opaque，函数签名带 const 无关——读侧本就不带 const）。素材还特别叮嘱了两件资源管理的事，正好对应本章的两处收尾：</p>
+
+      <p><strong>① 自定义输出时不能调用 avio_open</strong>——素材说「加入一个判断，当输出为自定义函数时不调用 avio_open」。现行写法更简单：<strong>根本没有 avio_open 这一行</strong>，<code>ofmt-&gt;pb</code> 直接指向 <code>avio_alloc_context</code> 的返回值。文件名只用于猜封装器，不再触发任何文件操作。<strong>② 释放资源时的对称处理</strong>——素材在析构函数里加判断；现行写法是 <code>avio_context_free(&amp;ofmt-&gt;pb)</code>（13.3 节已讲）。创建与释放严格成对，是 FFmpeg 内存管理的铁律。素材四处分歧对照：写回调签名带 const（否则编译报错）；游标从 static 全局变量挪进 opaque（多实例不串）；回调保持「纯搬运」（攒内存，落盘交给主程序）；释放用 avio_context_free 而非 avio_close。</p>
+
+      <div class="warning">
+        <p><strong>注意</strong>：素材还提到「目前 s3 是不支持流的处理，只能考虑 s3 的分块上传」——这是 2019 年的 S3 SDK 限制。今天的对象存储大多支持分片直传，但思路不变：<strong>自定义 IO 的价值恰恰在于，SDK 不支持流式时，你可以自己在回调里做分块拼接</strong>。回调封装了所有脏活，封装器毫不知情。</p>
+      </div>
+
+      <p>到这里，第 9-13 章这条 C API 主线全部收官：打开输出（9）→ 配参数（10）→ send/receive（11）→ flush 收尾（12）→ 自定义 IO（13）。你现在拥有的能力是：<strong>用自己的 C 代码，把任意数据源（内存、网络、加密流）经 FFmpeg 编封装成任意目标（内存、网络、加密流）</strong>——一个真正的转码器已经在你手里。诸葛亮最后布一局：「编解码只是管道的两头，管道中间还有千军万马——滤镜。下一章，我们把画面加工流水线搬进 C API。」</p>
+
+      <div class="tip">
+        <div class="tip-title">下一章预告</div>
+        <p>第 14 章《滤镜图原理：buffer → filters → buffersink》——第 2 章的 <code>-vf scale=320:180,fps=12</code> 背后是一条完整的滤镜流水线：buffer 入口、buffersink 出口、中间每一道工序都是一个滤镜。这一章把它从命令行原封不动搬进 C 代码，亲手跑通 320x240 → 320x180。</p>
+      </div>
+
+      <h2>章末练习</h2>
+
+      <div class="exercise-item">
+        <h3>练习 1：回调契约连线 <span class="difficulty difficulty-easy">入门</span></h3>
+        <p>三个回调分别要返回什么？把回调与返回值配对：read_packet / write_packet / seek，候选：A. 新位置或 -1；B. 实际读到的字节数或 AVERROR_EOF；C. 写入的字节数。</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>回顾 13.2 节的契约：读给多少、写收多少、定位回什么。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>read_packet → B（实际读到的字节数，读尽返回 AVERROR_EOF）；write_packet → C（写入的字节数，通常等于 buf_size）；seek → A（新位置，做不到返回 -1）。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 2：opaque 传令兵 <span class="difficulty difficulty-medium">进阶</span></h3>
+        <p>为什么素材用 <code>static uint64_t offset</code> 记读取位置是个隐患？如果同一份代码同时打开两个内存流（比如一边读源文件、一边写目标），会出现什么问题？现行写法怎么解决？</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>想想 static 变量的作用域和共享性；再想想 opaque 在每个回调里能取到什么。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>static 变量是全局唯一的——两个流实例会共享同一个 offset，第二个流的读取位置会把第一个的冲掉，数据全乱。现行写法把游标放进 opaque 指向的结构体（MemSrc.pos / MemBuf.size），每个 avio_alloc_context 传各自的实例，状态天然隔离。这就是「传令兵」的价值：令牌认人，全局不认。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 3：三层坑复盘 <span class="difficulty difficulty-medium">进阶</span></h3>
+        <p>某同学把 avio_open 换成 avio_alloc_context 后，plain 模式「成功」但 ffprobe 报 moov atom not found。请按 13.4 节的排查顺序回答：① 最可能的根因是什么？② 加哪一行代码后，报错变成了 muxer does not support non seekable output？③ 继续修，加什么参数能通过 write_header？④ 若此时 ffprobe 报 No start code is found，又缺了什么设置？</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>按坑 1 → 坑 2 → 坑 3 的顺序回忆：seekable 标志、movflags、GLOBAL_HEADER。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>① avio_alloc_context 默认把 seekable 置位，muxer 信任标志去 seek，回调返回 -1，moov 没写成；② <code>pb-&gt;seekable = 0;</code>；③ <code>av_opt_set(ofmt-&gt;priv_data, "movflags", "frag_keyframe+empty_moov", 0)</code>；④ <code>enc-&gt;flags |= AV_CODEC_FLAG_GLOBAL_HEADER</code>（在 avcodec_open2 之前）——empty_moov 的 avcC 在 write_header 时就要写，等不到 libx264 首包的 side data。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 4：把内存输出接到网络 <span class="difficulty difficulty-hard">挑战</span></h3>
+        <p>13.3 节的 mem_enc.c 把内存 buffer 最后一次性 fwrite 落盘。请把它改造成「边编码边发送」：write_packet 回调里直接把 buf 写入一个 socket 描述符（或者写入一个管道/文件描述符），主程序不再做最终 fwrite。要求：① 说明 write_packet 里应该调用什么系统调用、返回值怎么填；② 说明为什么这种模式下 fmp4（frag_keyframe+empty_moov）几乎是唯一选择；③ 思考：如果接收端是 ffplay（<code>nc | ffplay -</code> 或 ffplay 直接读管道），empty_moov 的 moov 在最前有什么好处？</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>① write 系统调用（POSIX write），返回实际写入字节数填给 FFmpeg；② 回顾 13.4 坑 2：普通 MP4 要 seek 回填 moov；③ 想想播放器什么时候才能开始解码——moov 在头 vs 在尾。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>① 回调里 <code>ssize_t n = write(fd, buf, buf_size); return (int)n;</code>（出错返回负值），与内存版唯一区别是 memcpy 换成 write。② 纯流没有 seek 能力，普通 MP4 的 moov 回填做不到（坑 2），fmp4 的 empty_moov 把 moov 放文件头、数据纯追加，是流式输出的标准解。③ empty_moov 让播放器一拿到文件头就能读出编码参数（SPS/PPS 在 avcC）开始解码——这正是 HLS/DASH 低延迟起播的原理：moov 在前，首帧即播；moov 在尾的普通 mp4 必须等全文件下载完才能播。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="tip">
+        <div class="tip-title">诸葛亮收官</div>
+        <p>「运筹帷幄之中，决胜千里之外。」本章的「帷幄」是一个 AVIOContext 和三个回调，「千里」是任意数据源与任意目标之间的转码管道。记住三句话：<strong>能力如实申报（seekable）、方向由 write_flag 定、状态靠 opaque 传</strong>。第 14 章滤镜图见。</p>
+      </div>
+    </article>
+  </div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

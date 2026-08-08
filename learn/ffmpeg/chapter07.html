@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第7章：启用 GPU 硬编解码：configure 与版本匹配 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter07.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第7章：启用 GPU 硬编解码：configure 与版本匹配 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter07.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="7" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：启用 GPU 硬编解码：configure 与版本匹配</h1>
+  <p class="chapter-subtitle">从 CPU 软编解码到 GPU 硬编解码，差的不是命令而是配置。这一章讲清楚 NVENC / NVDEC 是怎么被编译进 FFmpeg 的，以及为什么 nv-codec-headers 从 9.1 降到 8.1 才是正确的解法——先调查，再动手</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄（先调查，再动手）</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「运筹帷幄之中，决胜千里之外。这一章我们不急着敲命令，而是先把战场摸清：你的显卡有没有硬编解码单元？驱动、头文件、FFmpeg 三者的版本能不能对上？把这些变量列全、把每条路的代价算清，再动手编译——素材里那次把 nv-codec-headers 从 9.1 降到 8.1 就成功的翻盘，靠的正是'先调查再动手'，而不是一上来就兴师动众升级驱动。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 GPU 硬编解码全景：专用单元 vs 通用核 ========== -->
+  <h2>7.1 GPU 硬编解码全景：专用单元 vs 通用核</h2>
+
+  <p>第 2 章里我们用 <code>libx264</code> 转码，那是<strong>软编解码</strong>（software codec）——说人话：让 CPU 的通用计算核去跑 H.264 的压缩算法。软编解码的好处是纯软件、人人可编译、画质控制精细；坏处是 CPU 是通用核，干"压缩视频"这种专用活儿效率并不高——转码时 CPU 几乎占满，速度还常常只有几十帧每秒。服务器上同时转几路视频，CPU 直接被打穿。于是 GPU 厂商在显卡里焊了<strong>专用硬件单元</strong>：NVIDIA 的 <strong>NVENC</strong>（编码单元）和 <strong>NVDEC</strong>（解码单元），只干编解码这一件事，效率远超通用核跑算法，这就是<strong>硬编解码</strong>（hardware codec）。顺带记一个历史名词：NVDEC 的 API 旧名叫 <strong>CUVID</strong>，素材里满屏的 <code>cuvid</code> 指的就是它。</p>
+
+  <p>那 FFmpeg 为什么需要额外的 <strong>nv-codec-headers</strong>？因为 NVENC / NVDEC 是 NVIDIA 的私有接口，FFmpeg 作为第三方软件，必须拿到 NVIDIA 的 SDK 头文件（接口声明，说人话就是"这些函数的签名长什么样"），才能在编译时把 <code>h264_nvenc</code>、<code>h264_cuvid</code> 这些编解码器"焊"进自己的二进制。这套头文件由 FFmpeg 官方仓库维护（GitHub 上的 nv-codec-headers），<code>make install</code> 后默认装到 <code>/usr/local/include/ffnvcodec</code>。没有它，configure 阶段就找不到 NVENC 相关符号。先看两条管线在"谁干活"上的本质区别：</p>
+
+  <pre><code><span class="cmt"># CPU 软编解码管线（第 2 章的默认路径）—— 干活的都是 CPU 通用核</span>
+输入文件 <span class="op">--解封装--&gt;</span> 压缩流 <span class="op">--libx264 解码--&gt;</span> 原始帧 <span class="op">--libx264 编码--&gt;</span> 输出文件
+
+<span class="cmt"># GPU 硬编解码管线（本章目标）—— 解码交给 NVDEC，编码交给 NVENC</span>
+输入文件 <span class="op">--解封装--&gt;</span> 压缩流 <span class="op">--NVDEC 解码--&gt;</span> 原始帧 <span class="op">--NVENC 编码--&gt;</span> 输出文件
+<span class="ann">@NVDEC=显卡里的专用解码单元，NVENC=专用编码单元，CPU 只负责拆箱装箱</span></code></pre>
+
+  <pre><code><span class="cmt"># nv-codec-headers 的编译安装（官方标准流程；素材记录的是其中的版本选择）</span>
+<span class="kw">git</span> clone https://github.com/FFmpeg/nv-codec-headers
+<span class="kw">cd</span> nv-codec-headers
+<span class="kw">git</span> checkout sdk/<span class="num">8.1</span>    <span class="cmt"># 版本必须与驱动匹配——7.4 节的主战场</span>
+<span class="kw">make</span> install               <span class="cmt"># 默认装到 /usr/local/include/ffnvcodec</span></code></pre>
+
+  <table>
+    <tr><th>维度</th><th>CPU 软编解码</th><th>GPU 硬编解码</th></tr>
+    <tr><td>干活的人</td><td>CPU 通用核（libx264 / libx265 算法）</td><td>显卡专用单元（NVENC / NVDEC）</td></tr>
+    <tr><td>速度</td><td>慢，CPU 满载也常只有几十 fps</td><td>快，数倍到数十倍</td></tr>
+    <tr><td>CPU 占用</td><td>高，转码时几乎占满</td><td>低，编解码都甩给 GPU</td></tr>
+    <tr><td>画质</td><td>高，x264 高预设可精细控制</td><td>稍逊，码率与画质控制粒度粗</td></tr>
+    <tr><td>依赖</td><td>纯软件，人人可编译</td><td>驱动 + SDK 头文件 + 非自由许可</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>硬编码不是"画质更好"，是"更快、更省 CPU"。直播、批量转码、服务器转码这类场景首选硬编码；追求单路最高压缩画质，仍要回到 CPU 的慢速预设。先想清楚你要什么，再选路——这是运筹帷幄的第一课：<strong>目标决定路线，路线决定配置</strong>。</p>
+  </div>
+
+  <!-- ========== 7.2 战前侦察：lspci 看显卡与驱动就位 ========== -->
+  <h2>7.2 战前侦察：lspci 看显卡与驱动就位</h2>
+
+  <p>诸葛亮用兵前先派斥候。编译 FFmpeg 之前，先回答两个问题：<strong>机器上有没有 NVIDIA 显卡？驱动装没装对？</strong>第一问用 <code>lspci</code>——说人话，它列出 PCI 总线（主板上的高速设备通道）上的所有设备，<code>grep VGA</code> 把显卡那一行过滤出来。素材实录（2019 年的 CentOS 7 服务器）：</p>
+
+  <pre><code><span class="cmt"># 素材实录：查看机器上显卡的型号</span>
+<span class="kw">lspci</span> | <span class="kw">grep</span> VGA
+<span class="cmt"># 输出见素材截图：直接列出显卡厂商与型号（NVIDIA 的型号行就在其中）</span></code></pre>
+
+  <p>第二问看驱动。素材里驱动来自两个途径：一是从 NVIDIA 官网下载对应显卡的驱动包安装；二是素材的 CUDA 版本是 <strong>CUDA 10.0.130</strong>——这个版本<strong>自带驱动</strong>（装完 CUDA 就是驱动 410.48），所以素材原话是"这个版本自带驱动，可以不用安装驱动"。装好后用 <code>nvidia-smi</code> 确认——它是 NVIDIA 的系统管理接口，显示驱动版本、GPU 型号、显存占用、利用率等。素材实录：</p>
+
+  <pre><code><span class="cmt"># 素材实录：nvidia-smi 查看驱动与显卡状态</span>
+<span class="kw">nvidia-smi</span>
+<span class="cmt"># 输出见素材截图：Driver Version、CUDA Version、GPU 型号、显存占用、利用率</span></code></pre>
+
+  <pre><code><span class="cmt"># 素材实录：驱动安装的两个途径（二选一，装好后用 nvidia-smi 验证）</span>
+<span class="cmt"># 途径一：NVIDIA 官网下载对应显卡型号的驱动安装包</span>
+<span class="str">https://www.nvidia.com/Download/index.aspx?lang=en-us</span>
+<span class="cmt"># 途径二：安装 CUDA 10.0.130（自带驱动 410.48，可以不用安装驱动）</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：驱动是"地基"。硬编解码器不在 FFmpeg 里，而在<strong>驱动固件</strong>里——说人话，显卡的编码解码能力由驱动加载的底层固件程序提供，FFmpeg 只是"打电话的人"，驱动版本决定了它能调用的编码器能力上限。这也埋下了 7.4 节版本匹配故事的祸根：<strong>头文件声明了驱动固件没有的接口，编译或运行必然出错</strong>。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>侦察动作越早，返工越少。编译前花两分钟跑 <code>lspci | grep VGA</code> 和 <code>nvidia-smi</code>，把显卡型号和驱动版本记下来——它们就是 7.4 节查版本对应表的输入。没有显卡或驱动没装好，后面 configure 再对也是白忙。</p>
+  </div>
+
+  <!-- ========== 7.3 configure 选项逐个击破：把 GPU 编解码器编译进来 ========== -->
+  <h2>7.3 configure 选项逐个击破：把 GPU 编解码器编译进来</h2>
+
+  <p>第 5、6 章反复强调过：FFmpeg 的功能在 <code>./configure</code> 阶段就"焊死"了，之后想加功能只能重新编译。GPU 硬编解码也一样——必须在 configure 时显式声明。素材实录里，作者在 <code>./configure</code> 时追加了下面这组选项（素材原文，历史命令）：</p>
+
+  <pre><code><span class="cmt"># 素材实录：./configure 时追加的 GPU 选项（2020 年，FFmpeg n4.1.1 时代）</span>
+<span class="param">--enable-cuda-sdk</span> <span class="op">\</span>
+<span class="param">--enable-cuvid</span> <span class="op">\</span>
+<span class="param">--enable-nvenc</span> <span class="op">\</span>
+<span class="param">--enable-nonfree</span> <span class="op">\</span>
+<span class="param">--enable-libnpp</span> <span class="op">\</span>
+<span class="param">--extra-cflags</span><span class="op">=</span><span class="str">-I/usr/local/cuda/include</span> <span class="op">\</span>
+<span class="param">--extra-ldflags</span><span class="op">=</span><span class="str">-L/usr/local/cuda/lib64</span></code></pre>
+
+  <p>每个选项各管一件事。<strong><code>--enable-cuda-sdk</code></strong>：启用 CUDA SDK——注意这是旧版选项名，新版本里已改名为 <code>--enable-cuda-nvcc</code>（改用 nvcc 编译器探测 CUDA）；<strong><code>--enable-cuvid</code></strong>：编译 GPU 解码器（CUVID 是 NVDEC 的旧名），让 FFmpeg 认识 <code>h264_cuvid</code> 这类解码器，新版本另有同族开关 <code>--enable-nvdec</code>；<strong><code>--enable-nvenc</code></strong>：编译 GPU 编码器，让 FFmpeg 认识 <code>h264_nvenc</code> 这类编码器；<strong><code>--enable-nonfree</code></strong>：接受非自由许可——NVENC 的许可证不自由，FFmpeg 默认不编译非自由组件，必须显式声明"我接受"；<strong><code>--enable-libnpp</code></strong>：启用 NVIDIA 的 NPP 图像处理库，GPU 上的缩放滤镜 <code>scale_npp</code> 就是它的产物；<strong><code>--extra-cflags</code> / <code>--extra-ldflags</code></strong>：告诉编译器和链接器去 <code>/usr/local/cuda</code> 找头文件与库。今天的官方文档（FFmpeg 6.x / 7.x）要求的 NVIDIA 选项集合如下：</p>
+
+  <pre><code><span class="cmt"># 现行版本（FFmpeg 6.x / 7.x）NVIDIA 官方文档的 configure 开关（新版对照）</span>
+./configure <span class="op">\</span>
+  <span class="param">--enable-cuda-nvcc</span> <span class="op">\</span>
+  <span class="param">--enable-cuvid</span> <span class="op">\</span>
+  <span class="param">--enable-nvdec</span> <span class="op">\</span>
+  <span class="param">--enable-nvenc</span> <span class="op">\</span>
+  <span class="param">--enable-nonfree</span> <span class="op">\</span>
+  <span class="param">--enable-libnpp</span> <span class="op">\</span>
+  <span class="param">--extra-cflags</span><span class="op">=</span><span class="str">-I/usr/local/cuda/include</span> <span class="op">\</span>
+  <span class="param">--extra-ldflags</span><span class="op">=</span><span class="str">-L/usr/local/cuda/lib64</span></code></pre>
+
+  <table>
+    <tr><th>configure 选项</th><th>作用</th><th>说人话</th></tr>
+    <tr><td><code>--enable-cuda-sdk</code></td><td>启用 CUDA SDK</td><td>旧名，新版改名 <code>--enable-cuda-nvcc</code></td></tr>
+    <tr><td><code>--enable-cuvid</code></td><td>编译 GPU 解码器</td><td>让 FFmpeg 认识 h264_cuvid 等解码器</td></tr>
+    <tr><td><code>--enable-nvenc</code></td><td>编译 GPU 编码器</td><td>让 FFmpeg 认识 h264_nvenc 等编码器</td></tr>
+    <tr><td><code>--enable-nonfree</code></td><td>接受非自由许可</td><td>NVENC 许可不自由，必须显式声明</td></tr>
+    <tr><td><code>--enable-libnpp</code></td><td>启用 NPP 图像库</td><td>scale_npp 等 GPU 滤镜的靠山</td></tr>
+    <tr><td><code>--extra-cflags</code> / <code>--extra-ldflags</code></td><td>指向 CUDA 头文件与库</td><td>告诉编译器去 /usr/local/cuda 找人</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>--enable-nonfree</code> 不是可选项，是硬门槛。不加它，configure 会在"License: nonfree"这一关拒绝编译 nvenc——因为 NVENC 的许可证与 FFmpeg 的 LGPL/GPL 不兼容，属于非自由组件。自己编译自己用没问题；但带 NVENC 的二进制不能按 GPL 自由分发，商用分发前务必先读许可证。素材里这一行是加了 <code>--enable-nonfree</code> 的，别学漏。</p>
+  </div>
+
+  <!-- ========== 7.4 版本匹配之战：nv-codec-headers 9.1 → 8.1 ========== -->
+  <h2>7.4 版本匹配之战：nv-codec-headers 9.1 → 8.1</h2>
+
+  <p>这是本章的核心案例，也是素材里最有戏剧性的一段。作者编译 nv-codec-headers 时用的是<strong>最新版本 9.1</strong>，结果<strong>编译出错</strong>。素材原文只记了"编译出错"四个字，没贴报错文本——但原理可以推理：头文件 9.1 声明的是新版 SDK 的接口，而驱动 410.48 的固件只提供旧版接口，<strong>头文件要求的能力超出了驱动实际提供的能力</strong>，自然对不上。素材里的完整环境是（素材实录）：</p>
+
+  <pre><code><span class="cmt"># 素材实录：出问题时的完整版本清单</span>
+<span class="kw">ffmpeg</span> 版本 <span class="kw">ffmpeg</span> version <span class="type">n4.1.1</span>-<span class="num">3</span>-g53f3f52
+cuda 版本 <span class="type">CUDA</span> Version <span class="num">10.0.130</span>（这个版本自带驱动，可以不用安装驱动）
+drive 驱动版本 <span class="type">Driver</span> Version: <span class="num">410.48</span>
+nv-codec-headers 版本 <span class="type">sdk</span>/<span class="num">8.1</span></code></pre>
+
+  <p>报错之后有两条路，素材原文逐条评估过：<strong>路 A——升级驱动到 430 以上</strong>，让驱动固件跟上头文件的 API。麻烦在哪？要换驱动、可能要重启、可能影响服务器上正在跑的服务，动静太大。素材原话："这个比较的麻烦"。<strong>路 B——降低 nv-codec-headers 的版本到 8.1</strong>，让头文件去迁就驱动。成本就一个 <code>git checkout</code>。作者选了路 B，一次成功。这就是诸葛亮式的决策：<strong>把变量列全，比较每条路的代价，选改动最小的那条</strong>：</p>
+
+  <pre><code><span class="cmt"># 报错后的决策过程（诸葛亮式：列变量 → 比代价 → 选路）</span>
+<span class="kw">变量清单</span>：驱动 <span class="num">410.48</span>（CUDA <span class="num">10.0.130</span> 自带）· 头文件 <span class="num">9.1</span>（最新）· FFmpeg n4.1.1
+<span class="kw">路 A</span>：升级驱动到 <span class="num">430</span>+ —— 换驱动、可能重启、影响线上服务（麻烦）
+<span class="kw">路 B</span>：降头文件到 <span class="num">8.1</span> —— 一个 git checkout 的事（改动最小）<span class="ann">&lt;- 作者的选择，成功</span></code></pre>
+
+  <table>
+    <tr><th>驱动版本</th><th>nv-codec-headers</th><th>FFmpeg</th><th>结果</th></tr>
+    <tr><td>410.48</td><td>sdk/9.1（最新）</td><td>n4.1.1</td><td>编译出错（头文件 API 超出驱动能力）</td></tr>
+    <tr><td>410.48</td><td>sdk/8.1</td><td>n4.1.1</td><td>编译成功（素材实证）</td></tr>
+    <tr><td>430+</td><td>sdk/9.1</td><td>n4.1.1</td><td>可行（另一条路）</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：记住版本匹配三件套——<strong>驱动 ↔ 头文件 ↔ FFmpeg</strong>，三者必须匹配。素材是 2019-2020 年的 CUDA 10.0 / 驱动 410.48 环境；到了 2026 年，NVIDIA 驱动早已是 5xx/6xx 系列，nv-codec-headers 的发布标签也换成了 n11.x / n12.x 这类名字——具体数字全变了，但"驱动决定能力上限、头文件声明接口、FFmpeg 按声明编译，三者对不上就出错"的原则一条没变。遇到报错，先查三者的版本对应关系，别闷头重试。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>版本冲突的取舍口诀：<strong>改动最小优先</strong>。升级驱动 / 升级系统属于高风险、大影响面的动作，降级一个库通常是低风险、局部的小动作。素材这次"降 8.1 成功"是教科书式的取舍；反过来，如果你的驱动很新而头文件很旧，那就是升级头文件——方向永远是把两边拉到同一个 SDK 代际上。</p>
+  </div>
+
+  <!-- ========== 7.5 验证三连：hwaccels / codecs / nvidia-smi ========== -->
+  <h2>7.5 验证三连：hwaccels / codecs / nvidia-smi</h2>
+
+  <p>编译装完不等于成功，诸葛亮还要"验功"。第一步看<strong>硬件加速方法</strong>：<code>ffmpeg -hwaccels</code> 列出编译时真的启用（编进去）的硬件加速方法；第二步看<strong>解码器</strong>：<code>ffmpeg -codecs | grep cuvid</code> 直接确认 cuvid 系解码器是否编译进来（应能看到 <code>h264_cuvid</code> 等以 <code>_cuvid</code> 结尾的 GPU 解码器）。素材实录：</p>
+
+  <pre><code><span class="cmt"># 素材实录：查看支持的硬件加速选项</span>
+<span class="kw">ffmpeg</span> <span class="param">-hwaccels</span>
+<span class="cmt"># 素材实录：查看 cuvid 提供的 GPU 编解码器（应看到 h264_cuvid 等）</span>
+<span class="kw">ffmpeg</span> <span class="param">-codecs</span> | <span class="kw">grep</span> cuvid</code></pre>
+
+  <p>第三步，真正转一段，转码期间用 <code>nvidia-smi</code> 看 GPU 利用率——如果 GPU 那一栏在跳动，说明 FFmpeg 确实在用显卡干活。素材实录的 GPU 转码命令（注意与软转码的差别，第 8 章会逐参数拆解）：</p>
+
+  <pre><code><span class="cmt"># 素材实录：GPU 转码——h264 源转成指定尺寸与码率的 h264 输出</span>
+<span class="kw">ffmpeg</span> <span class="param">-hwaccel</span> <span class="fn">cuvid</span> <span class="param">-c:v</span> <span class="fn">h264_cuvid</span> <span class="param">-i</span> <span class="str">video/video-H264-AAC.mkv</span> <span class="param">-c:v</span> <span class="fn">h264_nvenc</span> <span class="param">-b:v</span> <span class="num">2048k</span> <span class="param">-vf</span> <span class="fn">scale_npp</span><span class="op">=</span><span class="num">1280</span><span class="op">:</span><span class="num">-1</span> <span class="param">-y</span> <span class="str">/root/transcode.mp4</span>
+<span class="cmt"># -hwaccel cuvid：启用 cuvid 硬件加速；-c:v h264_cuvid：GPU 解码</span>
+<span class="cmt"># -c:v h264_nvenc：GPU 编码；-vf scale_npp=1280:-1：GPU 缩放（不是 -vf scale）</span></code></pre>
+
+  <p>为什么必须显式点名 <code>h264_cuvid</code>？素材原文点透了：<strong>ffmpeg 只会自动选择 CPU 解码器</strong>，要让 FFmpeg 使用 GPU 解码器，必须先用 ffprobe 识别出输入视频的编码格式（第 3 章的本职工作），然后在命令行里显式指定对应的 GPU 解码器——这就是 <code>-hwaccel cuvid -c:v h264_cuvid</code> 组合存在的意义。</p>
+
+  <div class="warning">
+    <p><strong>注意</strong>：验证是"体检"，不是"仪式"。<code>ffmpeg -hwaccels</code> 只显示编译时真的编进去的方法——如果输出里没有 cuvid，说明 configure 没开对应选项、或 nv-codec-headers 没装好、或版本不匹配（回到 7.3 / 7.4），改完必须<strong>重新 configure 并重新 make</strong>，光改配置不重编是无效的。别在缺了选项的二进制上浪费时间排查。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>验证顺序就是排错顺序：先 <code>-hwaccels</code> 看有没有这个加速方法，再 <code>-codecs | grep cuvid</code> 看解码器，再 <code>-encoders | grep nvenc</code> 看编码器，最后转码时 <code>nvidia-smi</code> 看是不是真的在 GPU 上跑。四步全过，才算"决胜千里"。</p>
+  </div>
+
+  <!-- ========== 7.6 本机实测与平台差异：macOS 的 videotoolbox ========== -->
+  <h2>7.6 本机实测与平台差异：macOS 的 videotoolbox</h2>
+
+  <p>本教程的实测环境是 macOS（Apple Silicon，arm64）上的 Homebrew <code>ffmpeg-full</code> 8.1.1——没有 NVIDIA 显卡，素材里的 NVIDIA 命令无法原样复现。那就如实记录，顺便演示"验证三连"在别的平台上长什么样。先跑 <code>ffmpeg -hwaccels</code>（本机真实输出）：</p>
+
+  <pre><code><span class="cmt"># 本机实测（macOS arm64，ffmpeg 8.1.1）：支持的硬件加速方法</span>
+<span class="kw">ffmpeg</span> <span class="param">-hwaccels</span>
+Hardware acceleration methods:
+<span class="type">videotoolbox</span>
+<span class="type">vulkan</span></code></pre>
+
+  <p>没有 cuvid——因为既没有 NVIDIA 显卡，也没有编译 NVIDIA 支持。苹果平台的硬编解码走 <strong>VideoToolbox</strong>（macOS 系统的硬编解码框架，说人话：苹果官方提供给应用调用 GPU 编解码的通道），对应的 configure 开关是 <code>--enable-videotoolbox</code>。再跑第二、三步验证：NVIDIA 编解码器在本机一个都没有（grep 无输出是真实结果），而苹果平台的 GPU 编码器一查一个准（本机真实输出）：</p>
+
+  <pre><code><span class="cmt"># 本机实测：NVIDIA 编解码器均为空（无 NVIDIA 硬件，如实记录）</span>
+<span class="kw">ffmpeg</span> <span class="param">-encoders</span> <span class="num">2</span>&gt;/dev/null | <span class="kw">grep</span> -i nvenc   <span class="cmt"># 无输出</span>
+<span class="kw">ffmpeg</span> <span class="param">-decoders</span> <span class="num">2</span>&gt;/dev/null | <span class="kw">grep</span> -i cuvid   <span class="cmt"># 无输出</span>
+
+<span class="cmt"># 本机实测：macOS 的 GPU 编码器走 VideoToolbox 框架</span>
+<span class="kw">ffmpeg</span> <span class="param">-encoders</span> <span class="num">2</span>&gt;/dev/null | <span class="kw">grep</span> -i videotoolbox
+ V....D <span class="fn">h264_videotoolbox</span>    VideoToolbox H.264 Encoder (codec h264)
+ V....D <span class="fn">hevc_videotoolbox</span>    VideoToolbox H.265 Encoder (codec hevc)
+ V....D <span class="fn">prores_videotoolbox</span>  VideoToolbox ProRes Encoder (codec prores)</code></pre>
+
+  <pre><code><span class="cmt"># 本机实测：VideoToolbox 的解码不是独立解码器，而是挂在 hwaccel 上的方法</span>
+<span class="kw">ffmpeg</span> <span class="param">-decoders</span> <span class="num">2</span>&gt;/dev/null | <span class="kw">grep</span> -i videotoolbox   <span class="cmt"># 无输出（与 NVIDIA 的 h264_cuvid 族不同）</span></code></pre>
+
+  <p>注意上面这个空输出：VideoToolbox 的解码加速是挂在 <code>-hwaccel videotoolbox</code> 上的通用方法，配合普通解码器使用，而不是像 NVIDIA 那样生成一组独立的 <code>*_cuvid</code> 解码器——所以 <code>ffmpeg -decoders | grep videotoolbox</code> 为空是正常现象，别当成故障。</p>
+
+  <table>
+    <tr><th>平台</th><th>硬编解码方案</th><th>configure 开关</th><th>验证方法</th></tr>
+    <tr><td>NVIDIA GPU（Linux）</td><td>NVENC / NVDEC（cuvid）</td><td><code>--enable-cuvid --enable-nvenc --enable-nonfree</code></td><td><code>-hwaccels</code> / <code>-codecs | grep cuvid</code></td></tr>
+    <tr><td>Intel 核显</td><td>QSV（Quick Sync Video）</td><td><code>--enable-qsv</code></td><td><code>ffmpeg -hwaccels</code></td></tr>
+    <tr><td>AMD GPU</td><td>AMF</td><td><code>--enable-amf</code></td><td><code>ffmpeg -hwaccels</code></td></tr>
+    <tr><td>Apple Silicon / macOS</td><td>VideoToolbox</td><td><code>--enable-videotoolbox</code></td><td><code>ffmpeg -hwaccels</code></td></tr>
+    <tr><td>通用 Linux</td><td>VDPAU / VAAPI</td><td><code>--enable-vdpau</code> / <code>--enable-vaapi</code></td><td><code>ffmpeg -hwaccels</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>换平台先问一句"我的硬编解码走哪条路"，<code>ffmpeg -hwaccels</code> 就是答案。configure 开关随平台而变，但本章的招式完全通用：<strong>侦察（看硬件）→ 配置（加开关）→ 编译（带头文件）→ 验证三连</strong>。在 NVIDIA 机器上把这套流程走通，换到 Intel / AMD / Apple 机器只是换几个开关名字。</p>
+  </div>
+
+  <p>最后埋个钩子。素材的 GPU 转码章节还有一段"在容器中使用 NVIDIA"的记录：服务打包成 Docker 镜像后，怎么都调不到 NVIDIA 硬件，最后查遍资料，发现要在 Dockerfile 里加一行环境变量 <code>ENV NVIDIA_DRIVER_CAPABILITIES video,compute,utility</code> 才能让容器里调用成功——这是典型的"编译对了、运行环境没配"的坑，连同 <code>-hwaccel cuvid</code> 转码命令的逐参数拆解，留给第 8 章 <strong>GPU 转码实战与容器部署</strong>（狄仁杰导师，系统分析专场）。这一章先把"配置与版本匹配"的棋局下好，下一章就可以放心地让 GPU 跑起来了。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：术语配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边的术语与右边的解释配对：① NVENC；② NVDEC；③ --enable-nonfree；④ nv-codec-headers。候选解释：A. 显卡里的专用解码单元（旧名 CUVID）；B. FFmpeg 官方维护的 NVIDIA SDK 头文件；C. 显卡里的专用编码单元；D. 编译 NVENC 必需的"接受非自由许可"开关。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 7.1 节：NVENC 编码、NVDEC 解码；7.3 节的表格里 --enable-nonfree 和 nv-codec-headers 各自在解决什么问题？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → C（NVENC，专用编码单元）；② → A（NVDEC，专用解码单元，旧名 CUVID）；③ → D（接受非自由许可，NVENC 许可证不自由，不加它 configure 拒绝编译）；④ → B（FFmpeg 官方维护的 NVIDIA SDK 头文件，编译时把 nvenc / cuvid 编解码器焊进 FFmpeg）。口诀：<strong>编 NVENC、解 NVDEC、许可 nonfree、接口靠头文件</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：版本匹配决策 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材场景：驱动 410.48 + nv-codec-headers 最新版 9.1，编译 FFmpeg 报错。两个解法分别是什么？作者选了哪个，为什么？9.1 在 410.48 上为什么不行？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 7.4 节的两条路：升级谁、降级谁，各自的代价；再想想"驱动固件提供能力、头文件声明接口"这层关系。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>解法 A：升级驱动到 430+（让固件跟上头文件的 API，但麻烦、影响面大）；解法 B：降 nv-codec-headers 到 8.1（一个 git checkout，改动最小）。作者选了 B 并成功。9.1 在 410.48 上不行，是因为头文件 9.1 声明的是新版 SDK 接口，而驱动 410.48 的固件只提供旧版能力——头文件要求的超出了驱动实际提供的，编译必然对不上。取舍口诀：<strong>改动最小优先，先把两边拉到同一个 SDK 代际</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：configure 排错 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 NVIDIA 机器上编译完 FFmpeg，发现 <code>ffmpeg -hwaccels</code> 没有 cuvid，<code>ffmpeg -codecs | grep cuvid</code> 为空。按正确顺序排出排查步骤：a. 重新 ./configure + make 后再验证；b. 检查 configure 是否加了 --enable-cuvid / --enable-nvenc / --enable-nonfree；c. 检查 nv-codec-headers 是否已安装、版本是否与驱动匹配；d. 检查 --extra-cflags / --extra-ldflags 的 CUDA 路径是否正确。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>7.5 节的 warning 给了思路：先查配置（开关），再查依赖（头文件），改完必须重新编译。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>正确顺序：<code>b → c → d → a</code>。先确认开关开没开（7.3），再确认头文件装没装、版本对不对（7.4），再确认 CUDA 路径指向对不对（--extra-cflags / --extra-ldflags），最后重新 configure 并 make——注意顺序里的教训：<strong>任何一步改动后都必须重新编译</strong>，且验证动作（ffmpeg -hwaccels）永远在最后一步做。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：本机实测三步曲 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在自己机器上完成本章的"侦察 → 配置 → 验证"闭环：① 跑 <code>ffmpeg -hwaccels</code> 看自己的平台支持哪些硬件加速方法；② 判断你的平台属于哪一类（NVIDIA → cuvid/nvenc；Intel → qsv；AMD → amf；Apple → videotoolbox），写出对应的 configure 开关；③ 如果你有 NVIDIA GPU 的 Linux 机器，完整走一遍：lspci 看显卡 → nvidia-smi 看驱动 → 用 7.5 节的素材命令转码，转码中观察 nvidia-smi 的 GPU 利用率。把每步输出记录下来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>命令都在 7.2 / 7.5 / 7.6 节出现过；NVIDIA 转码命令是 <code>ffmpeg -hwaccel cuvid -c:v h264_cuvid -i 输入 -c:v h264_nvenc -b:v 2048k -vf scale_npp=1280:-1 输出</code>；转码时另开一个终端看 <code>nvidia-smi</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 苹果本机输出是 <code>videotoolbox</code> + <code>vulkan</code>（见 7.6 节实测）；② Apple 平台对应 <code>--enable-videotoolbox</code>，NVIDIA 平台对应 <code>--enable-cuvid --enable-nvenc --enable-nonfree</code>；③ NVIDIA 机器上，转码期间 <code>nvidia-smi</code> 的 GPU 利用率应明显跳动、而 CPU 占用远低于软转码——这就是"GPU 真的在干活"的铁证。三关全过，你就亲手走完了本章"先调查、再配置、后验证"的完整闭环。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

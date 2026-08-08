@@ -28,6 +28,7 @@
 - `cpp/` — `index.html`（目录页）+ `chapter01-16.html`
 - `graphics/` — `index.html`（目录页）+ `chapter01-16.html`
 - `cpp-internals/` — `index.html`（目录页）+ `chapter01-16.html`（C++ 底层原理线）
+- `ffmpeg/` — `index.html`（目录页）+ `chapter01-16.html`（FFmpeg 音视频实战线）
 - `tools/check-links.js` — 全站链接 + SITE_NAV 导航校验脚本（Node，由 Task 8 建立；用法见「校验」）
 - `docs/` — superpowers 设计与计划文档（非站点内容）
 
@@ -35,8 +36,8 @@
 
 - **改导航 / 章节 / 导师 → 只改 `site-nav.js` 的 `SITE_NAV` / `MENTORS`**。禁止在页面 HTML 里写死导航——顶栏、目录、上一章/下一章均由 `script.js` 依据 `SITE_NAV` 自动渲染。
 - 每个页面 `<body>` 必须声明：
-  - `class="track-*"` — 技术线标识（`track-kotlin` / `track-lvgl` / `track-epub` / `track-sifli` / `track-cpp` / `track-graphics` / `track-cpp-internals`），决定强调色
-  - `data-track` — 技术线 id（`kotlin` / `lvgl` / `epub` / `sifli` / `cpp` / `graphics` / `cpp-internals`）；门户与 preview 页可省略
+  - `class="track-*"` — 技术线标识（`track-kotlin` / `track-lvgl` / `track-epub` / `track-sifli` / `track-cpp` / `track-graphics` / `track-cpp-internals` / `track-ffmpeg`），决定强调色
+  - `data-track` — 技术线 id（`kotlin` / `lvgl` / `epub` / `sifli` / `cpp` / `graphics` / `cpp-internals` / `ffmpeg`）；门户与 preview 页可省略
   - `data-chapter` — 章节页编号（章节页必填）；Kotlin 用两位补零（如 `"01"`），LVGL 用非补零（如 `"1"`），`script.js` 用 `parseInt` 解析，两者均可
   - `data-root` — 相对根：子目录章节/目录页用 `"../"`，根目录页面（门户、preview）用 `"./"`
 - **链接一律相对路径**。GitHub Pages 部署在 `/learn/` 子路径，以 `/` 开头的根绝对路径会失效。
@@ -55,7 +56,7 @@
 
 ## 新增技术线与章节制作规范
 
-站点设计为「一条技术线一个目录」，加新教程请严格按此流程，保证各技术线格式统一。已有七线的做法即范本：Kotlin（朱砂红 `#b3402f`）、LVGL（墨藏蓝 `#35536b`）、ESP32 电子墨水屏（琥珀金 `#9a6a1f`）、SF32（藤紫 `#6a4f7a`）、C++ 工程实践（青瓷绿 `#4a6b5d`）、图像与视觉实战（赭金 `#8a6d3b`）、C++ 底层原理（陶土赭石 `#8a5a44`），每线 16 章。
+站点设计为「一条技术线一个目录」，加新教程请严格按此流程，保证各技术线格式统一。已有八线的做法即范本：Kotlin（朱砂红 `#b3402f`）、LVGL（墨藏蓝 `#35536b`）、ESP32 电子墨水屏（琥珀金 `#9a6a1f`）、SF32（藤紫 `#6a4f7a`）、C++ 工程实践（青瓷绿 `#4a6b5d`）、图像与视觉实战（赭金 `#8a6d3b`）、C++ 底层原理（陶土赭石 `#8a5a44`）、FFmpeg 音视频实战（黛青 `#3f7d76`），每线 16 章。
 
 ### 新增技术线（6 步）
 

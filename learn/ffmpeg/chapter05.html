@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第5章：源码编译准备：configure / make 流程 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter05.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第5章：源码编译准备：configure / make 流程 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter05.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="5" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：源码编译准备：configure / make 流程</h1>
+  <p class="chapter-subtitle">放着 brew 装好的 FFmpeg 不用，为什么偏要自己编译一份？这一章从"发行版二进制的三宗罪"讲起，把 clone 源码、装依赖、configure 体检、make 出活这条黄金流水线完整走一遍——工具备齐，第 6 章才能逐个击破依赖库</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「工欲善其事，必先利其器。工具不顺，手艺再高也白搭。这一章我们亲手备齐整套编译工具链：clone 源码、装依赖、configure 体检、make 出活——每一步都自己走一遍，你就拥有了完全属于自己的 FFmpeg。别嫌麻烦：自己编译过一遍的人，和只会 brew install 的人，对 FFmpeg 的理解是两个世界。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 为什么源码编译：发行版二进制的三宗罪 ========== -->
+  <h2>5.1 为什么源码编译：发行版二进制的三宗罪</h2>
+
+  <p>前三章，我们一直在用 brew 装好的 FFmpeg 干活——它是别人替我们编译好的"成品"。但成品有个天然问题：<strong>它是按大众需求裁剪的</strong>。第 4 章我们说过，FFmpeg 不是一个大程序，而是一组库加三个命令行工具的集合，支持的编解码器有几百种；发行版不可能全给你打开。于是就有了第一宗罪：<strong>功能裁剪</strong>。看本机 ffmpeg-full 的 configuration 行——一长串 <code>--enable-libxxx</code>，每一个都代表"编译时把一个外部库勾选进了 FFmpeg"（本机真实输出，节选）：</p>
+
+  <pre><code><span class="cmt"># ffmpeg -version 的 configuration 行（本机真实输出，节选）</span>
+configuration: --prefix=/opt/homebrew/Cellar/ffmpeg-full/<span class="num">8.1.1</span> --enable-shared \
+  <span class="param">--enable-gpl</span> <span class="param">--enable-gnutls</span> <span class="param">--enable-libx264</span> <span class="param">--enable-libx265</span> \
+  <span class="param">--enable-libopus</span> <span class="param">--enable-libaom</span> <span class="param">--enable-libvpx</span> <span class="param">--enable-libdav1d</span> ... \
+  <span class="param">--enable-videotoolbox</span> <span class="param">--enable-audiotoolbox</span> <span class="param">--enable-neon</span></code></pre>
+
+  <p>第二宗罪：<strong>想加自定义库</strong>。发行版公式里没开的功能（比如 gnutls 的 HTTPS 推流、某个冷门编码器、最新的 AV1 编码器），你要么等发行版更新，要么自己编译。第三宗罪：<strong>交叉编译与定制平台</strong>。嵌入式设备、Android / iOS、树莓派上跑 FFmpeg，或者要给自家 SDK 定制一个裁剪版，都只能走源码编译。而源码编译的入口就是 <code>configure</code>——说人话，它干两件事：<strong>体检</strong>（探测环境里有什么编译器、什么库）和<strong>勾选</strong>（按你的参数决定编哪些功能）。勾选完它生成 Makefile 和 config.h，真正的编译交给 make。一次典型的"自定义需求"长这样：</p>
+
+  <pre><code><span class="cmt"># 假设项目需要 HTTPS 推流 + H.265 软编，而发行版没开 gnutls：</span>
+./configure <span class="param">--enable-gpl</span> <span class="param">--enable-gnutls</span> <span class="param">--enable-libx265</span> \
+            <span class="param">--prefix=</span><span class="str">/opt/ffmpeg-custom</span>
+make <span class="param">-j</span> <span class="num">8</span> <span class="op">&amp;&amp;</span> make install
+<span class="cmt"># 产物装进 /opt/ffmpeg-custom，与系统 ffmpeg 井水不犯河水</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别轻易覆盖系统 FFmpeg。macOS 上 brew 默认把 ffmpeg-full 装成 <code>keg-only</code>（不主动链接进 PATH），就是为了防止你把自己系统搞乱。源码编译的产物请装进独立 prefix（如 <code>--prefix=/opt/ffmpeg-custom</code>），用完整路径调用，和系统二进制各过各的；卸载时直接删目录即可，干净利落。</p>
+  </div>
+
+  <!-- ========== 5.2 版本选择与源码获取：git clone 与 git tag ========== -->
+  <h2>5.2 版本选择与源码获取：git clone 与 git tag</h2>
+
+  <p>动手第一步：拿源码。本站 2020 年的源码编译笔记（CentOS 7 + CUDA 10.0 时代）用的是 <code>git clone</code> 拉全量仓库，当时的版本自报是 <code>ffmpeg version n4.1.1-3-g53f3f52</code>——n4.1.1 是 2018 年底发布的稳定版。FFmpeg 每年发一个大版本（n5、n6、n7、n8……），每个版本打一个 tag。到了今天，建议 clone 后 <code>git checkout</code> 到稳定的 release tag（比如 n8.0），而不是直接用 master——master 是开发分支，今天能用、明天可能就坏了：</p>
+
+  <pre><code><span class="cmt"># 【历史命令】素材原文：直接 clone 全量仓库</span>
+<span class="kw">git</span> <span class="fn">clone</span> https://github.com/FFmpeg/FFmpeg.git
+
+<span class="cmt"># 现行建议：clone 后切到稳定版 tag，别用 master</span>
+<span class="kw">git</span> <span class="fn">tag</span> | <span class="kw">tail</span> -<span class="num">5</span>          <span class="cmt"># 看看有哪些发布版本</span>
+<span class="kw">git</span> <span class="fn">checkout</span> n8.0             <span class="cmt"># 切到 n8.0 发布版</span>
+<span class="kw">git</span> <span class="fn">describe</span> --tags           <span class="cmt"># 输出形如 n8.0-0-gxxxxxxxx</span></code></pre>
+
+  <p>素材里那个版本号 <code>n4.1.1-3-g53f3f52</code> 值得读懂——它是 <code>git describe</code> 的标准输出：<strong>tag 名 + 落后提交数 + 当前提交哈希</strong>。意思是"n4.1.1 之后又提交了 3 次，当前 HEAD 指向 53f3f52"。这类版本号在复现老环境时极其有用：<code>git checkout 53f3f52</code> 就能精确回到素材笔记那个年代。老笔记的环境（CentOS 7 + yum + CUDA 10.0）如今已很难原样复现，但<strong>流程是永恒的</strong>——这正是本章的主题：</p>
+
+  <pre><code><span class="cmt"># 素材里的版本自报（2020 年笔记原文）</span>
+<span class="kw">ffmpeg</span> version n4.1.1-<span class="num">3</span>-g53f3f52
+<span class="cmt">#              ^^^^^^  ^  ^^^^^^^</span>
+<span class="cmt">#              tag 名  落后提交数  提交哈希前 7 位</span>
+<span class="cmt"># 即：n4.1.1 之后又提交了 3 次 —— git describe 的标准输出格式</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>clone 会拉下完整历史（含全部 tag，体积不小）。只想编一个版本，可以浅克隆：<code>git clone --depth 1 --branch n8.0 https://github.com/FFmpeg/FFmpeg.git</code>——只取该 tag 的快照，速度快一个数量级。版本选定这件事，第 7 章讲 GPU 硬编解码时还会回来：<strong>FFmpeg 版本、显卡驱动版本、nv-codec-headers 版本三者必须匹配</strong>，到时候你就知道为什么素材要把版本号记得那么细。</p>
+  </div>
+
+  <!-- ========== 5.3 基础依赖与环境变量：yum 时代与 brew / apt 对照 ========== -->
+  <h2>5.3 基础依赖与环境变量：yum 时代与 brew / apt 对照</h2>
+
+  <p>素材是 CentOS 7 + yum 时代的笔记，它的依赖安装命令长这样。这条命令只作<strong>历史对照</strong>——CentOS 7 已于 2024 年停止维护，yum 环境不建议再新装；但包名的构成逻辑到今天完全一样：</p>
+
+  <pre><code><span class="cmt"># 【历史命令】CentOS 7 + yum 时代，来自本站 2020 年源码编译笔记（素材原文）</span>
+<span class="kw">yum</span> <span class="param">-y</span> <span class="fn">install</span> autoconf automake freetype-devel gcc gcc-c++ git libtool \
+    make nasm pkgconfig zlib-devel bzip2 bzip2-devel</code></pre>
+
+  <p>拆开看这串包名，本质只有三类：<strong>编译工具链</strong>（<code>gcc</code>、<code>gcc-c++</code>、<code>make</code>、<code>autoconf</code>、<code>automake</code>、<code>libtool</code>）、<strong>FFmpeg 依赖的库</strong>（<code>freetype-devel</code>、<code>zlib-devel</code>、<code>bzip2-devel</code>——<code>-devel</code> 后缀表示"带开发头文件的版本"，编译时要用），外加两个 FFmpeg 编译的必备件：<strong>nasm</strong>（汇编器，FFmpeg 的 x86 优化代码要靠它编译）和 <strong>pkgconfig / pkg-config</strong>（查询库版本与路径的工具，configure 体检时靠它找库）。放到现行平台，骨架完全一样：</p>
+
+  <pre><code><span class="cmt"># macOS（Homebrew）：nasm 与 pkg-config 是源码编译的必备件</span>
+<span class="kw">brew</span> <span class="fn">install</span> nasm pkg-config
+
+<span class="cmt"># Ubuntu / Debian：build-essential 一次给齐 gcc / g++ / make</span>
+<span class="kw">sudo</span> <span class="kw">apt</span> <span class="fn">install</span> nasm pkg-config build-essential</code></pre>
+
+  <p>素材里还有一步容易被忽略：<strong>设置 PKG_CONFIG_PATH</strong>。configure 体检时通过 pkg-config 找库，而 pkg-config 默认只搜系统路径；自己编译安装的库（比如第 6 章要编的 gnutls）装到 /usr/local，就必须手动把路径告诉它。素材在 <code>/etc/profile</code> 里全局设置；macOS 上 Homebrew 的库装在 /opt/homebrew，默认路径其实已覆盖，但养成显式导出的习惯没坏处：</p>
+
+  <pre><code><span class="cmt"># 【历史命令】素材：在 /etc/profile 末尾追加（CentOS 7）</span>
+<span class="kw">vim</span> /etc/profile
+<span class="kw">export</span> PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig:/usr/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/lib/pkgconfig
+
+<span class="cmt"># 现行 macOS：临时会话导出，或写进 ~/.zshrc 持久化</span>
+<span class="kw">export</span> PKG_CONFIG_PATH=<span class="str">"$(brew --prefix)"</span>/lib/pkgconfig:<span class="str">"$(brew --prefix)"</span>/share/pkgconfig
+<span class="kw">echo</span> $PKG_CONFIG_PATH   <span class="cmt"># 验证是否生效</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>记住 pkg-config 的用法，后面章节会反复用到：<code>pkg-config --modversion libavcodec</code> 查版本，<code>pkg-config --cflags --libs libavcodec</code> 查编译链接参数。configure 报 <code>ERROR: xxx not found</code> 时，第一反应就是 pkg-config 查一下这个库在不在、版本对不对——第 6 章逐个击破依赖库，全靠这条线索。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：PKG_CONFIG_PATH 设错方向很隐蔽——路径写错不会报错，只会"找不到库"，configure 会判定依赖缺失然后<strong>默默禁用对应功能</strong>，编出来的 FFmpeg 少了功能你还以为是正常现象。改完环境变量，务必先 <code>echo $PKG_CONFIG_PATH</code> 确认路径真实存在，再跑 configure。</p>
+  </div>
+
+  <!-- ========== 5.4 configure：体检与勾选 ========== -->
+  <h2>5.4 configure：体检与勾选</h2>
+
+  <p>configure 是整个流程的心脏，但它<strong>不做编译</strong>。说人话，它干两件事：<strong>体检</strong>——探测编译器、汇编器、每个外部库在不在、版本够不够，结果写进 config.log；<strong>勾选</strong>——根据你的 <code>--enable</code> / <code>--disable</code> 参数决定编哪些功能，结果写进 config.h 和 config.mak。素材里说"配置好 configure 之后，通过 make 可以一步步试探你缺少的库是什么"——就是这个体检过程：缺库时 configure 会当场报 <code>ERROR: x264 not found</code>，而不是闷头编到一半才炸。先看看 configure 的"体检项目清单"长什么样：</p>
+
+  <pre><code><span class="cmt"># ./configure --help 的标准输出结构（FFmpeg n8 分支，节选）</span>
+Usage: configure [options]
+Options: [defaults in brackets after descriptions]
+
+Help options:
+  --help                   print this message
+  --list-encoders          list all encoders
+
+Standard options:
+  --prefix=PREFIX          install in PREFIX [/usr/local]
+  --pkg-config=PKG         use pkg-config tool PKG [pkg-config]
+
+Licensing options:
+  --enable-gpl             allow use of GPL code [no]
+  --enable-nonfree         allow use of nonfree code [no]
+
+Configuration options:
+  --enable-shared          build shared libraries [no]
+  --disable-avdevice       disable libavdevice build [no]
+
+Program options:
+  --disable-ffmpeg         disable ffmpeg build [no]
+  --disable-ffprobe        disable ffprobe build [no]
+
+Advanced options:
+  --enable-cross-compile   assume a cross-compiler is used [no]
+  --target-os=OS           compiler targets OS [auto]
+
+Developer options:
+  --disable-debug          disable debugging symbols [no]
+  --enable-debug=LEVEL     set the debug level [0]</code></pre>
+
+  <p>--help 输出从上到下分区清晰：Help（帮助自身）、Standard（安装路径与编译器）、Licensing（许可证，决定能不能链 GPL/非自由库）、Configuration（功能开关）、Program（三个命令行工具各自的开头）、Advanced（交叉编译等进阶项）、Developer（调试与开发）。几个高频选项过一遍，典型的编译组合就是把这些"勾"打上：</p>
+
+  <pre><code><span class="cmt"># 典型组合：GPL 编码器 + HTTPS 支持 + 动态库 + 不编文档</span>
+./configure <span class="param">--enable-gpl</span> <span class="param">--enable-libx264</span> <span class="param">--enable-libx265</span> \
+            <span class="param">--enable-gnutls</span> <span class="param">--enable-shared</span> <span class="param">--disable-doc</span>
+
+<span class="cmt"># configure 的产出：config.mak（给 Makefile 用）/ config.h（给源码用）</span>
+<span class="kw">ls</span> config.mak config.h <span class="num">2</span><span class="op">&gt;</span>/dev/null
+<span class="cmt"># config.h 里每一行都是 configure 替你写好的"体检结论"</span>
+<span class="kw">grep</span> <span class="str">"CONFIG_LIBX264"</span> config.h</code></pre>
+
+  <table>
+    <tr><th>选项</th><th>作用</th><th>默认</th></tr>
+    <tr><td><code>--enable-gpl</code></td><td>允许链接 GPL 协议代码（x264、x265 等）</td><td>关</td></tr>
+    <tr><td><code>--enable-libx264 / --enable-libx265</code></td><td>启用 H.264 / H.265 软件编码器（需先装对应库）</td><td>关</td></tr>
+    <tr><td><code>--enable-gnutls</code></td><td>启用 HTTPS / RTMPS 等加密传输支持</td><td>自动检测</td></tr>
+    <tr><td><code>--enable-shared</code></td><td>编译成动态库（.so / .dylib），否则只有静态库</td><td>关</td></tr>
+    <tr><td><code>--disable-avdevice</code></td><td>砍掉 libavdevice（设备采集），按需瘦身</td><td>开</td></tr>
+    <tr><td><code>--prefix=PREFIX</code></td><td>安装目录，默认 /usr/local</td><td>/usr/local</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>把素材那句"make 可以一步步试探你缺少的库是什么"翻译成现代工作流：<strong>configure 报缺哪个库，就去装哪个，装完重跑 configure</strong>。第 6 章《依赖库逐个击破：x264 / opus / gnutls》就是这套循环的标准演练——先 configure 看报错，再逐个补库，最后全部点亮。</p>
+  </div>
+
+  <!-- ========== 5.5 make 三板斧：编译、安装与清理 ========== -->
+  <h2>5.5 make 三板斧：编译、安装与清理</h2>
+
+  <p>configure 体检通过后，真正的编译交给 make。素材原文是 <code>make -j 10</code>（"并行 10 个核来一起编译，可以取消"）——FFmpeg 体量不小，串行编一次要等很久，并行是刚需。<code>-j</code> 后面跟数字是"用几个核"，不跟数字则是"有多少核用多少核"。编译产物是库文件（.a / .dylib / .so）和三个命令行工具；随后 <code>make install</code> 按 <code>--prefix</code> 把产物装进目标目录。素材的原始流程与现代建议如下：</p>
+
+  <pre><code><span class="cmt"># 【历史命令】素材原文：配置好 configure 之后的编译流程</span>
+./configure
+make <span class="param">-j</span> <span class="num">10</span>      <span class="cmt"># 编译，并行 10 个核</span>
+make install    <span class="cmt"># 安装</span>
+
+<span class="cmt"># 现行建议：-j 不跟数字 = 自动用满所有核；&amp;&amp; 串联保证前一步成功才继续</span>
+./configure <span class="param">--enable-gpl</span> <span class="param">--enable-shared</span>
+make <span class="param">-j</span> <span class="op">&amp;&amp;</span> make install</code></pre>
+
+  <p>收尾还有两个容易混的命令。素材把 <code>make distclean</code> 注释成"卸载"，其实是个笔误：<strong>distclean 是"清除配置 + 编译产物，把源码树还原到刚 clone 的状态"</strong>，不是卸载；真正卸载已安装文件是 <code>make uninstall</code>（FFmpeg 提供了这个目标）。<code>make clean</code> 则只清编译产物、保留 configure 结果——改完代码想重编时用 clean 就够，不用重新体检：</p>
+
+  <pre><code><span class="cmt"># 【历史命令】素材原文（注意：素材把 disclean 误注为"卸载"）</span>
+make distclean   <span class="cmt"># 清除配置 + 编译产物，回到刚 clone 的状态</span>
+make clean       <span class="cmt"># 只清除编译产物，保留 configure 结果</span>
+<span class="ann">@distclean 清场重来 / clean 轻量重编 / uninstall 卸载安装</span>
+
+<span class="cmt"># 真正的卸载（FFmpeg 提供 uninstall 目标）：</span>
+make uninstall   <span class="cmt"># 删除 make install 安装进 prefix 的文件</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>记一个节奏：<strong>第一次 configure 慢在体检，之后 make 慢在编译</strong>。改动 configure 参数前先 <code>make distclean</code> 清场，否则旧配置会残留干扰新结果；只改源码就 <code>make clean</code> 或直接 make——make 自带增量编译，只重编改动的文件。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>make install</code> 往系统目录（<code>--prefix=/usr/local</code>）写文件需要权限，必要时加 sudo。但提醒一句：<strong>给系统装 FFmpeg，优先用包管理器</strong>；源码编译的产物装进独立 prefix 才是常态玩法，系统目录留给发行版管理，两边不打架——这正是 5.1 节 warning 的延续。</p>
+  </div>
+
+  <!-- ========== 5.6 本机实测：依赖树与配置自检 ========== -->
+  <h2>5.6 本机实测：依赖树与配置自检</h2>
+
+  <p>纸上谈兵不如动手。本机已经装好 ffmpeg-full 8.1.1，三个命令快速自检环境，顺便预习第 6 章的主角们。第一个命令：验证 pkg-config 能否找到 libavcodec（5.3 节说过的查库神器）：</p>
+
+  <pre><code><span class="cmt"># 实测 1：本机 libavcodec 的 pkg-config 版本（真实输出）</span>
+<span class="kw">pkg-config</span> <span class="param">--modversion</span> libavcodec
+<span class="num">62.28.101</span>
+<span class="cmt"># 格式：主版本.次版本.修订 —— 与 ffmpeg 工具版本 8.1.1 是两套编号</span></code></pre>
+
+  <p><code>62.28.101</code> 是 libavcodec 库自身的版本号（主版本 62），和 ffmpeg 工具版本 8.1.1 对不上？这是常态：FFmpeg 的每个库独立演进、独立编号，主版本号变化通常意味着 ABI 不兼容。第二个命令：看依赖树。<code>brew info</code> 会列出编译这个 formula 所需的所有依赖——47 个 Required 里，x264、x265、opus、gnutls 赫然在列（真实输出，节选）：</p>
+
+  <pre><code><span class="cmt"># 实测 2：ffmpeg-full 的依赖树（真实输出，节选）</span>
+==&gt; ffmpeg-full: <span class="num">8.1.1</span> <span class="op">--&gt;</span> stable <span class="num">8.1.2</span> (bottled), HEAD [keg-only]
+...
+==&gt; Dependencies
+Required (<span class="num">47</span>): aom, aribb24, dav1d, fontconfig, freetype, frei0r, ggml, gnutls, harfbuzz,
+jpeg-xl, lame, libass, libbluray, libplacebo, librist, libsoxr, libssh, libvidstab, libvmaf,
+libvorbis, libvpx, libx11, libxcb, opencore-amr, openjpeg, opus, qrencode, rav1e, rubberband,
+sdl2-compat, snappy, speex, srt, svt-av1, tesseract, theora, webp, whisper-cpp, x264, x265,
+xvid, xz, zeromq, zimg, libarchive, libogg, libsamplerate
+Recursive Runtime (<span class="num">102</span>): all installed <span class="op">✔</span></code></pre>
+
+  <p>第三个命令：回到 5.1 节的 configuration 行。你会发现每个 <code>--enable-libxxx</code> 都能在依赖树里找到对应的包——x264、x265、opus、gnutls……这正是第 6 章要逐个击破的对象。到时候我们亲手把这三个库各编译一遍，再让 FFmpeg 的 configure 认到它们——到那一刻，5.1 节说的"三宗罪"，你就全都有解药了：</p>
+
+  <pre><code><span class="cmt"># 实测 3：版本与配置自检（真实输出）</span>
+<span class="kw">ffmpeg</span> <span class="param">-version</span> | <span class="kw">head</span> -<span class="num">3</span>
+<span class="kw">ffmpeg</span> version <span class="num">8.1.1</span> Copyright (c) <span class="num">2000</span>-<span class="num">2026</span> the FFmpeg developers
+built with Apple clang version <span class="num">21.0.0</span> (clang-<span class="num">2100.0.123.102</span>)
+configuration: --prefix=/opt/homebrew/Cellar/ffmpeg-full/<span class="num">8.1.1</span> --enable-shared --enable-pthreads \
+--enable-version3 --cc=clang ... --enable-gnutls --enable-gpl --enable-libaom --enable-libdav1d \
+--enable-libmp3lame --enable-libopus --enable-libx264 --enable-libx265 --enable-libvpx ... --enable-videotoolbox</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>三句话总结本章：<strong>configure 体检勾选，make 编译出活，make install 装好、distclean 还原</strong>。源码拿到了、依赖装好了、流程走通了——工具已经备齐。下一章，第 6 章《依赖库逐个击破：x264 / opus / gnutls》，我们开始逐个击破。🔨</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：configure 的职责 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>configure 在源码编译流程中的作用是什么？A. 直接把 C 源码编译成可执行文件；B. 探测环境 + 按参数生成 config.h / Makefile；C. 安装依赖库；D. 从 GitHub 下载 FFmpeg 源码。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 5.4 节的标题与第一段：configure 做"体检"和"勾选"，真正的编译交给谁？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>选 B。configure 不做编译（排除 A），不装依赖（排除 C），不下载源码（排除 D）——它探测编译器、汇编器和外部库，再按 <code>--enable / --disable</code> 参数生成 config.h 和 config.mak，真正的编译由 make 完成。记住这个分工：<strong>configure 体检勾选，make 编译出活</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读懂库版本号 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>运行 <code>pkg-config --modversion libavcodec</code>，本机输出 <code>62.28.101</code>。回答两个问题：① 三个数字分别代表什么？② 为什么它和 <code>ffmpeg -version</code> 显示的 8.1.1 对不上？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>版本号格式是"主版本.次版本.修订"；再想想 5.6 节实测 1 的注释——libavcodec 和 ffmpeg 工具是同一个项目里的什么关系？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>62</code> 是主版本、<code>28</code> 是次版本、<code>101</code> 是修订号；主版本号变化通常意味着 ABI 不兼容。② libavcodec 是独立演进的库，版本号与 ffmpeg 工具版本（8.1.1）是两套编号、互不同步——这是 FFmpeg 的常态，就像 5.6 节实测 1 展示的那样。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：distclean 的真相 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材笔记把 <code>make distclean</code> 注释为"卸载"，这个说法错在哪里？真正卸载源码编译安装的 FFmpeg 该用什么命令？<code>make clean</code> 和 <code>make distclean</code> 又有什么区别？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 5.5 节：distclean 把源码树还原到什么状态？卸载是另一个以 un- 开头的目标。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>make distclean</code> 是"清除配置 + 编译产物，把源码树还原到刚 clone 的状态"，素材把它注释成"卸载"是笔误；真正卸载已安装文件是 <code>make uninstall</code>。区别：<code>make clean</code> 只清编译产物、保留 configure 结果（改完代码重编够用）；<code>make distclean</code> 连配置一起清掉（改动 configure 参数前必须用）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：依赖树对比 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>分别运行 <code>brew info ffmpeg</code> 与 <code>brew info ffmpeg-full</code>，对比两者的 Required 依赖数量（本机分别是 10 与 47）。从 5.1 节"发行版二进制的三宗罪"的角度解释差距来源，并指出其中哪几个依赖是第 6 章的主角。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>10 个 vs 47 个，差的 37 个都是什么性质的库？回想 5.1 节第一宗罪"功能裁剪"和第二宗罪"想加自定义库"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>brew 的 <code>ffmpeg</code> 公式只勾选最常用的功能（Required 仅 10 个：dav1d、lame、libvmaf、libvpx、openssl@3、opus、sdl2-compat、svt-av1、x264、x265），<code>ffmpeg-full</code> 则几乎全开（Required 47 个，含 gnutls、libass、theora、speex 等）。这 37 个的差距就是"发行版二进制裁剪"的活教材——包管理器给你的永远是"别人替你做的取舍"，想要更多就得自己 configure。第 6 章的主角是 <strong>x264、opus、gnutls</strong>：前两个负责常见编解码，gnutls 负责 HTTPS/RTMPS 加密传输，三者都要先各自编译安装、再让 FFmpeg 的 configure 认到。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

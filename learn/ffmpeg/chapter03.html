@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第3章：ffprobe 探针：读懂视频的体检报告 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter03.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第3章：ffprobe 探针：读懂视频的体检报告 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter03.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="3" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：ffprobe 探针：读懂视频的体检报告</h1>
+  <p class="chapter-subtitle">拿到一个视频文件，第一件事不是转码，而是先做体检——用 ffprobe 把容器、流、帧三个层次逐一读出，让每个数字都对得上号，再决定下一步怎么走</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「体检报告不会说谎，但只有会读的人才能从中看到真相。播放器能播，不代表你了解这个文件；把容器、流、帧三个层次逐一拆开，让每个数字都能对上号，你才算真正掌握了它。记住：真相藏在细节里。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 为什么需要体检：从"能播"到"懂它" ========== -->
+  <h2>3.1 为什么需要体检：从"能播"到"懂它"</h2>
+
+  <p>双击一个视频，播放器就放出来了——但<strong>"能播"不等于"懂它"</strong>。转码要选编码器、截图要定时间点、硬解要挑解码器、切片要算时长，每一步决策都建立在同一个前提上：<strong>这个文件里到底是什么？</strong>是 MP4 还是 MKV？里面有几条流？视频是什么编码、多大分辨率、多少帧率？这些问题的答案，就是本章的主角 <strong>ffprobe</strong>（说人话：FFmpeg 全家桶里的"体检医生"，只读不改，专门把多媒体文件的内部结构一条条读出来给你看）给出的。</p>
+
+  <p>ffprobe 和 ffmpeg、ffplay 是"三兄弟"：<strong>ffmpeg</strong>（手术刀，负责转码）用 <strong>libavformat</strong>（解析容器的库）打开文件、用 <strong>libavcodec</strong>（编解码库）压缩和解压数据；<strong>ffplay</strong>（放映机）负责播放；而 <strong>ffprobe</strong> 不转码、不播放，只调用同一套库把文件"读一遍"然后汇报。所以 ffprobe 得出的结论，和 ffmpeg 转码时看到的是同一份数据——体检报告可信。本章全程用一个真实样本：先造一个 6 秒的测试视频（h264 视频流 + aac 音频流 + 章节 + 元数据），再对它做层层体检。先确认工具版本：</p>
+
+  <pre><code><span class="cmt"># 版本确认：本章全部输出来自本机 ffmpeg 8.1.1（Homebrew ffmpeg-full）</span>
+<span class="fn">ffprobe</span> <span class="param">-version</span>
+<span class="cmt"># 输出（真实，节选）：</span>
+ffprobe version 8.1.1 Copyright (c) 2007-2026 the FFmpeg developers
+  built with Apple clang version 21.0.0 (clang-2100.0.123.102)
+  libavutil      60. 26.101 / 60. 26.101
+  libavcodec     62. 28.101 / 62. 28.101
+  libavformat    62. 12.101 / 62. 12.101</code></pre>
+
+  <p>最朴素的用法是什么选项都不加，直接 <code>ffprobe 文件名</code>——它会把整个文件的"概览一页纸"打出来。这一页纸信息密度极高，后面几节我们逐行拆解，先整体看一眼（真实输出节选，完整版见 3.3 节）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">sample.mp4</span>
+<span class="cmt"># 输出（真实，节选）：</span>
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'sample.mp4':
+  Duration: 00:00:06.00, start: 0.000000, bitrate: 376 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 270 kb/s, 25 fps, 25 tbr, 12800 tbn (default)
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 96 kb/s (default)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>把"体检"想成破案：<strong>先看现场（容器层）→ 再找线索（流层）→ 最后核对每个时间点（帧层）</strong>。本章的三层拆解就是这个顺序。第 4 章会系统讲容器、编码与时间基的概念，这一章先把"怎么读出数据"练熟。</p>
+  </div>
+
+  <!-- ========== 3.2 造一个体检样本：h264 + aac + 章节 + 元数据 ========== -->
+  <h2>3.2 造一个体检样本：h264 + aac + 章节 + 元数据</h2>
+
+  <p>体检得有样本。为了让报告"有血有肉"，先用 ffmpeg 亲手造一个测试视频：<strong>6 秒、320×240、25 帧/秒（fps，说人话：每秒播放多少幅画面）的 h264 视频流</strong>，配一条 <strong>44100 Hz 单声道的 aac 音频流</strong>，再加两条章节和标题等元数据。视频画面用 <code>testsrc2</code>（说人话：FFmpeg 内置的测试图案发生器，自带滚动时间码和色条，专门用来做测试样本），音频用 <code>sine</code>（正弦波发生器，这里发 440Hz 的"标准音 A"）。</p>
+
+  <p>生成分两步。第一步写一个 <strong>ffmetadata 文件</strong>（说人话：FFmpeg 约定俗成的元数据描述文件，<code>[CHAPTER]</code> 段定义章节的起止时间与标题，<code>TIMEBASE=1/1000</code> 表示下面 START/END 的单位是毫秒）：</p>
+
+  <pre><code><span class="cmt"># meta.txt —— 章节与元数据描述文件</span>
+<span class="ann">;FFMETADATA1</span>
+title<span class="op">=</span>体检样本：侦探的考验
+artist<span class="op">=</span>狄仁杰工作室
+comment<span class="op">=</span>ffprobe 第 3 章测试样本
+<span class="ann">[CHAPTER]</span>
+TIMEBASE=1/1000
+START<span class="op">=</span><span class="num">0</span>
+END<span class="op">=</span><span class="num">3000</span>
+title=序幕
+<span class="ann">[CHAPTER]</span>
+TIMEBASE=1/1000
+START<span class="op">=</span><span class="num">3000</span>
+END<span class="op">=</span><span class="num">6000</span>
+title=真相浮现</code></pre>
+
+  <p>第二步跑 ffmpeg：<code>-f lavfi -i</code> 引入两个虚拟输入（画面 + 声音），<code>-i meta.txt</code> 引入元数据文件，<code>-map</code>（说人话：指定把哪些输入流写进输出）选择视频流和音频流，<code>-map_metadata 2</code> 把第 2 个输入（meta.txt）的元数据和章节带进输出，<code>-c:v libx264</code> / <code>-c:a aac</code> 指定编码器，<code>-movflags +faststart</code> 把 moov 元数据挪到文件头、便于边下载边播放：</p>
+
+  <pre><code><span class="cmt"># 生成 sample.mp4（本机真实执行，输出尾部节选）</span>
+<span class="fn">ffmpeg</span> <span class="param">-y -f lavfi -i</span> <span class="str">"testsrc2=size=320x240:rate=25:duration=6"</span> \
+       <span class="param">-f lavfi -i</span> <span class="str">"sine=frequency=440:sample_rate=44100:duration=6"</span> \
+       <span class="param">-i meta.txt -map 0:v -map 1:a -map_metadata 2</span> \
+       <span class="param">-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p</span> \
+       <span class="param">-c:a aac -b:a 96k -movflags +faststart sample.mp4</span>
+<span class="cmt"># 输出尾部（真实）：</span>
+[libx264 @ 0x...] kb/s:269.16
+[aac @ 0x...] Qavg: 123.618</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：样本里藏着一条"意外"的流——MP4 会把章节写成一条<strong>文本数据流</strong>（后面你会看到 <code>Stream #0:2</code>，编码是 <code>bin_data</code>、tag 是 <code>text</code>），所以 ffprobe 报告"3 条流"而不是 2 条，默认输出末尾还会提示 <code>Unsupported codec with id 98314 for input stream 2</code>——这不是错误，只是数据流无需解码。体检报告里出现"多余的流"往往是这类封装细节，先记下这个伏笔。</p>
+  </div>
+
+  <!-- ========== 3.3 默认输出：一页纸的概览 ========== -->
+  <h2>3.3 默认输出：一页纸的概览</h2>
+
+  <p>什么都不加直接 <code>ffprobe sample.mp4</code>，得到的就是"一页纸概览"。逐行读：<strong>第一行</strong> <code>Input #0, mov,mp4,m4a,3gp,3g2,mj2</code> 说明容器格式（说人话：装视频、音频、字幕的"档案袋"，MP4 家族在 FFmpeg 内部就是这一串名字）；<strong>Duration</strong> 6.00 秒是总时长，<strong>bitrate</strong> 376 kb/s 是平均总码率；接着是 <strong>Chapters</strong> 章节列表（两章：序幕、真相浮现）和 <strong>Stream</strong> 流清单。下面这行视频流的完整版，信息密度极高（真实输出）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">sample.mp4</span>
+<span class="cmt"># 输出（真实）：</span>
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'sample.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    title           : 体检样本：侦探的考验
+    artist          : 狄仁杰工作室
+    comment         : ffprobe 第 3 章测试样本
+  Duration: 00:00:06.00, start: 0.000000, bitrate: 376 kb/s
+  Chapters:
+    Chapter #0:0: start 0.000000, end 3.000000
+      Metadata:
+        title           : 序幕
+    Chapter #0:1: start 3.000000, end 6.000000
+      Metadata:
+        title           : 真相浮现
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 270 kb/s, 25 fps, 25 tbr, 12800 tbn (default)
+    Metadata:
+      handler_name    : VideoHandler
+      encoder         : Lavc62.28.101 libx264
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 96 kb/s (default)
+  Stream #0:2[0x3](eng): Data: bin_data (text / 0x74786574), 0 kb/s
+Unsupported codec with id 98314 for input stream 2</code></pre>
+
+  <p>逐段读这行视频流：<code>Stream #0:0[0x1]</code> 是"第 0 个输入的第 0 条流"（方括号里是流的 ID）；<code>h264 (High)</code> 是编码格式与档次（说人话：H.264 编码，High 是常用高档位）；<code>avc1 / 0x31637661</code> 是 h264 在 MP4 容器里的 <strong>FourCC 标记</strong>（四个字符的编码代号）；<code>yuv420p</code> 是像素格式（说人话：画面颜色怎么采样存储，4:2:0 是最通用的）；<code>320x240</code> 是分辨率；<code>270 kb/s</code> 是这条流的码率；最后的 <code>25 fps, 25 tbr, 12800 tbn</code> 三个缩写是理解时间的关键——<strong>fps</strong>（frames per second）是帧率，<strong>tbr</strong> 是实际平均帧率，<strong>tbn</strong>（time base numerator）是<strong>时间基</strong>的分子，表示"1 个时间单位 = 1/12800 秒"。音频流同理：aac 编码、44100 Hz 采样率（说人话：每秒采集 44100 个声音样本）、mono 单声道、fltp 是音频采样格式（32 位浮点，planar 布局）。</p>
+
+  <p>这页纸太长？脚本里想要"成功即无声"的安静模式，用 <code>-v error</code>（说人话：把日志级别提到 error，只报错不闲聊）——注意它连默认概览一起屏蔽了，这是真实行为，别以为命令没跑：</p>
+
+  <pre><code><span class="cmt"># -v error：日志级别提到 error，默认概览也不打印（输出为空是正常的）</span>
+<span class="fn">ffprobe</span> <span class="param">-v error sample.mp4</span>
+<span class="cmt"># 输出（真实）：（空 —— 成功即无声）</span>
+
+<span class="cmt"># 只想去掉版本横幅、保留概览，用 -hide_banner：</span>
+<span class="fn">ffprobe</span> <span class="param">-hide_banner sample.mp4</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>记住三个缩写：<strong>fps 是"名义帧率"，tbr 是"实际平均帧率"，tbn 是"时间基"</strong>。可变帧率（VFR）视频里 fps 和 tbr 会不一样，而 tbn 决定所有时间戳的换算——第 4 章「音视频基础：容器、编码与时间基」会专门展开。现在只需要知道：<code>12800 tbn</code> 意味着 1 秒被切成 12800 个时间单位。</p>
+  </div>
+
+  <!-- ========== 3.4 容器层：-show_format 读"档案袋" ========== -->
+  <h2>3.4 容器层：-show_format 读"档案袋"</h2>
+
+  <p>默认输出是人看的；要<strong>机器可读、字段齐全</strong>，就得用 <code>-show_format</code>——它把<strong>容器层</strong>（档案袋封皮）的信息全部打出来：<code>format_name</code>（容器格式）、<code>duration</code>（总时长，秒）、<code>size</code>（文件字节数）、<code>bit_rate</code>（平均总码率）、<code>probe_score</code>（探测置信度，100 表示完全确定）、<code>tags</code>（元数据字典）。配合 <code>-print_format json</code>（说人话：把结果按 JSON 结构输出，脚本解析的标配）就是一份标准体检档案：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-show_format -print_format json sample.mp4</span>
+<span class="cmt"># 输出（真实，完整）：</span>
+{
+    <span class="str">"format"</span>: {
+        <span class="str">"filename"</span>: <span class="str">"sample.mp4"</span>,
+        <span class="str">"nb_streams"</span>: <span class="num">3</span>,
+        <span class="str">"nb_programs"</span>: <span class="num">0</span>,
+        <span class="str">"nb_stream_groups"</span>: <span class="num">0</span>,
+        <span class="str">"format_name"</span>: <span class="str">"mov,mp4,m4a,3gp,3g2,mj2"</span>,
+        <span class="str">"format_long_name"</span>: <span class="str">"QuickTime / MOV"</span>,
+        <span class="str">"start_time"</span>: <span class="str">"0.000000"</span>,
+        <span class="str">"duration"</span>: <span class="str">"6.000000"</span>,
+        <span class="str">"size"</span>: <span class="str">"282453"</span>,
+        <span class="str">"bit_rate"</span>: <span class="str">"376604"</span>,
+        <span class="str">"probe_score"</span>: <span class="num">100</span>,
+        <span class="str">"tags"</span>: {
+            <span class="str">"major_brand"</span>: <span class="str">"isom"</span>,
+            <span class="str">"title"</span>: <span class="str">"体检样本：侦探的考验"</span>,
+            <span class="str">"artist"</span>: <span class="str">"狄仁杰工作室"</span>,
+            <span class="str">"encoder"</span>: <span class="str">"Lavf62.12.101"</span>,
+            <span class="str">"comment"</span>: <span class="str">"ffprobe 第 3 章测试样本"</span>
+        }
+    }
+}</code></pre>
+
+  <p>体检报告不用全抄，<code>-show_entries</code>（说人话：只挑你要的字段输出）配合 <code>-of default=noprint_wrappers=1</code>（说人话：输出成"字段=值"的纯文本，不套 [FORMAT] 外壳）就能精准提取。下面这条命令只拿 4 个字段，输出干净到可以直接喂给脚本：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -show_entries format=duration,bit_rate,format_name,size</span> \
+       <span class="param">-of default=noprint_wrappers=1 sample.mp4</span>
+<span class="cmt"># 输出（真实）：</span>
+format_name=mov,mp4,m4a,3gp,3g2,mj2
+duration=<span class="num">6.000000</span>
+size=<span class="num">282453</span>
+bit_rate=<span class="num">376604</span></code></pre>
+
+  <table>
+    <tr><th>format 字段</th><th>真实值</th><th>含义（说人话）</th></tr>
+    <tr><td><code>format_name</code></td><td>mov,mp4,m4a,3gp,3g2,mj2</td><td>容器格式，MP4 家族在 FFmpeg 里的统一代号</td></tr>
+    <tr><td><code>duration</code></td><td>6.000000</td><td>总时长（秒），所有流共同的时间跨度</td></tr>
+    <tr><td><code>size</code></td><td>282453</td><td>文件大小（字节）</td></tr>
+    <tr><td><code>bit_rate</code></td><td>376604</td><td>平均总码率（bps，说人话：每秒平均消耗多少比特）</td></tr>
+    <tr><td><code>probe_score</code></td><td>100</td><td>探测置信度，100 = 完全确定</td></tr>
+    <tr><td><code>tags</code></td><td>title / artist / …</td><td>元数据字典（标题、作者等"档案袋贴纸"）</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：容器层的 <code>bit_rate=376604</code> 是<strong>整包平均总码率</strong>，不是视频流 270 + 音频流 96 的简单相加（≈366 kb/s）——差额来自容器封装开销（moov 索引、章节文本流等）。体检报告里数字对不上时，先想"还有一层容器开销"，这是系统分析的第一步。</p>
+  </div>
+
+  <!-- ========== 3.5 流层：-show_streams 逐流听诊 ========== -->
+  <h2>3.5 流层：-show_streams 逐流听诊</h2>
+
+  <p>档案袋里到底装了几条流？<code>-show_streams</code> 逐条打印，每条 <code>[STREAM]</code> 块就是一条流的完整档案：<code>index</code>（流序号）、<code>codec_name</code>（编码器名）、<code>codec_type</code>（video/audio/data）、<code>width</code>/<code>height</code>（分辨率）、<code>pix_fmt</code>（像素格式）、<code>r_frame_rate</code>（名义帧率）、<code>avg_frame_rate</code>（平均帧率）、<code>time_base</code>（时间基）、<code>bit_rate</code>（该流码率）、<code>nb_frames</code>（帧数）。看视频流的真实档案（节选关键字段）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-show_streams sample.mp4</span>
+<span class="cmt"># 输出（真实，第 0 条流节选）：</span>
+<span class="ann">[STREAM]</span>
+index=<span class="num">0</span>
+codec_name=<span class="type">h264</span>
+codec_long_name=H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10
+profile=High
+codec_type=video
+codec_tag_string=avc1
+codec_tag=<span class="num">0x31637661</span>
+width=<span class="num">320</span>
+height=<span class="num">240</span>
+pix_fmt=<span class="type">yuv420p</span>
+level=<span class="num">13</span>
+r_frame_rate=<span class="num">25</span>/<span class="num">1</span>
+avg_frame_rate=<span class="num">25</span>/<span class="num">1</span>
+time_base=<span class="num">1</span>/<span class="num">12800</span>
+start_pts=<span class="num">0</span>
+start_time=<span class="num">0.000000</span>
+duration_ts=<span class="num">76800</span>
+duration=<span class="num">6.000000</span>
+bit_rate=<span class="num">270080</span>
+nb_frames=<span class="num">150</span>
+TAG:handler_name=VideoHandler
+TAG:encoder=Lavc62.28.101 libx264
+<span class="ann">[/STREAM]</span></code></pre>
+
+  <p><strong>时间基（time_base）是本章的重点，也是给第 4 章打的地基</strong>：<code>time_base=1/12800</code> 表示"1 个时间单位 = 1/12800 秒"，视频流 <code>duration_ts=76800</code> 是"共 76800 个时间单位"，那么时长 = 76800 × 1/12800 = <strong>6.0 秒</strong>。音频流 time_base 是 1/44100、duration_ts=264600，264600 ÷ 44100 = 同样 6.0 秒；容器层 duration 也是 6.000000——<strong>三个层次严丝合缝</strong>，这就是"真相藏在细节里"：体检报告里每一层的数字都能互相印证。再听诊一下音频流（用 <code>-select_streams a:0</code> 只挑第 0 条音频流，说人话：按类型和序号筛流）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams a:0 -show_entries</span> \
+       <span class="param">stream=codec_name,sample_rate,channels,channel_layout,time_base,duration_ts</span> \
+       <span class="param">-of default=noprint_wrappers=1 sample.mp4</span>
+<span class="cmt"># 输出（真实）：</span>
+codec_name=<span class="type">aac</span>
+sample_rate=<span class="num">44100</span>
+channels=<span class="num">1</span>
+channel_layout=mono
+time_base=<span class="num">1</span>/<span class="num">44100</span>
+duration_ts=<span class="num">264600</span></code></pre>
+
+  <table>
+    <tr><th>层级</th><th>探测选项</th><th>回答的问题</th><th>代表字段</th></tr>
+    <tr><td>容器层（format）</td><td><code>-show_format</code></td><td>整个文件是什么、多大、多长</td><td>format_name / duration / size / bit_rate</td></tr>
+    <tr><td>流层（stream）</td><td><code>-show_streams</code></td><td>里面有几条流、各是什么编码</td><td>index / codec_name / codec_type / width / height / time_base / bit_rate</td></tr>
+    <tr><td>帧层（frame）</td><td><code>-show_frames</code></td><td>每一帧怎么压缩、何时显示</td><td>pts_time / pict_type / key_frame</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p><code>r_frame_rate</code> 是"名义帧率"（编码时声明的），<code>avg_frame_rate</code> 是"实际平均帧率"（按真实帧数和时长算的）。恒定帧率（CFR）视频两者相同（都是 25/1）；<strong>可变帧率（VFR）视频两者会不一样，判断真实帧率要看 avg</strong>。这是体检报告里最常见的"细节陷阱"之一。</p>
+  </div>
+
+  <!-- ========== 3.6 帧层：-show_frames 与 -show_packets ========== -->
+  <h2>3.6 帧层：-show_frames 与 -show_packets 看细胞</h2>
+
+  <p>再往下钻就到了"细胞"级：流由<strong>包</strong>（packet，说人话：编码后的一段数据，一个视频包通常对应一帧）组成，包解码后得到<strong>帧</strong>（frame，一幅完整画面）。<code>-show_packets</code> 只读容器层、不解码（快）；<code>-show_frames</code> 会真正解码每一帧（慢），但能看到帧类型。看前几帧的真实档案——第一帧是 <code>key_frame=1</code>（关键帧，说人话：不依赖其他帧就能独立解码的帧）、<code>pict_type=I</code>（I 帧，帧内编码），随后是三个 <code>pict_type=B</code>（B 帧，双向预测帧，说人话：要参考前后两边的帧才能解码）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_frames</span> \
+       <span class="param">-show_entries frame=pts_time,pict_type,key_frame sample.mp4</span>
+<span class="cmt"># 输出（真实，前 4 帧）：</span>
+<span class="ann">[FRAME]</span>
+key_frame=<span class="num">1</span>
+pts_time=<span class="num">0.000000</span>
+pict_type=I
+<span class="ann">[SIDE_DATA]</span>
+side_data_type=H.26[45] User Data Unregistered SEI message
+<span class="ann">[/SIDE_DATA]</span>
+<span class="ann">[/FRAME]</span>
+<span class="ann">[FRAME]</span>
+key_frame=<span class="num">0</span>
+pts_time=<span class="num">0.040000</span>
+pict_type=B
+<span class="ann">[/FRAME]</span>
+<span class="ann">[FRAME]</span>
+key_frame=<span class="num">0</span>
+pts_time=<span class="num">0.080000</span>
+pict_type=B
+<span class="ann">[/FRAME]</span>
+<span class="ann">[FRAME]</span>
+key_frame=<span class="num">0</span>
+pts_time=<span class="num">0.120000</span>
+pict_type=B
+<span class="ann">[/FRAME]</span></code></pre>
+
+  <p>帧在时间轴上按 0.04 秒（1/25 秒）一帧均匀排开，符合 25 fps。但看<strong>包</strong>的视角就精彩了——第一个包的 <code>dts_time=-0.080000</code> 是<strong>负数</strong>！<code>pts</code>（presentation timestamp，显示时间戳，说人话：这帧"什么时候该被看到"）和 <code>dts</code>（decode timestamp，解码时间戳，"什么时候该被解码"）是两条时间轴：因为 B 帧要参考后面的帧，解码顺序（dts）必须把 B 帧的参考帧先送进去，于是前两个 B 帧在"解码时间轴"上被排到了 0 秒之前（真实输出）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_packets</span> \
+       <span class="param">-show_entries packet=pts_time,dts_time,duration_time,size,flags sample.mp4</span>
+<span class="cmt"># 输出（真实，前 5 个包；flags K 开头 = 关键帧）：</span>
+<span class="ann">[PACKET]</span>
+pts_time=<span class="num">0.000000</span>
+dts_time=-0.080000
+duration_time=<span class="num">0.040000</span>
+size=<span class="num">4750</span>
+flags=K__
+<span class="ann">[/PACKET]</span>
+<span class="ann">[PACKET]</span>
+pts_time=<span class="num">0.160000</span>
+dts_time=-0.040000
+duration_time=<span class="num">0.040000</span>
+size=<span class="num">2182</span>
+flags=___
+<span class="ann">[/PACKET]</span>
+<span class="ann">[PACKET]</span>
+pts_time=<span class="num">0.080000</span>
+dts_time=<span class="num">0.000000</span>
+duration_time=<span class="num">0.040000</span>
+size=<span class="num">1307</span>
+flags=___
+<span class="ann">[/PACKET]</span>
+<span class="ann">[PACKET]</span>
+pts_time=<span class="num">0.040000</span>
+dts_time=<span class="num">0.040000</span>
+duration_time=<span class="num">0.040000</span>
+size=<span class="num">860</span>
+flags=___
+<span class="ann">[/PACKET]</span></code></pre>
+
+  <p>对照看就明白了：显示顺序（pts）是 I(0.00) → B(0.04) → B(0.08) → B(0.12)；解码顺序（dts）是 B(-0.08) → B(-0.04) → I(0.00) → B(0.04)——<strong>I 帧虽然最先显示，却要等两个 B 帧"先解码"</strong>。把 150 帧的帧类型统计出来：1 个 I 帧 + 42 个 P 帧 + 107 个 B 帧，这就是 h264 的典型 GOP 结构（说人话：一组帧的编排模式，I 帧带头、P/B 帧填充）。<code>-count_frames</code> 还能数出视频流共 150 帧（25 fps × 6 秒，真实）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries frame=pict_type</span> \
+       <span class="param">-of csv=p=0 sample.mp4</span> <span class="param">| sort | uniq -c</span>
+<span class="cmt"># 输出（真实）：</span>
+  <span class="num">107</span> B
+   <span class="num">1</span> I,
+   <span class="num">42</span> P
+
+<span class="fn">ffprobe</span> <span class="param">-v error -count_frames -select_streams v:0</span> \
+       <span class="param">-show_entries stream=nb_read_frames sample.mp4</span>
+<span class="cmt"># 输出（真实）：</span>
+<span class="ann">[STREAM]</span>
+nb_read_frames=<span class="num">150</span>
+<span class="ann">[/STREAM]</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>-show_frames</code> 会触发<strong>完整解码</strong>，对长视频、大文件既慢又费内存；只想知道包的大小、时间戳有没有错乱，用 <code>-show_packets</code>（不解码）就够了。另外见到<strong>负的 dts 别慌</strong>——这是 B 帧重排的正常现象，恰恰证明 pts 与 dts 是两套时间轴，而很多时间戳错乱的 bug 就出在这两套轴上没对齐。</p>
+  </div>
+
+  <!-- ========== 3.7 机器可读：JSON 与一行命令提取 ========== -->
+  <h2>3.7 机器可读：-print_format json 与一行命令提取</h2>
+
+  <p>人看默认输出，机器看结构化输出。<code>-print_format json</code> 可以把 <code>-show_format</code> / <code>-show_streams</code> / <code>-show_packets</code> / <code>-show_frames</code> 全部转成 JSON；但日常脚本更常用的是"三件套"：<code>-select_streams</code>（选哪条流）+ <code>-show_entries</code>（要哪些字段）+ <code>-of csv=p=0</code>（说人话：输出成纯值 CSV，p=0 表示不要表头）。比如提取视频流分辨率，输出干净到可以直接赋值给 shell 变量（真实）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0</span> \
+       <span class="param">-show_entries stream=width,height -of csv=p=0 sample.mp4</span>
+<span class="cmt"># 输出（真实）：</span>
+<span class="num">320</span>,<span class="num">240</span>
+
+<span class="cmt"># 提取视频流编码格式：</span>
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0</span> \
+       <span class="param">-show_entries stream=codec_name -of csv=p=0 sample.mp4</span>
+<span class="cmt"># 输出（真实）：</span>
+<span class="type">h264</span></code></pre>
+
+  <p>这一行 <code>codec_name</code> 就是本章的"破案关键"——<strong>转码前必须先用 ffprobe 识别输入视频的编码格式</strong>。为什么？因为 ffmpeg 默认只会自动选择 <strong>CPU 解码器</strong>；要用 GPU 硬解，必须知道编码格式、然后在命令行里显式指定对应的 GPU 解码器（比如 h264 配 <code>h264_cuvid</code>，hevc 配 <code>hevc_cuvid</code>）。这是真实项目里的标准流程（摘自作者当年的 GPU 转码实战记录）：</p>
+
+  <pre><code><span class="cmt"># 真实场景：CPU 转码可以依赖 ffmpeg 自动选解码器；</span>
+<span class="cmt"># GPU 转码必须先 ffprobe 探明编码，再显式指定 GPU 解码器。</span>
+<span class="cmt"># 先体检：确认源视频是 h264 ——&gt; 选 h264_cuvid</span>
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0</span> \
+       <span class="param">-show_entries stream=codec_name -of csv=p=0 input.mkv</span>
+<span class="cmt"># h264</span>
+
+<span class="cmt"># 再开药：h264 硬解 + nvenc 硬编码，缩放到 1280 宽</span>
+<span class="fn">ffmpeg</span> <span class="param">-hwaccel cuvid -c:v h264_cuvid -i input.mkv</span> \
+       <span class="param">-c:v h264_nvenc -b:v 2048k -vf scale_npp=1280:-1 -y out.mp4</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>脚本三件套口诀：<strong>-select_streams 选流、-show_entries 选字段、-of 选格式</strong>，再加 <code>-v error</code> 静音，输出就能直接喂给 shell 变量或 JSON 解析器。这是 ffprobe 在自动化管线里最值钱的本事。GPU 硬编解码的完整流程（configure 开启、驱动与 nv-codec-headers 版本匹配、容器部署）是第 8 章「GPU 转码实战与容器部署」的主场。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：三层结构配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把探测选项与它回答的问题配对：① <code>-show_format</code>；② <code>-show_streams</code>；③ <code>-show_frames</code>。候选问题：A. 文件里有几条流、各是什么编码？B. 整个文件是什么容器、多大、多长？C. 每一帧是 I/P/B 哪种类型、什么时候显示？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 3.5 节的"三层结构"表格：容器层管整包、流层管轨道、帧层管细胞。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → B（容器层，format）；② → A（流层，stream）；③ → C（帧层，frame）。记住：<strong>format 管档案袋、stream 管轨道、frame 管画面</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：一行命令提取分辨率 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 ffprobe 对 sample.mp4 写一条命令，要求输出<strong>只有一行</strong>：<code>320,240</code>（视频流分辨率，无表头、无 [STREAM] 外壳、无日志噪音）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>三件套：<code>-select_streams v:0</code> 选视频流 + <code>-show_entries stream=width,height</code> 选字段 + <code>-of csv=p=0</code> 纯值输出，别忘 <code>-v error</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 sample.mp4</code>，输出 <code>320,240</code>（3.7 节第一条命令，本机实测）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：时间基换算 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>视频流 time_base=1/12800、duration_ts=76800；音频流 time_base=1/44100、duration_ts=264600。请分别算出两条流的时长（秒），并说明它们和容器层 duration=6.000000 的关系——这说明了体检报告的什么特性？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>时长 = duration_ts × time_base，即"时间单位数 × 每个单位多少秒"。两条流算完都该是 6.0 秒。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>视频：76800 × (1/12800) = 6.0 秒；音频：264600 × (1/44100) = 6.0 秒。与容器层 duration 完全一致——说明<strong>体检报告各层数字互相印证、可以交叉验证</strong>；如果对不上，多半是流时长不一致或封装异常（3.5 节实测数据）。这也是系统分析的基本功：多路交叉取证。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：先探病再开药 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一段 shell 脚本（或一条命令组合）：先用 ffprobe 提取 sample.mp4 视频流的 codec_name，若为 h264 则输出 <code>h264_cuvid</code>，为 hevc 则输出 <code>hevc_cuvid</code>，其他编码输出 <code>cpu</code>；然后在真实 sample.mp4 上运行，验证输出为 <code>h264_cuvid</code>。再想想：如果源视频是 hevc，这条 GPU 解码器选择逻辑还成立吗？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先跑 <code>ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 sample.mp4</code> 得到 <code>h264</code>；再用 shell 的 <code>case</code> 或 <code>if</code> 分支判断。注意把命令替换结果存进变量再比较。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>参考实现：</p>
+          <pre><code>codec=<span class="op">$(</span><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0</span> \
+  <span class="param">-show_entries stream=codec_name -of csv=p=0</span> sample.mp4<span class="op">)</span>
+<span class="kw">case</span> <span class="str">"$codec"</span> <span class="kw">in</span>
+  h264) <span class="kw">echo</span> <span class="str">"h264_cuvid"</span> ;;
+  hevc) <span class="kw">echo</span> <span class="str">"hevc_cuvid"</span> ;;
+  *)    <span class="kw">echo</span> <span class="str">"cpu"</span> ;;
+<span class="kw">esac</span></code></pre>
+          <p>在 sample.mp4 上实测输出 <code>h264_cuvid</code>（codec_name=h264）。逻辑对 hevc 同样成立——这正是 3.7 节 GPU 转码场景的"先探病再开药"：ffmpeg 只会自动选 CPU 解码器，硬解必须按探明结果显式指定 GPU 解码器。更多 GPU 细节在第 8 章。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

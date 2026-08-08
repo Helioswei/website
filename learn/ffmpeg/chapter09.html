@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第9章：编码器 API：从打开输出到创建流 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter09.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "第9章：编码器 API：从打开输出到创建流",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter09.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  },
+  "isPartOf": {
+    "@type": "CollectionPage",
+    "name": "FFmpeg 音视频实战"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="9" data-root="../" data-site="learn">
+<div id="site-header"></div>
+  <nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+  <div class="container">
+    <article class="chapter">
+      <h1>第9章：编码器 API：从打开输出到创建流</h1>
+
+      <div class="mentor-card">
+        <div class="mentor-header">
+          <span class="mentor-icon">⚖️</span>
+          <div class="mentor-info">
+            <h3>本章导师：包青天</h3>
+            <p class="mentor-method">核心方法论：铁面无私</p>
+          </div>
+        </div>
+        <div class="mentor-quote">
+          <p>「本官办案，只看证据。API 返回的每一个错误码，都是呈堂证供——你敢忽略它，它就敢让你的程序在线上崩溃。这一章我们按素材的九步流程走一遍编码器初始化：每一步的返回值都必须检查，这就是 C API 世界里的铁面无私。」</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <p><strong>本章前置</strong>：需要第 1-4 章的容器/编码/时间基概念，以及命令行转码的直觉。第 9-13 章是一整条 C API 主线：<strong>本章搭好"打开输出 → 创建流 → 找编码器 → 配参数 → 打开编码器"的骨架</strong>，第 10 章深入参数，第 11 章讲 send/receive 循环，第 12 章讲 flush 收尾，第 13 章把输入输出换成自定义 IO。跟着走，五章之后你就能手写一个转码器。</p>
+      </div>
+
+      <h2>9.1 API 全景：三个库的分工与对象模型</h2>
+
+      <p>第 2 章里我们一直在敲命令行：<code>ffmpeg -i in.mp4 -c:v libx264 out.mp4</code>。这条命令背后发生了什么？FFmpeg 的官方命令行工具本身就是一个巨大的 C 程序，它调用的是三个核心库的 API——你完全可以用同样的 API 写自己的转码器，嵌入业务逻辑（加水印、传进度、从内存读、传到云端）。</p>
+
+      <p>三个库的分工，一句话各一个：</p>
+
+      <table>
+        <thead>
+          <tr><th>库</th><th>职责</th><th>对应命令行概念</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>libavformat</code></td><td>封装与解封装：读写容器（mp4/mkv/ts…），拆装"档案袋"</td><td>输入输出文件、流</td></tr>
+          <tr><td><code>libavcodec</code></td><td>编解码：压缩与解压帧数据，干最重的活</td><td><code>-c:v</code> / <code>-c:a</code></td></tr>
+          <tr><td><code>libavutil</code></td><td>工具箱：内存管理、有理数、日志、通道布局等公共设施</td><td>一切基础设施</td></tr>
+        </tbody>
+      </table>
+
+      <p>这四个结构体是整条 API 主线的"四世同堂"，从大到小：</p>
+
+      <pre><code><span class="cmt">// 对象模型：从外到内</span>
+<span class="type">AVFormatContext</span> *ofmt;   <span class="cmt">// ① 封装器：整个输出文件（"档案袋"）</span>
+    <span class="type">AVStream</span> *st;          <span class="cmt">// ② 流：文件里的一条轨（视频/音频各一条）</span>
+        <span class="type">AVCodecContext</span> *enc; <span class="cmt">// ③ 编解码上下文：编码器的"工作台"，参数都摆这</span>
+            <span class="type">AVCodec</span> *codec;     <span class="cmt">// ④ 编解码器：干活的"师傅"（libx264 / aac…）</span></code></pre>
+
+      <p>对象模型的理解顺序：<strong>先找师傅（codec），再摆工作台（codec_ctx），然后把工作台挂到一条流（stream）上，最后把流放进档案袋（format_ctx）</strong>。但 API 的调用顺序恰好相反——因为你得先有档案袋才能往里面放流，有了流才知道这条流要什么师傅。这就是素材《ffmpeg-编码的步骤》记录的九步流程，本章一步步走完它。</p>
+
+      <pre><code><span class="cmt">// 命令行 ↔ API 对照：同一件事的两种说法</span>
+<span class="cmt">// 命令行（第 2 章）                 // C API（本章起）</span>
+ffmpeg -i in.wav -c:a aac out.aac    <span class="op">=</span> <span class="fn">avformat_alloc_output_context2</span>(<span class="param">&amp;ofmt</span>, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="str">"out.aac"</span>)
+                                     <span class="op">+</span> <span class="fn">avformat_new_stream</span>(<span class="param">ofmt</span>, <span class="kw">NULL</span>)
+<span class="param">-c:a aac</span>                            <span class="op">=</span> <span class="fn">avcodec_find_encoder_by_name</span>(<span class="str">"aac"</span>)
+<span class="param">-b:a 64k</span>                            <span class="op">=</span> <span class="param">enc_ctx</span><span class="op">-&gt;</span><span class="param">bit_rate</span> <span class="op">=</span> <span class="num">64000</span></code></pre>
+
+      <p>这张对照表是全章的"地图"：每一行命令行选项，都能在 API 里找到对应的一个或几个调用。往后读到某个 API 函数想不起用途时，回头看看命令行你用过的那条指令——它们说的是同一件事。</p>
+
+      <div class="tip">
+        <p><strong>tip</strong>：素材（2019 年）写的是音频编码（AAC），本章沿用。视频编码流程结构完全一样，只是参数从采样率换成宽高和像素格式——学完音频，视频自然就会。</p>
+      </div>
+
+      <h2>9.2 第一步：打开输出文件流</h2>
+
+      <p>一切从 <code>avformat_alloc_output_context2</code> 开始。它做两件事：分配一个 <code>AVFormatContext</code>，并且<strong>根据输出文件名猜出封装器</strong>（.aac → ADTS、.mp4 → MP4、.mkv → Matroska）。第三个参数传 <code>NULL</code> 就是"你看着办"。</p>
+
+      <pre><code><span class="type">AVFormatContext</span> *ofmt_ctx = <span class="kw">NULL</span>;
+<span class="type">int</span> ret = <span class="fn">avformat_alloc_output_context2</span>(&amp;ofmt_ctx, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="str">"out.aac"</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) {
+    <span class="fn">av_log</span>(<span class="kw">NULL</span>, AV_LOG_ERROR, <span class="str">"无法创建输出上下文: %s\n"</span>, <span class="fn">av_err2str</span>(ret));
+    <span class="kw">return</span> ret;
+}
+<span class="fn">printf</span>(<span class="str">"oformat = %s\n"</span>, ofmt_ctx-&gt;oformat-&gt;name);  <span class="cmt">// 猜对了哪个封装器</span></code></pre>
+
+      <p>注意包青天式写法：<strong>每一步的返回值都要检查</strong>。<code>av_err2str</code> 把错误码转成人类可读文本——这是排查问题的第一手证据。本机实测（FFmpeg 8.1.1）：</p>
+
+      <pre><code><span class="cmt"># 实测输出（2026-08-08，Apple clang 21 / arm64）</span>
+$ gcc enc_steps.c $(<span class="fn">pkg-config</span> --cflags --libs libavformat libavcodec libavutil) -o enc_steps &amp;&amp; ./enc_steps
+[ok  ] avformat_alloc_output_context2
+       oformat = adts        <span class="cmt">&lt;- 看到 out.aac 就自动选了 ADTS 封装器</span></code></pre>
+
+      <p><code>pkg-config</code> 一行搞定三个库的头文件路径和链接参数——这是编译 FFmpeg 程序的标准姿势，本章所有示例都用它编译。</p>
+
+      <div class="warning">
+        <p><strong>warning</strong>：素材原文这里写的是 <code>av_log();</code> 空调用——占位符没填参数。真正的 <code>av_log</code> 需要级别、上下文和格式串，直接抄素材会编译不过。本章所有示例都是修好、跑通的版本。</p>
+      </div>
+
+      <h2>9.3 第二步：创建输出音频流</h2>
+
+      <p>档案袋有了，往里放一条流。<code>avformat_new_stream</code> 在容器里注册一条流并返回它的 <code>AVStream</code>——这时候它还是一条"空流"，不知道自己要编什么码。</p>
+
+      <pre><code><span class="type">AVStream</span> *audio_stream = <span class="fn">avformat_new_stream</span>(ofmt_ctx, <span class="kw">NULL</span>);
+<span class="kw">if</span> (!audio_stream) {
+    <span class="fn">av_log</span>(<span class="kw">NULL</span>, AV_LOG_ERROR, <span class="str">"无法创建音频流\n"</span>);
+    <span class="kw">return</span> -<span class="num">1</span>;
+}
+<span class="fn">printf</span>(<span class="str">"stream index = %d\n"</span>, audio_stream-&gt;index);  <span class="cmt">// 这条流在容器里的编号（通常 0）</span></code></pre>
+
+      <p>第二个参数传 <code>NULL</code> 表示"流的信息稍后从编解码器上下文拷贝"——对应素材第七步的 <code>avcodec_parameters_from_context</code>。也就是说：<strong>先创建空流，配好编码器，最后把参数灌回流</strong>。</p>
+
+      <pre><code><span class="cmt"># 实测</span>
+[ok  ] avformat_new_stream</code></pre>
+
+      <div class="tip">
+        <p><strong>tip</strong>：一个容器可以有多条流（视频 + 音频 + 字幕）。转码时循环调用 <code>avformat_new_stream</code> 就能建多条——每条流一个 <code>index</code>，后面写包时靠它告诉封装器"这个包属于哪条轨"。</p>
+      </div>
+
+      <h2>9.4 第三步：找编码器</h2>
+
+      <p>现在要给流请师傅。素材的写法是 <code>avcodec_find_encoder(AV_CODEC_ID_AAC)</code>——按编码器 ID 找。这个函数在现行版本已经标记 deprecated（弃用），推荐按<strong>名字</strong>找，更精确：</p>
+
+      <pre><code><span class="cmt">// 素材旧写法（已弃用，但仍可用）：按 ID 找</span>
+<span class="type">AVCodec</span> *enc_old = <span class="fn">avcodec_find_encoder</span>(AV_CODEC_ID_AAC);
+
+<span class="cmt">// 现行推荐写法：按名字找（更精确，还能找到 libx264 这类第三方编码器）</span>
+<span class="type">const</span> <span class="type">AVCodec</span> *encoder = <span class="fn">avcodec_find_encoder_by_name</span>(<span class="str">"aac"</span>);
+<span class="kw">if</span> (!encoder) {
+    <span class="fn">av_log</span>(<span class="kw">NULL</span>, AV_LOG_ERROR, <span class="str">"找不到 aac 编码器——检查 ffmpeg 编译时是否启用了它\n"</span>);
+    <span class="kw">return</span> -<span class="num">1</span>;
+}</code></pre>
+
+      <p>为什么弃用按 ID 找？因为一个 ID 背后可能挂多个实现（AAC 有原生的 <code>aac</code>、Apple 的 <code>aac_at</code>、FDK 的 <code>libfdk_aac</code>……），<code>find_encoder</code> 返回"第一个"，结果可能不是你想要的。按名字找就是点名要谁。回顾第 2 章 <code>-c:a aac</code> 与 <code>-c:a aac_at</code>——命令行的 <code>-c:a</code> 后面跟的正是编码器名字，API 里就是 <code>avcodec_find_encoder_by_name</code> 的第一个参数。</p>
+
+      <pre><code><span class="cmt"># 实测</span>
+[ok  ] avcodec_find_encoder_by_name("aac")</code></pre>
+
+      <div class="warning">
+        <p><strong>warning</strong>：素材第三步直接 <code>avcodec_find_encoder(AV_CODEC_ID_AAC)</code> 且不检查空指针。如果 ffmpeg 编译时没启用 AAC 编码器（少见但可能），返回 <code>NULL</code>，下一步 <code>avcodec_alloc_context3(NULL)</code> 会直接崩溃。包青天规矩：找完必查。</p>
+      </div>
+
+      <h2>9.5 第四到六步：分配上下文与参数设置</h2>
+
+      <p>师傅请来了，给他摆工作台。<code>avcodec_alloc_context3</code> 分配 <code>AVCodecContext</code>，然后逐项设置参数。素材这部分的参数写法在现行版本有<strong>一处重要变化</strong>：</p>
+
+      <pre><code><span class="type">AVCodecContext</span> *enc_ctx = <span class="fn">avcodec_alloc_context3</span>(encoder);
+<span class="kw">if</span> (!enc_ctx) { <span class="fn">av_log</span>(<span class="kw">NULL</span>, AV_LOG_ERROR, <span class="str">"分配上下文失败\n"</span>); <span class="kw">return</span> -<span class="num">1</span>; }
+
+<span class="cmt">// —— 参数设置（素材旧写法 → 现行写法）——</span>
+enc_ctx-&gt;bit_rate   = <span class="num">64000</span>;      <span class="cmt">// 目标码率 64kbps（第 10 章：目标不是承诺）</span>
+enc_ctx-&gt;sample_rate = <span class="num">44100</span>;     <span class="cmt">// 采样率 44.1kHz</span>
+
+<span class="cmt">// 旧：enc_ctx-&gt;channel_layout = 2;           // 直接写整数，早已弃用</span>
+<span class="cmt">// 新：通道布局用 AVChannelLayout 结构体</span>
+<span class="fn">av_channel_layout_default</span>(&amp;enc_ctx-&gt;ch_layout, <span class="num">2</span>);  <span class="cmt">// 双声道</span>
+
+enc_ctx-&gt;sample_fmt = encoder-&gt;sample_fmts[<span class="num">0</span>];        <span class="cmt">// 用编码器支持的第一种采样格式</span>
+enc_ctx-&gt;time_base = (<span class="type">AVRational</span>){<span class="num">1</span>, enc_ctx-&gt;sample_rate};  <span class="cmt">// 时间基跟采样率走</span></code></pre>
+
+      <p>逐条解读（柯南视角，数据流会怎么变）：</p>
+      <ul>
+        <li><strong><code>bit_rate</code></strong>：目标码率。VBR 下编码器只把它当参考，实际输出看内容复杂度——第 2 章命令行实测 500k 目标只出了 194k。</li>
+        <li><strong><code>sample_rate</code></strong>：每秒钟采多少个样本。44100 是 CD 音质标准。</li>
+        <li><strong><code>ch_layout</code></strong>：<strong>素材的 <code>channel_layout = 2</code> 是旧 API</strong>（2019 年）。现行 FFmpeg 用 <code>AVChannelLayout</code> 结构体，通过 <code>av_channel_layout_default</code> 初始化成双声道立体声。旧写法在 8.1 会编译警告。</li>
+        <li><strong><code>sample_fmt</code></strong>：采样格式（每个样本怎么存）。<strong>不能自己拍脑袋</strong>——必须从 <code>encoder-&gt;sample_fmts</code> 数组里选编码器支持的第一种。AAC 编码器第一位是 <code>fltp</code>（32 位浮点平面格式）。</li>
+        <li><strong><code>time_base</code></strong>：时间基设为 <code>1/44100</code>——因为音频的"帧"是 1024 个样本一组，时间刻度跟采样率对齐最自然（呼应第 4 章：时间基是给时间编号的刻度）。</li>
+      </ul>
+
+      <pre><code><span class="cmt"># 实测</span>
+[ok  ] 参数设置(bit_rate/sample_rate/ch_layout/sample_fmt/time_base)
+       sample_fmt = fltp, channels = 2</code></pre>
+
+      <div class="warning">
+        <p><strong>warning</strong>：素材第五步还手动设了 <code>enc_ctx-&gt;channels = av_get_channel_layout_nb_channels(...)</code>——这个字段在现行版本同样弃用了，通道数由 <code>ch_layout.nb_channels</code> 自动推导（上面实测打印出 <code>channels = 2</code> 就是它）。照抄旧代码会得到一堆 deprecation 警告。</p>
+      </div>
+
+      <div class="tip">
+        <p><strong>tip</strong>：另一个版本差异彩蛋——本机编译时 <code>encoder-&gt;sample_fmts</code> 本身也报了 deprecated 警告。现行 FFmpeg 正把"编码器能力表"从 <code>AVCodec</code> 结构体搬到运行时查询（<code>avcodec_get_supported_config</code>）。用 <code>sample_fmts[0]</code> 目前仍然工作（只是警告），但新代码建议走运行时查询——这正是素材（2019）→ 现行（2026）API 演进的活标本。</p>
+      </div>
+
+      <h2>9.6 第七到九步：打开编码器、收尾三项</h2>
+
+      <p>工作台摆好了，师傅上岗：<code>avcodec_open2</code>。它会检查参数自洽性（采样率、通道数、采样格式是否匹配），任何矛盾都在这一步暴露。打开之后有三件收尾小事，素材第七到九步：</p>
+
+      <pre><code><span class="cmt">// 第七步：打开编码器</span>
+<span class="type">int</span> ret = <span class="fn">avcodec_open2</span>(enc_ctx, encoder, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) {
+    <span class="fn">av_log</span>(<span class="kw">NULL</span>, AV_LOG_ERROR, <span class="str">"打开编码器失败: %s\n"</span>, <span class="fn">av_err2str</span>(ret));
+    <span class="kw">return</span> ret;
+}
+
+<span class="cmt">// 第八步：codec_tag 清零——流级别覆盖封装器默认的编码标签</span>
+audio_stream-&gt;codecpar-&gt;codec_tag = <span class="num">0</span>;
+
+<span class="cmt">// 第九步：把编码器参数（码率/采样率/格式等）拷贝到流的 codecpar</span>
+ret = <span class="fn">avcodec_parameters_from_context</span>(audio_stream-&gt;codecpar, enc_ctx);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) { <span class="fn">av_log</span>(<span class="kw">NULL</span>, AV_LOG_ERROR, <span class="str">"拷贝参数失败\n"</span>); <span class="kw">return</span> ret; }</code></pre>
+
+      <p>等等，素材第六步不是 <code>GLOBAL_HEADER</code> 吗？对，它在打开编码器<strong>之前</strong>设置：</p>
+
+      <pre><code><span class="cmt">// 第六步：全局头标志——部分封装器要求编解码参数放容器头而非每个包</span>
+<span class="kw">if</span> (ofmt_ctx-&gt;oformat-&gt;flags &amp; AVFMT_GLOBALHEADER)
+    enc_ctx-&gt;flags |= AV_CODEC_FLAG_GLOBAL_HEADER;</code></pre>
+
+      <p>这个判断的意思是：<strong>先问封装器"你要不要全局头？"</strong>。MP4 要（extradata 写进文件头），ADTS 不要（每帧自带头）。<code>avcodec_open2</code> 会读这个标志决定把 extradata 放哪。实测 ADTS 封装器没有 <code>AVFMT_GLOBALHEADER</code>，标志不置位——符合预期。</p>
+
+      <pre><code><span class="cmt"># 实测（完整九步）</span>
+[ok  ] avformat_alloc_output_context2        oformat = adts
+[ok  ] avformat_new_stream
+[ok  ] avcodec_find_encoder_by_name("aac")
+[ok  ] avcodec_alloc_context3
+[ok  ] 参数设置(...)                          sample_fmt = fltp, channels = 2
+[ok  ] GLOBAL_HEADER flag
+[ok  ] avcodec_open2                          frame_size = 1024
+[ok  ] codec_tag = 0
+[ok  ] avcodec_parameters_from_context
+
+=== 九步全部就绪，可以开始编码了（第 11 章 send/receive）===</code></pre>
+
+      <p><code>frame_size = 1024</code> 是编码器揭晓的关键数字：AAC 每次吃 1024 个采样样本，产出一个压缩包。你的数据流必须按这个尺寸喂给它——<strong>第 11 章的 send/receive 循环就是干这个的</strong>。</p>
+
+      <div class="warning">
+        <p><strong>warning</strong>：素材把 <code>codec_tag</code> 设 0 的理由没写。实际原因：<code>avformat_new_stream</code> 创建的流有时会带上封装器默认的 codec_tag，显式清零避免与 <code>avcodec_parameters_from_context</code> 拷贝进来的真实参数打架。照抄就对了，但要知道它在防什么。</p>
+      </div>
+
+      <div class="tip">
+        <p><strong>tip</strong>：到这里，骨架已经立起来了。还差三件事才能真正产出文件：① <code>avio_open</code> 打开实际输出（第 13 章会换成自定义 IO）；② <code>avformat_write_header</code> 写容器头；③ 循环喂数据 + <code>av_write_trailer</code> 收尾——第 11、12 章专讲。</p>
+      </div>
+
+      <h2>章末练习</h2>
+
+      <div class="exercise-item">
+        <h3>练习 1：对象模型连线 <span class="difficulty difficulty-easy">入门</span></h3>
+        <p>把四个结构体和它们的"人话比喻"配对：AVFormatContext / AVStream / AVCodecContext / AVCodec，对应：档案袋 / 一条轨 / 工作台 / 师傅。</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>从外到内：档案袋装轨，轨上摆工作台，工作台请师傅。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>AVFormatContext=档案袋，AVStream=一条轨，AVCodecContext=工作台，AVCodec=师傅。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 2：找编码器两种写法 <span class="difficulty difficulty-medium">进阶</span></h3>
+        <p>素材用 <code>avcodec_find_encoder(AV_CODEC_ID_AAC)</code>，现行推荐 <code>avcodec_find_encoder_by_name("aac")</code>。请说明：① 为什么按 ID 找可能"找错师傅"？② 想用 libx264 编码视频，按名字找应该传什么字符串？</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>想想一个 ID 背后挂几个实现；再想想命令行 <code>-c:v</code> 后面跟什么。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>① 同一 ID（如 AAC）有多个实现（aac/aac_at/libfdk_aac），按 ID 返回"第一个"，不一定是你要的。② <code>avcodec_find_encoder_by_name("libx264")</code>——与 <code>-c:v libx264</code> 同名。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 3：GLOBAL_HEADER 的判断 <span class="difficulty difficulty-medium">进阶</span></h3>
+        <p>写出判断逻辑：什么条件下 <code>enc_ctx-&gt;flags</code> 要置 <code>AV_CODEC_FLAG_GLOBAL_HEADER</code>？ADTS 和 MP4 分别是置还是不置？</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>看封装器的 <code>oformat-&gt;flags</code> 有没有 <code>AVFMT_GLOBALHEADER</code>。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p><code>if (ofmt_ctx-&gt;oformat-&gt;flags &amp; AVFMT_GLOBALHEADER) enc_ctx-&gt;flags |= AV_CODEC_FLAG_GLOBAL_HEADER;</code>。MP4 有该标志→置位；ADTS 没有→不置位。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 4：把九步补全成可运行程序 <span class="difficulty difficulty-hard">挑战</span></h3>
+        <p>本章的 enc_steps.c 跑到九步就收尾了。请在此基础上补上 <code>avio_open</code> + <code>avformat_write_header</code>，并在打开编码器后打印 <code>frame_size</code>。编译运行，验证输出的 .aac 文件用 <code>ffprobe</code> 能看到 <code>aac</code> 编码、44100 Hz。</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p><code>avio_open(&amp;ofmt_ctx-&gt;pb, "out.aac", AVIO_FLAG_WRITE)</code> 在 write_header 前调用；头文件和链接参数用 <code>pkg-config --cflags --libs libavformat libavcodec libavutil</code>。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>补三行：<code>avio_open(&amp;ofmt_ctx-&gt;pb, "out.aac", AVIO_FLAG_WRITE)</code>；<code>avformat_write_header(ofmt_ctx, NULL)</code>；结尾 <code>av_write_trailer(ofmt_ctx)</code> + <code>avio_closep(&amp;ofmt_ctx-&gt;pb)</code>。ffprobe 应显示 <code>Audio: aac (LC), 44100 Hz, stereo, fltp</code>。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="tip">
+        <p><strong>下一章预告</strong>：第 10 章《编码器配置：参数设置的艺术》——bit_rate 真的是目标吗？sample_fmt 为什么必须听编码器的？第 11 章进入 send/receive 循环，把数据真正喂给编码器。</p>
+      </div>
+    </article>
+  </div>
+
+  <script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

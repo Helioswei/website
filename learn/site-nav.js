@@ -248,6 +248,39 @@ window.SITE_NAV = {
           { num: 16, title: "综合实战：内存控制与安全收尾", mentor: "诸葛亮", method: "融会贯通" }
         ]}
       ]
+    },
+    {
+      id: "ffmpeg",
+      name: "FFmpeg 音视频实战",
+      accent: "#3f7d76",
+      desc: "FFmpeg 音视频处理教程（命令行 / 编译 / GPU 加速 / C API）",
+      tagline: "从命令行到 API：转码、滤镜与硬件加速，一条吃透音视频处理管线的路径",
+      parts: [
+        { title: "入门与命令行", chapters: [
+          { num: 1, title: "FFmpeg 全家桶：ffmpeg / ffprobe / ffplay", mentor: "费曼", method: "第一性原理" },
+          { num: 2, title: "命令行转码入门：-i / -c / -b / -vf", mentor: "鲁班", method: "工欲善其事" },
+          { num: 3, title: "ffprobe 探针：读懂视频的体检报告", mentor: "狄仁杰", method: "系统分析" },
+          { num: 4, title: "音视频基础：容器、编码与时间基", mentor: "费曼", method: "第一性原理" }
+        ]},
+        { title: "源码编译与硬件加速", chapters: [
+          { num: 5, title: "源码编译准备：configure / make 流程", mentor: "鲁班", method: "工欲善其事" },
+          { num: 6, title: "依赖库逐个击破：x264 / opus / gnutls", mentor: "包青天", method: "铁面无私" },
+          { num: 7, title: "启用 GPU 硬编解码：configure 与版本匹配", mentor: "诸葛亮", method: "运筹帷幄" },
+          { num: 8, title: "GPU 转码实战与容器部署", mentor: "狄仁杰", method: "系统分析" }
+        ]},
+        { title: "C API 核心流程", chapters: [
+          { num: 9, title: "编码器 API：从打开输出到创建流", mentor: "包青天", method: "铁面无私" },
+          { num: 10, title: "编码器配置：参数设置的艺术", mentor: "柯南", method: "追踪数据流" },
+          { num: 11, title: "send/receive 模式：告别丢帧", mentor: "福尔摩斯", method: "排除不可能" },
+          { num: 12, title: "flush 与时间基：收尾的艺术", mentor: "达芬奇", method: "艺术与工程" },
+          { num: 13, title: "自定义 IO：内存与流式输入输出", mentor: "诸葛亮", method: "运筹帷幄" }
+        ]},
+        { title: "滤镜与工程收尾", chapters: [
+          { num: 14, title: "滤镜图原理：buffer → filters → buffersink", mentor: "达芬奇", method: "艺术与工程" },
+          { num: 15, title: "视频滤镜实战：水印、缩放与截图", mentor: "福尔摩斯", method: "排除不可能" },
+          { num: 16, title: "转码工程全景：把管线串起来", mentor: "柯南", method: "追踪数据流" }
+        ]}
+      ]
     }
   ]
 };

@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第16章：转码工程全景：把管线串起来 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter16.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "第16章：转码工程全景：把管线串起来",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter16.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  },
+  "isPartOf": {
+    "@type": "CollectionPage",
+    "name": "FFmpeg 音视频实战"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="16" data-root="../" data-site="learn">
+<div id="site-header"></div>
+  <nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+  <div class="container">
+    <article class="chapter">
+      <h1>第16章：转码工程全景：把管线串起来</h1>
+      <p class="chapter-subtitle">第 9-15 章我们拆零件，这一章把它们首尾相接：解封装 → 解码 → 滤镜 → 编码 → 封装，一条从文件进来到文件出去的完整转码管线，编译、运行、验证，一个环节都不落下</p>
+
+      <div class="mentor-card">
+        <div class="mentor-header">
+          <span class="mentor-icon">🔍</span>
+          <div class="mentor-info">
+            <h3>本章导师：柯南</h3>
+            <p class="mentor-method">核心方法论：追踪数据流</p>
+          </div>
+        </div>
+        <div class="mentor-quote">
+          <p>「16 章下来，你已经知道文件里每一帧从哪来、到哪去。这一章我们只做一件事：把第 9 到 15 章搭好的每一段管线首尾相接，通上电。真相只有一个——数据流从文件进来到文件出去，中间经过的每一站，我们亲眼验证一遍。」</p>
+        </div>
+      </div>
+
+      <!-- ========== 16.1 全景图：转码管线五站 ========== -->
+      <h2>16.1 全景图：转码管线五站</h2>
+
+      <p>第 2 章你敲过 <code>ffmpeg -i in.mp4 -c:v libx264 out.mp4</code>，第 9-15 章我们把这条命令拆成了零件：第 9 章搭编码器骨架、第 10 章调参数、第 11 章学 send/receive、第 12 章学 flush、第 14-15 章学滤镜。现在把零件装回去——一条完整的转码管线，说人话就是<strong>五个站</strong>：<strong>解封装</strong>（把文件拆成压缩包）→ <strong>解码</strong>（把压缩包变成像素帧）→ <strong>滤镜</strong>（加工像素帧，可选）→ <strong>编码</strong>（把像素帧重新压成包）→ <strong>封装</strong>（把包装回文件）。命令行只给了你一句话，API 给了你五个站，本章的转码器 <code>transcode16.cpp</code> 就是这五个站的完整实现。</p>
+
+      <p>柯南办案从不看表面，只看数据流。沿着这条管线追一遍，你看到的数据只有两种乘客：<strong>AVPacket</strong>（压缩的数据包，装着 h264/aac 编码后的字节，站点之间传送）和 <strong>AVFrame</strong>（解压的帧，装着 YUV 像素或 PCM 采样，站点内部加工）。五站的进出关系是这样一张图：</p>
+
+      <pre><code><span class="cmt"># 转码管线五站（柯南视角：每一站进什么、出什么）</span>
+[in.mp4] <span class="op">-&gt;</span> ①解封装 <span class="op">-&gt;</span> [<span class="type">AVPacket</span> 压缩包] <span class="op">-&gt;</span> ②解码 <span class="op">-&gt;</span> [<span class="type">AVFrame</span> 像素帧]
+        <span class="op">-&gt;</span> ③滤镜 <span class="op">-&gt;</span> [<span class="type">AVFrame</span> 加工后] <span class="op">-&gt;</span> ④编码 <span class="op">-&gt;</span> [<span class="type">AVPacket</span> 压缩包]
+        <span class="op">-&gt;</span> ⑤封装 <span class="op">-&gt;</span> [out.mp4]
+
+<span class="cmt"># 数据流形态变化：文件字节 -&gt; 包 -&gt; 帧 -&gt; 帧 -&gt; 包 -&gt; 文件字节</span>
+<span class="type">AVPacket</span> <span class="op">-&gt;</span> <span class="type">AVFrame</span> <span class="op">-&gt;</span> <span class="type">AVFrame</span> <span class="op">-&gt;</span> <span class="type">AVPacket</span>   <span class="ann">&lt;- 四种形态，两两一对</span></code></pre>
+
+      <p>每一站对应哪一章的零件，也一并交代清楚：① 解封装用 <code>avformat_open_input</code> / <code>av_read_frame</code>（第 4 章容器知识 + 第 13 章自定义 IO 的入口）；② 解码是 <code>avcodec_send_packet</code> / <code>avcodec_receive_frame</code>（第 11 章双循环）；③ 滤镜是 buffer → scale → buffersink（第 14 章五步、第 15 章实战）；④ 编码是 <code>avcodec_send_frame</code> / <code>avcodec_receive_packet</code>（第 9-11 章）；⑤ 封装是 <code>av_interleaved_write_frame</code> + 头尾（第 9 章骨架 + 第 12 章收尾）。把命令行那句咒语翻译成 API，就是下面这张对照表：</p>
+
+      <pre><code><span class="cmt"># 命令行（第 2 章）                        # C API（第 9-16 章）</span>
+ffmpeg <span class="param">-i</span> <span class="str">in.mp4</span> <span class="param">-vf</span> <span class="str">"scale=320:180"</span> <span class="param">-c:v</span> <span class="fn">libx264</span> <span class="param">-an</span> <span class="str">out.mp4</span>
+    <span class="param">-i</span> <span class="str">in.mp4</span>        <span class="op">=</span> <span class="fn">avformat_open_input</span> <span class="op">+</span> <span class="fn">avformat_find_stream_info</span>
+    <span class="param">-vf</span> <span class="str">"scale=320:180"</span> <span class="op">=</span> 滤镜图五步（<span class="fn">avfilter_graph_alloc</span> <span class="op">-&gt;</span> ... <span class="op">-&gt;</span> <span class="fn">avfilter_graph_config</span>）
+    <span class="param">-c:v</span> <span class="fn">libx264</span>     <span class="op">=</span> <span class="fn">avcodec_find_encoder_by_name</span>(<span class="str">"libx264"</span>) <span class="op">+</span> <span class="fn">avcodec_open2</span>
+    <span class="param">-an</span>              <span class="op">=</span> 主循环里跳过非视频包（<span class="kw">if</span> (pkt<span class="op">-&gt;</span><span class="param">stream_index</span> <span class="op">!=</span> vindex) <span class="kw">continue</span>;）
+    <span class="str">out.mp4</span>          <span class="op">=</span> <span class="fn">avformat_alloc_output_context2</span> <span class="op">+</span> <span class="fn">avformat_write_header</span></code></pre>
+
+      <p>数据流在每一站谁分配、谁释放，是追数据流时最容易栽跟头的地方。表里每一行的规则都来自前面章节的真实教训（第 11 章"送出去就不再是你的了"、第 14 章 KEEP_REF 陷阱）：</p>
+
+      <table>
+        <tr><th>站</th><th>输入</th><th>输出</th><th>谁分配</th><th>谁释放</th></tr>
+        <tr><td>① 解封装 <code>av_read_frame</code></td><td>文件字节</td><td><code>AVPacket</code>（压缩）</td><td>封装器内部</td><td>你：<code>av_packet_unref</code></td></tr>
+        <tr><td>② 解码 <code>send/receive</code></td><td><code>AVPacket</code></td><td><code>AVFrame</code>（像素）</td><td>你：<code>av_frame_alloc</code></td><td>你：<code>av_frame_unref</code></td></tr>
+        <tr><td>③ 滤镜 <code>add/get</code></td><td><code>AVFrame</code></td><td><code>AVFrame</code>（加工后）</td><td>你：<code>av_frame_alloc</code></td><td>你：<code>av_frame_unref</code></td></tr>
+        <tr><td>④ 编码 <code>send/receive</code></td><td><code>AVFrame</code></td><td><code>AVPacket</code>（压缩）</td><td>你：<code>av_packet_alloc</code></td><td>你：<code>av_packet_free</code></td></tr>
+        <tr><td>⑤ 封装 <code>interleaved_write</code></td><td><code>AVPacket</code></td><td>文件字节</td><td>封装器内部</td><td>你：<code>avio_closep</code></td></tr>
+      </table>
+
+      <div class="tip">
+        <div class="tip-title">柯南提示</div>
+        <p>记忆口诀：<strong>压缩态是包（AVPacket），解压态是帧（AVFrame）</strong>。解封装出包、解码出帧、滤镜动帧、编码出包、封装收包——五站的数据流形态恰好是"包 → 帧 → 帧 → 包"的对称结构。你只要记住每个 API 收的是包还是帧，就永远不会接错线。</p>
+      </div>
+
+      <!-- ========== 16.2 初始化：五站的开张手续 ========== -->
+      <h2>16.2 初始化：五站的开张手续</h2>
+
+      <p>完整的转码器程序长什么样？<code>main</code> 函数是经典的三段式：<strong>初始化（五站开张）→ 主循环（数据接力）→ 收尾（flush + 清理）</strong>。这和命令行 ffmpeg 干的事一模一样——ffmpeg 那个巨大的 C 程序，本质就是这个三段式。先看结构图，再看每段代码：</p>
+
+      <pre><code><span class="cmt">// main 三段式（本章 transcode16.cpp 的骨架）</span>
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span> **argv) {
+    <span class="cmt">/* 阶段一：初始化 —— 五站开张手续（16.2 节） */</span>
+    ① 解封装：打开输入，找到视频流
+    ② 解码器：按流的编码 ID 找到并打开
+    ③ 滤镜图：buffer <span class="op">-&gt;</span> <span class="fn">scale</span>=<span class="num">320:180</span> <span class="op">-&gt;</span> buffersink（可选）
+    ④ 编码器：libx264，输出尺寸 <span class="num">320x180</span>
+    ⑤ 封装器：建 out.mp4，写容器头
+
+    <span class="cmt">/* 阶段二：主循环 —— 包 -&gt; 帧 -&gt; 帧 -&gt; 包（16.3 节） */</span>
+    <span class="kw">while</span> (<span class="fn">av_read_frame</span> 还有包) {
+        丢弃音频包 <span class="op">-&gt;</span> 解码 <span class="op">-&gt;</span> 滤镜 <span class="op">-&gt;</span> 编码 <span class="op">-&gt;</span> 写容器
+    }
+
+    <span class="cmt">/* 阶段三：收尾 —— 三级 flush + trailer + 清理（16.4 节） */</span>
+    解码器 flush <span class="op">-&gt;</span> 滤镜 flush <span class="op">-&gt;</span> 编码器 flush <span class="op">-&gt;</span> <span class="fn">av_write_trailer</span> <span class="op">-&gt;</span> 逆序释放
+}</code></pre>
+
+      <p>阶段一的前两站，解封装和解码。第 9 章教编码器时是"先建档案袋再找师傅"，这里正好反过来——<strong>输入侧是"先开文件再按流找解码器"</strong>。第 9 章提过的 <code>avcodec_parameters_to_context</code> 在解码侧是必需品：流的 codecpar 是容器里读出来的参数卡，必须拷贝给解码器工作台，它才知道画面多大、什么格式：</p>
+
+      <pre><code><span class="cmt">/* ① 解封装：打开输入，找到视频流 */</span>
+<span class="type">AVFormatContext</span> *ifmt = <span class="kw">NULL</span>;
+ret = <span class="fn">avformat_open_input</span>(&amp;ifmt, infile, <span class="kw">NULL</span>, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avformat_open_input"</span>, ret);
+ret = <span class="fn">avformat_find_stream_info</span>(ifmt, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avformat_find_stream_info"</span>, ret);
+
+<span class="kw">int</span> vindex = <span class="fn">av_find_best_stream</span>(ifmt, <span class="param">AVMEDIA_TYPE_VIDEO</span>, <span class="op">-</span><span class="num">1</span>, <span class="op">-</span><span class="num">1</span>, <span class="kw">NULL</span>, <span class="num">0</span>);
+<span class="kw">if</span> (vindex &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"av_find_best_stream"</span>, vindex);
+<span class="type">AVStream</span> *in_st = ifmt<span class="op">-&gt;</span><span class="param">streams</span>[vindex];
+
+<span class="cmt">/* ② 解码：按输入流的编码 ID 打开解码器 */</span>
+<span class="kw">const</span> <span class="type">AVCodec</span> *dec = <span class="fn">avcodec_find_decoder</span>(in_st<span class="op">-&gt;</span><span class="param">codecpar</span><span class="op">-&gt;</span><span class="param">codec_id</span>);
+<span class="type">AVCodecContext</span> *dec_ctx = <span class="fn">avcodec_alloc_context3</span>(dec);
+ret = <span class="fn">avcodec_parameters_to_context</span>(dec_ctx, in_st<span class="op">-&gt;</span><span class="param">codecpar</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avcodec_parameters_to_context(dec)"</span>, ret);
+ret = <span class="fn">avcodec_open2</span>(dec_ctx, dec, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avcodec_open2(dec)"</span>, ret);
+<span class="fn">printf</span>(<span class="str">"[ok] 解码器: %s %dx%d %s\n"</span>, dec<span class="op">-&gt;</span><span class="param">name</span>, dec_ctx<span class="op">-&gt;</span><span class="param">width</span>,
+       dec_ctx<span class="op">-&gt;</span><span class="param">height</span>, <span class="fn">av_get_pix_fmt_name</span>(dec_ctx<span class="op">-&gt;</span><span class="param">pix_fmt</span>));</code></pre>
+
+      <p>后三站：滤镜、编码、封装。滤镜就是第 14 章的五步原封不动（buffer 的参数串里，<code>video_size</code> / <code>pix_fmt</code> 必须用解码器实际输出的值拼出来）；编码器参数是第 9-10 章的老朋友（libx264 + 320x180 + yuv420p + 1/25 时间基）；封装器是第 9 章的骨架（建上下文 → 建流 → 拷参数 → 打开 → 写头）：</p>
+
+      <pre><code><span class="cmt">/* ③ 滤镜：buffer -&gt; [scale=320:180] -&gt; buffersink（第 14 章五步） */</span>
+<span class="type">AVFilterGraph</span> *graph = <span class="fn">avfilter_graph_alloc</span>();
+<span class="kw">const</span> <span class="type">AVFilter</span> *bufsrc  = <span class="fn">avfilter_get_by_name</span>(<span class="str">"buffer"</span>);
+<span class="kw">const</span> <span class="type">AVFilter</span> *bufsink = <span class="fn">avfilter_get_by_name</span>(<span class="str">"buffersink"</span>);
+<span class="type">AVFilterContext</span> *src_ctx = <span class="kw">NULL</span>, *sink_ctx = <span class="kw">NULL</span>;
+<span class="kw">char</span> args[<span class="num">256</span>];
+<span class="fn">snprintf</span>(args, <span class="kw">sizeof</span> args,
+         <span class="str">"video_size=%dx%d:pix_fmt=%s:time_base=1/%d:frame_rate=%d/1"</span>,
+         dec_ctx<span class="op">-&gt;</span><span class="param">width</span>, dec_ctx<span class="op">-&gt;</span><span class="param">height</span>,
+         <span class="fn">av_get_pix_fmt_name</span>(dec_ctx<span class="op">-&gt;</span><span class="param">pix_fmt</span>), <span class="param">FPS</span>, <span class="param">FPS</span>);
+<span class="fn">avfilter_graph_create_filter</span>(&amp;src_ctx,  bufsrc,  <span class="str">"in"</span>,  args, <span class="kw">NULL</span>, graph);
+<span class="fn">avfilter_graph_create_filter</span>(&amp;sink_ctx, bufsink, <span class="str">"out"</span>, <span class="kw">NULL</span>, <span class="kw">NULL</span>, graph);
+<span class="type">AVFilterInOut</span> *inputs  = <span class="fn">avfilter_inout_alloc</span>();
+<span class="type">AVFilterInOut</span> *outputs = <span class="fn">avfilter_inout_alloc</span>();
+outputs<span class="op">-&gt;</span><span class="param">name</span> = <span class="fn">av_strdup</span>(<span class="str">"in"</span>);   outputs<span class="op">-&gt;</span><span class="param">filter_ctx</span> = src_ctx;
+inputs<span class="op">-&gt;</span><span class="param">name</span>  = <span class="fn">av_strdup</span>(<span class="str">"out"</span>);  inputs<span class="op">-&gt;</span><span class="param">filter_ctx</span>  = sink_ctx;
+ret = <span class="fn">avfilter_graph_parse_ptr</span>(graph, filter_desc, &amp;inputs, &amp;outputs, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avfilter_graph_parse_ptr"</span>, ret);
+<span class="fn">avfilter_inout_free</span>(&amp;inputs);
+<span class="fn">avfilter_inout_free</span>(&amp;outputs);
+ret = <span class="fn">avfilter_graph_config</span>(graph, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avfilter_graph_config"</span>, ret);
+
+<span class="cmt">/* ④ 编码：libx264，输出尺寸 320x180 */</span>
+<span class="kw">const</span> <span class="type">AVCodec</span> *enc_codec = <span class="fn">avcodec_find_encoder_by_name</span>(<span class="str">"libx264"</span>);
+<span class="type">AVCodecContext</span> *enc = <span class="fn">avcodec_alloc_context3</span>(enc_codec);
+enc<span class="op">-&gt;</span><span class="param">width</span> = <span class="num">320</span>;  enc<span class="op">-&gt;</span><span class="param">height</span> = <span class="num">180</span>;
+enc<span class="op">-&gt;</span><span class="param">pix_fmt</span>  = <span class="param">AV_PIX_FMT_YUV420P</span>;
+enc<span class="op">-&gt;</span><span class="param">time_base</span> = (<span class="type">AVRational</span>){<span class="num">1</span>, <span class="param">FPS</span>};
+enc<span class="op">-&gt;</span><span class="param">framerate</span> = (<span class="type">AVRational</span>){<span class="param">FPS</span>, <span class="num">1</span>};
+enc<span class="op">-&gt;</span><span class="param">gop_size</span>  = <span class="num">25</span>;
+enc<span class="op">-&gt;</span><span class="param">max_b_frames</span> = <span class="num">3</span>;
+ret = <span class="fn">avcodec_open2</span>(enc, enc_codec, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avcodec_open2(enc)"</span>, ret);
+
+<span class="cmt">/* ⑤ 封装：建输出容器 out.mp4 */</span>
+<span class="type">AVFormatContext</span> *ofmt = <span class="kw">NULL</span>;
+ret = <span class="fn">avformat_alloc_output_context2</span>(&amp;ofmt, <span class="kw">NULL</span>, <span class="kw">NULL</span>, outfile);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avformat_alloc_output_context2"</span>, ret);
+<span class="type">AVStream</span> *out_st = <span class="fn">avformat_new_stream</span>(ofmt, <span class="kw">NULL</span>);
+ret = <span class="fn">avcodec_parameters_from_context</span>(out_st<span class="op">-&gt;</span><span class="param">codecpar</span>, enc);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avcodec_parameters_from_context(enc)"</span>, ret);
+out_st<span class="op">-&gt;</span><span class="param">time_base</span> = enc<span class="op">-&gt;</span><span class="param">time_base</span>;
+ret = <span class="fn">avio_open</span>(&amp;ofmt<span class="op">-&gt;</span><span class="param">pb</span>, outfile, <span class="param">AVIO_FLAG_WRITE</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avio_open"</span>, ret);
+ret = <span class="fn">avformat_write_header</span>(ofmt, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avformat_write_header"</span>, ret);</code></pre>
+
+      <p>注意一个细节：滤镜参数串里的 <code>FPS</code> 是本章程序写死的 25。这不是偷懒，是教学简化——<strong>滤镜和编码器的时间基必须一致</strong>（都是 1/25），输入是什么帧率，就在主循环里把帧的时间戳换算到 1/25（下一节就是干这个的）。通用的转码器应该用 <code>av_guess_frame_rate</code> 从输入读帧率，这留给章末练习。</p>
+
+      <div class="tip">
+        <div class="tip-title">柯南提示</div>
+        <p>五个站的初始化是"先开张、后营业"：<strong>所有 <code>avcodec_open2</code> / <code>avformat_write_header</code> 都必须在主循环之前完成</strong>。开张手续有一个统一模式——每个 API 的返回值都用同一个 <code>die()</code> 出口检查（第 9 章包青天的铁律），16.5 节我们把这些检查点汇总成一张全景图。</p>
+      </div>
+
+      <!-- ========== 16.3 主循环：包 → 帧 → 帧 → 包的接力 ========== -->
+      <h2>16.3 主循环：包 → 帧 → 帧 → 包的接力</h2>
+
+      <p>初始化完毕，数据开始流动。主循环是三层嵌套：<strong>外层读包</strong>（<code>av_read_frame</code>），<strong>中层解码出帧</strong>（send/receive），<strong>内层滤镜 + 编码 + 写容器</strong>。第 11 章学过：send 一个包，可能要 receive 很多次才能把缓冲里的帧全拿出来；编码器同理。所以每一层都是"送一次、取到 EAGAIN/EOF 为止"的双循环结构。先看外层和中层：</p>
+
+      <pre><code><span class="cmt">/* 主循环外层：读包 -&gt; 丢音频 -&gt; 送解码器 -&gt; 取帧（第 11 章双循环） */</span>
+<span class="kw">while</span> (<span class="num">1</span>) {
+    ret = <span class="fn">av_read_frame</span>(ifmt, pkt);
+    <span class="kw">if</span> (ret == <span class="param">AVERROR_EOF</span>) <span class="kw">break</span>;            <span class="cmt">// 输入读完了，进收尾阶段</span>
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+    <span class="kw">if</span> (pkt<span class="op">-&gt;</span><span class="param">stream_index</span> != vindex) {          <span class="cmt">// 非视频包：丢弃（等价命令行 -an）</span>
+        <span class="fn">av_packet_unref</span>(pkt);
+        <span class="kw">continue</span>;
+    }
+    packets_in<span class="op">++</span>;
+
+    ret = <span class="fn">avcodec_send_packet</span>(dec_ctx, pkt);      <span class="cmt">// ① 压缩包进解码器</span>
+    <span class="fn">av_packet_unref</span>(pkt);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+
+    <span class="kw">while</span> (ret <span class="op">&gt;=</span> <span class="num">0</span>) {                            <span class="cmt">// ② 像素帧出解码器（一次出多帧）</span>
+        ret = <span class="fn">avcodec_receive_frame</span>(dec_ctx, frame);
+        <span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span> <span class="op">||</span> ret == <span class="param">AVERROR_EOF</span>) <span class="kw">break</span>;
+        <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+        frames_decoded<span class="op">++</span>;
+
+        <span class="cmt">/* 时间基换算：容器时间基(1/12800) -&gt; 滤镜时间基(1/25)（第 12 章的钥匙） */</span>
+        frame<span class="op">-&gt;</span><span class="param">pts</span> = <span class="fn">av_rescale_q</span>(frame<span class="op">-&gt;</span><span class="param">pts</span>, in_st<span class="op">-&gt;</span><span class="param">time_base</span>,
+                                  (<span class="type">AVRational</span>){<span class="num">1</span>, <span class="param">FPS</span>});
+
+        ret = <span class="fn">av_buffersrc_add_frame_flags</span>(src_ctx, frame,
+                                           <span class="param">AV_BUFFERSRC_FLAG_KEEP_REF</span>);
+        <span class="fn">av_frame_unref</span>(frame);                   <span class="cmt">// KEEP_REF：释放权留在自己手里</span>
+        <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;</code></pre>
+
+      <p>接着是内层：从滤镜取加工后的帧，送进编码器，再把编码器吐出的压缩包写进容器。这里有三件事要盯紧：<strong>① 滤镜出帧要 <code>av_buffersink_get_frame</code> 取到 EAGAIN</strong>（第 14 章）；<strong>② 编码器送帧后必须立刻排空 receive</strong>（第 11 章不丢帧的保证）；<strong>③ 写容器前把时间基从编码器刻度换算成容器刻度</strong>（<code>av_packet_rescale_ts</code>，第 4 章 + 第 12 章的主角）：</p>
+
+      <pre><code>        <span class="kw">while</span> (<span class="num">1</span>) {                            <span class="cmt">// ③ 加工后的帧出滤镜</span>
+            ret = <span class="fn">av_buffersink_get_frame</span>(sink_ctx, filt);
+            <span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span> <span class="op">||</span> ret == <span class="param">AVERROR_EOF</span>) <span class="kw">break</span>;
+            <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+            frames_filtered<span class="op">++</span>;
+
+            ret = <span class="fn">avcodec_send_frame</span>(enc, filt);  <span class="cmt">// ④ 像素帧进编码器</span>
+            <span class="fn">av_frame_unref</span>(filt);
+            <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+
+            <span class="kw">while</span> (<span class="num">1</span>) {                        <span class="cmt">// ⑤ 压缩包出编码器 -&gt; 写容器</span>
+                <span class="type">AVPacket</span> *opkt = <span class="fn">av_packet_alloc</span>();
+                ret = <span class="fn">avcodec_receive_packet</span>(enc, opkt);
+                <span class="kw">if</span> (ret == <span class="param">AVERROR(EAGAIN)</span> <span class="op">||</span> ret == <span class="param">AVERROR_EOF</span>) {
+                    <span class="fn">av_packet_free</span>(&amp;opkt);
+                    <span class="kw">break</span>;
+                }
+                <span class="kw">if</span> (ret &lt; <span class="num">0</span>) { <span class="fn">av_packet_free</span>(&amp;opkt); <span class="kw">break</span>; }
+                packets_out<span class="op">++</span>;
+                opkt<span class="op">-&gt;</span><span class="param">stream_index</span> = out_st<span class="op">-&gt;</span><span class="param">index</span>;
+                <span class="fn">av_packet_rescale_ts</span>(opkt, enc<span class="op">-&gt;</span><span class="param">time_base</span>, out_st<span class="op">-&gt;</span><span class="param">time_base</span>);
+                ret = <span class="fn">av_interleaved_write_frame</span>(ofmt, opkt);
+                <span class="fn">av_packet_free</span>(&amp;opkt);
+                <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+            }
+        }
+    }
+}</code></pre>
+
+      <p>这段代码里藏着两个"时间刻度"：<strong>帧的 pts 在滤镜里是 1/25 刻度</strong>（buffer 参数串里指定的），<strong>编码器吐出的包的 pts 是编码器时间基刻度</strong>（也是 1/25），而 <strong>mp4 容器内部是 1/12800 刻度</strong>（第 4 章实测）。本程序里编码器和滤镜刻度相同，所以帧直接递送；但容器刻度不同，所以每个包在写容器前都要 <code>av_packet_rescale_ts</code> 换算一次——这正是第 12 章"时间基是每站的度量衡"的实战应用。</p>
+
+      <div class="warning">
+        <p><strong>注意</strong>：三个"乘客计数器"——<code>packets_in</code>（读了多少包）、<code>frames_decoded</code>（解出多少帧）、<code>packets_out</code>（写出多少包）——是本章验证管线完整性的三把尺子。正常转码时它们近似相等（150 包进 → 150 帧 → 150 包出）；如果 <code>frames_decoded</code> 明显少于 <code>packets_in</code>，说明有帧在解码环节丢了；如果 <code>packets_out</code> 少于 <code>frames_filtered</code>，说明编码器还在缓冲——收尾阶段就是为它准备的。</p>
+      </div>
+
+      <!-- ========== 16.4 收尾：三级 flush 与 trailer ========== -->
+      <h2>16.4 收尾：三级 flush 与 trailer</h2>
+
+      <p>输入读完了（<code>av_read_frame</code> 返回 EOF），但数据流还没走完——<strong>解码器、滤镜、编码器里都可能还有半成品</strong>：解码器缓冲着 B 帧重排的帧，滤镜链上还挂着最后一帧，编码器里压着还没吐出的 B 帧。第 12 章教过：每个"送"都有一个"喂 NULL 表示 flush"的暗号。转码器收尾要按数据流方向做<strong>三级 flush</strong>：先刷解码器（把剩下的帧全解出来送进滤镜），再刷滤镜（把链上最后一帧推出来送进编码器），最后刷编码器（把缓冲的 B 帧全吐出来写进容器）：</p>
+
+      <pre><code><span class="cmt">/* ① 解码器 flush：喂 NULL，把缓冲的解码帧全部吐出来 */</span>
+<span class="fn">avcodec_send_packet</span>(dec_ctx, <span class="kw">NULL</span>);
+<span class="kw">while</span> (<span class="fn">avcodec_receive_frame</span>(dec_ctx, frame) <span class="op">&gt;=</span> <span class="num">0</span>) {
+    frames_decoded<span class="op">++</span>;
+    frame<span class="op">-&gt;</span><span class="param">pts</span> = <span class="fn">av_rescale_q</span>(frame<span class="op">-&gt;</span><span class="param">pts</span>, in_st<span class="op">-&gt;</span><span class="param">time_base</span>, (<span class="type">AVRational</span>){<span class="num">1</span>, <span class="param">FPS</span>});
+    ret = <span class="fn">av_buffersrc_add_frame_flags</span>(src_ctx, frame, <span class="param">AV_BUFFERSRC_FLAG_KEEP_REF</span>);
+    <span class="fn">av_frame_unref</span>(frame);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+}
+
+<span class="cmt">/* ② 滤镜 flush：同样喂 NULL，让流水线上的最后一帧走完 */</span>
+ret = <span class="fn">av_buffersrc_add_frame_flags</span>(src_ctx, <span class="kw">NULL</span>, <span class="num">0</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"filter flush"</span>, ret);
+<span class="kw">while</span> (<span class="fn">av_buffersink_get_frame</span>(sink_ctx, filt) <span class="op">&gt;=</span> <span class="num">0</span>) {
+    frames_filtered<span class="op">++</span>;
+    ret = <span class="fn">avcodec_send_frame</span>(enc, filt);
+    <span class="fn">av_frame_unref</span>(filt);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+    <span class="cmt">/* 边送边取：编码器缓冲满了会拒收（EAGAIN），必须立刻排空 */</span>
+    <span class="kw">while</span> (<span class="fn">avcodec_receive_packet</span>(enc, pkt) <span class="op">&gt;=</span> <span class="num">0</span>) {
+        packets_out<span class="op">++</span>;
+        pkt<span class="op">-&gt;</span><span class="param">stream_index</span> = out_st<span class="op">-&gt;</span><span class="param">index</span>;
+        <span class="fn">av_packet_rescale_ts</span>(pkt, enc<span class="op">-&gt;</span><span class="param">time_base</span>, out_st<span class="op">-&gt;</span><span class="param">time_base</span>);
+        ret = <span class="fn">av_interleaved_write_frame</span>(ofmt, pkt);
+        <span class="fn">av_packet_unref</span>(pkt);
+        <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+    }
+}
+
+</code></pre>
+
+      <pre><code><span class="cmt">/* ③ 编码器 flush：缓冲里的 B 帧全靠这一步出来 */</span>
+ret = <span class="fn">avcodec_send_frame</span>(enc, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"encoder flush"</span>, ret);
+<span class="kw">while</span> (<span class="fn">avcodec_receive_packet</span>(enc, pkt) <span class="op">&gt;=</span> <span class="num">0</span>) {
+    packets_out<span class="op">++</span>;
+    pkt<span class="op">-&gt;</span><span class="param">stream_index</span> = out_st<span class="op">-&gt;</span><span class="param">index</span>;
+    <span class="fn">av_packet_rescale_ts</span>(pkt, enc<span class="op">-&gt;</span><span class="param">time_base</span>, out_st<span class="op">-&gt;</span><span class="param">time_base</span>);
+    ret = <span class="fn">av_interleaved_write_frame</span>(ofmt, pkt);
+    <span class="fn">av_packet_unref</span>(pkt);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">break</span>;
+}
+<span class="fn">av_write_trailer</span>(ofmt);   <span class="cmt">// 写容器尾（mp4 的 moov 索引在这里落盘）</span></code></pre>
+
+      <p>flush 完了写 trailer，最后按"创建顺序相反"清理所有对象：先释放帧和包（<code>av_frame_free</code> / <code>av_packet_free</code>），再释放滤镜图、编码器、解码器（<code>avfilter_graph_free</code> / <code>avcodec_free_context</code>），最后关 IO 和输入（<code>avio_closep</code> / <code>avformat_free_context</code> / <code>avformat_close_input</code>）。顺序记不住也没关系，记住一条铁律：<strong>谁分配谁释放，后分配的先释放</strong>。</p>
+
+      <div class="tip">
+        <div class="tip-title">柯南提示</div>
+        <p>三级 flush 的顺序不能乱：<strong>必须沿数据流方向（解码 → 滤镜 → 编码）</strong>。反着刷（先刷编码器）会让滤镜还挂着的帧无处可去。本程序运行时会看到 x264 打印 <code>forced frame type (5) at 24 was changed to frame type (3)</code>——这是流的末尾 B 帧排不下（B 帧需要看未来的帧），x264 把末段帧型降级成 P/I 帧，是编码器缓冲在收尾时的正常调整，不是错误。</p>
+      </div>
+
+      <div class="warning">
+        <p><strong>注意</strong>：② 滤镜 flush 里那个"边送边取"是本章实测踩过的坑——第一版只在主循环里排空编码器，flush 阶段只送不取，结果编码器缓冲塞满，<code>avcodec_send_frame</code> 直接返回 <code>EAGAIN</code>（Resource temporarily unavailable），程序带着半截文件退出，<code>ffprobe</code> 报 <code>moov atom not found</code>。<strong>编码器的"送"和"取"是跷跷板，任何阶段送完都要立刻排空</strong>，否则它就用 EAGAIN 拒收。</p>
+      </div>
+
+      <!-- ========== 16.5 错误处理全景：ret 检查点与常见运行时错误 ========== -->
+      <h2>16.5 错误处理全景：ret 检查点与常见运行时错误</h2>
+
+      <p>第 9 章包青天立下铁律：<strong>每一个 ret 都不能放过</strong>。五站串起来之后，检查点的数量也翻了五倍——本程序一共 <strong>16 个 ret 检查点</strong>，全部走同一个 <code>die()</code> 出口：打印出错的站点名 + 错误码的人类可读文本（<code>av_err2str</code>），返回 1。出错时你一眼就能看到"哪一站、为什么"：</p>
+
+      <pre><code><span class="cmt">// 统一错误出口：站点名 + av_err2str 把负数错误码翻译成人话</span>
+<span class="kw">static</span> <span class="kw">int</span> <span class="fn">die</span>(<span class="kw">const</span> <span class="kw">char</span> *where, <span class="kw">int</span> ret) {
+    <span class="fn">fprintf</span>(stderr, <span class="str">"[FAIL] %s: %s\n"</span>, where, <span class="fn">av_err2str</span>(ret));
+    <span class="kw">return</span> <span class="num">1</span>;
+}
+
+<span class="cmt">// 用法：每个检查点都是同一句话，只有站点名不同</span>
+ret = <span class="fn">avformat_open_input</span>(&amp;ifmt, infile, <span class="kw">NULL</span>, <span class="kw">NULL</span>);
+<span class="kw">if</span> (ret &lt; <span class="num">0</span>) <span class="kw">return</span> <span class="fn">die</span>(<span class="str">"avformat_open_input"</span>, ret);</code></pre>
+
+      <p>16 个检查点按五站分布：解封装 3 个（open_input / find_stream_info / find_best_stream）、解码 2 个（parameters_to_context / open2）、滤镜 4 个（create_filter ×2 / parse_ptr / graph_config）、编码 3 个（open2 / parameters_from_context / 以及 flush 阶段 2 个）、封装 3 个（alloc_output_context2 / avio_open / write_header），外加主循环里每个 send/receive 的返回值判断。整理成一张"站点 × 检查点"全景图：</p>
+
+      <pre><code><span class="cmt"># 五站 × ret 检查点全景（transcode16.cpp 实测，16 处）</span>
+① 解封装  <span class="fn">avformat_open_input</span> / <span class="fn">avformat_find_stream_info</span> / <span class="fn">av_find_best_stream</span>
+② 解码    <span class="fn">avcodec_parameters_to_context</span> / <span class="fn">avcodec_open2</span>(dec)
+③ 滤镜    <span class="fn">avfilter_graph_create_filter</span> x2 / <span class="fn">avfilter_graph_parse_ptr</span> / <span class="fn">avfilter_graph_config</span>
+④ 编码    <span class="fn">avcodec_open2</span>(enc) / <span class="fn">avcodec_parameters_from_context</span> / flush 时 <span class="fn">avcodec_send_frame</span>(<span class="kw">NULL</span>)
+⑤ 封装    <span class="fn">avformat_alloc_output_context2</span> / <span class="fn">avio_open</span> / <span class="fn">avformat_write_header</span>
+循环内    send/receive 的返回值每个都判断（<span class="param">EAGAIN</span> 是正常节奏，其余 <span class="op">&lt;</span> <span class="num">0</span> 都是事故）</code></pre>
+
+      <p>把常见的运行时错误都亲手触发一遍，你才能像柯南一样"看见报错就知道凶手是谁"。下面四条是本机实测的真实报错（<code>./t16</code> 跑出来的，一字未改）：</p>
+
+      <pre><code><span class="cmt"># 本机真实报错（ffmpeg 8.1.1, macOS arm64）</span>
+$ ./t16 nofile.mp4 out.mp4
+[FAIL] avformat_open_input: No such file or directory
+
+$ ./t16 sample4.mp4 out.mp4 <span class="str">"scale=abc"</span>
+[FAIL] avfilter_graph_parse_ptr: Invalid argument
+
+$ ./t16 sample4.mp4 /nonexistent/out.mp4
+[FAIL] avio_open: No such file or directory
+
+$ ./t16 <span class="str">"scale=320:180,no_such_filter"</span>   <span class="cmt"># 滤镜名写错（第 14 章报错）</span>
+[FAIL] avfilter_graph_parse_ptr: No such filter or filtergraph</code></pre>
+
+      <p>四条报错对应四类病因：文件不存在（解封装）、滤镜参数非法（滤镜）、输出路径不可写（封装）、滤镜名拼错（滤镜）。共同点：<strong>报错文本足够精确，但前提是你把站点名写进了 die()</strong>——如果只打印错误码不打印站点，<code>Invalid argument</code> 这种报错会让人在五站里瞎找。最后还有一类错误发生在编译期，专属于 C++ 用户，值得单独说：</p>
+
+      <div class="warning">
+        <p><strong>注意</strong>：FFmpeg 8 的公共头文件<strong>不再自带 <code>extern "C"</code> 守卫</strong>（旧版本有，8.0 移除了）。用 <code>g++</code> 编译时，头文件里的函数声明会被当作 C++ 符号修饰，链接时报出一长串 <code>Undefined symbols ... declaration possibly missing 'extern "C"'</code>（真实报错）。对策很简单：把全部 FFmpeg 头文件的 include 包进 <code>extern "C" { ... }</code>，本章 <code>transcode16.cpp</code> 开头就是这么写的。</p>
+      </div>
+
+      <table>
+        <tr><th>报错现象（本机实测）</th><th>出现在哪一站</th><th>原因</th><th>对策</th></tr>
+        <tr><td><code>[FAIL] avformat_open_input: No such file or directory</code></td><td>① 解封装</td><td>输入路径不对</td><td>先 <code>ls</code> 确认文件存在</td></tr>
+        <tr><td><code>[FAIL] avfilter_graph_parse_ptr: Invalid argument</code></td><td>③ 滤镜</td><td>滤镜串写错（<code>scale=abc</code>）</td><td>先在命令行 <code>-vf</code> 调通，再原封不动搬进 API</td></tr>
+        <tr><td><code>[FAIL] avio_open: No such file or directory</code></td><td>⑤ 封装</td><td>输出目录不存在 / 不可写</td><td>检查输出路径的父目录</td></tr>
+        <tr><td><code>Undefined symbols ... missing 'extern "C"'</code></td><td>编译期</td><td>FFmpeg 8 头文件无 C++ 守卫</td><td>include 包进 <code>extern "C" { }</code></td></tr>
+        <tr><td><code>[FAIL] encoder flush: Resource temporarily unavailable</code></td><td>④ 编码</td><td>缓冲塞满还硬送（flush 只送不取）</td><td>边送边取，EAGAIN 就排空再继续</td></tr>
+        <tr><td><code>Failed to open file ... or configure filtergraph</code></td><td>播放验证</td><td>ffplay 对无音频文件的已知怪癖</td><td>去掉 <code>-loglevel error</code>，或用 ffprobe 验证</td></tr>
+      </table>
+
+      <div class="tip">
+        <div class="tip-title">柯南提示</div>
+        <p>排错心法：<strong>报错永远先看"哪一站"，再看"什么码"</strong>。die() 的站点名是定位第一刀——知道是滤镜站出的错，你就不用去检查封装代码。这一招把 16 个检查点从"16 个 if"变成了"一张五站地图上的 16 个路标"。</p>
+      </div>
+
+      <!-- ========== 16.6 本机实测与章节总复习 ========== -->
+      <h2>16.6 本机实测与章节总复习</h2>
+
+      <p>全管线写完了，用第 4 章的 <code>sample4.mp4</code>（h264 + aac，320x240，25fps，6 秒）做输入，跑 320x240 → 320x180 的缩放转码。编译和运行的命令如下——<code>pkg-config</code> 一次性给出五个库的头文件路径和链接参数，这也是本线所有 C 程序的标准编译姿势（第 9 章起沿用）：</p>
+
+      <pre><code><span class="cmt"># 编译 + 运行（本机真实执行，macOS arm64 / g++ / ffmpeg 8.1.1）</span>
+$ g++ <span class="param">-O2</span> <span class="param">-D__STDC_CONSTANT_MACROS</span> transcode16.cpp <span class="op">$(</span><span class="fn">pkg-config</span> <span class="param">--cflags --libs</span> libavformat libavcodec libavutil libavfilter libswscale<span class="op">)</span> <span class="param">-o</span> t16
+$ ./t16 sample4.mp4 out16.mp4
+[ok] 解码器: h264 320x240 yuv420p
+[ok] 滤镜图: scale=320:180
+[libx264 @ 0x...] forced frame type (<span class="num">5</span>) at <span class="num">24</span> was changed to frame type (<span class="num">3</span>)
+[libx264 @ 0x...] forced frame type (<span class="num">5</span>) at <span class="num">25</span> was changed to frame type (<span class="num">1</span>)
+[libx264 @ 0x...] forced frame type (<span class="num">5</span>) at <span class="num">50</span> was changed to frame type (<span class="num">1</span>)
+[libx264 @ 0x...] forced frame type (<span class="num">5</span>) at <span class="num">75</span> was changed to frame type (<span class="num">1</span>)
+[libx264 @ 0x...] forced frame type (<span class="num">5</span>) at <span class="num">100</span> was changed to frame type (<span class="num">1</span>)
+[libx264 @ 0x...] forced frame type (<span class="num">5</span>) at <span class="num">125</span> was changed to frame type (<span class="num">1</span>)
+packets_in=<span class="num">150</span> frames_decoded=<span class="num">150</span> frames_filtered=<span class="num">150</span> packets_out=<span class="num">150</span> duration=<span class="num">6.00</span>s</code></pre>
+
+      <p>三个计数器全部相等：<strong>150 个包进 → 150 帧解出 → 150 帧过滤镜 → 150 个包写出，时长 6.00 秒</strong>——一行不多，一行不少。x264 的 <code>forced frame type</code> 警告是末段 B 帧降级的正常调整（16.4 节讲过）。最后用 ffprobe 给输入输出各做一次体检，验证"320x240 → 320x180"真的落地了：</p>
+
+      <pre><code><span class="cmt"># 输入侧（节选）：h264 320x240 25fps + aac 音频，6 秒</span>
+$ ffprobe <span class="param">-show_entries</span> <span class="param">stream=codec_name,width,height,r_frame_rate</span> \
+          <span class="param">-show_entries</span> <span class="param">format=duration,size</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> sample4.mp4
+codec_name=h264
+width=<span class="num">320</span>
+height=<span class="num">240</span>
+r_frame_rate=25/1
+codec_name=aac
+duration=<span class="num">6.000000</span>
+size=<span class="num">261398</span>
+
+<span class="cmt"># 输出侧（节选）：h264 320x180 25fps，只有视频轨，5.96 秒，179634 字节</span>
+$ ffprobe <span class="param">-show_entries</span> <span class="param">stream=codec_name,width,height,pix_fmt,nb_frames</span> \
+          <span class="param">-show_entries</span> <span class="param">format=duration,size</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> out16.mp4
+codec_name=h264
+width=<span class="num">320</span>
+height=<span class="num">180</span>
+pix_fmt=yuv420p
+nb_frames=<span class="num">150</span>
+duration=<span class="num">5.960000</span>
+size=<span class="num">179634</span></code></pre>
+
+      <p>体检报告对得上账：输出 320x180、yuv420p、150 帧，时长 5.96 秒（mp4 时间基 1/12800 下 150 帧 = 5.96 秒，与第 4 章的知识一致），音频轨按 <code>-an</code> 语义被丢弃。用 <code>ffplay -autoexit -nodisp out16.mp4</code> 冒烟测试，正常播放、退出码 0——管线从头到尾是通的。唯一要注意的是 ffplay 的一个小怪癖：<strong>对没有音频轨的文件，加 <code>-loglevel error</code> 会误报 <code>Failed to open file</code></strong>，去掉这个参数就正常（16.5 节错误表最后一行），验证产物优先用 ffprobe。</p>
+
+      <div class="warning">
+        <p><strong>注意</strong>：本程序把滤镜和编码器的时间基写死为 25fps。拿 15fps 的素材（如第 1 章的 lavfi 测试视频）也能跑通（45 包 → 45 帧 → 45 包），但输出会被加速成 25fps——因为 pts 是按 1/25 刻度重算的。<strong>通用转码器必须用 <code>av_guess_frame_rate</code> 从输入读帧率</strong>，而不是写死。这个升级就作为章末练习 2。</p>
+      </div>
+
+      <p>最后一站：回头看这 16 章。你手里的地图已经完整了——从命令行到 C API，从容器到编码，从滤镜到整条管线。把 16 章的知识浓缩成一张表，就是你从"会用 ffmpeg"到"能写 ffmpeg"的全部路径：</p>
+
+      <table>
+        <tr><th>章</th><th>核心概念</th><th>学会的本事</th></tr>
+        <tr><td>1 FFmpeg 全家桶</td><td>ffmpeg / ffprobe / ffplay、lavfi 测试素材</td><td>造素材、冒烟测试任何产物</td></tr>
+        <tr><td>2 命令行转码</td><td>-i / -c / -b / -vf、流复制 vs 重编码、GOP 裁剪</td><td>一条命令完成转码与裁剪</td></tr>
+        <tr><td>3 ffprobe 探针</td><td>流 / 帧 / 包、时间基、JSON 输出</td><td>读懂任何媒体的体检报告</td></tr>
+        <tr><td>4 音视频基础</td><td>容器、编码、时间基、PTS/DTS</td><td>看懂 1/12800 这类数字</td></tr>
+        <tr><td>5 源码编译准备</td><td>configure / make、依赖探测</td><td>从源码定制自己的 FFmpeg</td></tr>
+        <tr><td>6 依赖库逐个击破</td><td>x264 / opus / gnutls、缺库排错循环</td><td>configure 报错不再害怕</td></tr>
+        <tr><td>7 GPU 硬编解码</td><td>--enable-cuda、h264_cuvid / nvenc</td><td>配出 GPU 版 FFmpeg</td></tr>
+        <tr><td>8 GPU 转码实战</td><td>hwaccel 流程、容器部署</td><td>上线 GPU 转码服务</td></tr>
+        <tr><td>9 编码器 API</td><td>四对象模型、九步流程</td><td>搭起编码器骨架</td></tr>
+        <tr><td>10 编码器配置</td><td>bit_rate / sample_fmt / 时间基 / 全局头</td><td>参数落地成文件特征</td></tr>
+        <tr><td>11 send/receive</td><td>双循环、EAGAIN、stream_index</td><td>不丢帧的编解码循环</td></tr>
+        <tr><td>12 flush 与时间基</td><td>draining mode、av_packet_rescale_ts</td><td>收尾不丢数据</td></tr>
+        <tr><td>13 自定义 IO</td><td>内存 / 流式输入输出</td><td>把数据源换成任意来源</td></tr>
+        <tr><td>14 滤镜图原理</td><td>buffer → filters → buffersink</td><td>搭画面加工流水线</td></tr>
+        <tr><td>15 视频滤镜实战</td><td>scale / overlay / drawtext / 截图</td><td>加水印、缩放、截图</td></tr>
+        <tr><td>16 转码工程全景</td><td>五站管线、三段式 main、错误全景</td><td>手写完整转码器</td></tr>
+      </table>
+
+      <div class="tip">
+        <div class="tip-title">柯南结案</div>
+        <p>「16 章前，视频对你是一个黑盒子；现在它是一条五站的流水线，每一站进什么、出什么、谁分配、谁释放，你都说得清。数据流的真相只有一个：<strong>文件字节 → 包 → 帧 → 帧 → 包 → 文件字节</strong>。抓住这条主线，以后遇到任何 FFmpeg 问题——不管是命令行还是 API——你都能顺着数据流找到那一站，亲手验证，亲手修复。真相只有一个，而你已经是那个能找到它的人。」</p>
+      </div>
+
+      <h2>章末练习</h2>
+
+      <div class="exercise-item">
+        <h3>练习 1：五站数据流填空 <span class="difficulty difficulty-easy">入门</span></h3>
+        <p>写出五站各自的输入输出形态（包还是帧），并说出每一站谁负责分配乘客、谁负责释放。</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>压缩态是包（AVPacket），解压态是帧（AVFrame）；16.1 节的表就是答案。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>① 解封装：文件字节 → AVPacket（你 unref）；② 解码：AVPacket → AVFrame（你 alloc + unref）；③ 滤镜：AVFrame → AVFrame（你 alloc + unref）；④ 编码：AVFrame → AVPacket（你 alloc + free）；⑤ 封装：AVPacket → 文件字节（你 avio_closep）。口诀：包 → 帧 → 帧 → 包。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 2：把写死的 25fps 改成从输入读取 <span class="difficulty difficulty-medium">进阶</span></h3>
+        <p>16.6 节的警告说：写死 FPS 会让 15fps 素材被加速。请用 <code>av_guess_frame_rate</code> 改造程序：在初始化阶段读出输入帧率，用它替换滤镜参数串和编码器里的 <code>FPS</code>。提示：该函数返回 <code>AVRational</code>。</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p><code>AVRational fr = av_guess_frame_rate(ifmt, in_st, NULL);</code> 在打开解码器之后调用；把滤镜参数串里的 time_base 和编码器的 time_base / framerate 都用 fr.num / fr.den 拼出来。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>在 ② 之后加一行：<code>AVRational fr = av_guess_frame_rate(ifmt, in_st, NULL);</code>（sample4.mp4 实测返回 25/1，15fps 的 lavfi 视频返回 15/1）。然后把滤镜参数串改为 <code>time_base=1/%d:frame_rate=%d/1</code> 传入 <code>fr.den / fr.num</code>，编码器的 <code>time_base = (AVRational){fr.den, fr.num}</code>、<code>framerate = fr</code>，主循环里换算 pts 的目标刻度也换成 <code>{fr.den, fr.num}</code>。改完用 15fps 素材重跑，duration 应保持 3.00s 而不是 1.80s。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 3：解释 flush 的"边送边取" <span class="difficulty difficulty-medium">进阶</span></h3>
+        <p>16.4 节的 warning 说：flush 阶段只送不取，<code>avcodec_send_frame</code> 会返回 EAGAIN。请解释：① EAGAIN 在 send 侧代表什么？② 为什么主循环里同样的问题不会出现？③ 去掉 flush ② 里的排空循环，程序会怎样收场？</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>想想编码器的内部缓冲是"一进一出"的跷跷板；再想想主循环里 send 之后紧跟的那个 receive 循环在干什么。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>① send 返回 EAGAIN = 编码器内部缓冲已满，拒绝再接新帧——你得先 receive 排空再送。② 主循环里每次 <code>avcodec_send_frame</code> 之后都紧跟 receive 循环取到 EAGAIN 为止，缓冲始终有位置。③ 去掉后：滤镜 flush 阶段连续送帧，缓冲塞满，send 返回 EAGAIN，代码 break 退出——丢帧 + <code>av_write_trailer</code> 前提前返回，输出文件没有 moov 索引，ffprobe 报 <code>moov atom not found</code>（本机实测过的完整事故链）。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="exercise-item">
+        <h3>练习 4：给转码器加上音频轨 <span class="difficulty difficulty-hard">挑战</span></h3>
+        <p>本章程序用 <code>-an</code> 语义丢了音频。请把它升级成音视频双轨转码：音频用 aac 编码（第 9-11 章的知识），输出 mp4 同时含视频和音频轨。要求：写出主循环按 <code>stream_index</code> 分流的骨架，并说明音频帧的 pts 换算该用什么时间基（提示：第 10 章学过，音频编码器 time_base 跟采样率走）。</p>
+        <details>
+          <summary>提示</summary>
+          <div class="answer-content"><p>把视频的解码-编码循环抽成函数，音频流走同样的 send/receive 骨架；音频帧不需要滤镜，解码后直接送音频编码器。注意输出容器要建两条流（avformat_new_stream × 2），时间基一个是 1/fps，一个是 1/sample_rate。</p></div>
+        </details>
+        <details>
+          <summary>参考答案</summary>
+          <div class="answer-content">
+            <p>骨架：<code>int aindex = av_find_best_stream(ifmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);</code> 找到音频流 → 按 <code>codecpar->codec_id</code> 打开解码器 → <code>avcodec_find_encoder_by_name("aac")</code> 建编码器（<code>sample_fmt</code> 取 <code>encoder->sample_fmts[0]</code>，<code>time_base = {1, sample_rate}</code>，第 10 章全套）→ 输出端 <code>avformat_new_stream</code> 第二条流。主循环里 <code>if (pkt->stream_index == aindex)</code> 走音频分支：send/receive 出帧后直接 <code>avcodec_send_frame</code> 给音频编码器，包写容器前 <code>av_packet_rescale_ts(pkt, audio_enc->time_base, out_ast->time_base)</code>。flush 阶段也要对音频编码器做一次 send NULL。完工后 ffprobe 应看到两条流：h264 + aac。</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="tip">
+        <p><strong>本章结语</strong>：FFmpeg 音视频实战 16 章到此收官。从第 1 章生成第一段测试视频，到这一章亲手写完一条完整转码管线——你走过的这条路，就是 FFmpeg 官方的路。往后遇到任何媒体处理需求，先画出五站数据流，再逐站填代码，最后用 ffprobe 验证每一站：这就是本线教你的全部方法论。</p>
+      </div>
+    </article>
+  </div>
+
+  <script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第4章：音视频基础：容器、编码与时间基 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter04.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第4章：音视频基础：容器、编码与时间基 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter04.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="4" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：音视频基础：容器、编码与时间基</h1>
+  <p class="chapter-subtitle">视频文件不是一块铁板：容器负责装、编码负责压、帧负责组织画面，时间基则给每一帧编上精确的号。把这三层结构从第一性原理推明白，ffmpeg 的一万个参数就都成了表象</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「别人丢给你一个视频文件，你看到的是几百万个 0 和 1；费曼会问：这些比特被组织成了什么？——容器负责装，编码负责压，时间基负责给每一帧编号。把这三件事从第一性原理推出来，ffmpeg 的一万个选项都只是表象。搞懂本质，一切工具都是表象。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 三层结构：容器、编码流与帧 ========== -->
+  <h2>4.1 三层结构：容器、编码流与帧</h2>
+
+  <p>双击一个视频能播，但"能播"的背后是三件完全不同的事在协作。用第一性原理拆开：视频文件 = <strong>容器</strong>（说人话：装视频、音频、字幕的"档案袋"，决定文件怎么组织）+ <strong>编码流</strong>（说人话：压缩算法，决定画面和声音怎么被压成二进制）+ <strong>帧</strong>（说人话：一幅完整的画面，压缩的最小单位）。播放器的工作流程正好反过来：拆档案袋（解封装 demux）→ 解压缩（解码）→ 按时间顺序显示。</p>
+
+  <p>三层为什么必须分开？因为"怎么装"和"怎么压"是两个独立问题：同一条 h264 码流，既能装进 MP4，也能装进 MKV、MPEG-TS；同一个 MP4 文件，视频流可以是 h264，也可以是 hevc。这就是<strong>「容器 ≠ 编码」</strong>——本章第一块基石，后面所有实验都建立在它之上。先看容器层和流层长什么样（本章样本 sample4.mp4：6 秒、320×240、25 帧/秒的 h264 视频流 + 一条 44.1kHz 单声道 aac 音频流，生成命令见 4.2 节）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">sample4.mp4</span>
+<span class="cmt"># 输出（真实，节选）：</span>
+<span class="ann">Input #0,</span> mov,mp4,m4a,3gp,3g2,mj2, from 'sample4.mp4':
+  Duration: 00:00:06.00, start: 0.000000, bitrate: 348 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 243 kb/s, 25 fps, 25 tbr, 12800 tbn (default)
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 96 kb/s (default)</code></pre>
+
+  <p>第一行 <code>Input #0, mov,mp4,m4a,3gp,3g2,mj2</code> 是容器身份（MP4 家族在 FFmpeg 内部就叫这一串名字）；<code>Stream #0:0</code> 是视频流（h264 编码、320×240、25 fps），<code>Stream #0:1</code> 是音频流（aac、44100 Hz 单声道）。容器层还报总时长 <code>Duration 6.00 秒</code> 和总码率 <code>348 kb/s</code>。再看 FFmpeg 自己维护的容器清单——图例里 <code>D</code> 表示能解封装（demux）、<code>E</code> 表示能封装（mux）：</p>
+
+  <pre><code><span class="fn">ffmpeg</span> <span class="param">-hide_banner -formats</span> <span class="op">|</span> <span class="fn">grep</span> <span class="param">-E</span> <span class="str">"mp4|matroska|mpegts"</span>
+<span class="cmt"># 输出（真实，节选）：</span>
+  E  mp4             MP4 (MPEG-4 Part 14)
+ D   mov,mp4,m4a,3gp,3g2,mj2 QuickTime / MOV
+ DE  mpegts          MPEG-TS (MPEG-2 Transport Stream)
+ D   matroska,webm   Matroska / WebM
+  E  matroska        Matroska</code></pre>
+
+  <p>注意一个细节：<code>mp4</code> 行只有 <code>E</code>（只能封装）——FFmpeg 把 MP4 的解封装归到了 <code>mov,mp4,...</code> 家族名下，"名字"和"身份"不是一回事。常见三种容器，各管一摊：</p>
+
+  <table>
+    <tr><th>容器</th><th>典型场景</th><th>能装什么</th><th>实测时间基（4.5 节）</th><th>特点</th></tr>
+    <tr><td>MP4（.mp4）</td><td>在线播放、通用存档</td><td>h264/hevc + aac 最主流</td><td>1/12800（h264 @ 25 fps）</td><td>兼容性最好，几乎全设备通吃</td></tr>
+    <tr><td>MKV（.mkv）</td><td>高清收藏、多音轨多字幕</td><td>几乎一切编码 + 任意字幕</td><td>1/1000（毫秒刻度）</td><td>自由开放，兼容性看播放器</td></tr>
+    <tr><td>MPEG-TS（.ts）</td><td>直播、电视广播</td><td>任意编码（多为 h264/aac）</td><td>1/90000（90 kHz）</td><td>可流式拼接、断点续传</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>判断"容器"只看后缀会翻车——.mp4 里完全可能装着 hevc 视频。容器与编码是正交的两个维度，唯一可靠的判断方式是 ffprobe（第 3 章的主场）。把"容器管怎么装、编码管怎么压"钉在脑子里，本章后面的时间基实验才看得懂。</p>
+  </div>
+
+  <!-- ========== 4.2 编码的本质：帧内与帧间压缩 ========== -->
+  <h2>4.2 编码的本质：帧内与帧间压缩</h2>
+
+  <p>第一性原理问：一段 6 秒、320×240 的原始视频有多大？按 yuv420p 每像素 1.5 字节算：320 × 240 × 1.5 × 25 帧 × 6 秒 ≈ 17.3 MB——而 sample4.mp4 只有 261 KB，压缩了约 66 倍。凭什么？因为视频里有两种巨大的冗余：<strong>空间冗余</strong>（一帧之内，天空是一整片相近的蓝色——帧内压缩）和<strong>时间冗余</strong>（相邻两帧几乎一模一样，只是画面动了一点点——帧间压缩）。</p>
+
+  <p>帧内压缩把每一帧当独立照片压（类似 JPEG：DCT 变换 + 量化，丢掉人眼不敏感的细节）；帧间压缩只记录"这帧和参考帧的差异 + 运动矢量"（说人话：画面往哪儿挪了多少）。于是产生三种帧：<strong>I 帧</strong>（关键帧，帧内编码的完整画面，可独立解码，体积最大）；<strong>P 帧</strong>（前向预测，参考前面已解码的帧，只存差异，中等体积）；<strong>B 帧</strong>（双向预测，同时参考前后两帧，压缩率最高，但解码时必须等"后面"的帧先到——这一点在 4.6 节引爆）。一组从 I 帧开始、到下一个 I 帧之前的所有帧，叫一个 <strong>GOP</strong>（说人话：一组画面，组内共享同一个关键帧作锚点）。</p>
+
+  <p>libx264 默认就开 B 帧（x264 默认 bframes=3 且自适应）。生成带 B 帧的样本并观察帧类型序列——样本还是第 3 章的老配方 testsrc2，6 秒 25 fps 共 150 帧：</p>
+
+  <pre><code><span class="cmt"># 先造母版，再按默认参数压一遍（本机真实执行）</span>
+<span class="fn">ffmpeg</span> <span class="param">-y -f lavfi -i</span> <span class="str">"testsrc2=size=320x240:rate=25:duration=6"</span> \
+       <span class="param">-f lavfi -i</span> <span class="str">"sine=frequency=440:sample_rate=44100:duration=6"</span> \
+       <span class="param">-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p</span> \
+       <span class="param">-c:a aac -b:a 96k</span> master.mp4
+<span class="fn">ffmpeg</span> <span class="param">-y -i master.mp4 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a copy</span> sample4.mp4
+<span class="cmt"># 输出尾部（真实）：</span><span class="ann">[libx264 @ 0x...]</span> kb/s:269.16 / <span class="ann">[aac @ 0x...]</span> Qavg: 123.618</code></pre>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries frame=pict_type -of csv=p=0</span> sample4.mp4
+<span class="cmt"># 输出（真实，前 14 帧）：</span>
+I, B B B P B P B P B B B P B ...
+<span class="cmt"># 全片 150 帧统计（真实）：</span>
+  <span class="num">97</span> B
+   <span class="num">1</span> I,
+  <span class="num">52</span> P</code></pre>
+
+  <p>序列以 <code>I</code> 开头，后面跟着一串 B/P——每两个 I/P 之间夹着最多 3 个 B 帧，这正是"bframes=3 且自适应"的实证。三种帧的差异：</p>
+
+  <table>
+    <tr><th>帧类型</th><th>说人话</th><th>参考</th><th>体积</th><th>能独立解码？</th></tr>
+    <tr><td>I 帧（关键帧）</td><td>完整的照片</td><td>无，帧内编码</td><td>最大</td><td>能——seek 只能落在 I 帧</td></tr>
+    <tr><td>P 帧</td><td>只记变化</td><td>前面已解码的帧</td><td>中</td><td>不能，依赖参考帧</td></tr>
+    <tr><td>B 帧</td><td>前后都参考</td><td>前面 + 后面的帧</td><td>最小</td><td>不能，还要等后面的帧先解码</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：B 帧是"事后诸葛"——它要参考还没显示出来的未来帧，所以解码器必须先把后面的帧解出来。这直接导致<strong>文件里的包顺序 ≠ 显示顺序</strong>（4.6 节的 PTS/DTS 重排）。你在第 3 章 <code>-show_packets</code> 里见过的负 dts（<code>-0.080000</code>）就是这件事的证据——不是文件坏了，是 B 帧在排队。</p>
+  </div>
+
+  <!-- ========== 4.3 实测：GOP 与关键帧间隔 ========== -->
+  <h2>4.3 实测：GOP 与关键帧间隔</h2>
+
+  <p>第 2 章转码裁剪时，为什么 <code>-c copy</code> 切出来的视频会丢画面？根因就是<strong>关键帧间隔</strong>（说人话：两个 I 帧之间隔多少帧）。libx264 的默认值是 250 帧——直接问本机的 x264 要官方默认值：</p>
+
+  <pre><code><span class="fn">x264</span> <span class="param">--fullhelp</span> <span class="op">|</span> <span class="fn">grep</span> <span class="param">keyint</span>
+<span class="cmt"># 输出（真实）：</span>
+  -I, --keyint <span class="op">&lt;</span>integer or <span class="str">"infinite"</span><span class="op">&gt;</span> Maximum GOP size [<span class="num">250</span>]
+  -i, --min-keyint <span class="op">&lt;</span>integer<span class="op">&gt;</span>  Minimum GOP size [auto]
+      --scenecut <span class="op">&lt;</span>integer<span class="op">&gt;</span>    How aggressively to insert extra I-frames [<span class="num">40</span>]</code></pre>
+
+  <p>25 fps 下 250 帧 = 10 秒一个关键帧。sample4.mp4 全长 150 帧 &lt; 250，所以整片只有 1 个 I 帧（正是 4.2 节统计里的 "1 I"）。现在用 <code>-g 50</code> 强制每 50 帧一个关键帧，重新编码并对比统计：</p>
+
+  <pre><code><span class="fn">ffmpeg</span> <span class="param">-y -i master.mp4 -c:v libx264 -preset veryfast -crf 23 -g 50 -pix_fmt yuv420p -c:a copy</span> gop50.mp4
+<span class="cmt"># 输出尾部（真实）：</span><span class="ann">[libx264 @ 0x...]</span> kb/s:252.75</code></pre>
+
+  <pre><code><span class="cmt"># 统计帧类型（真实输出；I 行带尾逗号是 csv 格式原样）</span>
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries frame=pict_type -of csv=p=0</span> sample4.mp4 <span class="op">|</span> <span class="fn">sort</span> <span class="op">|</span> <span class="fn">uniq</span> <span class="param">-c</span>
+<span class="cmt">#   97 B
+#    1 I,
+#   52 P</span>
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries frame=pict_type -of csv=p=0</span> gop50.mp4 <span class="op">|</span> <span class="fn">sort</span> <span class="op">|</span> <span class="fn">uniq</span> <span class="param">-c</span>
+<span class="cmt">#   97 B
+#    2 I
+#    1 I,
+#   50 P</span>
+<span class="cmt"># 关键帧位置（grep -n "I"）：默认只有第 1 帧；-g 50 在第 1 / 51 / 101 帧（即 0 / 50 / 100）</span></code></pre>
+
+  <p>对比：默认 1 个 I 帧 vs <code>-g 50</code> 的 3 个 I 帧。I 帧越多文件越大（gop50.mp4 269 KB vs sample4.mp4 261 KB），但<strong>随机访问点</strong>变多——seek（说人话：拖动进度条）只能落在 I 帧，I 帧越密，拖动越跟手、裁剪越精准。这就是第 2 章裁剪丢视频流的完整答案：从非关键帧开始裁剪，前面没有参考帧可解，画面自然就丢了。</p>
+
+  <div class="warning">
+    <p><strong>注意</strong>：GOP 长短是权衡——直播要秒级短 GOP（观众随时切入），存档要长 GOP（省空间）。但 <code>-g</code> 只在<strong>编码</strong>时生效：用 <code>-c copy</code> 转封装不会改变关键帧位置，GOP 是编码器压码流时定死的。另外 <code>scenecut=40</code> 表示场景突变也会额外插入 I 帧，所以真实视频的关键帧位置不会严格均匀（testsrc2 无场景突变，本例恰好均匀）。</p>
+  </div>
+
+  <!-- ========== 4.4 时间基：用有理数给时间编号 ========== -->
+  <h2>4.4 时间基：用有理数给时间编号</h2>
+
+  <p>现在进入本章最"第一性"的概念。播放器必须回答一个问题：这一帧该在什么时候显示？计算机里时间怎么存？用浮点秒（0.04 秒）有累计误差——0.04 的二进制是无限循环小数，150 帧累加就会漂移。FFmpeg 的做法是<strong>分数</strong>：时间基 <strong>time_base</strong>（说人话：时间的最小刻度，1/25 表示一格 = 1/25 秒），任何时刻 = 整数刻度 × time_base，全程整数运算、零误差。分数在 C 里的样子（本机头文件原文）：</p>
+
+  <pre><code><span class="cmt"># /opt/homebrew/include/libavutil/rational.h 第 58 行起（真实）</span>
+<span class="kw">typedef</span> <span class="kw">struct</span> <span class="type">AVRational</span>{
+    <span class="kw">int</span> num; <span class="cmt">///&lt; Numerator</span>
+    <span class="kw">int</span> den; <span class="cmt">///&lt; Denominator</span>
+} <span class="type">AVRational</span>;</code></pre>
+
+  <p>那 25 fps 的视频，time_base 是不是就该是 1/25？实测打脸——用 ffprobe 直接问（本章核心命令，<code>-select_streams v:0</code> 选视频流，<code>-show_entries stream=...</code> 选字段，<code>-of json</code> 输出 JSON）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0</span> \
+       <span class="param">-show_entries stream=time_base,r_frame_rate,avg_frame_rate -of json</span> sample4.mp4
+<span class="cmt"># 输出（真实，完整）：</span>
+{
+    <span class="str">"programs"</span>: [
+
+    ],
+    <span class="str">"stream_groups"</span>: [
+
+    ],
+    <span class="str">"streams"</span>: [
+        {
+            <span class="str">"r_frame_rate"</span>: <span class="str">"25/1"</span>,
+            <span class="str">"avg_frame_rate"</span>: <span class="str">"25/1"</span>,
+            <span class="str">"time_base"</span>: <span class="str">"1/12800"</span>
+        }
+    ]
+}</code></pre>
+
+  <p>time_base = <strong>1/12800</strong>，不是 1/25！r_frame_rate 和 avg_frame_rate 都是 25/1（分数形式；前者是码流宣称的帧率，后者按实际帧数 ÷ 时长算出，两者一致说明帧率恒定——变帧率视频这两个值会分家）。而 12800 ÷ 25 = 512：<strong>每帧恰好 512 个整数刻度</strong>，帧与帧之间没有小数误差——这是封装器选出来的"够细又不浪费"的刻度。时间基换算对账（复用第 3 章体检数据）：视频 76800 × (1/12800) = 6.0 秒；音频 264600 × (1/44100) = 6.0 秒——两条流、两种刻度，算出的时长严丝合缝。这就是分数时间基的威力。ffprobe 概览里的三个"基"各有分工：</p>
+
+  <table>
+    <tr><th>缩写</th><th>全称含义</th><th>sample4.mp4 实测</th><th>说明</th></tr>
+    <tr><td>tbn</td><td>容器时间基（time base numerator）</td><td>12800（刻度 1/12800 秒）</td><td>PTS/DTS 的实际刻度，由封装器决定（4.5 节实测）</td></tr>
+    <tr><td>tbr</td><td>帧率基准（time base rate）</td><td>25</td><td>每秒约多少帧，FFmpeg 从码流推算</td></tr>
+    <tr><td>tbc</td><td>编码层时间基（codec）</td><td>概览不打印</td><td>解码器内部帧刻度，与容器刻度解耦</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>默认输出行 "25 fps, 25 tbr, 12800 tbn" 里三个数各管一层：fps/tbr 是帧率视角，tbn 是时间戳刻度。凡是"第几帧在什么时刻"的问题，先问刻度——刻度是 1/12800 还是 1/1000，算出来的秒数完全不同。别拿浮点秒当时间戳：API 层全是整数刻度 + AVRational。</p>
+  </div>
+
+  <!-- ========== 4.5 容器决定时间基：同一码流三个容器 ========== -->
+  <h2>4.5 容器决定时间基：同一码流三个容器</h2>
+
+  <p>关键问题：time_base 到底是谁定的？是编码器吗？做个对照实验——同一份 sample4.mp4，用 <code>-c copy</code> 转封装（说人话：不重新编码，码流的字节原样搬进新容器）成 MKV 和 TS，然后探测时间基：</p>
+
+  <pre><code><span class="fn">ffmpeg</span> <span class="param">-y -i sample4.mp4 -c copy</span> sample4.mkv
+<span class="fn">ffmpeg</span> <span class="param">-y -i sample4.mp4 -c copy</span> sample4.ts
+<span class="cmt"># 输出尾部（真实）：frame= 150 ... Lsize= 253KiB / 296KiB（转封装极快，无重编码）</span></code></pre>
+
+  <pre><code><span class="kw">for</span> f <span class="kw">in</span> sample4.mp4 sample4.mkv sample4.ts; <span class="kw">do</span>
+  <span class="kw">echo</span> <span class="str">"-- $f"</span>
+  <span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries stream=time_base -of default=noprint_wrappers=1</span> <span class="str">"$f"</span>
+<span class="kw">done</span>
+<span class="cmt"># 输出（真实）：</span>
+-- sample4.mp4
+time_base=<span class="num">1/12800</span>
+-- sample4.mkv
+time_base=<span class="num">1/1000</span>
+-- sample4.ts
+time_base=<span class="num">1/90000</span>
+<span class="cmt"># 默认输出行里的 tbn（真实）：
+#   mp4: 25 fps, 25 tbr, 12800 tbn
+#   mkv: 25 fps, 25 tbr, 1k tbn
+#   ts : 25 fps, 25 tbr, 90k tbn</span></code></pre>
+
+  <p>同一个 h264 码流，字节一个没变，时间基从 1/12800 → 1/1000 → 1/90000。结论：<strong>时间基由容器（封装器）决定</strong>——MKV 规范用毫秒刻度（1/1000），MPEG-TS 用广播电视行业的 90 kHz 刻度（1/90000），MP4 家族按需选细刻度。所以第 3 章 sample.mp4 的 12800 tbn 不是偶然，是 MP4 容器的选择。再做一次反证：把 sample4.ts 转封装回 mp4——</p>
+
+  <pre><code><span class="fn">ffmpeg</span> <span class="param">-y -i sample4.ts -c copy</span> back.mp4
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries stream=time_base -of default=noprint_wrappers=1</span> back.mp4
+<span class="cmt"># 输出（真实）：time_base=1/90000</span></code></pre>
+
+  <p>反证结果更有意思：ts 转回 mp4，time_base 仍是 1/90000——MP4 封装器在流拷贝时<strong>沿用输入流刻度</strong>以保住精度，而不是强制换成 12800。所以准确的说法是：时间基是封装器写时间戳时选的刻度——有的容器强制规范刻度（MKV/TS），有的容器沿用输入（MP4 拷贝）；直接编码时，MP4 封装器会为帧率挑一个细刻度（25 fps → 12800）。重封装时 FFmpeg 内部干的活，就是把每个包的时间戳从旧刻度换算到新刻度——这个换算函数 <code>av_packet_rescale_ts</code> 是第 11 章丢帧排错的钥匙，4.6 节先亮个相。</p>
+
+  <div class="warning">
+    <p><strong>注意</strong>：混流时各流刻度天生不同（视频 1/12800、音频 1/44100），播放器做音画同步必须换算；任何"时间戳对不上"的错乱，先查刻度。另外，MKV 的 duration_ts 是 N/A（ffprobe 查不到）、时长显示 6.023 秒 vs MP4 的 6.00 秒——容器对"时长"的存储方式也不一样。这同样是容器差异，不是 bug。</p>
+  </div>
+
+  <!-- ========== 4.6 PTS 与 DTS：解码顺序 vs 显示顺序 ========== -->
+  <h2>4.6 PTS 与 DTS：解码顺序 vs 显示顺序</h2>
+
+  <p>B 帧埋的雷现在引爆。播放器要干两件事：<strong>解码</strong>（按依赖关系）和<strong>显示</strong>（按时间顺序）。I 帧先解码才能给 P 帧当参考，P 帧先解码才能给 B 帧当参考——但显示顺序里 B 帧在 P 帧前面。两件事顺序不同，就需要两个时间戳：<strong>DTS</strong>（decode timestamp，解码时刻，说人话：解码器按这个顺序开工）和 <strong>PTS</strong>（presentation timestamp，显示时刻，说人话：画面按这个顺序上屏）。实测看包（真实输出，csv 四列 = pts,dts,时长,flags，K 打头表示关键帧）：</p>
+
+  <pre><code><span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries packet=pts_time,dts_time,duration_time,flags -of csv=p=0</span> sample4.mp4
+<span class="cmt"># 输出（真实，前 8 个视频包）：</span>
+<span class="num">0.000000</span>,<span class="num">-0.080000</span>,<span class="num">0.040000</span>,K__
+<span class="num">0.160000</span>,<span class="num">-0.040000</span>,<span class="num">0.040000</span>,___
+<span class="num">0.080000</span>,<span class="num">0.000000</span>,<span class="num">0.040000</span>,___
+<span class="num">0.040000</span>,<span class="num">0.040000</span>,<span class="num">0.040000</span>,___
+<span class="num">0.120000</span>,<span class="num">0.080000</span>,<span class="num">0.040000</span>,___
+<span class="num">0.240000</span>,<span class="num">0.120000</span>,<span class="num">0.040000</span>,___
+<span class="num">0.200000</span>,<span class="num">0.160000</span>,<span class="num">0.040000</span>,___
+<span class="num">0.320000</span>,<span class="num">0.200000</span>,<span class="num">0.040000</span>,___</code></pre>
+
+  <p>第一列 pts 是显示顺序：0.00 → 0.04 → 0.08 → 0.12 → 0.16……（正是 4.2 节的 I B B B P 序列）；第二列 dts 是解码顺序：-0.08 → -0.04 → 0.00 → 0.04 → 0.08……<strong>包在文件里的顺序就是 dts 顺序</strong>。第一个包（I 帧，pts 0.00）的 dts 是 -0.08：因为显示序第 2~4 位的 B 帧（pts 0.04 / 0.08 / 0.12）都要参考后面的帧，解码器得先把 I 帧和后续帧解出来等它们，解码时钟被迫从 0 秒之前就开始干活——这就是第 3 章"第一个包 dts=-0.080000"的完整解释：<strong>负 dts 是 B 帧重排的正常现象，不是文件坏了</strong>。两条时间轴对照：</p>
+
+  <pre><code><span class="cmt"># 文件里的包顺序（= dts 升序 = 解码顺序）：</span>
+<span class="cmt">#   pts:  0.00 → 0.16 → 0.08 → 0.04 → 0.12 → 0.24 → 0.20 → 0.32 ...</span>
+<span class="cmt">#   dts: -0.08 → -0.04 → 0.00 → 0.04 → 0.08 → 0.12 → 0.16 → 0.20 ...</span>
+<span class="cmt"># 播放顺序（= pts 升序 = 显示顺序）：</span>
+<span class="cmt">#   pts:  0.00 → 0.04 → 0.08 → 0.12 → 0.16 → 0.20 → 0.24 → 0.32 ...</span>
+<span class="cmt"># 同一批包，两条时间轴；解码器按 dts 解，显示器按 pts 排。</span></code></pre>
+
+  <p>现在把 4.4 / 4.5 的刻度问题接上：换容器、进播放器、音画同步，到处都在做同一件事——把时间戳从一套刻度换算到另一套刻度。FFmpeg 的 C API 里，这个函数长这样（本机头文件原文）：</p>
+
+  <pre><code><span class="cmt"># /opt/homebrew/include/libavcodec/packet.h 第 930 行（真实）</span>
+<span class="kw">void</span> <span class="fn">av_packet_rescale_ts</span>(<span class="type">AVPacket</span> <span class="op">*</span>pkt, <span class="type">AVRational</span> tb_src, <span class="type">AVRational</span> tb_dst);</code></pre>
+
+  <p>tb_src 是当前刻度，tb_dst 是目标刻度，一调就把包的 pts/dts 全部换算过去。<strong>第 11 章排丢帧问题时，第一嫌疑永远是"时间基换算错"</strong>：容器换了刻度、demux 出来的包没 rescale、播放器时钟还按旧刻度读数——帧就丢了、音画就不同步了。本章这三块基石（容器、编码、时间基）就是到时候的排查地图。</p>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把三块基石串成一句话：<strong>容器决定怎么装（含时间戳刻度），编码决定怎么压（I/P/B 帧与 GOP），时间基决定怎么算时间（刻度 + 整数换算）</strong>。任何视频问题的排查，都从"这三层分别是什么、刻度是什么"开始——这就是第一性原理的用法。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：三层结构配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把下列对象归入三层结构之一，并为每个对象写一句话说明它在那一层的职责：① MP4；② H.264；③ I 帧；④ PTS。再回答：为什么同一条 h264 码流既能装进 .mp4 也能装进 .mkv？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 4.1 节的三层：容器管"怎么装"、编码管"怎么压"、帧与时间戳管"怎么组织画面、怎么计时"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① MP4 → 容器层（怎么装，档案袋）；② H.264 → 编码层（怎么压，压缩算法）；③ I 帧 → 帧层（一幅完整画面，压缩的最小单位）；④ PTS → 帧层的时间属性（这一帧什么时候显示）。容器与编码是正交的两个维度（解耦），所以同一码流可以装进任何支持它的容器——这就是「容器 ≠ 编码」。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：实测 GOP <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 <code>-g 30</code> 把 master.mp4（6 秒、25 fps、共 150 帧）重新编码成 gop30.mp4：先预测 I 帧的数量与位置，再用 4.3 节的统计命令实测验证，并和 <code>-g 50</code>（3 个 I 帧）对比。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>150 帧、每 30 帧一个关键帧：150 ÷ 30 = 5。验证用 <code>ffprobe ... -show_entries frame=pict_type -of csv=p=0 gop30.mp4 | grep -n "I"</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>预测 5 个 I 帧，位置在第 0 / 30 / 60 / 90 / 120 帧。实测（本机真实输出）：</p>
+          <pre><code><span class="fn">ffmpeg</span> <span class="param">-y -i master.mp4 -c:v libx264 -preset veryfast -crf 23 -g 30 -pix_fmt yuv420p -c:a copy</span> gop30.mp4
+<span class="fn">ffprobe</span> <span class="param">-v error -select_streams v:0 -show_entries frame=pict_type -of csv=p=0</span> gop30.mp4 <span class="op">|</span> <span class="fn">grep</span> <span class="param">-n</span> <span class="str">"I"</span>
+<span class="cmt"># 输出（真实）：1:I, 31:I 61:I 91:I 121:I</span></code></pre>
+          <p>grep 的行号是 1 基编号，即第 0 / 30 / 60 / 90 / 120 帧；全片统计 5 I + 51 P + 94 B = 150 帧。GOP 越短（-g 30 vs -g 50），I 帧越多，seek 越精准，文件也越大——权衡题没有标准答案，只有场景。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：时间基换算与反证 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>sample4.ts 的视频流 time_base=1/90000、duration_ts=540000：(a) 算出它的时长（秒）；(b) 把 sample4.ts 用 <code>-c copy</code> 转封装回 mp4，实测它的 time_base 变成多少？(c) 结合 4.5 节解释：时间基到底由谁决定？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>时长 = duration_ts × time_base（duration_ts 的单位是 1/90000 秒一格）。(b) 用 4.5 节的命令实测，别靠猜。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 540000 × (1/90000) = 6.0 秒。(b) 实测仍为 <code>time_base=1/90000</code>，不是 1/12800。(c) 时间基由<strong>封装器</strong>决定：MKV 强制 1/1000（毫秒）、TS 强制 1/90000（90 kHz 广播电视刻度）；MP4 在流拷贝时沿用输入流刻度以保精度（ts → mp4 仍是 1/90000），直接编码时才为帧率挑细刻度（25 fps → 12800）。所以"时间基是编码器定的"是错的——h264 码流本身没有时间基，刻度是容器层写时间戳时的选择。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：B 帧重排 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>已知 sample4.mp4 前 5 个视频包的 (pts, dts) 为：(0.00, -0.08)、(0.16, -0.04)、(0.08, 0.00)、(0.04, 0.04)、(0.12, 0.08)。(a) 写出解码顺序对应的 pts 序列；(b) 写出显示顺序对应的 pts 序列；(c) 解释为什么第一个包的 dts 是负的；(d) 如果播放器忽略 pts、直接按 dts 顺序显示画面，会发生什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>文件里的包顺序就是 dts 升序；显示顺序是 pts 升序。第一个包是 I 帧（flags=K__），它要等后面的 P 帧一起先解码。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 解码顺序（dts 升序）对应 pts：0.00 → 0.16 → 0.08 → 0.04 → 0.12，即 I → P → B → B → B；(b) 显示顺序（pts 升序）：0.00 → 0.04 → 0.08 → 0.12 → 0.16，即 I → B → B → B → P；(c) 前 3 个 B 帧要参考后面的 P 帧，P 帧又要参考 I 帧，解码器必须提前开工把 I、P 解出来，解码时钟从 0 秒之前开始，所以 I 帧的 dts = -0.08（负 dts 是 B 帧重排的正常现象）；(d) 画面会按"解码完成顺序"上屏，B 帧全部错位、画面乱序抖动，负 dts 时刻的画面也无法安排——所以播放器必须维护两条时间轴：按 dts 解码，按 pts 显示。日后排查丢帧/音画不同步，第一嫌疑就是时间戳在刻度换算（<code>av_packet_rescale_ts</code>）时被搞乱——第 11 章见。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

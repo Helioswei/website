@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第10章：编码器配置：参数设置的艺术 - FFmpeg 音视频实战</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/ffmpeg/chapter10.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第10章：编码器配置：参数设置的艺术 - FFmpeg 音视频实战",
+  "url": "https://aigcwei.cn/learn/ffmpeg/chapter10.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-ffmpeg" data-track="ffmpeg" data-chapter="10" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：编码器配置：参数设置的艺术</h1>
+  <p class="chapter-subtitle">上一章把编码器的门打开了——本章给编码器上参数：码率、采样率、声道布局、采样格式、时间基、全局头，每个参数设下去，数据流都会跟着变——真相，就藏在参数与产物的对应关系里</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：追踪数据流</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「真相只有一个。我不相信任何'应该'——你说设了 64k 码率，那就把产物拿 ffprobe 测给我看；你说时间基是 1/44100，那就去文件里把 time_base 翻出来。这一章我们逐个参数设下去、逐个追到产物里验证。参数是原因，文件属性是结果，中间的因果关系一旦串起来，就再也没有玄学参数。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 参数总览：编码器上下文 ========== -->
+  <h2>10.1 参数总览：编码器上下文的"遥控器"</h2>
+
+  <p>上一章（第 9 章）我们走完了三步：<code>avformat_alloc_output_context2</code> 创建输出上下文、<code>avformat_new_stream</code> 在容器里创建流、<code>avcodec_find_encoder</code> 找到编码器。但编码器拿到的是一张"白纸"——它还不知道你要多高的码率、什么采样率、几个声道。这些信息都填在<strong>编码器上下文</strong>（AVCodecContext，编码器的"参数仓库"，所有配置都存这里）里，填完之后再调用 <code>avcodec_open2</code> 正式打开编码器。说人话：<strong>AVCodecContext 就是编码器的遥控器，本章拧的每个旋钮都在它上面</strong>。</p>
+
+  <p>素材笔记《ffmpeg-编码的步骤》把音频编码流程总结为七步，其中第 3 到第 7 步全是本章的主场：第 3 步设置编码上下文（bit_rate / sample_rate / channel_layout / channels / sample_fmt / time_base 六件套）、第 4 步设置 GLOBAL_HEADER 标志、第 5 步 avcodec_open2 打开编码器、第 6 步清空 codec_tag、第 7 步把参数从上下文拷贝到流的 codecpar。先看素材第 3 步的原始代码（2019 年的写法，注意其中的旧 API，后面我们会逐项升级）：</p>
+
+  <pre><code><span class="cmt">// 素材笔记：第 3 步，设置编码上下文（2019 年旧 API 写法）</span>
+enc_ctx = <span class="fn">avcodec_alloc_context3</span>(encoder);
+<span class="kw">if</span> (!enc_ctx){
+    <span class="fn">av_log</span>();
+}
+enc_ctx<span class="op">-&gt;</span>bit_rate = <span class="num">64000</span>;          <span class="cmt">// 目标码率：64 kbit/s</span>
+enc_ctx<span class="op">-&gt;</span>sample_rate = <span class="num">44100</span>;      <span class="cmt">// 采样率：44.1 kHz</span>
+enc_ctx<span class="op">-&gt;</span>channel_layout = <span class="num">2</span>;      <span class="cmt">// 这个可以根据输入来设置</span>
+enc_ctx<span class="op">-&gt;</span>channels = <span class="fn">av_get_channel_layout_nb_channels</span>(enc_ctx<span class="op">-&gt;</span>channel_layout);
+enc_ctx<span class="op">-&gt;</span>sample_fmt = encoder<span class="op">-&gt;</span>sample_fmts[<span class="num">0</span>];  <span class="cmt">// 编码器支持的第一个采样格式</span>
+<span class="type">AVRational</span> time_base = {<span class="num">1</span>, enc_ctx<span class="op">-&gt;</span>sample_rate};
+enc_ctx<span class="op">-&gt;</span>time_base = time_base;</code></pre>
+
+  <p>这段代码每行都是一个"旋钮"，后面 10.2 到 10.4 我们会逐个拆解。先把这张参数总览表记住——它也是本章的地图：</p>
+
+  <p>为了把"本章管哪几步"钉死，先把素材的七步流程画出来——第 1、2 步是第 9 章的活儿（创建上下文、创建流、找编码器），第 3 到第 7 步就是本章的战场。这七步是音频编码的"标准流程骨架"，后面每一章都会在这根骨架上做文章：</p>
+
+  <pre><code><span class="cmt"># 素材《ffmpeg-编码的步骤》：音频编码七步流程（本章主战场 = 第 3-7 步）</span>
+<span class="num">1</span>. <span class="fn">avformat_alloc_output_context2</span>(<span class="op">&amp;</span>ofmt_ctx, <span class="kw">NULL</span>, <span class="kw">NULL</span>, filename);  <span class="cmt"># 第 9 章：输出上下文</span>
+<span class="num">2</span>. <span class="fn">avformat_new_stream</span>(ofmt_ctx, <span class="kw">NULL</span>) + <span class="fn">avcodec_find_encoder</span>(<span class="param">AV_CODEC_ID_AAC</span>); <span class="cmt"># 第 9 章：流 + 编码器</span>
+<span class="num">3</span>. 设置 enc_ctx 参数：bit_rate / sample_rate / ch_layout / sample_fmt / time_base;  <span class="cmt"># 本章 10.2-10.4</span>
+<span class="num">4</span>. <span class="kw">if</span> (封装器要全局头) enc_ctx<span class="op">-&gt;</span>flags <span class="op">|=</span> <span class="param">AV_CODEC_FLAG_GLOBAL_HEADER</span>;    <span class="cmt"># 本章 10.5</span>
+<span class="num">5</span>. <span class="fn">avcodec_open2</span>(enc_ctx, encoder, <span class="kw">NULL</span>);          <span class="cmt"># 本章 10.6：打开编码器</span>
+<span class="num">6</span>. audioStream<span class="op">-&gt;</span>codecpar<span class="op">-&gt;</span>codec_tag = <span class="num">0</span>;         <span class="cmt"># 本章 10.6：交还封装器选 tag</span>
+<span class="num">7</span>. <span class="fn">avcodec_parameters_from_context</span>(audioStream<span class="op">-&gt;</span>codecpar, enc_ctx);  <span class="cmt"># 本章 10.6：参数落盘</span></code></pre>
+
+  <table>
+    <tr><th>参数</th><th>说人话</th><th>设下去数据流怎么变</th></tr>
+    <tr><td><code>bit_rate</code></td><td>目标码率：每秒允许多少比特</td><td>决定压缩力度，VBR 下是目标不是承诺</td></tr>
+    <tr><td><code>sample_rate</code></td><td>采样率：每秒采多少个样本点</td><td>决定音频的时间精度与频响上限</td></tr>
+    <tr><td><code>channel_layout</code> / <code>ch_layout</code></td><td>声道布局：单声道 / 立体声 / 5.1</td><td>决定输出几条声道、每帧多少样本</td></tr>
+    <tr><td><code>sample_fmt</code></td><td>采样格式：每个样本怎么存</td><td>必须取编码器支持列表，否则 open 失败</td></tr>
+    <tr><td><code>time_base</code></td><td>时间基：时间戳的最小刻度</td><td>决定帧时间戳的单位，音频跟采样率走</td></tr>
+    <tr><td><code>flags | GLOBAL_HEADER</code></td><td>全局头标志：配置放文件头</td><td>部分封装器（mp4）要求，ADTS 不需要</td></tr>
+    <tr><td><code>codec_tag</code> / <code>codecpar</code></td><td>流的参数副本</td><td>编码器参数最终要拷进流的 codecpar</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>素材代码的 <code>channel_layout = 2</code> 是旧 API 的写法，而且位掩码值其实不规范（真正的立体声位掩码是 0x3）——素材作者是把 2 当成"2 声道"在用。现行 API 已经用 <code>AVChannelLayout ch_layout</code> 取代了 <code>channel_layout</code> + <code>channels</code> 两个旧字段，10.3 节我们做完整的新旧对照。记住柯南的规矩：<strong>代码是证据，素材是线索，真相以本机实测 + 现行头文件为准</strong>。</p>
+  </div>
+
+  <!-- ========== 10.2 bit_rate 与 sample_rate：目标不是承诺 ========== -->
+  <h2>10.2 bit_rate 与 sample_rate：目标不是承诺</h2>
+
+  <p><strong>bit_rate</strong>（目标码率）是压缩的"预算"：<code>enc_ctx-&gt;bit_rate = 64000</code> 表示希望音频流平均每秒花 64000 比特。但柯南要提醒你——第 2 章命令行实测已经证明：<strong>-b:v 是目标、不是承诺</strong>（500k 目标实测只有 194k）。C API 里 <code>bit_rate</code> 的语义一模一样：它告诉编码器"尽量往这个码率靠"，但最终花多少由编码器的码率控制算法按内容复杂度决定。素材选 64000（64 kbit/s）是音频常见档位：语音够用、音乐偏低，128k 才是音乐级。</p>
+
+  <p><strong>sample_rate</strong>（采样率）是"每秒采多少个样本点"，素材设 44100 是 CD 级标准（44.1 kHz）。它决定两件事：音频能表示的最高频率（奈奎斯特定理：采样率的一半）和每秒钟要处理的样本数。注意它和 bit_rate 是两码事：采样率管"采多密"，码率管"存多省"。音频编码器通常对采样率有硬性支持列表——不是随便什么值都收，10.4 节我们会用 <code>ffmpeg -h encoder=aac</code> 把 aac 编码器的支持采样率列表挖出来。</p>
+
+  <pre><code><span class="cmt"># 素材第 3 步的码率与采样率（C API 视角）</span>
+enc_ctx<span class="op">-&gt;</span>bit_rate = <span class="num">64000</span>;       <span class="cmt">// 目标码率 64 kbit/s</span>
+enc_ctx<span class="op">-&gt;</span>sample_rate = <span class="num">44100</span>;   <span class="cmt">// 采样率 44.1 kHz</span></code></pre>
+
+  <pre><code><span class="cmt"># 命令行等价写法 + 实测：同一段 5 秒正弦音，-b:a 64k 与 -b:a 128k（本机 ffmpeg 8.1.1 真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-hide_banner</span> <span class="param">-y</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">sine=frequency=440:duration=5</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="param">-b:a</span> <span class="num">64k</span> <span class="str">out64.m4a</span>
+<span class="cmt"># 实测尾输出：size=41KiB time=00:00:05.00 bitrate= 67.5kbits/s  （Qavg: 416.694）</span>
+<span class="kw">ffmpeg</span> <span class="param">-hide_banner</span> <span class="param">-y</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">sine=frequency=440:duration=5</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="param">-b:a</span> <span class="num">128k</span> <span class="str">out128.m4a</span>
+<span class="cmt"># 实测尾输出：size=79KiB time=00:00:05.00 bitrate= 128.9kbits/s  （Qavg: 2171.543）</span></code></pre>
+
+  <p>用 ffprobe 复查两个产物的真实码率（<code>bit_rate</code> 字段）：64k 目标实测流码率 64495（约 64.5 kbit/s）、128k 目标实测 125608（约 125.6 kbit/s）。和视频的 500k→194k 大缩水不同，<strong>AAC 对简单内容能贴得比较近</strong>——但依然是"目标"不是"承诺"：64k 那档实测甚至略超了目标（67.5 vs 64），因为 aac 编码器会为保持音质微调。这就是柯南式的验证：目标写在代码里，真相在 ffprobe 的输出里。</p>
+
+  <table>
+    <tr><th>目标（代码 / 命令行）</th><th>实测流码率（ffprobe）</th><th>实测格式码率</th><th>产物大小</th></tr>
+    <tr><td><code>-b:a 64k</code></td><td>64495（≈64.5k）</td><td>67475</td><td>42172 字节</td></tr>
+    <tr><td><code>-b:a 128k</code></td><td>125608（≈125.6k）</td><td>128872</td><td>80545 字节</td></tr>
+    <tr><td>第 2 章视频 <code>-b:v 500k</code></td><td>194604（≈194k）</td><td>—</td><td>170921 字节</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>bit_rate</code> 是"目标码率"不是"上限"。对简单内容（正弦音、彩条）编码器会低于目标省钱；对复杂内容（音乐、电影画面）它会逼近甚至超过目标。想要"文件大小硬性可控"（比如直播推流限码率），需要 CBR 模式的参数配合（<code>-b:a</code> + <code>-minrate</code>/<code>-maxrate</code> + <code>-bufsize</code>，或编码器专属选项）；想要"音质优先、大小随缘"，用质量参数。第 2 章 CRF 那一课，在音频 C API 里依然适用。</p>
+  </div>
+
+  <!-- ========== 10.3 channel_layout：从旧位掩码到 AVChannelLayout ========== -->
+  <h2>10.3 channel_layout：从旧位掩码到 AVChannelLayout</h2>
+
+  <p>素材第 3 步的 <code>enc_ctx-&gt;channel_layout = 2;</code> 是 <strong>旧 API</strong>：channel_layout 是一个 64 位整数位掩码，每个 bit 代表一条声道（比如 0x1 是左声道、0x2 是右声道），再用 <code>av_get_channel_layout_nb_channels()</code> 从掩码反推声道数。这套 API 从 FFmpeg 6.0 起被废弃，到 8.x 版本里 <code>AVCodecContext</code> 上的 <code>channel_layout</code> 和 <code>channels</code> 两个字段已经<strong>整个移除</strong>，只剩一个 <code>AVChannelLayout ch_layout</code> 结构体字段。说人话：<strong>旧 API 用"位掩码"表达声道，新 API 用"结构体"表达声道，素材那两行代码在新版上直接编译不过</strong>。</p>
+
+  <p>现行 API 的正确写法是用 <code>av_channel_layout_default()</code> 按<strong>声道数</strong>初始化默认布局——素材想表达"2 声道"，就传 2：</p>
+
+  <pre><code><span class="cmt">// 素材旧 API：channel_layout 位掩码 + channels 辅助字段（FFmpeg 8.x 已移除）</span>
+enc_ctx<span class="op">-&gt;</span>channel_layout = <span class="num">2</span>;   <span class="cmt">// 旧字段：位掩码（素材写成 2 并不规范，见下方提示）</span>
+enc_ctx<span class="op">-&gt;</span>channels = <span class="fn">av_get_channel_layout_nb_channels</span>(enc_ctx<span class="op">-&gt;</span>channel_layout);</code></pre>
+
+  <pre><code><span class="cmt">// 现行 API：AVChannelLayout 结构体 + av_channel_layout_default（本机头文件核实）</span>
+<span class="fn">av_channel_layout_default</span>(<span class="op">&amp;</span>enc_ctx<span class="op">-&gt;</span>ch_layout, <span class="num">2</span>);  <span class="cmt">// 2 声道，默认立体声布局</span>
+<span class="cmt">// 之后读声道数：enc_ctx-&gt;ch_layout.nb_channels（现在是结构体字段，不再是函数）</span></code></pre>
+
+  <p>声道布局怎么"落地"到文件里？实测给你看：上面 10.2 生成的两个文件是 <strong>mono 单声道</strong>——因为 lavfi 的 sine 虚拟源默认只输出单声道。加上 <code>-ac 2</code> 强制转成双声道后，ffprobe 的 <code>channels=2</code>、<code>channel_layout=stereo</code> 就出现了。这正是柯南要追的数据流：<strong>代码里设什么布局，编码器就产出什么声道，容器里就记录什么布局，ffprobe 就能读出什么布局</strong>——一条链，环环相扣：</p>
+
+  <pre><code><span class="cmt"># 实测：同一段 sine，默认单声道 vs -ac 2 强制立体声（本机真实执行）</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">a:0</span> <span class="param">-show_entries</span> <span class="param">stream=channels,channel_layout</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out64.m4a</span>
+<span class="cmt"># 实测输出：channels=1  channel_layout=mono</span>
+<span class="kw">ffmpeg</span> <span class="param">-hide_banner</span> <span class="param">-y</span> <span class="param">-f</span> <span class="fn">lavfi</span> <span class="param">-i</span> <span class="fn">sine=frequency=440:duration=5</span> <span class="param">-ac</span> <span class="num">2</span> <span class="param">-c:a</span> <span class="fn">aac</span> <span class="param">-b:a</span> <span class="num">64k</span> <span class="str">out64st.m4a</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">a:0</span> <span class="param">-show_entries</span> <span class="param">stream=channels,channel_layout</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out64st.m4a</span>
+<span class="cmt"># 实测输出：channels=2  channel_layout=stereo</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>素材的 <code>channel_layout = 2</code> 其实是把"2 声道"塞进了位掩码字段——而真正的立体声位掩码是 <code>AV_CH_LAYOUT_STEREO = 0x3</code>（左声道 0x1 + 右声道 0x2）。旧 API 时代很多示例代码都这么"随手写"，恰好能跑是因为编码器常常宽容处理。现行 <code>av_channel_layout_default(&amp;ch_layout, 2)</code> 的参数就是<strong>声道数</strong>，语义清晰不会再产生歧义——这也是新版 API 更不容易写错的地方。</p>
+  </div>
+
+  <!-- ========== 10.4 sample_fmt 与 time_base：跟编码器走、跟采样率走 ========== -->
+  <h2>10.4 sample_fmt 与 time_base：跟编码器走、跟采样率走</h2>
+
+  <p><strong>sample_fmt</strong>（采样格式）描述"每个音频样本在内存里怎么存"：整型还是浮点、8 位还是 32 位、是否交错存储。素材的写法 <code>enc_ctx-&gt;sample_fmt = encoder-&gt;sample_fmts[0]</code> 是教科书级操作：<strong>不要自己拍脑袋选格式，直接取编码器支持列表的第一个</strong>。每个编码器都有自己擅长的格式——aac 编码器只支持 <code>fltp</code>（float planar，32 位浮点、按声道平面存储），libmp3lame 则支持 <code>s16p</code> 等整型格式。设一个编码器不支持的格式，<code>avcodec_open2</code> 会直接返回错误。</p>
+
+  <p>柯南的取证方式：用 <code>ffmpeg -h encoder=aac</code> 直接问编码器"你支持什么"，本机实测输出里 <code>Supported sample formats: fltp</code> 一行就是答案（注意：<code>encoder-&gt;sample_fmts</code> 字段在新版里标记为废弃，官方推荐改用 <code>avcodec_get_supported_config()</code> 查询——但"取支持列表第一个"的思路完全不变）。同一份输出还列出了 <code>Supported sample rates</code>：96000 / 88200 / 64000 / 48000 / 44100 / 32000 / 24000 / 22050 / 16000 / 12000 / 11025 / 8000 / 7350——全是音频标准采样率，素材设的 44100 就在其中：</p>
+
+  <pre><code><span class="cmt"># 实测：ffmpeg -h encoder=aac（本机 ffmpeg 8.1.1 真实输出，节选关键行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-hide_banner</span> <span class="param">-h</span> <span class="param">encoder=aac</span>
+<span class="cmt"># Encoder aac [AAC (Advanced Audio Coding)]:</span>
+<span class="cmt">#     General capabilities: dr1 delay small</span>
+<span class="cmt">#     Supported sample rates: 96000 88200 64000 48000 44100 32000 24000 22050 16000 12000 11025 8000 7350</span>
+<span class="cmt">#     Supported sample formats: fltp</span>
+<span class="cmt"># AAC encoder AVOptions: -aac_coder / -aac_ms / -aac_is / -aac_pns / -aac_tns / -aac_pce ...</span></code></pre>
+
+  <p><strong>time_base</strong>（时间基）是时间戳的最小刻度，一个 <code>AVRational</code> 有理数（分子/分母秒）。素材写 <code>{1, enc_ctx-&gt;sample_rate}</code> 即 1/44100 秒——<strong>音频的时间基跟着采样率走</strong>：既然 1 秒有 44100 个采样点，把 1 秒切成 44100 份，每个采样点的"时间戳"就是一个整数，天然对齐、无舍入误差。验证：ffprobe 读 out64.m4a 的音频流，<code>time_base=1/44100</code>——代码里设的 {1, sample_rate} 原样落进了文件。</p>
+
+  <pre><code><span class="cmt"># 素材第 3 步的 sample_fmt 与 time_base（现行写法）</span>
+enc_ctx<span class="op">-&gt;</span>sample_fmt = encoder<span class="op">-&gt;</span>sample_fmts[<span class="num">0</span>];             <span class="cmt">// 取编码器支持的第一个采样格式（fltp）</span>
+<span class="type">AVRational</span> time_base = {<span class="num">1</span>, enc_ctx<span class="op">-&gt;</span>sample_rate};    <span class="cmt">// 时间基 = 1/采样率</span>
+enc_ctx<span class="op">-&gt;</span>time_base = time_base;</code></pre>
+
+  <pre><code><span class="cmt"># 实测：ffprobe 读回文件里的 time_base（本机真实输出）</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">a:0</span> <span class="param">-show_entries</span> <span class="param">stream=time_base,sample_rate,codec_name</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out64.m4a</span>
+<span class="cmt"># 实测输出：</span>
+<span class="cmt"># time_base=1/44100   </span><span class="ann">&lt;- 代码里设的 {1, sample_rate}，原样落地</span>
+<span class="cmt"># sample_rate=44100</span>
+<span class="cmt"># codec_name=aac</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>采样格式和采样率都是"编码器说了算"的参数：<strong>先查编码器支持什么，再设什么</strong>。养成两个取证习惯：写代码前先跑 <code>ffmpeg -h encoder=&lt;名字&gt;</code> 看 Supported 列表；代码里用 <code>encoder-&gt;sample_fmts[0]</code>（或新版 <code>avcodec_get_supported_config()</code>）取第一个。第 11 章讲 send/receive 循环时你会看到：frame 的采样格式必须和这里设的 sample_fmt 一致，否则编码器直接拒收。</p>
+  </div>
+
+  <!-- ========== 10.5 GLOBAL_HEADER：extradata 与封装器的约定 ========== -->
+  <h2>10.5 GLOBAL_HEADER：extradata 与封装器的约定</h2>
+
+  <p>素材第 4 步有一句看着不起眼的判断：<code>if (ofmt_ctx-&gt;oformat-&gt;flags &amp; AVFMT_GLOBALHEADER)</code>——如果封装器（muxer，负责把编码好的流打包进容器文件的组件）想要"全局头"，就给编码器也加上 <code>AV_CODEC_FLAG_GLOBAL_HEADER</code> 标志。什么是全局头？编码器在正式输出帧数据之前，会先产出一小段<strong>解码器配置数据</strong>（extradata，编码器私有的初始化信息，比如 AAC 的 AudioSpecificConfig），这段数据可以放在文件头部（全局头），也可以塞进每个包自己的头里（局部头）。<strong>mp4/mov 这类容器要求在文件头集中存一份配置，ADTS 流式格式则每个包自带配置</strong>。</p>
+
+  <p>柯南式验证：同一段 AAC 音频，分别封装成 m4a（mp4 家族）和裸 ADTS（.aac），用 ffprobe 查 extradata_size：m4a 里有 5 字节 extradata（AudioSpecificConfig），而 ADTS 文件查不到 extradata——因为它的配置写进了每个 ADTS 包头的同步字（0xFFF）之后。再用 hexdump 看文件头：m4a 开头是 ftyp box（容器元数据），.aac 开头是 <code>fff1 5040</code>（ADTS 同步字）——两种封装哲学一目了然：</p>
+
+  <pre><code><span class="cmt"># 素材第 4 步：封装器要全局头，就给编码器也加上（现行写法）</span>
+<span class="kw">if</span> (ofmt_ctx<span class="op">-&gt;</span>oformat<span class="op">-&gt;</span>flags <span class="op">&amp;</span> <span class="param">AVFMT_GLOBALHEADER</span>)
+    enc_ctx<span class="op">-&gt;</span>flags <span class="op">|=</span> <span class="param">AV_CODEC_FLAG_GLOBAL_HEADER</span>;</code></pre>
+
+  <pre><code><span class="cmt"># 实测：m4a 与 ADTS 的 extradata 对比（本机 ffmpeg 8.1.1 真实执行）</span>
+<span class="kw">ffmpeg</span> <span class="param">-hide_banner</span> <span class="param">-y</span> <span class="param">-i</span> <span class="str">out64.m4a</span> <span class="param">-c:a</span> <span class="fn">copy</span> <span class="str">out64.aac</span>   <span class="cmt"># 裸 ADTS 流</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">a:0</span> <span class="param">-show_entries</span> <span class="param">stream=extradata_size</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out64.m4a</span>
+<span class="cmt"># 实测输出：extradata_size=5    </span><span class="ann">&lt;- mp4 家族把 AAC 配置存进文件头</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">a:0</span> <span class="param">-show_entries</span> <span class="param">stream=extradata_size</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out64.aac</span>
+<span class="cmt"># 实测输出：（空）              </span><span class="ann">&lt;- ADTS 无 extradata，配置随每个包走</span></code></pre>
+
+  <p>为什么 mp4 要全局头而 ADTS 不要？因为 mp4 的 moov 元数据区需要一份"解码器配置快照"，播放器先读头、再初始化解码器、然后才从头播放；而 ADTS 是流式格式（直播、广播场景），接收端可能从任意位置切入，所以每个 ADTS 包头都自带同步字 + 采样率 + 声道等配置，随时能接上。素材里"如果封装器要就加上"这句判断，正是为了让同一套编码代码能适配两种哲学——<strong>参数不是写死的，是跟着封装器走的</strong>。</p>
+
+  <table>
+    <tr><th>封装格式</th><th>需要全局头？</th><th>配置存在哪</th><th>典型场景</th></tr>
+    <tr><td>mp4 / mov / m4a</td><td>需要（AVFMT_GLOBALHEADER）</td><td>文件头（extradata，实测 5 字节）</td><td>点播文件</td></tr>
+    <tr><td>ADTS（裸 .aac）</td><td>不需要</td><td>每个 ADTS 包自带</td><td>流式传输</td></tr>
+    <tr><td>flac / ogg</td><td>视实现而定</td><td>各自的头区</td><td>视场景</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：不设 GLOBAL_HEADER 直接写 mp4 会怎样？实测中 ffmpeg 命令行会自动帮你补上（命令行对 mp4 默认开启），但 C API 里如果漏了这句判断，写 mp4 时编码器会把配置写进每个关键帧/包，产物要么体积膨胀、要么被封装器拒绝或播放器无法解码。素材的判断写法就是标准防御姿势：<strong>先问封装器要不要，再决定加不加</strong>。反过来，给 ADTS 加全局头也不是错误——只是没必要。</p>
+  </div>
+
+  <!-- ========== 10.6 codec_tag 与 avcodec_parameters_from_context：参数落盘 ========== -->
+  <h2>10.6 codec_tag 与 avcodec_parameters_from_context：参数落盘</h2>
+
+  <p>素材第 5 到第 7 步是收尾三连：<strong>第 5 步</strong> <code>avcodec_open2(enc_ctx, encoder, NULL)</code>——把遥控器上的所有参数交给编码器，编码器校验参数、初始化内部状态（这一步之后参数基本只读）；<strong>第 6 步</strong> <code>audioStream-&gt;codecpar-&gt;codec_tag = 0</code>——清空流的 codec_tag，让封装器自己去选合适的四字符标签（fourcc，容器里标识编码格式的短码）；<strong>第 7 步</strong> <code>avcodec_parameters_from_context(audioStream-&gt;codecpar, enc_ctx)</code>——把编码器上下文里的参数（codec_id、bit_rate、sample_rate、ch_layout、extradata……）整体拷贝到流的 <code>codecpar</code>（AVCodecParameters，流的"参数卡片"，封装器写容器头部时读的就是它）。</p>
+
+  <p>为什么需要第 7 步的拷贝？因为 <strong>AVCodecContext 属于编码器，AVCodecParameters 属于容器流</strong>——编码器用前者干活，封装器用后者写文件头，两者是两套对象。不拷贝，容器就不知道这条流是什么编码、什么采样率，写出来的文件缺头、无法播放。素材把这步放在最后（打开编码器之后）是合理的：此时 enc_ctx 里的参数已全部确定（部分由 avcodec_open2 补全默认值），拷出来的 codecpar 才是完整真相。而 ffprobe 读到的 <code>bit_rate</code>、<code>sample_rate</code>、<code>channels</code>、<code>time_base</code>——全都来自这条流的 codecpar：</p>
+
+  <pre><code><span class="cmt">// 素材第 5-7 步：打开编码器 → 清空 codec_tag → 参数拷入流的 codecpar（现行写法）</span>
+ret = <span class="fn">avcodec_open2</span>(enc_ctx, encoder, <span class="kw">NULL</span>);      <span class="cmt">// 第 5 步：正式打开编码器</span>
+<span class="kw">if</span> (ret <span class="op">&lt;</span> <span class="num">0</span>) {
+    <span class="fn">av_log</span>();                                   <span class="cmt">// 参数不合格会在这里失败</span>
+}
+audioStream<span class="op">-&gt;</span>codecpar<span class="op">-&gt;</span>codec_tag = <span class="num">0</span>;              <span class="cmt">// 第 6 步：交还封装器自动选择</span>
+ret = <span class="fn">avcodec_parameters_from_context</span>(audioStream<span class="op">-&gt;</span>codecpar, enc_ctx);  <span class="cmt">// 第 7 步：参数落盘</span></code></pre>
+
+  <pre><code><span class="cmt"># 实测：ffprobe 从 codecpar 读回整张"参数卡片"（本机真实输出，完整字段）</span>
+<span class="kw">ffprobe</span> <span class="param">-v</span> <span class="param">error</span> <span class="param">-select_streams</span> <span class="param">a:0</span> <span class="param">-show_entries</span> <span class="param">stream=codec_name,codec_long_name,profile,bit_rate,sample_rate,channels,channel_layout,time_base</span> <span class="param">-of</span> <span class="param">default=noprint_wrappers=1</span> <span class="str">out64.m4a</span>
+<span class="cmt"># 实测输出（完整）：</span>
+<span class="cmt"># codec_name=aac</span>
+<span class="cmt"># codec_long_name=AAC (Advanced Audio Coding)</span>
+<span class="cmt"># profile=LC</span>
+<span class="cmt"># sample_rate=44100</span>
+<span class="cmt"># channels=1</span>
+<span class="cmt"># channel_layout=mono</span>
+<span class="cmt"># time_base=1/44100</span>
+<span class="cmt"># bit_rate=64495</span></code></pre>
+
+  <p>把 10.2 到 10.6 串起来，就是完整的"参数 → 数据流 → 文件属性"证据链：代码里设 <code>bit_rate = 64000</code>、<code>sample_rate = 44100</code>、声道布局 stereo、<code>sample_fmt = fltp</code>、<code>time_base = {1, 44100}</code>，加上 GLOBAL_HEADER 标志，<code>avcodec_open2</code> 校验通过后，<code>avcodec_parameters_from_context</code> 把这些值拷进流的 codecpar，封装器据此写 mp4 头——最终 ffprobe 读出的 bit_rate / sample_rate / time_base 与代码一一对应（本机实测 sine 源为单声道，所以 channels=1/mono，若输入立体声则呈现 stereo）。参数设置的艺术，本质上就是<strong>让每个旋钮的取值与编码器支持、封装器要求、真实输入三者对齐</strong>。</p>
+
+  <table>
+    <tr><th>素材七步</th><th>动作</th><th>本章对应</th></tr>
+    <tr><td>第 1 步</td><td>创建输出上下文</td><td>第 9 章</td></tr>
+    <tr><td>第 2 步</td><td>创建音频流 + 找编码器</td><td>第 9 章</td></tr>
+    <tr><td>第 3 步</td><td>设置编码上下文参数</td><td>本章 10.2-10.4</td></tr>
+    <tr><td>第 4 步</td><td>GLOBAL_HEADER 标志</td><td>本章 10.5</td></tr>
+    <tr><td>第 5 步</td><td>avcodec_open2 打开编码器</td><td>本章 10.6</td></tr>
+    <tr><td>第 6 步</td><td>codec_tag = 0</td><td>本章 10.6</td></tr>
+    <tr><td>第 7 步</td><td>参数拷入流的 codecpar</td><td>本章 10.6</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>参数设完了、编码器也打开了——但别忘了：现在只是"配置好了"，还没有任何一帧数据真正流过编码器。下一章（第 11 章）导师换成福尔摩斯，我们进入 <strong>send/receive 编码循环</strong>：<code>avcodec_send_frame</code> 把 PCM 帧送进编码器、<code>avcodec_receive_packet</code> 把压缩好的 AVPacket 取出来。你会亲眼看到：本章设的 sample_fmt 和 time_base，正是第 11 章编码循环里最容易踩坑的两个参数——配置的艺术，最终要在数据流动起来的那一刻接受检验。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：参数配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边参数与右边作用连线：① bit_rate；② sample_rate；③ ch_layout；④ sample_fmt；⑤ time_base。候选描述：A. 每秒采多少个样本点；B. 目标码率；C. 时间戳的最小刻度；D. 声道布局；E. 每个样本在内存里怎么存。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 10.1 的参数总览表——每个参数"说人话"那一列。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → B（bit_rate 目标码率）；② → A（sample_rate 采样率）；③ → D（ch_layout 声道布局）；④ → E（sample_fmt 采样格式）；⑤ → C（time_base 时间基）。口诀：<strong>码率管预算、采样率管密度、布局管声道、格式管存储、时间基管刻度</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：新旧 API 改写 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>素材第 3 步有这两行旧代码：<code>enc_ctx-&gt;channel_layout = 2; enc_ctx-&gt;channels = av_get_channel_layout_nb_channels(enc_ctx-&gt;channel_layout);</code>。在 FFmpeg 8.x 上这两行编译不过（旧字段已移除）。请改写成现行 API，并说明为什么新写法更不容易写错。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>现行 API 用 AVChannelLayout 结构体字段 ch_layout + av_channel_layout_default() 函数；回忆 10.3 节的对照代码块。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>改写成：<code>av_channel_layout_default(&amp;enc_ctx-&gt;ch_layout, 2);</code>。理由：旧 API 的 channel_layout 是 64 位位掩码，素材把"2 声道"写成 2 其实并不等于立体声位掩码 0x3，全靠编码器宽容才跑通；新 API 的参数直接是<strong>声道数</strong>，语义清晰无歧义。读声道数也从函数调用变成结构体字段：<code>enc_ctx-&gt;ch_layout.nb_channels</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：目标不是承诺 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>用 <code>-b:a 96k</code> 把同一段 5 秒正弦音转成 AAC，然后 ffprobe 读回实际流码率。结合本章实测（64k→64495、128k→125608）和第 2 章视频实测（500k→194k），说明：为什么音频 64k/128k 目标都能贴得比较近，而视频 500k 目标会缩水到 194k？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想两件事：AAC 的码率控制对简单内容（正弦音）几乎不浪费预算；而 x264 对 testsrc 彩条这类"信息量极低"的画面会自动降码率省钱。码率控制算法会根据内容复杂度做判断。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>实测 96k 目标会得到约 96-97 kbit/s 的实际流码率（正弦音内容极简单、且 AAC 码控贴近目标）。根本原因：<strong>bit_rate 是目标不是承诺</strong>，实际码率 = 码率控制算法按内容复杂度决定。正弦音是周期性信号，压缩后信息量小但 AAC 会保持基本码率水准；testsrc 彩条是平坦色块，x264 判断"花 500k 是浪费"就自动降到 194k。要硬性控制大小需 CBR 三件套（-minrate/-maxrate/-bufsize）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：完整证据链 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一段完整的 C API 片段：设置 bit_rate=128000、sample_rate=48000、双声道（现行 API）、sample_fmt 取编码器支持列表第一个、time_base={1, 48000}，然后走完 GLOBAL_HEADER 判断、avcodec_open2、codec_tag 清空、avcodec_parameters_from_context 四步。再预测：如果这段代码成功跑完，ffprobe 读回音频流会看到哪些关键字段值？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>字段顺序参考 10.4/10.6 的代码块；预测时注意 sample_fmt 由"编码器支持列表"决定而不是你拍脑袋——aac 是 fltp；声道布局设 2 声道会得到 stereo。bit_rate 是目标，实际值可能略偏。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>关键片段：<code>enc_ctx-&gt;bit_rate = 128000; enc_ctx-&gt;sample_rate = 48000; av_channel_layout_default(&amp;enc_ctx-&gt;ch_layout, 2); enc_ctx-&gt;sample_fmt = encoder-&gt;sample_fmts[0]; enc_ctx-&gt;time_base = (AVRational){1, 48000};</code>，随后 <code>if (ofmt_ctx-&gt;oformat-&gt;flags &amp; AVFMT_GLOBALHEADER) enc_ctx-&gt;flags |= AV_CODEC_FLAG_GLOBAL_HEADER;</code>、<code>avcodec_open2(...)</code>、<code>codecpar-&gt;codec_tag = 0</code>、<code>avcodec_parameters_from_context(...)</code>。ffprobe 预期：<code>codec_name=aac</code>、<code>profile=LC</code>、<code>sample_rate=48000</code>、<code>channels=2</code>、<code>channel_layout=stereo</code>、<code>time_base=1/48000</code>，bit_rate 在 128k 附近（AAC 对简单内容会贴近目标）。注意 <code>sample_fmts[0]</code> 在 aac 上取到 fltp，若换成 libmp3lame 则是 s16p——同一段代码换编码器，sample_fmt 自动跟随。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

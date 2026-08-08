@@ -92,6 +92,12 @@ body.track-cpp-internals {
   --accent-soft: #f0e6e0;
   --tip-bg: var(--paper-deep);
 }
+body.track-ffmpeg {
+  --accent: #3f7d76;
+  --accent-strong: #31625c;
+  --accent-soft: #e2efec;
+  --tip-bg: #edf5f3;
+}
 
 /* ===== 2. Base ===== */
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -436,6 +442,7 @@ details .answer-content {
 .track-card.cpp { --accent: #4a6b5d; }
 .track-card.graphics { --accent: #8a6d3b; }
 .track-card.cpp-internals { --accent: #8a5a44; }
+.track-card.ffmpeg { --accent: #3f7d76; }
 
 /* ===== 13. 目录页 TOC ===== */
 .track-hero { text-align: center; padding: 64px 0 8px; }
