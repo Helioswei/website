@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第10章：内存对齐：为什么结构体大小不是成员之和 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter10.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第10章：内存对齐：为什么结构体大小不是成员之和 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter10.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="10" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第10章：内存对齐：为什么结构体大小不是成员之和</h1>
+  <p class="chapter-subtitle">一个 <code>int</code> 加一个 <code>char</code> 加一个 <code>int</code>，成员之和明明是 9 字节，结构体却要 12 字节——多出来的 3 个字节去哪了？这一章我们跟着编译器这位"画家"的笔触，把内存布局这张画布一寸一寸描出来</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎨</span>
+      <div class="mentor-info">
+        <h3>本章导师：达芬奇</h3>
+        <p class="mentor-method">核心方法论：艺术与工程</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「结构体是编译器画的一张画布。真正的画家从不把颜料堆得越满越好——留白与构图，决定整幅画的呼吸。内存对齐就是画布上的留白：看似浪费的缝隙，恰恰是让每个成员各就其位的优雅。这一章，我带你把画布上的每一块砖、每一道缝都描出来：先看懂为什么必须有缝，再学会怎么把缝留得最少、最讲究。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 10.1 先看现象 ========== -->
+  <h2>10.1 先看现象：两个结构体，成员一样，大小却不同</h2>
+
+  <p>先抛出一个"反直觉"的现象。下面两个结构体，成员种类一模一样——都是一个 <code>int</code>（整数，4 字节）、一个 <code>char</code>（字符，1 字节）、一个 <code>int</code>，只是写的顺序不同。按常识，体积都该是 4 + 1 + 4 = <strong>9 字节</strong>。可现实是：<strong>结构体的大小，并不等于成员大小之和</strong>。这不是编译器的 bug，而是<strong>内存对齐</strong>（memory alignment，让每种类型的对象都放在"地址是某固定值倍数"的位置上的一种硬件约定）在起作用。素材 S1 的两个变体原样保留：</p>
+
+  <pre><code><span class="cmt">// 变体一：int → char → int（素材 S1 原样保留）</span>
+<span class="kw">struct</span> S1
+{
+    <span class="kw">int</span> i;
+    <span class="kw">char</span> c;
+    <span class="kw">int</span> j;
+};
+
+<span class="cmt">// 变体二：int → int → char（素材 S1 原样保留）</span>
+<span class="kw">struct</span> S1
+{
+    <span class="kw">int</span> i;
+    <span class="kw">int</span> j;
+    <span class="kw">char</span> c;
+};</code></pre>
+
+  <p>眼见为实，用 <code>sizeof</code>（求对象字节数的运算符）测一测。下面这段程序在本机（macOS 64 位）编译运行，输出全部是真实测量值：两个变体的大小都恰好是 <strong>12 字节</strong>，而不是 9。它们大小相同，是因为成员种类相同；但它们都违背直觉，因为<strong>都大于成员之和</strong>。多出来的 3 个字节，就是编译器塞进去的<strong>填充字节</strong>（padding，为了让成员站到合法位置而插入的空隙）：</p>
+
+  <pre><code><span class="cmt">// align.cpp —— 用 sizeof 实测两个结构体</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+
+<span class="kw">struct</span> S1A { <span class="kw">int</span> i; <span class="kw">char</span> c; <span class="kw">int</span> j; };  <span class="cmt">// 变体一：i, c, j</span>
+<span class="kw">struct</span> S1B { <span class="kw">int</span> i; <span class="kw">int</span> j; <span class="kw">char</span> c; };  <span class="cmt">// 变体二：i, j, c</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(S1A) = %zu\n"</span>, <span class="kw">sizeof</span>(S1A));
+    <span class="fn">printf</span>(<span class="str">"sizeof(S1B) = %zu\n"</span>, <span class="kw">sizeof</span>(S1B));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出（g++ -o align align.cpp 后运行）：</span>
+<span class="cmt">// sizeof(S1A) = 12   （4 + 1 + 4 = 9，却占 12 字节）</span>
+<span class="cmt">// sizeof(S1B) = 12   （同样 9，同样占 12 字节）</span></code></pre>
+
+  <p>再细看一层：两个变体虽然都是 12 字节，<strong>填充字节藏的位置不一样</strong>。用 <code>offsetof</code>（求成员相对结构体首地址偏移量的宏）实测：变体一的 <code>j</code> 从偏移 8 开始（<code>c</code> 和 <code>j</code> 之间空了 5~7），变体二的 <code>c</code> 从偏移 8 开始（尾巴空了 9~11）。也就是说：同一批 9 字节的成员，编译器把 3 字节的空隙补在了不同的地方。</p>
+
+  <table>
+    <tr><th>变体</th><th>成员顺序</th><th>成员裸大小之和</th><th>sizeof 实测</th><th>填充字节藏在哪</th></tr>
+    <tr><td>变体一</td><td><code>int i → char c → int j</code></td><td>4 + 1 + 4 = 9</td><td>12</td><td><code>c</code> 与 <code>j</code> 之间（3 字节）</td></tr>
+    <tr><td>变体二</td><td><code>int i → int j → char c</code></td><td>4 + 4 + 1 = 9</td><td>12</td><td>最末尾（3 字节）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>把现象钉死成一句话：<strong>成员一样的两个结构体，大小相同（12）；但它们的大小都不等于成员之和（9）</strong>。填充字节不是玄学——它是编译器在"布局画布"时，为了满足某种硬性规则而刻意留的空白。接下来两节回答：为什么必须留白？留白多少由谁决定？</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>sizeof</code> 测量的是<strong>类型</strong>的大小，和成员存了什么值毫无关系——无论 <code>i</code> 里存 <code>1</code> 还是 <code>2147483647</code>，<code>sizeof(S1A)</code> 永远是 12。另外，不同平台、不同编译器得出的 sizeof 可能不同（32 位系统上 <code>double</code> 的对齐要求就不同），所以永远<strong>以你自己机器上的实测为准</strong>——这也是本章所有数字都用本机真实输出的原因。</p>
+  </div>
+
+  <!-- ========== 10.2 为什么需要对齐 ========== -->
+  <h2>10.2 为什么需要对齐：硬件读取的块机制</h2>
+
+  <p>编译器为什么放着"紧凑摆放"不做，非要插空隙？答案在<strong>硬件里</strong>。很多计算机系统对基础数据类型的"允许地址"做了一个限制：<strong>某种类型的对象，地址必须是某个值 k（通常是 2、4、8）的倍数</strong>。这种对齐限制，简化了处理器和存储器系统之间接口的硬件设计。说人话：<strong>CPU 去内存取数，是按"块"取的</strong>——它一次只从"块边界"（地址是块大小整数倍的位置）开始整块搬。这个固定大小的块叫<strong>字</strong>（word，CPU 一次搬运的基本单位）；64 位系统的字长是 8 字节。</p>
+
+  <p>素材里有个经典例子：假如一个处理器总是从存储器中取 <strong>8 字节</strong>的数据，那它读数据的起始地址<strong>必须为 8 的倍数</strong>。如果能保证所有 <code>double</code>（双精度浮点数，本机 8 字节）的地址都是 8 的倍数，一次存储器操作就能读写完；否则就可能要执行<strong>两次存储器访问</strong>——对象横跨了两个 8 字节块。两次访问意味着慢一倍，某些平台上甚至直接触发硬件异常。读错位的场景，用文字示意：</p>
+
+  <pre><code><span class="cmt"># 64 位系统：CPU 按 8 字节一个字读取，字边界在 0、8、16……</span>
+      ┌───────────────┬───────────────┐
+      │     字块 0     │     字块 1     │
+      └───────────────┴───────────────┘
+
+<span class="cmt"># 对齐的 double（地址 8，占 8~15）：正好一个块 —— 一次读取 ✓</span>
+                                  └── d ──┘
+                                  ↑ 一次存储器访问
+
+<span class="cmt"># 未对齐的 double（地址 4，占 4~11）：横跨两个块 —— 两次读取 ✗</span>
+            └─ d 前半(4~7) ─┘  └─ d 后半(8~11) ─┘
+            ↑ 第一次访问        ↑ 第二次访问，拼起来才能用</code></pre>
+
+  <p>所以"对齐"的本质一句话：<strong>让每个对象都住在"块内"，而不是"跨块"</strong>。跨块意味着一次读变两次读——对追求极致性能的 C/C++ 来说，这是不可接受的浪费。编译器会在汇编代码里放入指令，指明全局数据所需要的对齐；结构体内部的布局，则由编译器完全按对齐规则自动安排（我们自己也能干预，<code>#pragma pack</code> 第 11 章专门讲）。下面用一个小程序验证：编译器确实会把 <code>double</code> 的地址放在 8 的倍数上。</p>
+
+  <pre><code><span class="cmt">// address.cpp —— 验证 double 的地址落在 8 的倍数上</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdint&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="kw">double</span> d = <span class="num">3.14</span>;
+    <span class="type">std::uintptr_t</span> addr = <span class="kw">reinterpret_cast</span>&lt;<span class="type">std::uintptr_t</span>&gt;(&amp;d);
+    <span class="fn">printf</span>(<span class="str">"地址 = 0x%llx，地址 %% 8 = %llu\n"</span>,
+           (<span class="kw">unsigned long long</span>)addr,
+           (<span class="kw">unsigned long long</span>)(addr % <span class="num">8</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出（地址数值每次运行都变，但 %% 8 恒为 0）：</span>
+<span class="cmt">// 地址 = 0x16b4fe130，地址 % 8 = 0</span></code></pre>
+
+  <table>
+    <tr><th>平台</th><th>字长</th><th>CPU 一次读取</th><th>典型对齐要求</th></tr>
+    <tr><td>32 位系统</td><td>4 字节（32 位）</td><td>4 字节</td><td><code>int</code> 地址为 4 的倍数</td></tr>
+    <tr><td>64 位系统</td><td>8 字节（64 位）</td><td>8 字节</td><td><code>double</code> 地址为 8 的倍数</td></tr>
+    <tr><td>本机实测</td><td>8 字节</td><td>8 字节</td><td><code>alignof(int)=4</code>、<code>alignof(double)=8</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>把硬件逻辑画成一句话：<strong>块是固定的，对象是移动的——那就让对象去凑块，而不是让块来凑对象</strong>。对齐就是"对象地址必须是块大小的整数倍"这条铁律。理解了它，你就明白为什么 <code>alignof(int)</code> 在 64 位系统上是 4 而不是 1：一个 4 字节的 <code>int</code>，只要地址是 4 的倍数，就永远不可能横跨两个 4 字节的读取单元。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别把"未对齐 = 慢一点"当小事。在某些古老架构（比如部分 RISC 处理器）上，未对齐访问<strong>直接触发硬件异常</strong>，程序当场崩溃——根本没有"慢"这个选项。即便在 x86 / ARM 上，跨块访问也意味着更多内存事务。另外，<strong>栈上的局部变量和堆上的对象，编译器同样会自动对齐</strong>（上面的 <code>d</code> 就是例子）——对齐规则约束的是<strong>所有</strong>对象，不只是结构体成员。</p>
+  </div>
+
+  <!-- ========== 10.3 对齐规则 ========== -->
+  <h2>10.3 对齐规则：有效对齐值</h2>
+
+  <p>现在进入"规则"本身。每个特定平台上的编译器，都有自己默认的<strong>对齐系数</strong>（alignment factor，编译器心里那把衡量对齐的"尺子"）。可以通过预编译命令 <code>#pragma pack(n)</code>（n = 1, 2, 4, 8）来改变这个系数；若没有手动指定，编译器就会默认将<strong>成员变量中最大的类型字节数</strong>设置为对齐值 m。注意，对齐系数和 m 不一定相等——真正说了算的是<strong>有效对齐值</strong>：</p>
+
+  <p><strong>有效对齐值</strong>（effective alignment，也叫<strong>对齐单位</strong>），是给定值 <code>#pragma pack(n)</code> 和结构体中最长数据类型长度中<strong>较小</strong>的那个。说人话：尺子和最胖的成员，谁短听谁的。默认没有 <code>#pragma pack</code> 干预时，有效对齐值就等于最长成员的长度——比如只有 <code>int</code>、<code>char</code> 的结构体，有效对齐值就是 4。素材里的对齐规则原样如下，两条，背下来：</p>
+
+  <pre><code><span class="cmt"># 对齐规则（素材原样重写为清单）</span>
+<span class="cmt"># 先算有效对齐值（对齐单位）：</span>
+有效对齐值 = min( <span class="kw">#pragma</span> pack(n) 的值, 结构体中最长数据类型的长度 )
+
+<span class="cmt"># 规则一：成员摆放</span>
+(1) 结构体第一个成员的偏移量（offset）为 <span class="num">0</span>；
+    以后每个成员相对于结构体首地址的 offset，
+    都是「该成员大小 与 有效对齐值 中较小那个」（即对齐单位）的整数倍；
+    如有需要，编译器会在成员之间加上填充字节。
+
+<span class="cmt"># 规则二：总大小</span>
+(2) 结构体的总大小，为 有效对齐值 的整数倍；
+    如有需要，编译器会在最末一个成员之后加上填充字节。</code></pre>
+
+  <p>把规则翻译成人话。规则一管"成员怎么排"：第一个成员站 <strong>0 号位</strong>（画布最左边），之后每个成员必须站到"自己尺寸和对齐单位取小者"的整数倍位置上——站不上，就垫空隙。规则二管"整体多大"：排完所有成员后，如果总长度不是有效对齐值的整数倍，就在<strong>尾巴</strong>上继续垫到凑整。为什么要凑整？因为结构体通常要<strong>组成数组</strong>——数组里第二个元素的起始地址必须仍然是合法的，尾巴上的填充就是给"下一个元素"留的接力棒。</p>
+
+  <p>两条规则之间还有一个微妙的联动：<strong>每个成员的对齐需求，也可能比有效对齐值小</strong>。比如有效对齐值是 4 时，一个 <code>char</code>（1 字节）只需要站在 1 的倍数上——而 1 的倍数就是任何位置，所以 <code>char</code> 可以"见缝插针"。这正是填充字节的诞生机制：大块成员必须站"整点"，小块成员只能挤进缝里，缝不够大时编译器再补新缝。下面这个 <code>#pragma pack</code> 的预告示例，让你直观看到"尺子换短了，布局立刻变"（完整玩法第 11 章再展开）：</p>
+
+  <pre><code><span class="cmt">// pack.cpp —— 把对齐系数压到 1，看看会发生什么</span>
+<span class="kw">#pragma</span> pack(<span class="num">1</span>)              <span class="cmt">// 把对齐系数改成 1 字节（n = 1）</span>
+<span class="kw">struct</span> Packed
+{
+    <span class="kw">int</span> i;
+    <span class="kw">char</span> c;
+    <span class="kw">int</span> j;
+};
+<span class="kw">#pragma</span> pack()               <span class="cmt">// 恢复默认对齐系数</span>
+
+<span class="cmt">// 有效对齐值 = min(1, 4) = 1 → 所有成员站 1 的倍数即可，谁都不用等谁</span>
+<span class="cmt">// 本机真实输出：sizeof(Packed) = 9 —— 三成员紧挨着，零填充（4 + 1 + 4）</span></code></pre>
+
+  <table>
+    <tr><th>概念</th><th>定义</th><th>说人话</th></tr>
+    <tr><td>对齐系数</td><td>编译器默认值，可用 <code>#pragma pack(n)</code> 修改（n = 1, 2, 4, 8）</td><td>编译器手里那把"尺子"</td></tr>
+    <tr><td>最长成员长度 m</td><td>结构体中最大的成员类型字节数</td><td>全组里最胖的成员</td></tr>
+    <tr><td>有效对齐值（对齐单位）</td><td>min(对齐系数, m)</td><td>尺子和最胖成员，取短的那个</td></tr>
+    <tr><td>填充字节（padding）</td><td>编译器插入的"空隙"，让成员站到合法位置</td><td>画布上的留白</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>给新手一个抓手：<strong>这一节你只需要记住一个公式——有效对齐值 = min(尺子, 最胖成员)</strong>。默认情况下没有 <code>#pragma pack</code>，尺子不参与，有效对齐值就等于最胖成员的字节数。全 <code>int</code>/<code>char</code> 的结构体，有效对齐值 = 4；一旦出现 <code>double</code>（8 字节），有效对齐值立刻升到 8，整张画布的节奏都要跟着变。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>#pragma pack</code> 是"能改规则"的规则，但改规则的代价很昂贵。把对齐系数压小（比如 <code>pack(1)</code>）会让结构体变紧凑、省内存，但成员的地址可能不再满足硬件最舒服的对齐——读写变慢，甚至在某些平台不可移植。工程上这叫"用性能换内存"。第 11 章会详细讲什么时候值得这么干（网络协议、文件格式、跨平台数据交换），以及 <code>#pragma pack(push/pop)</code> 的正确打开方式。现在先知道它的存在即可。</p>
+  </div>
+
+  <!-- ========== 10.4 手算结构体大小 ========== -->
+  <h2>10.4 手算结构体大小：padding 怎么产生</h2>
+
+  <p>规则背下来不算会，能<strong>徒手推演</strong>才算会。现在用 10.3 的两条规则，把 10.1 的两个变体一步一步推出来。本机有效对齐值 = 4（最长成员 <code>int</code> 是 4 字节，无 <code>#pragma pack</code>），每个成员的"站队条件"是：<code>int</code> 必须站 4 的倍数（4 和 4 取小还是 4），<code>char</code> 只需站 1 的倍数（1 和 4 取小是 1，即任意位置）。</p>
+
+  <p><strong>变体一 <code>struct S1A { int i; char c; int j; }</code></strong>。① <code>i</code> 是第一个成员，站偏移 0，占 0~3；② <code>c</code> 对齐需求 1，紧挨着站偏移 4；③ <code>j</code> 对齐需求 4，可它想站的位置是 5——5 不是 4 的倍数，不行！于是编译器在 <code>c</code> 和 <code>j</code> 之间插入 <strong>3 字节填充</strong>，把 <code>j</code> 推到偏移 8，占 8~11；④ 总长 12，已经是有效对齐值 4 的整数倍，尾巴不用再补。最终 <code>sizeof = 12</code>。文字版内存布局：</p>
+
+  <pre><code><span class="cmt"># S1A：int i; char c; int j; —— 填充在中间</span>
+偏移: <span class="num">0</span>~<span class="num">3</span> | <span class="num">4</span> | <span class="num">5</span>~<span class="num">7</span> | <span class="num">8</span>~<span class="num">11</span>
+      [    i    ] [c] [ 填充3B ] [    j    ]
+      <span class="ann">@规则一：j 不能站 5（不是 4 的倍数），垫 3 字节站 8</span></code></pre>
+
+  <p><strong>变体二 <code>struct S1B { int i; int j; char c; }</code></strong>。① <code>i</code> 站偏移 0，占 0~3；② <code>j</code> 对齐需求 4，4 是 4 的倍数，直接站 4~7；③ <code>c</code> 对齐需求 1，紧挨着站偏移 8；④ 排完总长 9——但规则二来了：9 不是有效对齐值 4 的整数倍，于是编译器在<strong>最末成员之后</strong>补 3 字节，凑成 12。注意：这次不是"成员之间有缝"，而是"成员排完，尾巴多出一截"。这截尾巴不是给 <code>c</code> 用的，是给<strong>下一个对象</strong>用的——想想 <code>S1B arr[2]</code>：第二个元素的 <code>i</code> 必须站在 4 的倍数上，如果第一个元素只占 9 字节，第二个元素就从偏移 9 开始，直接违规。文字版布局：</p>
+
+  <pre><code><span class="cmt"># S1B：int i; int j; char c; —— 填充在尾巴</span>
+偏移: <span class="num">0</span>~<span class="num">3</span> | <span class="num">4</span>~<span class="num">7</span> | <span class="num">8</span> | <span class="num">9</span>~<span class="num">11</span>
+      [    i    ] [    j    ] [c] [ 填充3B ]
+      <span class="ann">@规则二：总长 9 不是 4 的倍数，尾巴补到 12</span></code></pre>
+
+  <p>素材还留了一组"对照组"——联合体和结构体的对比。<strong>联合体</strong>（union，所有成员共用同一块内存、容量取最大者的类型）<code>A</code> 的三个成员：<code>char c</code>（1 字节）、<code>int a[5]</code>（20 字节）、<code>double d</code>（8 字节），全部从偏移 0 开始共享内存，实际需要 20 字节；但 20 不是有效对齐值 8 的倍数（出现了 <code>double</code>，有效对齐值升到 8），于是补到 24。而结构体 <code>B</code> 是"每人一块地"：<code>c</code> 站 0、垫 3 字节、<code>a[5]</code> 站 4~23、<code>d</code> 站 24~31，总共 32。同一批成员，<strong>union 24、struct 32</strong>——差出来的 8 字节，就是"共享"和"独占"的差别。素材原例 + 本机实测：</p>
+
+  <pre><code><span class="cmt">// union_vs_struct.cpp —— 素材原例：同一批成员，两种容器</span>
+<span class="kw">union</span> A {
+    <span class="kw">char</span> c;
+    <span class="kw">int</span> a[<span class="num">5</span>];
+    <span class="kw">double</span> d;
+};
+
+<span class="kw">struct</span> B {
+    <span class="kw">char</span> c;
+    <span class="kw">int</span> a[<span class="num">5</span>];
+    <span class="kw">double</span> d;
+};
+<span class="cmt">// 本机真实输出：sizeof(A) = 24  （union：20 字节按 8 对齐凑整）</span>
+<span class="cmt">//              sizeof(B) = 32  （struct：c(1)+填充(3)+a[5](20)+d(8)）</span></code></pre>
+
+  <table>
+    <tr><th>步骤</th><th>S1A：int i; char c; int j;</th><th>S1B：int i; int j; char c;</th></tr>
+    <tr><td>① 第一个成员</td><td><code>i</code> 站偏移 0（0~3）</td><td><code>i</code> 站偏移 0（0~3）</td></tr>
+    <tr><td>② 第二个成员</td><td><code>c</code> 对齐需求 1，紧挨着站偏移 4</td><td><code>j</code> 对齐需求 4，4 是 4 的倍数，站 4~7</td></tr>
+    <tr><td>③ 第三个成员</td><td><code>j</code> 想站 5，5 不是 4 的倍数 → 填充 3 字节，站 8~11</td><td><code>c</code> 对齐需求 1，紧挨着站偏移 8</td></tr>
+    <tr><td>④ 收尾</td><td>12 已是 4 的倍数，无需尾部填充</td><td>9 不是 4 的倍数 → 尾部填充 3 字节，凑成 12</td></tr>
+    <tr><td>sizeof</td><td><strong>12</strong></td><td><strong>12</strong></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>手算的通用套路，四步走：<strong>① 确定有效对齐值（默认 = 最长成员）；② 按成员顺序逐个放，算每个成员的对齐需求；③ 站不上就垫填充；④ 排完看总长是不是有效对齐值的整数倍，不是就补尾巴</strong>。画布局图时，用偏移量（0、4、8……）对账，一眼就能看出"哪个成员在等谁"。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：填充字节里的内容是什么？<strong>没有定义——是"脏数据"</strong>。C/C++ 标准从不承诺填充字节的值，它们可能是上次残留的任意字节。所以：① 不要用 <code>memcmp</code> 直接比较两个结构体变量（填充字节不同会导致误判）；② 不要试图把结构体用 <code>memcpy</code> 原样写进文件当"通用格式"（不同机器布局不同，第 11 章讲怎么安全序列化）；③ 填充字节是初学者最容易忽略的"隐藏内存"——一个 12 字节的结构体，真正"有主"的只有 9 字节。</p>
+  </div>
+
+  <!-- ========== 10.5 成员顺序的学问 ========== -->
+  <h2>10.5 成员顺序的学问：重新排列减少浪费</h2>
+
+  <p>10.1 的两个变体都是 12 字节——那是不是说"顺序无所谓"？<strong>不，那是因为它们只有 <code>int</code> 和 <code>char</code>，有效对齐值只有 4，腾挪空间小</strong>。一旦混入 <code>double</code>（8 字节），顺序立刻变成真金白银。看下面这对结构体：成员完全一样（一个 <code>char</code>、一个 <code>double</code>、一个 <code>int</code>），仅仅顺序不同，本机实测 <code>sizeof</code> 差了整整 <strong>8 字节</strong>：</p>
+
+  <pre><code><span class="cmt">// order.cpp —— 同成员，不同顺序，sizeof 实测</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> Mis { <span class="kw">char</span> c; <span class="kw">double</span> d; <span class="kw">int</span> i; };  <span class="cmt">// 乱序版：char 开头</span>
+<span class="kw">struct</span> Fit { <span class="kw">double</span> d; <span class="kw">int</span> i; <span class="kw">char</span> c; };  <span class="cmt">// 重排版：double 开头</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(Mis) = %zu\n"</span>, <span class="kw">sizeof</span>(Mis));  <span class="cmt">// char c; double d; int i;</span>
+    <span class="fn">printf</span>(<span class="str">"sizeof(Fit) = %zu\n"</span>, <span class="kw">sizeof</span>(Fit));  <span class="cmt">// double d; int i; char c;</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出 + offsetof 实测：</span>
+<span class="cmt">// sizeof(Mis) = 24   （c=0, d=8, i=16，尾巴又补了 4 字节）</span>
+<span class="cmt">// sizeof(Fit) = 16   （d=0, i=8, c=12，只补了 3 字节尾巴）</span></code></pre>
+
+  <p>拆开看 <code>Mis</code> 为什么会胖：<code>c</code>（1 字节）站偏移 0 后，<code>d</code> 的对齐需求是 8，只能从偏移 8 开始——中间白白垫了 <strong>7 字节</strong>；<code>i</code> 站 16~19 后，总长 20，不是 8 的倍数，尾巴再补 4 字节。而 <code>Fit</code> 让最胖的 <code>d</code> 打头阵，后面 <code>i</code> 正好续在 8 上，<code>c</code> 见缝插针站 12，最后只补 3 字节尾巴。规则没变，只是<strong>顺序变了，缝就少了</strong>。布局对账图：</p>
+
+  <pre><code><span class="cmt"># Mis：char c; double d; int i; —— 24 字节，浪费 11 字节</span>
+偏移: <span class="num">0</span> | <span class="num">1</span>~<span class="num">7</span> | <span class="num">8</span>~<span class="num">15</span> | <span class="num">16</span>~<span class="num">19</span> | <span class="num">20</span>~<span class="num">23</span>
+      [c] [ 填充7B ] [    d    ] [   i   ] [ 填充4B ]
+      <span class="ann">@c 之后 d 站不上 1，只能等 8</span>
+
+<span class="cmt"># Fit：double d; int i; char c; —— 16 字节，只浪费 3 字节</span>
+偏移: <span class="num">0</span>~<span class="num">7</span> | <span class="num">8</span>~<span class="num">11</span> | <span class="num">12</span> | <span class="num">13</span>~<span class="num">15</span>
+      [    d    ] [   i   ] [c] [ 填充3B ]
+      <span class="ann">@d 打头，i 续上，c 见缝插针，尾巴只补 3</span></code></pre>
+
+  <p>那 10.1 的变体三呢？<code>struct S1C { char c; int i; int j; }</code> 本机实测也是 12 字节（<code>c=0</code>，垫 3 字节后 <code>i</code> 站 4，<code>j</code> 站 8，总长 12 正好）。这说明：<strong>成员全是对齐需求 4 及以下的类型时，无论怎么排都是 12</strong>；只有引入 8 字节的大家伙，顺序的价值才会显现。工程经验法则：<strong>把成员按对齐需求从大到小排列</strong>（<code>double</code> → <code>int</code> → <code>short</code> → <code>char</code>），通常能拿到最小体积——相当于把画布上最大的色块先铺好，小色块再填缝。</p>
+
+  <pre><code><span class="cmt"># 结构体"瘦身"经验法则</span>
+<span class="cmt"># 1. 按对齐需求从大到小排：double(8) → int(4) → short(2) → char(1)</span>
+<span class="cmt"># 2. 同类成员尽量相邻，避免"大块等小块、小块留大缝"</span>
+<span class="cmt"># 3. 排完用 sizeof 实测验证，别靠感觉——不同编译器结果可能不同</span>
+<span class="cmt"># 4. 警告：改顺序会改变结构体的二进制布局，跨进程/跨平台交换数据时慎动</span></code></pre>
+
+  <table>
+    <tr><th>版本</th><th>成员顺序</th><th>内存布局</th><th>sizeof 实测</th><th>浪费的字节</th></tr>
+    <tr><td>Mis（乱序）</td><td><code>char c → double d → int i</code></td><td>c(1) + 填充7 + d(8) + i(4) + 填充4</td><td>24</td><td>11 字节</td></tr>
+    <tr><td>Fit（重排）</td><td><code>double d → int i → char c</code></td><td>d(8) + i(4) + c(1) + 填充3</td><td>16</td><td>3 字节</td></tr>
+    <tr><td>变体三 S1C</td><td><code>char c → int i → int j</code></td><td>c(1) + 填充3 + i(4) + j(4)</td><td>12</td><td>3 字节</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>把这一节浓缩成一句画家的心得：<strong>留白是必须的，但留多少白，取决于你落笔的顺序</strong>。数组场景下收益还会放大——<code>Fit arr[1000]</code> 比 <code>Mis arr[1000]</code> 少占 8KB。嵌入式、网络服务器这种内存紧张的场景里，重排成员顺序是性价比最高的"免费优化"之一：不动算法、不动逻辑，只动声明顺序。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：重排顺序不是免费的午餐。① <strong>ABI / 序列化约束</strong>：如果这个结构体要和别的进程、别的语言、别的机器交换（网络协议、文件格式、共享内存），成员顺序就是协议的一部分，私自重排等于撕毁协议；② <strong>可读性权衡</strong>：为省 8 字节把结构体排得面目全非，团队维护成本可能更高——先按逻辑分组写，再用注释标注"已按对齐重排"；③ <strong>别迷信"越小越快"</strong>：访问已对齐成员永远比访问紧凑但未对齐的成员快，某些情况下 <code>pack(1)</code> 的结构体反而拖慢程序。</p>
+  </div>
+
+  <!-- ========== 10.6 章节小结与悬念 ========== -->
+  <h2>10.6 章节小结与悬念：class 也有同样的对齐问题</h2>
+
+  <p>把这一章的链路串起来：现象（<code>sizeof</code> 不是成员之和）→ 原因（硬件按块读内存，对象必须站在块的倍数上）→ 规则（有效对齐值 + 两条铁律）→ 手算（padding 怎么产生、藏在哪）→ 优化（重排成员顺序省内存）。这五步就是"内存布局"这门手艺的完整闭环。达芬奇式的收尾：<strong>先把画布结构画对，再谈笔触的省俭</strong>——对齐规则是画布的结构，重排是省俭的笔触。</p>
+
+  <p>最后埋一个必须埋的钩子。你可能会想："<code>struct</code> 才需要对齐，<code>class</code> 总该特殊吧？"——<strong>恰恰相反：在成员布局这件事上，class 和 struct 是同一张画布</strong>。class 的成员变量遵守一模一样的对齐规则；更刺激的是，<strong>一旦 class 里有虚函数，编译器会悄悄塞进一个隐藏成员 <code>vptr</code>（虚函数表指针，指向虚函数表的指针，本机 8 字节）</strong>，它也要参与排布、也要对齐。看一个预告实验，全部本机实测：</p>
+
+  <pre><code><span class="cmt">// class_preview.cpp —— 预告：class 的对齐问题（第 12 章主战场）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> Empty {};                          <span class="cmt">// 空类：没有任何成员</span>
+<span class="kw">class</span> WithVirtual
+{
+<span class="kw">public</span>:
+    <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">run</span>();                <span class="cmt">// 一个虚函数 → 隐藏的 vptr</span>
+};
+<span class="kw">class</span> Config
+{
+<span class="kw">public</span>:
+    <span class="kw">char</span> level;                        <span class="cmt">// 1 字节</span>
+    <span class="kw">int</span> timeout;                       <span class="cmt">// 4 字节</span>
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(Empty)       = %zu\n"</span>, <span class="kw">sizeof</span>(Empty));      <span class="cmt">// 空类不能是 0！</span>
+    <span class="fn">printf</span>(<span class="str">"sizeof(WithVirtual) = %zu\n"</span>, <span class="kw">sizeof</span>(WithVirtual));
+    <span class="fn">printf</span>(<span class="str">"sizeof(Config)      = %zu\n"</span>, <span class="kw">sizeof</span>(Config));     <span class="cmt">// 和 struct {char;int;} 一样？</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：</span>
+<span class="cmt">// sizeof(Empty)       = 1   （空类占 1 字节：保证每个对象地址都不同，C++ 规定）</span>
+<span class="cmt">// sizeof(WithVirtual) = 8   （没有数据成员，但藏了一个 8 字节的 vptr）</span>
+<span class="cmt">// sizeof(Config)      = 8   （char(1) + 填充3 + int(4)：和 struct 一模一样的规则）</span></code></pre>
+
+  <p>看到了吗？<code>Config</code> 的 8 字节里，同样藏着 3 字节 padding——<strong>class 不是结构体的例外，而是结构体的延伸</strong>。那么问题来了：空类为什么必须是 1 字节而不是 0？<code>vptr</code> 到底站在哪个偏移？多继承、虚继承时，<code>vptr</code> 又该怎么排？这些"对象内部怎么住"的问题，就是<strong>第 12 章「类的大小：空类、成员函数与虚函数指针」</strong>的主战场——包青天导师会把每个字节的来龙去脉都审清楚。另外预告一句：第 11 章「对齐控制实战：#pragma pack 与联合体」会教你把本章的两条规则"掰弯"的完整手法，网络协议解析、跨平台二进制格式都靠它。</p>
+
+  <pre><code><span class="cmt"># 本章知识地图</span>
+<span class="num">10.1</span> 现象：  sizeof = <span class="num">12</span> ≠ 成员之和 <span class="num">9</span> → 填充字节
+<span class="num">10.2</span> 原因：  CPU 按字读内存，地址须是块大小的倍数
+<span class="num">10.3</span> 规则：  有效对齐值 = min(尺子, 最胖成员)
+<span class="num">10.4</span> 手算：  四步推演 + offsetof 对账
+<span class="num">10.5</span> 优化：  按对齐需求从大到小排，Mis(24) → Fit(<span class="num">16</span>)
+<span class="num">10.6</span> 悬念：  class 同规则 + vptr → 第 <span class="num">12</span> 章</code></pre>
+
+  <table>
+    <tr><th>小节</th><th>一句话核心</th><th>带走的能力</th></tr>
+    <tr><td>10.1 先看现象</td><td>sizeof 不等于成员之和，padding 藏在中间或尾巴</td><td>会用 sizeof / offsetof 实测</td></tr>
+    <tr><td>10.2 硬件块机制</td><td>CPU 按字读内存，跨块要两次访问</td><td>理解对齐的动机，不再觉得它是玄学</td></tr>
+    <tr><td>10.3 有效对齐值</td><td>有效对齐值 = min(尺子, 最胖成员)，两条铁律</td><td>背下规则，能解释任何布局</td></tr>
+    <tr><td>10.4 手算推演</td><td>四步走：定值 → 摆成员 → 垫缝 → 凑整</td><td>能徒手画出结构体内存布局图</td></tr>
+    <tr><td>10.5 重排瘦身</td><td>按对齐需求从大到小排，Mis 24 → Fit 16</td><td>会做"免费优化"，也懂其代价</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">达芬奇提示</div>
+    <p>给整章一个"画家视角"的收束：<strong>内存布局是编译器画的画，但执笔的是你——结构体怎么声明，画就怎么长</strong>。规则是死的（硬件决定），手法是活的（顺序、pack 由你决定）。从下一章开始，你将学会主动"改画笔"：<code>#pragma pack</code> 让你能精确控制每个字节的落点，第 11 章见。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：本章所有 sizeof 数字都是在作者本机（macOS 64 位）实测的真实输出，素材原例与规则已原样保留。你的机器、你的编译器（GCC / Clang / MSVC）可能给出不同数字——特别是 32 位平台或开了 <code>#pragma pack</code> 时。<strong>请务必亲手跑一遍本章的示例程序</strong>，以你自己机器上的输出为准，这比背任何数字都可靠。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：快速心算 sizeof <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>本机默认对齐下（<code>int</code> 4 字节、<code>char</code> 1 字节），心算两个结构体的 sizeof：① <code>struct E1 { char a; char b; char c; };</code>；② <code>struct E2 { char a; int b; };</code>。再用程序实测验证。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回忆 10.3 的两条规则：每个成员站"对齐单位"的整数倍；总大小是有效对齐值的整数倍。全 <code>char</code> 时有效对齐值是多少？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>sizeof(E1) = 3</code>：三个 <code>char</code> 各 1 字节，有效对齐值 = 1，总长 3 已是 1 的倍数，零填充。② <code>sizeof(E2) = 8</code>：<code>a</code> 站 0，<code>b</code> 对齐需求 4 不能站 1，垫 3 字节后站 4~7，总长 8 正好。本机实测：E1 = 3，E2 = 8。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：徒手画布局 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>不运行程序，画出 <code>struct E3 { char c; int i; char d; int j; };</code> 的内存布局图（标出每个成员的偏移量和填充字节的位置），并算出 sizeof。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>按 10.4 的四步走：c 站 0 → i 要对齐 4 怎么办 → d 站哪 → j 站哪 → 总长是否凑整。注意中间有两个 1 字节的小成员，它们各自见缝插针。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>布局：<code>c</code> 站 0；垫 3 字节；<code>i</code> 站 4~7；<code>d</code> 对齐需求 1，站 8；垫 3 字节；<code>j</code> 站 12~15。总长 16，正好是有效对齐值 4 的倍数。<code>sizeof(E3) = 16</code>，成员裸大小之和只有 10，浪费 6 字节。本机实测：16。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：重排瘦身实战 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>struct E4 { char c; long long x; char d; };</code>（本机 <code>long long</code> 为 8 字节）实测是 24 字节。请把成员重新排列，写出一个成员完全相同但体积最小的版本，并说明为什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 10.5 的经验法则：按对齐需求从大到小排——8 字节的打头，1 字节的垫后。算算重排后总长是多少、还要不要补尾巴。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>重排为 <code>struct E5 { long long x; char c; char d; };</code>：<code>x</code> 站 0~7，<code>c</code> 站 8，<code>d</code> 站 9，总长 10，补 6 字节尾巴凑成 16。<code>sizeof(E5) = 16</code>，比 24 省了 8 字节。原因：<code>char</code> 开头的版本里，<code>x</code> 被迫等 8 的倍数，白白垫了 7 字节；让最胖的成员打头，缝就只剩尾巴。本机实测：E4 = 24，E5 = 16。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：挑战——用代码审问布局 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个程序：① 用 <code>offsetof</code> 打印 <code>struct E3</code> 每个成员的偏移量，和练习 2 的手算结果对账；② 用 <code>#pragma pack(1)</code> 重新定义 E3，打印 sizeof 前后的变化；③ 解释为什么 <code>pack(1)</code> 之后的 E3 不再是 16 字节，并思考这种"紧凑"的代价是什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p><code>offsetof</code> 需要 <code>&lt;cstddef&gt;</code> 头文件；<code>#pragma pack(1)</code> 的写法见 10.3 节的 pack.cpp；"代价"从 10.2 的硬件块机制里找答案。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 实测输出：<code>offsetof: c=0, i=4, d=8, j=12</code>，与手算完全一致。② <code>pack(1)</code> 后有效对齐值 = min(1, 4) = 1，所有成员紧挨着：0、1~4、5、6~9，总长 10，<code>sizeof = 10</code>。③ 代价：成员地址不再满足 4 字节对齐，访问 <code>int</code> 成员可能触发跨块读取（10.2 说过的"两次访问"），性能变差，且布局依赖编译器行为，跨平台不可移植。这正是第 11 章要深入的主题——什么时候该用、怎么用得安全。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

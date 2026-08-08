@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第7章：字节序与数据表示：大小端与基本类型 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter07.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第7章：字节序与数据表示：大小端与基本类型 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter07.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="7" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第7章：字节序与数据表示：大小端与基本类型</h1>
+  <p class="chapter-subtitle">程序跑起来之后，数据在内存里到底是怎么"躺"着的？字节、字长、大小端、基本类型的大小——这一章我们不当读者，当侦探：每一处结论都用本机实测取证</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：真相只有一个——观察、取证、推理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「案发现场有一具 int 的尸体——0x12345678，被分成了四个字节，丢在四格内存里。问题是：凶手按什么顺序摆放的？顺着放 12 34 56 78，还是倒着放 78 56 34 12？很多程序员一辈子没问过这个问题，直到网络程序在别的机器上莫名跑出乱码。真相只有一个，但取证要靠代码。这一章，跟着我把答案从你的机器里'审'出来。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 7.1 从字节说起：内存的最小单位与虚拟地址 ========== -->
+  <h2>7.1 从字节说起：内存的最小单位与虚拟地址</h2>
+
+  <p>上一章把可执行文件加载进内存后，程序开始运行。数据在内存里到底怎么存？先回到最底层：大多数计算机使用 8 位的块，也就是<strong>字节</strong>（byte，8 个二进制位组成的最小存储单元）作为<strong>最小的可寻址存储器单位</strong>——CPU 能精确读"第 100 号字节"，却读不了"第 100 号字节的第 3 位"：按位寻址的硬件成本高得离谱，而字符、整数、浮点数天然以字节为倍数。机器级程序把存储器看作一个非常大的<strong>字节数组</strong>，这个数组就是<strong>虚拟存储器</strong>（virtual memory，操作系统给程序提供的统一字节数组假象）。每个字节由一个唯一的数字标识，称为它的<strong>地址</strong>（address）；所有可能地址的集合就是<strong>虚拟地址空间</strong>（virtual address space）。说人话：<strong>内存就是一个超大数组，下标就是地址，每个元素恰好一个字节</strong>。</p>
+
+  <p>那地址和字节内容用什么记法？答案是<strong>十六进制</strong>（hexadecimal，逢 16 进 1，用 0-9 和 A-F 表示 0 到 15）。原因很漂亮：<strong>一个字节 = 8 位 = 恰好 2 个十六进制位</strong>。二进制写 8 位太长，十进制又跟位对不上，唯独十六进制两两一组严丝合缝。所以调试器、内存 dump、地址打印里满屏都是十六进制：地址写作 <code>0x100</code>，多字节整数写作 <code>0x12345678</code>。快速换算如下：</p>
+
+  <pre><code><span class="cmt"># 十六进制 ↔ 二进制：一个十六进制位对应 4 个二进制位</span>
+<span class="num">0x7F</span> = <span class="num">0111</span> <span class="num">1111</span>   <span class="cmt">// 十进制 127</span>
+<span class="num">0x80</span> = <span class="num">1000</span> <span class="num">0000</span>   <span class="cmt">// 十进制 128，符号位的起点</span>
+<span class="num">0xFF</span> = <span class="num">1111</span> <span class="num">1111</span>   <span class="cmt">// 十进制 255，无符号字节最大值</span>
+<span class="num">0x12</span> <span class="num">34</span> <span class="num">56</span> <span class="num">78</span> = <span class="num">0001 0010 0011 0100 0101 0110 0111 1000</span>  <span class="cmt">// 4 个字节 = 一个 int</span></code></pre>
+
+  <p>眼见为实：写个小程序，打印 int 变量的地址，再读出最低地址处的字节。注意——<strong>地址每次运行都不一样</strong>，因为现代操作系统都有 <strong>ASLR</strong>（地址空间布局随机化，每次启动都把栈和堆的基址打乱，防止黑客利用固定地址攻击）。下面是我在本机（arm64 macOS）连续两次运行的真实输出，地址变了，规律没变：</p>
+
+  <pre><code><span class="cmt">// addr.cpp —— 打印变量地址，读取最低地址处的字节</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> x = <span class="num">0x12345678</span>;
+    <span class="kw">unsigned char</span>* p = (<span class="kw">unsigned char</span>*)<span class="op">&amp;</span>x;   <span class="cmt">// 指向 x 占用的第一个字节</span>
+    <span class="fn">printf</span>(<span class="str">"&amp;x   = %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span>x);
+    <span class="fn">printf</span>(<span class="str">"p[0] = 0x%02x (最低地址字节)\n"</span>, (<span class="kw">int</span>)p[<span class="num">0</span>]);
+    <span class="fn">printf</span>(<span class="str">"p[3] = 0x%02x (最高地址字节)\n"</span>, (<span class="kw">int</span>)p[<span class="num">3</span>]);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译 + 运行（本机 arm64 macOS 真实输出）</span>
+g++ addr.cpp -o addr <span class="op">&amp;&amp;</span> ./addr
+<span class="cmt"># 第一次：</span>
+<span class="op">&amp;</span>x   = <span class="num">0x16fa5e128</span>
+p[<span class="num">0</span>] = <span class="num">0x78</span> (最低地址字节)
+p[<span class="num">3</span>] = <span class="num">0x12</span> (最高地址字节)
+<span class="cmt"># 第二次：地址变为 0x16fa7e128（ASLR 随机化），字节规律不变</span></code></pre>
+
+  <table>
+    <tr><th>十进制</th><th>十六进制</th><th>二进制（8 位）</th><th>备注</th></tr>
+    <tr><td>0</td><td>0x00</td><td>0000 0000</td><td>一切从零开始</td></tr>
+    <tr><td>9</td><td>0x09</td><td>0000 1001</td><td>换行符 \n 的 ASCII 码</td></tr>
+    <tr><td>65</td><td>0x41</td><td>0100 0001</td><td>大写字母 A 的 ASCII 码</td></tr>
+    <tr><td>127</td><td>0x7F</td><td>0111 1111</td><td>有符号 char 的最大值</td></tr>
+    <tr><td>255</td><td>0xFF</td><td>1111 1111</td><td>无符号 char 的最大值</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>为什么程序员必须会看十六进制？因为调试器、网络抓包、内存 dump 全都用它。学会两件事就够：<strong>① 一个字节 = 两个十六进制位；② 0x 开头就是十六进制</strong>。看到 <code>0x7F000001</code> 能条件反射出这是 <code>127.0.0.1</code>（回环地址），你的底层功力就入门了。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别把「字节」和「字」混为一谈。<strong>字节</strong>是 8 位，是内存寻址的基本单位；<strong>字</strong>（word）是处理器一次能痛快处理的定长数据块，在第 1 章硬件组织里出现过——x86-64 的字长是 8 字节。一句话：字节是"内存的格子"，字是"CPU 的饭量"。7.2 节要讲的"字长"，指的就是后者。</p>
+  </div>
+
+  <!-- ========== 7.2 字长：32 位与 64 位系统的差别 ========== -->
+  <h2>7.2 字长：32 位与 64 位系统的差别</h2>
+
+  <p>每台计算机都有一个<strong>字长</strong>（word size），指明<strong>整数和指针数据的标称大小</strong>——指针就是"装地址的变量"，指针多大由字长决定。因为<strong>虚拟地址就是用字来编码的</strong>，字长决定最重要的参数：<strong>虚拟地址空间的最大大小</strong>。字长为 n 位的机器，虚拟地址范围是 <code>0 ~ 2^n - 1</code>，程序最多访问 <code>2^n</code> 字节。把这条刻进脑子：<strong>n 位字长 = n 位地址 = 2 的 n 次方字节的寻址能力</strong>。</p>
+
+  <p>算一算就吓人：32 位机器地址空间 <code>2^32 ≈ 4 GB</code>——当年"内存 4GB 到头"的硬天花板；64 位机器是 <code>2^64 ≈ 16 EB</code>（艾字节，1 EB = 10 亿 GB）。注意这不是翻倍，是<strong>平方</strong>：地址多一位，空间翻一倍。当然 16 EB 只是理论极限，硬件和操作系统都有限制；但"指针从 4 字节变 8 字节"是实打实的，本机实测如下：</p>
+
+  <pre><code><span class="cmt">// ptrsize.cpp —— 指针大小 = 字长 / 8</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span>* p = <span class="kw">nullptr</span>;
+    <span class="fn">printf</span>(<span class="str">"sizeof(int*) = %zu 字节\n"</span>, <span class="fn">sizeof</span>(p));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 本机（64 位 arm64 macOS）真实输出：</span>
+g++ ptrsize.cpp -o ptrsize <span class="op">&amp;&amp;</span> ./ptrsize
+<span class="cmt"># sizeof(int*) = 8 字节</span></code></pre>
+
+  <table>
+    <tr><th>对比项</th><th>32 位系统</th><th>64 位系统</th></tr>
+    <tr><td>字长 / 指针大小</td><td>4 字节（32 位）</td><td>8 字节（64 位）</td></tr>
+    <tr><td>地址空间上限</td><td>2^32 ≈ 4 GiB</td><td>2^64 ≈ 16 EiB</td></tr>
+    <tr><td>int 装得下地址吗</td><td>刚好（unsigned int 就是指针大小）</td><td>装不下，指针要用 long long 或专门类型</td></tr>
+    <tr><td>指针的内存开销</td><td>链表、哈希表指针省一半内存</td><td>同样的结构多花一倍指针内存</td></tr>
+    <tr><td>如今的状态</td><td>嵌入式、老设备、兼容模式</td><td>桌面 / 服务器 / 手机主流</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>记住一个反直觉的结论：<strong>64 位系统不是"两倍的 32 位"，而是"地址多 32 位"</strong>——空间是 2^64，不是 2^32×2。代价是每个指针从 4 字节涨到 8 字节，全是指针的程序（链表、树、哈希表）内存开销直接变大，这也是 64 位时代很多数据结构要重新设计的原因。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<strong>"64 位系统"不等于"你的程序是 64 位程序"</strong>。在 64 位系统上编译 32 位程序（比如 GCC 加 <code>-m32</code>），它的指针还是 4 字节，照样只能寻址 4GB。另外预告一个 7.5 节的坑：同样是 64 位，Linux/macOS 上 <code>long</code> 是 8 字节，Windows 上 <code>long</code> 却还是 4 字节——字长和基本类型大小是两回事，别混。</p>
+  </div>
+
+  <!-- ========== 7.3 大小端：一个数的两种存放方式 ========== -->
+  <h2>7.3 大小端：一个数的两种存放方式</h2>
+
+  <p>对于跨越多字节的对象（比如 4 字节的 int），必须建立两条规则：<strong>① 对象的地址是什么</strong>——约定：地址等于所占字节序列中<strong>最小</strong>的那个，比如 x 的地址是 0x100，它就占 0x100~0x103；<strong>② 字节按什么顺序摆放</strong>——这就是字节序（byte order）。字节序有两种：<strong>小端法</strong>（little endian）和<strong>大端法</strong>（big endian）。说人话：<strong>小端 = "小头朝下"</strong>，低字节（least significant byte，"不重要的那端"）放低地址，高字节放高地址；<strong>大端 = 按书写顺序放</strong>，高字节（most significant byte，"重要的那端"）放低地址，和阅读习惯一致。</p>
+
+  <p>还是侦探开场那个"尸体"：整数 <code>0x12345678</code> 的四个字节是 <code>0x12</code>、<code>0x34</code>、<code>0x56</code>、<code>0x78</code>，<code>0x12</code> 是最高字节，<code>0x78</code> 是最低字节。假设变量地址是 0x100，两种摆法如下——注意看低地址 0x100 那一格是谁：</p>
+
+  <pre><code><span class="cmt"># int x = 0x12345678; 地址从 0x100 开始，占 4 个字节</span>
+<span class="cmt"># 地址增大方向：0x100 -&gt; 0x101 -&gt; 0x102 -&gt; 0x103</span>
+
+<span class="cmt"># 小端法（little endian）：低字节放低地址 —— 内存里是"倒着"的</span>
+地址:   <span class="num">0x100</span>   <span class="num">0x101</span>   <span class="num">0x102</span>   <span class="num">0x103</span>
+内存:  ┌──────┬──────┬──────┬──────┐
+       │ 0x78 │ 0x56 │ 0x34 │ 0x12 │   <span class="ann">&lt;- 低字节 0x78 在最前面（低地址）</span>
+       └──────┴──────┴──────┴──────┘
+
+<span class="cmt"># 大端法（big endian）：高字节放低地址 —— 和书写顺序一致</span>
+地址:   <span class="num">0x100</span>   <span class="num">0x101</span>   <span class="num">0x102</span>   <span class="num">0x103</span>
+内存:  ┌──────┬──────┬──────┬──────┐
+       │ 0x12 │ 0x34 │ 0x56 │ 0x78 │   <span class="ann">&lt;- 高字节 0x12 在最前面（低地址）</span>
+       └──────┴──────┴──────┴──────┘</code></pre>
+
+  <p>顺着地址把字节一个一个打出来，本机的真实答案是：<code>0x78 0x56 0x34 0x12</code>——低字节在前，<strong>本机是小端</strong>。这跟 7.1 节 p[0]=0x78、p[3]=0x12 的取证结果完全对上：</p>
+
+  <pre><code><span class="cmt">// byteorder.cpp —— 按地址顺序打印 int 的 4 个字节</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> x = <span class="num">0x12345678</span>;
+    <span class="kw">unsigned char</span>* p = (<span class="kw">unsigned char</span>*)<span class="op">&amp;</span>x;
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; <span class="num">4</span>; i++)
+        <span class="fn">printf</span>(<span class="str">"addr+%d: 0x%02x\n"</span>, i, (<span class="kw">int</span>)p[i]);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 本机真实输出：低字节 0x78 在低地址 → 小端法</span>
+g++ byteorder.cpp -o byteorder <span class="op">&amp;&amp;</span> ./byteorder
+addr+<span class="num">0</span>: <span class="num">0x78</span>   <span class="cmt">// 低地址 = 低字节</span>
+addr+<span class="num">1</span>: <span class="num">0x56</span>
+addr+<span class="num">2</span>: <span class="num">0x34</span>
+addr+<span class="num">3</span>: <span class="num">0x12</span>   <span class="cmt">// 高地址 = 高字节</span></code></pre>
+
+  <table>
+    <tr><th>平台 / 处理器</th><th>字节序</th><th>说人话</th></tr>
+    <tr><td>x86 / x86-64（Intel、AMD）</td><td>小端</td><td>绝大多数 PC 和服务器，你大概率就站在这里</td></tr>
+    <tr><td>ARM（手机、Mac、嵌入式）</td><td>双端，默认小端</td><td>两种都支持，主流操作系统按小端配置运行</td></tr>
+    <tr><td>MIPS / RISC-V</td><td>双端</td><td>硬件两种都行，看系统怎么配</td></tr>
+    <tr><td>IBM z/Architecture（大型机）、旧 PowerPC</td><td>大端</td><td>金融、银行系统常见，跟书写习惯一致</td></tr>
+    <tr><td>网络字节序（TCP/IP 协议）</td><td>大端</td><td>协议规定的"世界语"，7.6 节的主角</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>大小端只影响<strong>多字节</strong>的数值类型。单个 <code>char</code>、字符数组、文本，怎么存都是那一串字节，没有大小端问题。还有一条：<strong>寄存器里没有大小端</strong>——字节序是"内存视图"，数据一旦被 CPU 读进寄存器就是完整整数，哪头在前根本不存在。所以大小端只在"内存 ↔ 寄存器搬运"和"跨机器传输"两个环节显形。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：永远不要在业务代码里写死字节序假设。"把 int 第 0 个字节当低字节用"这种代码，这台机器上对，换台大端机器就全错。正经做法：跨平台序列化用统一的字节序工具函数（7.6 节），或用编译期断言（<code>static_assert</code>）在编译时拦住"这台机器和我假设的不一样"的情况。取证代码可以写，生产代码别赌。</p>
+  </div>
+
+  <!-- ========== 7.4 侦探取证：如何判断你的机器是哪种 ========== -->
+  <h2>7.4 侦探取证：如何判断你的机器是哪种</h2>
+
+  <p>什么时候需要知道本机字节序？调试内存 dump、写跨平台序列化、抓网络包对照协议头——三种场景，判断错了全盘皆输。柯南办案从不靠猜，只有一条：<strong>取证</strong>。判断字节序的本质，是回答一个问题：<strong>"多字节数值的最低地址那个字节，到底是低字节还是高字节？"</strong> 只要把"最低地址的字节"单独揪出来看一眼，答案自己就跳出来了。两种经典手法都能取证。</p>
+
+  <p><strong>方法一：union 共用内存法</strong>。联合体（union）的杀手锏：<strong>所有成员共用同一块内存的起始地址</strong>。让 <code>int a</code> 和 <code>char c</code> 站在同一块内存上，写入 <code>a = 0x12345678</code> 后读 <code>c</code>，读到的就是 <code>a</code> 的<strong>最低地址字节</strong>：c 是 0x78（低字节）就是小端，是 0x12（高字节）就是大端。这方法出自《深入理解计算机系统》的经典习题，也原样保留在咱们的素材笔记里——下面代码照搬原文，仅补了一行 <code>#include &lt;iostream&gt;</code> 才能编译：</p>
+
+  <pre><code><span class="cmt">// endian_union.cpp —— union 判端序（素材原样，仅补头文件）</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span>* argv[])
+{
+    <span class="kw">union</span> {
+        <span class="kw">int</span> a;
+        <span class="kw">char</span> c;
+    }Un;<span class="cmt">//联合体共用内存</span>
+    <span class="cmt">//假设当前的内存地址为           00 01 02 03</span>
+    <span class="cmt">//int a 4个字节，大端法的内存分布 12 34 56 78;</span>
+    <span class="cmt">//int a 4个字节，小端法的内存分布 78 56 34 12;</span>
+    Un.a = <span class="num">0x12345678</span>;<span class="cmt">//12是数据的高字节哦</span>
+    <span class="kw">if</span> (Un.c == <span class="num">0x12</span>)
+        <span class="fn">std::cout</span> &lt;&lt; <span class="str">"big"</span> &lt;&lt; <span class="fn">std::endl</span>;
+    <span class="kw">else if</span> (Un.c == <span class="num">0x78</span>)
+        <span class="fn">std::cout</span> &lt;&lt; <span class="str">"little"</span> &lt;&lt; <span class="fn">std::endl</span>;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译 + 运行（本机真实输出）：</span>
+g++ endian_union.cpp -o endian_union <span class="op">&amp;&amp;</span> ./endian_union
+little</code></pre>
+
+  <p><strong>方法二：指针低地址读法</strong>。思路一模一样，只是把"读最低地址字节"从 union 换成指针：把 <code>&amp;x</code> 强转成 <code>unsigned char*</code>，解引用就是 x 的<strong>第一个字节</strong>（对象地址 = 最小地址，7.3 节约定过）。殊途同归，方法二还能把 4 个字节按地址顺序全打出来，证据更完整：</p>
+
+  <pre><code><span class="cmt">// endian_ptr.cpp —— 指针低地址读法</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> x = <span class="num">0x12345678</span>;
+    <span class="kw">unsigned char</span>* p = (<span class="kw">unsigned char</span>*)<span class="op">&amp;</span>x;   <span class="cmt">// 指向最低地址字节</span>
+    <span class="fn">printf</span>(<span class="str">"低地址首字节 = 0x%02x\n"</span>, (<span class="kw">int</span>)p[<span class="num">0</span>]);
+    <span class="kw">if</span> (p[<span class="num">0</span>] == <span class="num">0x78</span>)
+        <span class="fn">printf</span>(<span class="str">"little endian (小端)\n"</span>);
+    <span class="kw">else if</span> (p[<span class="num">0</span>] == <span class="num">0x12</span>)
+        <span class="fn">printf</span>(<span class="str">"big endian (大端)\n"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译 + 运行（本机真实输出）：</span>
+g++ endian_ptr.cpp -o endian_ptr <span class="op">&amp;&amp;</span> ./endian_ptr
+低地址首字节 = <span class="num">0x78</span>
+little endian (小端)</code></pre>
+
+  <table>
+    <tr><th>取证方法</th><th>原理</th><th>优点 / 缺点</th></tr>
+    <tr><td>union 共用内存法</td><td>union 所有成员共享起始地址，读 char 即读 int 首字节</td><td>教科书经典、直白；但 union 双读（type punning）是未定义行为，仅适合教学取证</td></tr>
+    <tr><td>指针低地址读法</td><td>强转 unsigned char* 后解引用首字节</td><td>同样直白，还能顺带打印全部字节；对 char 符号性敏感（见下方警告）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>取证的三个要素，缺一不可：<strong>① 已知数据</strong>（0x12345678 这种"高字节 12、低字节 78"一眼可辨的数）；<strong>② 观察点</strong>（最低地址那个字节）；<strong>③ 观察顺序</strong>（从低地址往高地址读）。三要素齐了，大小端无所遁形。侦探和普通人的区别不是看得多，是会看。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：读字节一定要用 <code>unsigned char</code>，别用裸 <code>char</code>。多数平台上 <code>char</code> 有符号，首字节若是 <code>0x80</code> 这类高位为 1 的值，会被<strong>符号扩展</strong>成 <code>0xffffff80</code>（int 值 -128），一比较就全乱。用 <code>unsigned char</code> 读内存字节，是底层程序员的职业习惯。</p>
+  </div>
+
+  <!-- ========== 7.5 基本类型的存储大小：sizeof 实测 ========== -->
+  <h2>7.5 基本类型的存储大小：sizeof 实测</h2>
+
+  <p>搞定了字节序，再看第二件事：<strong>每种基本类型占几个字节</strong>。用 <code>sizeof</code> 运算符（编译期求值）一问便知。C++ 标准只给<strong>下限保证</strong>：<code>char</code> 恒为 1 字节；<code>short</code> ≥ 2；<code>int</code> ≥ 2；<code>long</code> ≥ 4；<code>long long</code> ≥ 8；指针大小 = 字长 / 8。具体多少由平台的<strong>数据模型</strong>（data model，int/long/指针的位宽组合约定）决定：Linux/macOS 的 64 位模型是 <strong>LP64</strong>（long 和指针都是 64 位），Windows 是 <strong>LLP64</strong>（只有 long long 和指针是 64 位，long 还是 32 位）——同一个 <code>long</code>，macOS 上 8 字节，Windows 上 4 字节，这是跨平台代码最常见的坑。</p>
+
+  <p>纸上谈兵不如实测。下面这个程序把基本类型挨个量了一遍，<strong>本机（arm64 macOS，LP64 模型）真实输出</strong>如下——注意 <code>long</code> 是 8 字节，Windows 上会差一倍：</p>
+
+  <pre><code><span class="cmt">// sizeof.cpp —— 本机实测所有基本类型大小</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"char      = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">char</span>));
+    <span class="fn">printf</span>(<span class="str">"short     = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">short</span>));
+    <span class="fn">printf</span>(<span class="str">"int       = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">int</span>));
+    <span class="fn">printf</span>(<span class="str">"long      = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">long</span>));
+    <span class="fn">printf</span>(<span class="str">"long long = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">long long</span>));
+    <span class="fn">printf</span>(<span class="str">"float     = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">float</span>));
+    <span class="fn">printf</span>(<span class="str">"double    = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">double</span>));
+    <span class="fn">printf</span>(<span class="str">"指针(int*) = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">int</span>*));
+    <span class="fn">printf</span>(<span class="str">"bool      = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">bool</span>));
+    <span class="fn">printf</span>(<span class="str">"size_t    = %zu 字节\n"</span>, <span class="fn">sizeof</span>(<span class="kw">size_t</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译 + 运行（本机 arm64 macOS 真实输出）：</span>
+g++ sizeof.cpp -o sizeof_prog <span class="op">&amp;&amp;</span> ./sizeof_prog
+char      = <span class="num">1</span> 字节
+short     = <span class="num">2</span> 字节
+<span class="kw">int</span>       = <span class="num">4</span> 字节
+long      = <span class="num">8</span> 字节    <span class="cmt">// LP64：macOS/Linux 上 long 是 8 字节</span>
+long long = <span class="num">8</span> 字节
+float     = <span class="num">4</span> 字节
+double    = <span class="num">8</span> 字节
+指针 (int*) = <span class="num">8</span> 字节   <span class="cmt">// 64 位系统指针固定 8 字节</span>
+bool      = <span class="num">1</span> 字节
+size_t    = <span class="num">8</span> 字节</code></pre>
+
+  <table>
+    <tr><th>类型</th><th>本机实测（arm64 macOS）</th><th>64 位 Linux</th><th>64 位 Windows</th><th>备注</th></tr>
+    <tr><td>char</td><td>1</td><td>1</td><td>1</td><td>标准保证恒为 1</td></tr>
+    <tr><td>short</td><td>2</td><td>2</td><td>2</td><td>至少 2</td></tr>
+    <tr><td>int</td><td>4</td><td>4</td><td>4</td><td>至少 2，主流 4</td></tr>
+    <tr><td>long</td><td>8</td><td>8</td><td><strong>4</strong></td><td>LP64 vs LLP64 的坑就在这</td></tr>
+    <tr><td>long long</td><td>8</td><td>8</td><td>8</td><td>标准保证 ≥ 8</td></tr>
+    <tr><td>float</td><td>4</td><td>4</td><td>4</td><td>IEEE 754 单精度</td></tr>
+    <tr><td>double</td><td>8</td><td>8</td><td>8</td><td>IEEE 754 双精度</td></tr>
+    <tr><td>指针（任意 T*）</td><td>8</td><td>8</td><td>8</td><td>等于字长/8</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p><code>sizeof</code> 最经典的陷阱：<strong>数组和指针，长得像，量起来不一样</strong>。<code>int a[8]</code> 在定义处 <code>sizeof(a)</code> 是 32（整个数组 8×4 字节）；可一旦传进函数 <code>void f(int arr[])</code>，形参 <code>arr</code> 退化成指针，函数里 <code>sizeof(arr)</code> 只有 8。一个变量两种答案，原因就是 7.2 节那句话：指针是"装地址的变量"，大小只由字长决定。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>sizeof</code> 的返回值类型是 <code>size_t</code>（无符号整数），打印要用 <code>%zu</code>，千万别用 <code>%d</code> 或塞进 <code>int</code>——大对象或 32 位平台上可能截断。另外别拿 <code>sizeof</code> 当字符串长度：<code>sizeof("hi")</code> 是 3（含结尾的 <code>'\0'</code>），数实际字符得用 <code>strlen</code>。</p>
+  </div>
+
+  <!-- ========== 7.6 实战：网络协议里的字节序陷阱 ========== -->
+  <h2>7.6 实战：网络协议里的字节序陷阱</h2>
+
+  <p>前几节的知识不落地就只是谈资。现在看一个真实事故现场：<strong>小端机器发出的网络包，为什么到对方手里就变味了？</strong> 假设你在小端机器（x86、ARM 默认配置）上给对端发端口号 <code>8080</code>（十六进制 <code>0x1F90</code>）。端口号是两个字节，写进协议头后按小端规则排列：<strong>低字节在前，先 0x90 后 0x1F</strong>，字节流是 <code>90 1F</code>。对端如果是一台大端机器（比如银行的大型机），它按"高字节在前"读，拼出来就是 <code>0x901F</code> = 36943——端口 8080 变成了 36943，连接打到别的服务上。同一个字节流，两种解释，鸡同鸭讲。这就是<strong>字节序在网络上引发的真实事故</strong>：小端机器发的数据到了大端机器手里，"字里的字节全反了"；反之亦然。</p>
+
+  <p>解决方案是行业公约：<strong>TCP/IP 协议规定，所有多字节字段在网络上统一使用大端，称为"网络字节序"</strong>（network byte order，就是大端法）。发送方把本机内部表示（主机字节序）转成网络标准，接收方再转回来。转换由四个标准函数完成：<code>htons</code>、<code>htonl</code>、<code>ntohs</code>、<code>ntohl</code>。名字就是助记：<strong>h = host 主机，n = network 网络，s = short 16 位，l = long 32 位</strong>。在小端机器上它们真的倒字节；在大端机器上它们原样返回（网络序就是大端，转了等于没转）——所以代码永远要调用它们，别写"反正我是小端"的假设。下面这段程序在本机实测了四个函数的转换效果：</p>
+
+  <pre><code><span class="cmt">// htons.cpp —— 主机序与网络序互转实测</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdint&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;arpa/inet.h&gt;</span>   <span class="cmt">// POSIX 平台提供 htons / htonl / ntohs / ntohl</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">uint16_t</span> host_port = <span class="num">8080</span>;                <span class="cmt">// 端口 8080 = 0x1F90，主机序</span>
+    <span class="kw">uint16_t</span> net_port  = <span class="fn">htons</span>(host_port);     <span class="cmt">// 主机序 -&gt; 网络序</span>
+    <span class="fn">printf</span>(<span class="str">"host 0x%04x -&gt; net 0x%04x\n"</span>, host_port, net_port);
+
+    <span class="kw">uint32_t</span> host_ip = <span class="num">0x7F000001</span>;           <span class="cmt">// 127.0.0.1，主机序</span>
+    <span class="kw">uint32_t</span> net_ip  = <span class="fn">htonl</span>(host_ip);        <span class="cmt">// 主机序 -&gt; 网络序</span>
+    <span class="fn">printf</span>(<span class="str">"host 0x%08x -&gt; net 0x%08x\n"</span>, host_ip, net_ip);
+    <span class="cmt">// 回程验证：ntoh* 是 hton* 的逆运算</span>
+    <span class="fn">printf</span>(<span class="str">"回程: ntohs(0x%04x)=0x%04x  ntohl(0x%08x)=0x%08x\n"</span>,
+           net_port, <span class="fn">ntohs</span>(net_port), net_ip, <span class="fn">ntohl</span>(net_ip));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译 + 运行（本机小端 arm64 macOS 真实输出）：</span>
+g++ htons.cpp -o htons_prog <span class="op">&amp;&amp;</span> ./htons_prog
+host <span class="num">0x1f90</span> -&gt; net <span class="num">0x901f</span>      <span class="cmt">// 两个字节颠倒了——小端机器上 htons 真的在倒字节</span>
+host <span class="num">0x7f000001</span> -&gt; net <span class="num">0x0100007f</span>  <span class="cmt">// 4 个字节整体倒序</span>
+回程: ntohs(<span class="num">0x901f</span>)=<span class="num">0x1f90</span>  ntohl(<span class="num">0x0100007f</span>)=<span class="num">0x7f000001</span></code></pre>
+
+  <p>用进真实发送流程，规矩就一句话：<strong>写进协议头的每个多字节数值先过 hton*，从协议头读出的先过 ntoh*</strong>。端口、IP 地址、长度字段，一个都不能漏。标准写法如下（示意代码，省略错误处理）：</p>
+
+  <pre><code><span class="cmt">// 发送 UDP 报文（示意）：所有多字节字段先转网络字节序</span>
+<span class="kw">#include</span> <span class="type">&lt;sys/socket.h&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;netinet/in.h&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;arpa/inet.h&gt;</span>
+
+<span class="kw">struct</span> sockaddr_in addr;
+addr.sin_family      = AF_INET;
+addr.sin_port        = <span class="fn">htons</span>(<span class="num">8080</span>);        <span class="cmt">// 端口：主机序 -&gt; 网络序</span>
+addr.sin_addr.s_addr = <span class="fn">htonl</span>(<span class="num">0x7F000001</span>);  <span class="cmt">// 127.0.0.1：同样要转</span>
+
+<span class="fn">sendto</span>(sock, buf, len, <span class="num">0</span>,
+       (<span class="kw">struct</span> sockaddr*)<span class="op">&amp;</span>addr, <span class="fn">sizeof</span>(addr));</code></pre>
+
+  <table>
+    <tr><th>函数</th><th>全称助记</th><th>转换方向</th><th>处理对象</th></tr>
+    <tr><td><code>htons</code></td><td>host to network short</td><td>主机序 → 网络序</td><td>16 位数值（端口号等）</td></tr>
+    <tr><td><code>htonl</code></td><td>host to network long</td><td>主机序 → 网络序</td><td>32 位数值（IPv4 地址等）</td></tr>
+    <tr><td><code>ntohs</code></td><td>network to host short</td><td>网络序 → 主机序</td><td>16 位数值</td></tr>
+    <tr><td><code>ntohl</code></td><td>network to host long</td><td>网络序 → 主机序</td><td>32 位数值</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>这四个函数的名字本身就是一份完整的案情笔记：<strong>h 是 host（主机），n 是 network（网络），s 是 short（16 位），l 是 long（32 位）</strong>。方向永远从"当前所在的地方"往"要去的地方"写：要发出去了就 hton（从主机去网络）；刚收到了就 ntoh（从网络回主机）。看到 <code>htons</code> 条件反射：发端口号；看到 <code>ntohl</code>：读 IP 地址。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：两件事别搞错。① <strong>只有多字节数值需要转</strong>——文本、字节数组是逐字节传输的，没有字节序问题，硬转反而坏事。② <strong>别对已转过的值再转一次</strong>——<code>htons(htons(x))</code> 会把字节倒回来（双重转换是经典 bug）。一个值只转一次，方向记清。</p>
+  </div>
+
+  <p>这一章的案卷可以归档了：内存是字节数组，地址是下标，字长决定指针大小和地址空间上限；多字节数值分大小端两派，本机是小端，union 或指针低地址读法即可取证；基本类型大小由数据模型决定，<code>long</code> 跨平台不一样；网络协议用大端当"世界语"，跨机器传输的数值都交给 hton*/ntoh* 转译。真相只有一个，但你得自己动手才能看见。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：读现场 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>某台机器上，一个 int 变量 x = 0x12345678 的内存 dump 是（从低地址到高地址）：<code>12 34 56 78</code>。请问这台机器是大端还是小端？如果把同样的 x 存在小端机器上，dump 应该长什么样？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>看低地址第一个字节是谁：是 0x12（高字节）还是 0x78（低字节）？对照 7.3 节的两张内存布局图。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>dump 从低地址开始是 <code>12 34 56 78</code>，即高字节 0x12 在低地址——<strong>大端法</strong>（和书写顺序一致）。同样的 x 在小端机器上是 <code>78 56 34 12</code>，正是 7.4 节本机取证看到的真实样子。判断口诀：<strong>低地址是低字节 = 小端；低地址是高字节 = 大端</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读懂 union 取证 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>把 7.4 节那段 union 代码原样放到一台 x86 机器上编译运行，输出是什么？解释为什么。如果把 <code>Un.a = 0x12345678</code> 改成 <code>Un.a = 0x1234</code>，输出会变吗？为什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>x86 是经典小端；union 的 char 成员读的是 int 的最低地址字节。0x1234 的最低地址字节是多少？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>x86 小端，最低地址字节是低字节 0x78，输出 <code>little</code>（本机 arm64 macOS 实测也正是 little）。改成 <code>0x1234</code> 后，最低地址字节是 0x34，既不是 0x12 也不是 0x78，两个分支都不命中，程序什么都不输出——这也提醒你：<strong>取证的"已知数据"必须是高、低字节一眼可辨的数</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：sizeof 迷案 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 64 位 macOS 上：<code>int a[8]</code> 在 main 函数里 <code>sizeof(a)</code> 是多少？把 a 传给 <code>void f(int arr[])</code> 后，f 里 <code>sizeof(arr)</code> 又是多少？如果这份代码被移植到 64 位 Windows 上，<code>sizeof(long)</code> 会从多少变成多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>数组在函数形参里会退化成指针；回忆 7.5 节的数据模型表格，LP64 和 LLP64 差在哪一个类型？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>sizeof(a)</code> = 8×4 = 32 字节（整个数组）。② 形参 <code>int arr[]</code> 其实就是 <code>int*</code>，退化成指针，f 里 <code>sizeof(arr)</code> = 8 字节。③ macOS 是 LP64，<code>long</code> = 8 字节；Windows 是 LLP64，<code>long</code> = 4 字节，long long 才是 8 字节。同一个 <code>long</code> 跨平台差一倍——跨平台代码要么用 <code>int32_t</code>/<code>int64_t</code> 定宽类型，要么先查数据模型。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：手写 htonl <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>不调用任何库函数，自己实现一个 <code>uint32_t my_htonl(uint32_t v)</code>，把小端机器上的 32 位数值转成网络字节序（大端）。提示：把 4 个字节分别取出来，按相反的顺序重新拼装。然后回答：这个函数在大端机器上运行，结果应该是什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>取字节用移位和掩码：<code>v &amp; 0xFF</code> 拿最低字节，<code>v &gt;&gt; 8</code> 挪到最低位。拼装时把"最低字节"放到最高位。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>实现：<code>return ((v &amp; 0xFF) &lt;&lt; 24) | ((v &amp; 0xFF00) &lt;&lt; 8) | ((v &gt;&gt; 8) &amp; 0xFF00) | ((v &gt;&gt; 24) &amp; 0xFF);</code>——最低字节挪到最高位，次低挪到次高，依次倒序拼装。验证：v = 0x7F000001 时返回 0x0100007F，和 7.6 节 <code>htonl</code> 的实测输出一致。在大端机器上，内存本来就按大端排，<code>my_htonl</code> 会把字节再倒一遍，结果反而错了——所以标准库的 <code>htonl</code> 在大端机器上被实现为"原样返回"。这也解释了为什么正确姿势永远是调标准函数：<strong>标准函数在不同平台上各自正确，你的手写版只有一个平台正确</strong>。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

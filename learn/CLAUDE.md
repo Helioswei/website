@@ -12,11 +12,12 @@
 - SF32 电子书移植实战线：基于真实 `EPD_Reader-main` 项目的跨平台移植实战（ESP32 → SiFli SF32，中文字体、触控、电量管理，含「已实现/未实现」盘点）。
 - C++ 工程实践线：基于 notes/cpp 真实笔记素材（vcpkg / GCC 源码安装 / gtest+LCOV / gRPC / jsoncpp / pistache / POCO / spdlog / Doxygen 等）重写的工程化教程，4 分部（工程准备 / 包管理与第三方库 / 测试与通信 / 深入工程实践）。
 - 图像与视觉实战线：基于 notes/graphics 真实笔记素材（libraw / libvips / OpenCV 源码安装 / CUDA 10.0 / 相机底片解析等）重写的服务端图像处理教程，4 分部（图像基础与格式 / 图像处理库实战 / 计算机视觉与 GPU 加速 / 深入工程实践）。
+- C++ 底层原理线：由旧源「菜鸟回炉」6 篇（CSAPP 体系：编译原理 / 链接详解 / 内存管理 / 内存对齐 / 类内存分布 / 对象创建限制）重写的语言机制与系统底层教程，4 分部（编译与链接 / 内存与数据表示 / C++ 对象的内存模型 / 对象生命周期与内存控制）；与 C++ 工程实践线（工具链方向）互补。
 
 ## 目录结构
 
 - `index.html` — 门户首页（各技术线入口）
-- `style.css` — 统一浅色设计系统：顶部 `:root` 定义 design tokens（颜色 / 字体 / 圆角 / 阴影），`body.track-*` 覆盖各线强调色（Kotlin 朱砂红 `#b3402f` · LVGL 墨藏蓝 `#35536b` · ESP32 琥珀金 `#9a6a1f` · SF32 藤紫 `#6a4f7a` · C++ 青瓷绿 `#4a6b5d` · 图像 赭金 `#8a6d3b`）；改全站观感只改这里
+- `style.css` — 统一浅色设计系统：顶部 `:root` 定义 design tokens（颜色 / 字体 / 圆角 / 阴影），`body.track-*` 覆盖各线强调色（Kotlin 朱砂红 `#b3402f` · LVGL 墨藏蓝 `#35536b` · ESP32 琥珀金 `#9a6a1f` · SF32 藤紫 `#6a4f7a` · C++ 青瓷绿 `#4a6b5d` · 图像 赭金 `#8a6d3b` · C++ 底层原理 陶土赭石 `#8a5a44`）；改全站观感只改这里
 - `site-nav.js` — **导航数据单一来源**：`window.MENTORS`（导师 → emoji）+ `window.SITE_NAV`（站名、技术线、分部、章节、导师、方法论）
 - `script.js` — 依赖 `site-nav.js`，负责顶栏导航、底部上一章/下一章、目录页 TOC、代码复制按钮的渲染
 - `preview.html` — 设计系统预览页（组件与 tokens 一览，仅作开发参考）
@@ -26,6 +27,7 @@
 - `sifli/` — `index.html`（目录页）+ `chapter01-16.html`
 - `cpp/` — `index.html`（目录页）+ `chapter01-16.html`
 - `graphics/` — `index.html`（目录页）+ `chapter01-16.html`
+- `cpp-internals/` — `index.html`（目录页）+ `chapter01-16.html`（C++ 底层原理线）
 - `tools/check-links.js` — 全站链接 + SITE_NAV 导航校验脚本（Node，由 Task 8 建立；用法见「校验」）
 - `docs/` — superpowers 设计与计划文档（非站点内容）
 
@@ -33,8 +35,8 @@
 
 - **改导航 / 章节 / 导师 → 只改 `site-nav.js` 的 `SITE_NAV` / `MENTORS`**。禁止在页面 HTML 里写死导航——顶栏、目录、上一章/下一章均由 `script.js` 依据 `SITE_NAV` 自动渲染。
 - 每个页面 `<body>` 必须声明：
-  - `class="track-*"` — 技术线标识（`track-kotlin` / `track-lvgl` / `track-epub` / `track-sifli` / `track-cpp` / `track-graphics`），决定强调色
-  - `data-track` — 技术线 id（`kotlin` / `lvgl` / `epub` / `sifli` / `cpp` / `graphics`）；门户与 preview 页可省略
+  - `class="track-*"` — 技术线标识（`track-kotlin` / `track-lvgl` / `track-epub` / `track-sifli` / `track-cpp` / `track-graphics` / `track-cpp-internals`），决定强调色
+  - `data-track` — 技术线 id（`kotlin` / `lvgl` / `epub` / `sifli` / `cpp` / `graphics` / `cpp-internals`）；门户与 preview 页可省略
   - `data-chapter` — 章节页编号（章节页必填）；Kotlin 用两位补零（如 `"01"`），LVGL 用非补零（如 `"1"`），`script.js` 用 `parseInt` 解析，两者均可
   - `data-root` — 相对根：子目录章节/目录页用 `"../"`，根目录页面（门户、preview）用 `"./"`
 - **链接一律相对路径**。GitHub Pages 部署在 `/learn/` 子路径，以 `/` 开头的根绝对路径会失效。
@@ -53,12 +55,12 @@
 
 ## 新增技术线与章节制作规范
 
-站点设计为「一条技术线一个目录」，加新教程请严格按此流程，保证各技术线格式统一。已有六线的做法即范本：Kotlin（朱砂红 `#b3402f`）、LVGL（墨藏蓝 `#35536b`）、ESP32 电子墨水屏（琥珀金 `#9a6a1f`）、SF32（藤紫 `#6a4f7a`）、C++ 工程实践（青瓷绿 `#4a6b5d`）、图像与视觉实战（赭金 `#8a6d3b`），每线 16 章。
+站点设计为「一条技术线一个目录」，加新教程请严格按此流程，保证各技术线格式统一。已有七线的做法即范本：Kotlin（朱砂红 `#b3402f`）、LVGL（墨藏蓝 `#35536b`）、ESP32 电子墨水屏（琥珀金 `#9a6a1f`）、SF32（藤紫 `#6a4f7a`）、C++ 工程实践（青瓷绿 `#4a6b5d`）、图像与视觉实战（赭金 `#8a6d3b`）、C++ 底层原理（陶土赭石 `#8a5a44`），每线 16 章。
 
 ### 新增技术线（6 步）
 
 1. **`site-nav.js`** — 在 `SITE_NAV.tracks` 追加一条：`{ id, name, accent, desc, tagline, parts: [{ title, chapters: [{ num, title, mentor, method }] }] }`。导师名必须能在 `MENTORS` 中找到；每线 16 章、分 4-6 个分部。
-2. **`style.css`** — 加 `body.track-<id> { --accent / --accent-strong / --accent-soft / --tip-bg }`，并加 `.track-card.<id> { --accent }`。新强调色须与现有六色在纸面色板上和谐（偏印刷暖色系，避免高饱和撞色）。
+2. **`style.css`** — 加 `body.track-<id> { --accent / --accent-strong / --accent-soft / --tip-bg }`，并加 `.track-card.<id> { --accent }`。新强调色须与现有七色在纸面色板上和谐（偏印刷暖色系，避免高饱和撞色）。
 3. **门户 `index.html`** — 加一张 `track-card`：`track-vol`（卷 N · 技术线名）+ 图标 + 标题 + 描述 + `track-meta` + `track-cta`「翻到目录 →」。
 4. **目录页 `<track>/index.html`** — 复制现有某线目录页，改 `track-eyebrow`（卷 N · …）、`<h1>`、tagline、`data-track`。
 5. **章节 `<track>/chapter01-16.html`** — 先写第 1 章确立模板，其余章节严格复用其结构，只换内容。

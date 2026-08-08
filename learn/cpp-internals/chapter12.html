@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第12章：类的大小：空类、成员函数与虚函数指针 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter12.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第12章：类的大小：空类、成员函数与虚函数指针 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter12.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="12" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第12章：类的大小：空类、成员函数与虚函数指针</h1>
+  <p class="chapter-subtitle">从 sizeof 出发，把"类到底占多少内存"审个水落石出：空类为什么是 1 字节、成员函数为什么不要钱、虚函数又凭什么让大小暴涨——每个字节都要有交代</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">⚖️</span>
+      <div class="mentor-info">
+        <h3>本章导师：包青天</h3>
+        <p class="mentor-method">核心方法论：铁面无私</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「本官断案，只认一样东西——证据。这一章的证物就是 sizeof：空类到底多大？加了函数变不变？加了虚函数又为什么暴涨？不看教科书，把代码写出来、编译、运行，<strong>sizeof 一锤定音，数字不会说谎</strong>。每个字节的来龙去脉，本官都要审个水落石出。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 12.1 空类为什么是 1 字节 ========== -->
+  <h2>12.1 空类为什么是 1 字节：不同对象必须有不同地址</h2>
+
+  <p>先亮出本章的第一个问题：<strong>一个什么都没有的类（空类），占多少内存？</strong>直觉上应该是 0？答案是否定的：在 C++ 里，空类（class）、空结构体（struct）、空联合体（union）的内存大小都是 <strong>1</strong>，而不是 0。</p>
+
+  <p>原因就一句话，这是 C++ 标准定的规矩：<strong>不同的对象必须拥有不同的地址</strong>。如果空类大小是 0，实例化两个空对象时，它们在内存地址上就无法区分——"谁是谁"根本说不清。所以编译器往往会给空类<strong>隐含地加一个字节</strong>做占位符，让每个实例都拿到独一无二的地址。换句话说：那 1 个字节不是数据，是"存在感"。下面用素材里的经典三件套实测（本机 macOS 64 位 / Apple Clang 21）：</p>
+
+  <pre><code><span class="cmt">// empty01.cpp —— 空类 / 空结构体 / 空联合体：sizeof 都是多少？</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>
+<span class="kw">#define</span> <span class="fn">PR</span>(x) std::cout <span class="op">&lt;&lt;</span> <span class="op">#</span>x <span class="op">&lt;&lt;</span> <span class="str">":"</span> <span class="op">&lt;&lt;</span> x <span class="op">&lt;&lt;</span> std::endl;
+
+<span class="kw">struct</span> <span class="type">A</span> {};                    <span class="cmt">// 空结构体</span>
+<span class="kw">class</span> <span class="type">C</span> { <span class="kw">static</span> <span class="kw">int</span> <span class="param">a</span>; };   <span class="cmt">// 空类：只有一个静态成员声明</span>
+<span class="kw">union</span> <span class="type">B</span> {};                    <span class="cmt">// 空联合体</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">PR</span>(<span class="kw">sizeof</span>(<span class="type">A</span>));
+    <span class="fn">PR</span>(<span class="kw">sizeof</span>(<span class="type">B</span>));
+    <span class="fn">PR</span>(<span class="kw">sizeof</span>(<span class="type">C</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：sizeof(A):1  sizeof(B):1  sizeof(C):1</span></code></pre>
+
+  <p>三个 1。注意 <code>C</code> 里明明写了一个 <code>static int a;</code>——为什么还是 1？因为<strong>静态成员变量不属于任何对象</strong>：它只有一份，住在静态存储区，实例化一百个对象也不会有第二份。所以"有没有静态成员"不影响对象大小。接下来验证"地址唯一"这条铁律——两个空对象、三个空对象的数组，地址怎么排：</p>
+
+  <pre><code><span class="cmt">// empty02.cpp —— 空对象的地址：一个萝卜一个坑</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> <span class="type">A</span> {};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="type">A</span> <span class="param">x</span>, <span class="param">y</span>;                     <span class="cmt">// 两个空对象</span>
+    <span class="fn">printf</span>(<span class="str">"&amp;x = %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">x</span>);
+    <span class="fn">printf</span>(<span class="str">"&amp;y = %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">y</span>);
+
+    <span class="type">A</span> <span class="param">arr</span>[<span class="num">3</span>];                     <span class="cmt">// 空类数组：每个元素地址必须不同</span>
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">i</span> = <span class="num">0</span>; <span class="param">i</span> <span class="op">&lt;</span> <span class="num">3</span>; <span class="param">i</span>++)
+        <span class="fn">printf</span>(<span class="str">"&amp;arr[%d] = %p\n"</span>, <span class="param">i</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">arr</span>[<span class="param">i</span>]);
+    <span class="fn">printf</span>(<span class="str">"元素间隔 = %zu 字节\n"</span>, (<span class="kw">char</span>*)<span class="op">&amp;</span><span class="param">arr</span>[<span class="num">1</span>] <span class="op">-</span> (<span class="kw">char</span>*)<span class="op">&amp;</span><span class="param">arr</span>[<span class="num">0</span>]);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：&amp;x = 0x16f0160cb  &amp;y = 0x16f0160ca</span>
+<span class="cmt">// &amp;arr[0..2] = 0x16f0160c7 / 0x16f0160c8 / 0x16f0160c9</span>
+<span class="cmt">// 元素间隔 = 1 字节（每个空对象都实打实占着那 1 字节）</span></code></pre>
+
+  <table>
+    <tr><th>对象</th><th>声明</th><th>sizeof</th><th>为什么</th></tr>
+    <tr><td>空结构体</td><td><code>struct A {}</code></td><td>1</td><td>占位字节，保证对象地址唯一</td></tr>
+    <tr><td>空类（带静态成员）</td><td><code>class C { static int a; }</code></td><td>1</td><td>静态成员不属于对象，类仍是空的</td></tr>
+    <tr><td>空联合体</td><td><code>union B {}</code></td><td>1</td><td>同样占位 1 字节</td></tr>
+    <tr><td>嵌套空成员</td><td><code>struct Wrap { A a; }</code></td><td>1</td><td>占位字节就是那 1 字节</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>标准只规定"<strong>不同对象必须拥有不同的地址</strong>"，没规定必须用 1 字节实现——几乎所有编译器都用 1 字节，你只需要记住：<strong>sizeof(空类) 不为 0</strong>。面试被问"空类多大"，先答 1，再把"地址唯一"这条标准原话背出来，一锤定音。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别把空类当"零成本"。上面 <code>arr[3]</code> 实打实占了 3 字节——<strong>数组里每个空对象都要消耗它那 1 个占位字节</strong>。<code>std::vector&lt;空类&gt;</code> 存一万个元素就是一万字节。另外别以为 <code>static int a</code> 在对象里：它只有一份，在静态存储区，跟对象大小毫无关系。</p>
+  </div>
+
+  <!-- ========== 12.2 空结构体与空联合体 ========== -->
+  <h2>12.2 空结构体与空联合体：同样 1 字节</h2>
+
+  <p>上一节三种空壳一视同仁，都是 1 字节。再深挖一层：<strong>在 C++ 里，struct、class、union 只是"关键字不同"</strong>——struct 与 class 唯一的差别是成员默认访问权限（struct 默认 public，class 默认 private），内存规则完全一致；union 特殊在"成员共享内存"，但空 union 没有成员，同样落到 1 字节占位。一句话：<strong>占位字节不看你是哪种壳，只看你是不是空的</strong>。</p>
+
+  <p>但同样的问题放到 C 语言里，答案截然不同：<strong>C 语言中空结构体、空联合体的内存大小为 0</strong>（标准 C 根本不允许空结构体——能编译是 GNU 扩展在网开一面）。为什么 C 可以 0？因为"不同对象必须拥有不同地址"是 C++ 的规则，C 语言没这条规矩。下面是 C 与 C++ 的对照实测：</p>
+
+  <pre><code><span class="cmt">// empty03.cpp —— 空结构体当成员 / 塞进 union，逐一实测</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> <span class="type">A</span> {};
+<span class="kw">union</span> <span class="type">U</span> { <span class="type">A</span> <span class="param">a</span>; <span class="kw">int</span> <span class="param">x</span>; };       <span class="cmt">// 空结构体塞进联合体</span>
+<span class="kw">struct</span> <span class="type">Wrap</span> { <span class="type">A</span> <span class="param">a</span>; };            <span class="cmt">// 空结构体当成员</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(A)   = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">A</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(Wrap)= %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Wrap</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(U)   = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">U</span>));   <span class="cmt">// 最大成员 int 决定（第 11 章规则）</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：sizeof(A) = 1  sizeof(Wrap) = 1  sizeof(U) = 4</span></code></pre>
+
+  <pre><code><span class="cmt">// empty_c.c —— 同一个"空壳"，C 语言里是 0（GNU 扩展）</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">struct</span> <span class="type">A</span> {};
+<span class="kw">union</span> <span class="type">B</span> {};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(A) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="kw">struct</span> <span class="type">A</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(B) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="kw">union</span> <span class="type">B</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出（gcc -std=gnu11 编译）：sizeof(A) = 0  sizeof(B) = 0</span></code></pre>
+
+  <table>
+    <tr><th>场景</th><th>sizeof</th><th>说人话</th></tr>
+    <tr><td>C++ 空结构体 <code>struct A {}</code></td><td>1</td><td>占位字节，对象地址必须唯一</td></tr>
+    <tr><td>C++ 空联合体 <code>union B {}</code></td><td>1</td><td>没有成员，同样占位 1 字节</td></tr>
+    <tr><td>C++ 嵌套 <code>struct Wrap { A a; }</code></td><td>1</td><td>占位字节就是那 1 字节</td></tr>
+    <tr><td>C++ <code>union { A a; int x; }</code></td><td>4</td><td>最大成员 int 决定（第 11 章规则）</td></tr>
+    <tr><td>C 语言空结构体 / 空联合体（GNU 扩展）</td><td>0</td><td>C 没有"对象地址唯一"的规则</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>审案要点：<strong>占位字节是 C++ 的"法律要求"，不是编译器的个人爱好</strong>。把 <code>struct A {}</code> 换成 <code>class A {}</code> 或 <code>union A {}</code>，结果纹丝不动。会背 1 字节不算本事，能讲出"为什么"才算过关。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：跨语言边界要小心。把 C++ 的空结构体交给 C 编译器，可能连编译都过不去（标准 C 不允许空结构体），过了也是 0 字节；反过来，C 代码假设空壳是 0，用 C++ 编译就变成 1——<strong>同一个"空壳"，两种语言，两种大小，别混着用</strong>。</p>
+  </div>
+
+  <!-- ========== 12.3 加成员函数：大小不变 ========== -->
+  <h2>12.3 加成员函数：大小不变（函数住在代码段）</h2>
+
+  <p>空类只有 1 字节，那往里面加函数呢？答案可能让新手意外：<strong>加普通函数、构造函数、析构函数、静态函数、const 函数——sizeof 纹丝不动，还是 1</strong>。原因是一个贯穿全章的根本事实：<strong>成员函数不占用这个类的内存空间</strong>。对象里装的只有数据（成员变量），函数是"类"这个集体户口，不随对象搬家。</p>
+
+  <p>那函数住哪？<strong>住在代码段</strong>（text segment，可执行文件里存放机器指令的区域）——每个函数在编译产物里只有一份拷贝，一万个对象调用的都是同一份代码。所谓"调用 <code>obj.sum()</code>"，本质是编译器把 <code>obj</code> 的地址作为隐藏参数 <code>this</code> 传进去，跳到那份唯一的代码执行。用素材里的经典"函数全家桶"实测：</p>
+
+  <pre><code><span class="cmt">// methods01.cpp —— 塞满成员函数，sizeof 纹丝不动</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="type">C</span>
+{
+<span class="kw">public</span>:
+    <span class="type">C</span>()          { <span class="cmt">/* 构造函数 */</span> }
+    <span class="op">~</span><span class="type">C</span>()         { <span class="cmt">/* 析构函数 */</span> }
+    <span class="kw">int</span> <span class="fn">sum</span>()    { <span class="kw">int</span> <span class="param">a</span> = <span class="num">10</span>; <span class="kw">return</span> <span class="param">a</span>; }
+    <span class="kw">static</span> <span class="kw">void</span> <span class="fn">add</span>() { <span class="cmt">/* 静态函数：连 this 都没有 */</span> }
+    <span class="kw">const</span> <span class="kw">int</span> <span class="fn">getA</span>() { <span class="kw">return</span> <span class="num">10</span>; }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(C) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">C</span>));   <span class="cmt">// 还是 1！</span>
+    <span class="type">C</span> <span class="param">obj</span>;
+    <span class="fn">printf</span>(<span class="str">"obj.sum() = %d, obj.getA() = %d\n"</span>, <span class="param">obj</span>.<span class="fn">sum</span>(), <span class="param">obj</span>.<span class="fn">getA</span>());
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：sizeof(C) = 1  obj.sum() = 10  obj.getA() = 10</span></code></pre>
+
+  <p>构造函数、析构函数、普通成员函数、静态成员函数、const 成员函数——五路大军齐上阵，<code>sizeof(C)</code> 依然是 1。为了把"函数住在代码段"钉死，再做一个取证实验：读出两个成员函数的<strong>地址</strong>，它们应落在代码段（远离栈上的对象）：</p>
+
+  <pre><code><span class="cmt">// methods02.cpp —— 函数地址取证：一份代码，万人共享</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstring&gt;</span>
+
+<span class="kw">class</span> <span class="type">C</span>
+{
+<span class="kw">public</span>:
+    <span class="kw">int</span> <span class="fn">sum</span>()    { <span class="kw">return</span> <span class="num">10</span>; }
+    <span class="kw">const</span> <span class="kw">int</span> <span class="fn">getA</span>() { <span class="kw">return</span> <span class="num">10</span>; }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="type">C</span> <span class="param">obj1</span>, <span class="param">obj2</span>;
+    <span class="kw">int</span> (<span class="type">C</span>::*<span class="param">pmf_sum</span>)()  = <span class="op">&amp;</span><span class="type">C</span>::<span class="fn">sum</span>;    <span class="cmt">// 成员函数指针</span>
+    <span class="kw">const</span> <span class="kw">int</span> (<span class="type">C</span>::*<span class="param">pmf_getA</span>)() = <span class="op">&amp;</span><span class="type">C</span>::<span class="fn">getA</span>;
+    <span class="kw">void</span>* <span class="param">p1</span> = <span class="kw">nullptr</span>, *<span class="param">p2</span> = <span class="kw">nullptr</span>;
+    <span class="fn">memcpy</span>(<span class="op">&amp;</span><span class="param">p1</span>, <span class="op">&amp;</span><span class="param">pmf_sum</span>,  <span class="kw">sizeof</span>(<span class="param">p1</span>));  <span class="cmt">// Itanium ABI 上等于 void* 大小</span>
+    <span class="fn">memcpy</span>(<span class="op">&amp;</span><span class="param">p2</span>, <span class="op">&amp;</span><span class="param">pmf_getA</span>, <span class="kw">sizeof</span>(<span class="param">p2</span>));
+    <span class="fn">printf</span>(<span class="str">"&amp;C::sum  = %p（代码段地址）\n"</span>, <span class="param">p1</span>);
+    <span class="fn">printf</span>(<span class="str">"&amp;C::getA = %p（代码段地址）\n"</span>, <span class="param">p2</span>);
+    <span class="fn">printf</span>(<span class="str">"obj1.sum() = %d, obj2.sum() = %d\n"</span>, <span class="param">obj1</span>.<span class="fn">sum</span>(), <span class="param">obj2</span>.<span class="fn">sum</span>());
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：</span>
+<span class="cmt">// &amp;C::sum = 0x10001c6c4（代码段地址）  &amp;C::getA = 0x10001c6e0（代码段地址）</span>
+<span class="cmt">// obj1.sum() = 10, obj2.sum() = 10</span></code></pre>
+
+  <table>
+    <tr><th>加进空类的"东西"</th><th>sizeof 变化</th><th>原因</th></tr>
+    <tr><td>普通成员函数</td><td>不变（1）</td><td>函数代码在代码段，不属于对象</td></tr>
+    <tr><td>构造函数 / 析构函数</td><td>不变（1）</td><td>同上，调用时才执行</td></tr>
+    <tr><td>静态成员函数</td><td>不变（1）</td><td>静态函数连 this 都没有，更不占对象空间</td></tr>
+    <tr><td>const 成员函数</td><td>不变（1）</td><td>只是签名里的承诺，不产生任何成员</td></tr>
+    <tr><td>静态成员变量</td><td>不变（1）</td><td>静态变量全局只有一份，不在对象里</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>这一课是对象模型的第一块基石：<strong>对象 = 数据（成员变量）；类 = 数据 + 行为（成员函数）</strong>。函数不进对象，是因为"行为"是全班共享的——一万个对象不需要一万份 <code>sum()</code>，一份就够了，大家轮流把 <code>this</code> 递进去用。想通这一点，后面虚函数表、多态的机制就顺了。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>："成员函数不占空间"有个著名的例外——<strong>虚成员函数</strong>。一旦函数前加上 <code>virtual</code>，情况立刻反转，下一节就是这场反转的现场。另外留意：成员函数指针（<code>int (C::*)()</code>）和普通函数指针（<code>void (*)()</code>）是两种东西，语法、大小、用法都不同，别混用。</p>
+  </div>
+
+  <!-- ========== 12.4 加虚函数：vptr 出现了 ========== -->
+  <h2>12.4 加虚函数：vptr 出现了（8 字节的隐藏成员）</h2>
+
+  <p>现在给类加一个虚函数，戏剧性的一幕出现了：<strong>sizeof 从 1 直接跳到 8</strong>（本机 64 位系统实测）。原因：虚函数会引入一个隐藏成员——<strong>虚表指针</strong>（vptr，virtual table pointer，指向虚函数表的指针）。虚函数表（vtable，virtual table，存放这个类所有虚函数地址的表）不定义在类里，<strong>类定义时只是在类的开头加了一个指向虚函数表的指针</strong>，而不是塞一个"虚函数数组"。所以每次实例化一个带虚函数的对象，都要多付一个指针的代价——64 位系统上一个指针是 8 字节。</p>
+
+  <p>几个必须审清的细节：<strong>vptr 布局在类的开头</strong>（偏移 0）；<strong>编译器在构造函数中创建/初始化这个 vptr</strong>，让它指向本类的虚函数表；<strong>这个类产生多个对象时，所有对象共用同一张虚函数表</strong>——表只有一份，每个对象只存一个指向它的指针；<strong>纯虚函数同理</strong>（抽象类照样带 vptr）。先复现素材里的"虚函数空类"：</p>
+
+  <pre><code><span class="cmt">// vptr01.cpp —— 加一个虚函数，sizeof 从 1 跳到 8</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="type">C</span>
+{
+<span class="kw">public</span>:
+    <span class="type">C</span>()  { <span class="cmt">/* 构造函数 */</span> }
+    <span class="op">~</span><span class="type">C</span>() { <span class="cmt">/* 析构函数 */</span> }
+    <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">test</span>() {}   <span class="cmt">// 一个虚函数：编译器偷偷塞进一个 vptr</span>
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(C) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">C</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：sizeof(C) = 8  （64 位系统，一个指针 = 8 字节）</span></code></pre>
+
+  <p>再看 vptr 到底站在哪、以及"共享虚表"怎么取证。给类加一个 <code>int a</code> 成员，量出它的偏移：如果 <code>a</code> 不在偏移 0 而在偏移 8，说明前 8 字节被 vptr 占了；再创建两个对象，读出各自的 vptr 值，如果两个值相同，说明它们指向同一张虚表：</p>
+
+  <pre><code><span class="cmt">// vptr02.cpp —— vptr 站在类开头，所有对象共享同一张虚表</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="type">VInt</span>
+{
+<span class="kw">public</span>:
+    <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">run</span>() {}
+    <span class="kw">int</span> <span class="param">a</span>;                     <span class="cmt">// 虚函数 + 一个 int</span>
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(VInt) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">VInt</span>));
+
+    <span class="type">VInt</span> <span class="param">vi</span>;
+    <span class="kw">char</span>* <span class="param">base</span> = <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">vi</span>);
+    <span class="fn">printf</span>(<span class="str">"对象地址   = %p\n"</span>, (<span class="kw">void</span>*)<span class="param">base</span>);
+    <span class="fn">printf</span>(<span class="str">"成员 a 偏移 = %zu 字节（前 8 字节是 vptr）\n"</span>,
+           <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">vi</span>.<span class="param">a</span>) <span class="op">-</span> <span class="param">base</span>);
+
+    <span class="type">VInt</span> <span class="param">v1</span>, <span class="param">v2</span>;                <span class="cmt">// 两个对象，读出各自的 vptr</span>
+    <span class="kw">void</span>** <span class="param">vt1</span> = *(<span class="kw">void</span>***)<span class="op">&amp;</span><span class="param">v1</span>;
+    <span class="kw">void</span>** <span class="param">vt2</span> = *(<span class="kw">void</span>***)<span class="op">&amp;</span><span class="param">v2</span>;
+    <span class="fn">printf</span>(<span class="str">"v1 的 vptr 指向 %p\n"</span>, (<span class="kw">void</span>*)<span class="param">vt1</span>);
+    <span class="fn">printf</span>(<span class="str">"v2 的 vptr 指向 %p\n"</span>, (<span class="kw">void</span>*)<span class="param">vt2</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：</span>
+<span class="cmt">// sizeof(VInt) = 16</span>
+<span class="cmt">// 对象地址   = 0x16bcf6098   成员 a 偏移 = 8 字节（前 8 字节是 vptr）</span>
+<span class="cmt">// v1 的 vptr 指向 0x10410c028  v2 的 vptr 指向 0x10410c028（同一张虚表！）</span></code></pre>
+
+  <table>
+    <tr><th>类</th><th>内容</th><th>sizeof</th><th>vptr？</th></tr>
+    <tr><td><code>class C {}</code></td><td>空</td><td>1</td><td>无</td></tr>
+    <tr><td><code>class C { 一堆函数 }</code></td><td>只有成员函数</td><td>1</td><td>无（函数不占对象空间）</td></tr>
+    <tr><td><code>class C { virtual void test(); }</code></td><td>一个虚函数</td><td>8</td><td>有（类开头 8 字节）</td></tr>
+    <tr><td><code>class VInt { virtual; int a; }</code></td><td>虚函数 + int</td><td>16</td><td>有（vptr 8 + int 4 + 填充 4）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>把 12.1 到 12.4 连起来看，这条曲线就是多态的全部成本：<strong>空类 1 字节 → 加函数还是 1 字节 → 加一个 virtual 变 8 字节</strong>。vptr 是编译器偷偷塞进来的隐藏成员——你看不见它，但它真实存在，还占着类最前面 8 个字节。这就是"多态不是免费的"的字面意思：每个对象都要为"运行时才知道调哪个函数"预付一个指针。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：有虚函数的类不再是<strong>标准布局</strong>（standard-layout）类型，对它用 <code>offsetof</code> 是未定义行为；上面用 <code>reinterpret_cast</code> 硬读 vptr 只是教学实验，<strong>生产代码千万别依赖这种技巧</strong>——不同编译器、不同 ABI 的 vptr 布局可能不同。</p>
+  </div>
+
+  <!-- ========== 12.5 回扣第 10 章：类也要对齐 ========== -->
+  <h2>12.5 回扣第 10 章：类也要对齐</h2>
+
+  <p>第 10 章我们审过结构体的对齐：<code>sizeof</code> 不是成员之和，<code>padding</code> 藏在中间或尾巴。现在把结论搬进类——<strong>在成员布局这件事上，class 和 struct 用的是同一把尺子</strong>。看三个成员一模一样、顺序不同的类，<code>sizeof</code> 天差地别（本机实测）：</p>
+
+  <pre><code><span class="cmt">// align01.cpp —— class 的对齐：和 struct 用的是同一把尺子</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="type">Config</span>  { <span class="kw">public</span>: <span class="kw">char</span> <span class="param">level</span>; <span class="kw">int</span> <span class="param">timeout</span>; };      <span class="cmt">// char + int</span>
+<span class="kw">class</span> <span class="type">Config2</span> { <span class="kw">public</span>: <span class="kw">char</span> <span class="param">level</span>; <span class="kw">int</span> <span class="param">timeout</span>; <span class="kw">char</span> <span class="param">mode</span>; }; <span class="cmt">// char + int + char</span>
+<span class="kw">class</span> <span class="type">Config3</span> { <span class="kw">public</span>: <span class="kw">int</span> <span class="param">timeout</span>; <span class="kw">char</span> <span class="param">level</span>; <span class="kw">char</span> <span class="param">mode</span>; }; <span class="cmt">// 重排：int 在前</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="fn">printf</span>(<span class="str">"sizeof(Config)  = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Config</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(Config2) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Config2</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(Config3) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Config3</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：</span>
+<span class="cmt">// sizeof(Config)  = 8    （char(1) + 填充3 + int(4)）</span>
+<span class="cmt">// sizeof(Config2) = 12   （char(1) + 填充3 + int(4) + char(1) + 填充3）</span>
+<span class="cmt">// sizeof(Config3) = 8    （int(4) + char(1) + char(1) + 填充2）</span></code></pre>
+
+  <p>和 struct 一模一样的剧情。更关键的是：<strong>vptr 也参与对齐排布</strong>。带虚函数的类，布局是"vptr 打头，成员变量按对齐规则往后排"。用地址差把偏移量一个个量出来，把 <code>Config2</code> 和 12.4 节的 <code>VInt</code> 并排审一遍：</p>
+
+  <pre><code><span class="cmt">// align02.cpp —— 用地址差把成员偏移量出来（含 vptr 的类）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="type">Config2</span>
+{
+<span class="kw">public</span>:
+    <span class="kw">char</span> <span class="param">level</span>;      <span class="cmt">// 1 字节</span>
+    <span class="kw">int</span>  <span class="param">timeout</span>;    <span class="cmt">// 4 字节</span>
+    <span class="kw">char</span> <span class="param">mode</span>;       <span class="cmt">// 1 字节</span>
+};
+
+<span class="kw">class</span> <span class="type">VInt</span>
+{
+<span class="kw">public</span>:
+    <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">run</span>() {}
+    <span class="kw">int</span> <span class="param">a</span>;           <span class="cmt">// 虚函数 + int</span>
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="type">Config2</span> <span class="param">c2</span>;
+    <span class="kw">char</span>* <span class="param">b</span> = <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">c2</span>);
+    <span class="fn">printf</span>(<span class="str">"Config2.level   偏移 = %zu\n"</span>, <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">c2</span>.<span class="param">level</span>)   <span class="op">-</span> <span class="param">b</span>);
+    <span class="fn">printf</span>(<span class="str">"Config2.timeout 偏移 = %zu\n"</span>, <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">c2</span>.<span class="param">timeout</span>) <span class="op">-</span> <span class="param">b</span>);
+    <span class="fn">printf</span>(<span class="str">"Config2.mode    偏移 = %zu\n"</span>, <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">c2</span>.<span class="param">mode</span>)    <span class="op">-</span> <span class="param">b</span>);
+
+    <span class="type">VInt</span> <span class="param">vi</span>;
+    <span class="kw">char</span>* <span class="param">v</span> = <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">vi</span>);
+    <span class="fn">printf</span>(<span class="str">"VInt 的 vptr 偏移 = 0\n"</span>);
+    <span class="fn">printf</span>(<span class="str">"VInt::a     偏移 = %zu（前面 8 字节是 vptr）\n"</span>,
+           <span class="kw">reinterpret_cast</span><span class="op">&lt;</span><span class="kw">char</span>*<span class="op">&gt;</span>(<span class="op">&amp;</span><span class="param">vi</span>.<span class="param">a</span>) <span class="op">-</span> <span class="param">v</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：</span>
+<span class="cmt">// Config2.level = 0  Config2.timeout = 4  Config2.mode = 8</span>
+<span class="cmt">// VInt 的 vptr 偏移 = 0  VInt::a 偏移 = 8（前面 8 字节是 vptr）</span></code></pre>
+
+  <pre><code><span class="cmt"># VInt 对象内部布局（64 位，本机实测，单位：字节）</span>
+偏移 <span class="num">0</span>  : <span class="param">vptr</span>（<span class="num">8</span>）  <span class="op">&lt;-</span> 编译器自动塞入的隐藏成员，指向虚表
+偏移 <span class="num">8</span>  : <span class="param">int a</span>（<span class="num">4</span>）
+偏移 <span class="num">12</span> : 填充（<span class="num">4</span>）  <span class="ann">@padding</span> 对齐到 8 的倍数
+总计     : <span class="fn">sizeof</span>(<span class="type">VInt</span>) = <span class="num">16</span></code></pre>
+
+  <table>
+    <tr><th>类声明</th><th>成员排布</th><th>sizeof</th><th>padding</th></tr>
+    <tr><td><code>Config</code></td><td>char + int</td><td>8</td><td>3 字节</td></tr>
+    <tr><td><code>Config2</code></td><td>char + int + char</td><td>12</td><td>6 字节</td></tr>
+    <tr><td><code>Config3</code></td><td>int + char + char（重排）</td><td>8</td><td>2 字节</td></tr>
+    <tr><td><code>VInt</code></td><td>vptr + int</td><td>16</td><td>4 字节</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>把本章所有证据串成一条总公式：<strong>类的大小 = 隐藏的 vptr（有虚函数才有）+ 成员变量（按第 10 章对齐规则排布）+ padding</strong>。成员函数、静态成员都不进来。以后拿到任意一个类，先数虚函数定 vptr，再按对齐规则排成员，手算的 sizeof 和编译器对账——对不上，说明你漏了规矩。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：带虚函数的类，<strong>第一个成员不在偏移 0</strong>——vptr 占了头 8 字节。写序列化、网络协议、跨进程共享结构时，类里藏一个虚函数等于埋雷：你以为 <code>level</code> 在偏移 0，实际它在偏移 8，字节流一错位全盘皆输。协议结构体要么不带虚函数，要么用第 11 章的手法 pack + static_assert 钉死。</p>
+  </div>
+
+  <!-- ========== 12.6 章节小结与悬念 ========== -->
+  <h2>12.6 章节小结与悬念：继承之后内存怎么排？</h2>
+
+  <p>包青天式的收尾：把本堂审案的证据链摆齐。起点是空类的 1 字节占位（对象地址必须唯一）；接着证明成员函数不占对象空间（函数住在代码段）；然后虚函数登场，vptr 在类开头出现，一加就是 8 字节，所有对象共享同一张虚表；最后回扣第 10 章——class 与 struct 用同一把对齐尺子，vptr 也参与排布。五步走完，<strong>"类多大"不再是一道背数字的题，而是一道推理题</strong>。</p>
+
+  <p>最后一个必须埋的钩子：本章审的全是"单打独斗"的类。那么<strong>继承之后，内存怎么排？</strong>子类的成员是接在父类后面，还是另起炉灶？父类的 vptr 子类继承吗——还是子类生成自己的虚表？多态调用 <code>son.print()</code> 时，CPU 是怎么通过 vptr 找到正确函数的？预告一个实验（本机实测）：</p>
+
+  <pre><code><span class="cmt">// inherit_preview.cpp —— 第 13 章预告：继承之后内存怎么排？</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="type">Base</span>
+{
+<span class="kw">public</span>:
+    <span class="kw">int</span> <span class="param">a</span>;
+<span class="kw">private</span>:
+    <span class="kw">int</span> <span class="param">b</span>;
+    <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">print</span>() { <span class="fn">printf</span>(<span class="str">"Base\n"</span>); }
+};
+
+<span class="kw">class</span> <span class="type">Son</span> : <span class="kw">public</span> <span class="type">Base</span>
+{
+<span class="kw">public</span>:
+    <span class="kw">int</span> <span class="param">c</span>;
+    <span class="kw">void</span> <span class="fn">print</span>() { <span class="fn">printf</span>(<span class="str">"Son\n"</span>); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="type">Son</span> <span class="param">son</span>;
+    <span class="param">son</span>.<span class="fn">print</span>();
+    <span class="fn">printf</span>(<span class="str">"sizeof(Base) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Base</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(Son)  = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Son</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt">// 本机真实输出：</span>
+<span class="cmt">// Son</span>
+<span class="cmt">// sizeof(Base) = 16  （vptr 8 + int a 4 + int b 4，正好对齐）</span>
+<span class="cmt">// sizeof(Son)  = 24  （Base 16 + int c 4 + 填充 4）</span></code></pre>
+
+  <pre><code><span class="cmt"># 本章知识地图（包青天审案记录）</span>
+<span class="num">12.1</span> 空类：  <span class="fn">sizeof</span> = <span class="num">1</span> —— 不同对象必须有不同地址（占位字节）
+<span class="num">12.2</span> 空壳：  struct / union 同为 <span class="num">1</span>，C 语言里是 <span class="num">0</span>（GNU 扩展）
+<span class="num">12.3</span> 函数：  成员函数不占对象空间 —— 函数代码住在代码段
+<span class="num">12.4</span> 虚函数：<span class="fn">sizeof</span> <span class="num">1</span> → <span class="num">8</span> —— vptr 出现在类开头，指向共享虚表
+<span class="num">12.5</span> 对齐：  class 与 struct 同一把尺子 —— padding 照塞，vptr 也参与
+<span class="num">12.6</span> 悬念：  继承之后内存怎么排？<span class="op">-&gt;</span> 第 <span class="num">13</span> 章</code></pre>
+
+  <table>
+    <tr><th>小节</th><th>一句话核心</th><th>带走的能力</th></tr>
+    <tr><td>12.1 空类</td><td>占位 1 字节，保证对象地址唯一</td><td>能解释 sizeof(空类) = 1 的标准依据</td></tr>
+    <tr><td>12.2 空壳</td><td>struct / union 同样 1 字节，C 里是 0</td><td>知道 C / C++ 在这个问题上的差别</td></tr>
+    <tr><td>12.3 成员函数</td><td>函数不进对象，代码在代码段</td><td>建立"对象 = 数据"的对象模型直觉</td></tr>
+    <tr><td>12.4 虚函数</td><td>vptr 8 字节，在类开头，指向共享虚表</td><td>能解释多态的内存成本</td></tr>
+    <tr><td>12.5 对齐</td><td>class 与 struct 同规则，vptr 也参与</td><td>会手算带虚函数的类的大小</td></tr>
+    <tr><td>12.6 悬念</td><td>继承之后内存怎么排？</td><td>带着问题进第 13 章</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">包青天提示</div>
+    <p>本官的断案口诀只有八个字：<strong>sizeof 一锤定音</strong>。别人问你某个类多大，别背数字、别猜——把类写进程序，<code>printf("%zu", sizeof(类))</code> 跑一遍，数字自己会说话。本章所有结论（空类 1、函数不加量、虚函数加 8、对齐照排）你都可以在十分钟内亲手复现，这就是铁面无私的力量：不靠权威，靠验证。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：本章所有 sizeof 数字都是本机（macOS 64 位，Apple Clang 21）编译运行的真实输出，素材核心结论原样保留。换环境数字可能不同：<strong>32 位平台上指针是 4 字节</strong>（vptr 就是 4），MSVC 与 Itanium ABI 的成员排布也可能有差异。请务必亲手编译运行本章的每一个示例，以你自己机器上的输出为准。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念判断题 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>判断下列说法是否正确：A. <code>sizeof(空类)</code> 在 C++ 中等于 0；B. 空类占 1 字节是为了保证不同对象拥有不同地址；C. 静态成员变量会撑大对象的大小；D. 空联合体也是 1 字节。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 12.1 节的"三个 1"实测和那段标准原话；再想想静态成员住在哪、属于谁。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>B、D 正确；A、C 错误。A：C++ 规定不同对象必须有不同地址，空类占 1 字节（0 是 C 语言 GNU 扩展里的行为）。C：静态成员变量全局只有一份，住在静态存储区，不占任何对象的空间——<code>class C { static int a; }</code> 实测 sizeof 仍是 1。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：预测 sizeof 的变化 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>一个类只有构造函数、析构函数、普通成员函数和静态成员函数，它的 sizeof 是多少？如果在这个类里再加一个 <code>virtual void test();</code>，sizeof 变成多少？分别说明理由。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先想"成员函数住哪"（12.3），再想"虚函数会引入什么隐藏成员"（12.4）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>加函数前是 1（成员函数不占对象空间，只有空类的占位字节）。加虚函数后变成 8（本机 64 位）：虚函数让编译器在类开头塞进一个 vptr（指向虚函数表的指针），一个指针正好 8 字节。如果你在 32 位平台上编译，答案是 4。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：手算类的大小 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 64 位系统上，<code>class Foo { char c; int n; char d; };</code> 的 sizeof 是多少？各成员的偏移分别是多少？如果给 Foo 加一个 <code>virtual void f();</code>，sizeof 又变成多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先按第 10 章的对齐规则排 char + int + char，再用 12.5 节的总公式：类大小 = vptr（有虚函数时）+ 成员 + padding。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>不加虚函数：<code>char c</code>（偏移 0）+ 填充 3 + <code>int n</code>（偏移 4）+ <code>char d</code>（偏移 8）+ 填充 3 = 12。加了虚函数：vptr（偏移 0，8 字节）+ <code>char c</code>（偏移 8）+ 填充 3 + <code>int n</code>（偏移 12）+ <code>char d</code>（偏移 16）+ 填充 7 = 24（对齐到 8 的倍数）。注意第一个成员被挤到偏移 8——这正是 12.5 节 warning 里"带虚函数的类第一个成员不在偏移 0"的实例。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手审案 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个程序完成三组取证：① 实例化 3 个空类对象组成数组，打印地址，验证元素间隔是 1 字节；② 定义一个带虚函数的类（含一个 int 成员），打印 sizeof 和 int 成员的偏移，确认 vptr 在偏移 0；③ 把本章的 class 全部换成 struct 重跑一遍，确认结果一致。把每步输出记录下来，并解释为什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>① 用 <code>(char*)&amp;arr[1] - (char*)&amp;arr[0]</code> 量间隔；② 用 <code>reinterpret_cast&lt;char*&gt;</code> 减法量成员偏移；③ 直接全局替换 class 为 struct 再编译。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 间隔是 1——每个空对象都占满它的占位字节，地址不撞车；② sizeof = 8 + 4 对齐到 16，int 成员偏移 8——前 8 字节是 vptr，证明虚函数引入了隐藏成员；③ struct 与 class 结果完全一致——两者在成员布局上只有默认访问权限的差别，占位、vptr、对齐规则统统相同。三组取证全过，你就算把本章的案子审完了——记住包青天的话：<strong>sizeof 一锤定音</strong>。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

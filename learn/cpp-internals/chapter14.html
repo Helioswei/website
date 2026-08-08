@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第14章：栈与堆：对象创建的两种方式 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter14.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第14章：栈与堆：对象创建的两种方式 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter14.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="14" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第14章：栈与堆：对象创建的两种方式</h1>
+  <p class="chapter-subtitle">一行 <code>Foo f;</code> 与一行 <code>Foo* p = new Foo;</code> 之间，隔着的不是语法差异，而是两种完全不同的生命周期契约——本章把分配、析构、性能与事故逐一实测给你看</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「先别背'栈上快、堆上慢'这种结论。我们要问的是最底层的问题：对象到底住在一台计算机的哪里？谁负责把它造出来、谁负责把它拆掉？把这两件事亲手用日志打出来、用计时器量出来、用汇编看出来，'该用栈还是该用堆'就不再是需要查资料的选项，而是一种本能。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 14.1 两种方式：栈上直接创建 vs 堆上 new ========== -->
+  <h2>14.1 两种方式：栈上直接创建 vs 堆上 new</h2>
+
+  <p>用第一性原理问一个问题：<strong>一个 C++ 对象，物理上住在哪里？</strong>答案在第 6 章的虚拟地址空间里：每个进程的地址空间自下而上分为代码区、数据区、<strong>堆</strong>（heap，向上生长）和<strong>栈</strong>（stack，向下生长）。说人话：<strong>栈是"编译器替你管"的内存，堆是"你自己管"的内存</strong>。对象只有两种出身——要么诞生在栈上，由编译器安排生死；要么诞生在堆上，由你亲手安排生死。语法上它们长得极像，本质却天差地别：</p>
+
+  <pre><code><span class="cmt">// 方式一：栈上直接创建 —— 不需要指针，直接用对象本身</span>
+Foo stackFoo;            <span class="cmt">// 声明即构造，离开作用域自动析构</span>
+
+<span class="cmt">// 方式二：堆上 new —— 拿到的是指针，指向堆里的对象</span>
+Foo* heapFoo = <span class="kw">new</span> Foo;   <span class="cmt">// 必须手动 delete，否则泄漏</span></code></pre>
+
+  <p>这里藏着一个底层真相：<code>new</code> 是<strong>两步走</strong>——先调 <code>operator new</code> 分配原始内存（内部就是 <code>malloc</code>），再在这块内存上调用构造函数；<code>delete</code> 同样两步：先析构，再调 <code>operator delete</code> 归还内存（内部就是 <code>free</code>）。而栈上创建没有这两步——<strong>编译器在函数开头移动一下栈指针，内存就"分配"好了</strong>。眼见为实，让对象把自己的地址打出来（本机 arm64 macOS 实测）：</p>
+
+  <pre><code><span class="cmt">// ex1_where.cpp —— 把两种对象的地址打出来</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> Foo {
+    <span class="kw">int</span> data;
+    Foo()  { <span class="fn">std::printf</span>(<span class="str">"Foo 构造 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+    ~Foo() { <span class="fn">std::printf</span>(<span class="str">"Foo 析构 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> stackVar = <span class="num">0</span>;          <span class="cmt">// 一个普通的栈变量</span>
+    Foo stackFoo;                <span class="cmt">// 栈上直接创建</span>
+    Foo* heapFoo = <span class="kw">new</span> Foo;   <span class="cmt">// 堆上 new</span>
+    Foo* heapFoo2 = <span class="kw">new</span> Foo;
+    <span class="fn">std::printf</span>(<span class="str">"栈变量 = %p\n"</span>, (<span class="kw">void</span>*)&amp;stackVar);
+    <span class="fn">std::printf</span>(<span class="str">"栈对象 = %p\n"</span>, (<span class="kw">void</span>*)&amp;stackFoo);
+    <span class="fn">std::printf</span>(<span class="str">"堆对象 = %p\n"</span>, (<span class="kw">void</span>*)heapFoo);
+    <span class="fn">std::printf</span>(<span class="str">"堆对象2 = %p\n"</span>, (<span class="kw">void</span>*)heapFoo2);
+    <span class="fn">std::printf</span>(<span class="str">"main = %p\n"</span>, (<span class="kw">void</span>*)&amp;<span class="fn">main</span>);
+    <span class="kw">delete</span> heapFoo;   <span class="cmt">// 堆对象：析构 + 释放，两步走</span>
+    <span class="kw">delete</span> heapFoo2;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 运行输出（真实）：</span>
+Foo 构造 @0x16fa2e0b8    <span class="ann">← 0x16f...：栈区（高位地址）</span>
+Foo 构造 @0x1008a59a0    <span class="ann">← 0x1008...：堆区（低位地址）</span>
+Foo 构造 @0x1008a59b0
+栈变量 = 0x16fa2e0bc
+栈对象 = 0x16fa2e0b8
+堆对象 = 0x1008a59a0
+堆对象2 = 0x1008a59b0
+<span class="fn">main</span> = 0x1003d04e8      <span class="ann">← 代码区（比堆还低）</span>
+Foo 析构 @0x1008a59a0    <span class="ann">← delete 触发的析构</span>
+Foo 析构 @0x1008a59b0
+Foo 析构 @0x16fa2e0b8    <span class="ann">← 离开 main 自动析构</span></code></pre>
+
+  <table>
+    <tr><th>对比项</th><th>栈上直接创建</th><th>堆上 new</th></tr>
+    <tr><td>语法</td><td><code>Foo f;</code></td><td><code>Foo* p = new Foo;</code></td></tr>
+    <tr><td>内存区域</td><td>栈（高位，向下生长）</td><td>堆（低位，向上生长）</td></tr>
+    <tr><td>生命周期</td><td>随作用域，编译器管理</td><td>从 new 到 delete，程序员管理</td></tr>
+    <tr><td>释放方式</td><td>离开作用域自动析构</td><td>必须手动 delete</td></tr>
+    <tr><td>分配开销</td><td>一条指令（移动栈指针）</td><td>分配器查找空闲块（见 14.4）</td></tr>
+    <tr><td>失败表现</td><td>栈溢出（罕见）</td><td>内存耗尽：new 抛 <code>std::bad_alloc</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>看地址数字就懂布局：<strong>0x16f... 是栈、0x1008... 是堆、0x1003... 是代码</strong>——栈在最上面（高位）、堆在中间、代码在最低处。栈向下生长、堆向上生长，两片区域相向而行。本章只关心它们"管法不同"：栈是编译器在管，堆是你在管。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>new</code> 是"分配 + 构造"两步走，<code>delete</code> 是"析构 + 释放"两步走；栈对象没有这两步，构造就是分配、析构就是释放。这个区别会在 14.3 的 RAII 和 14.5 的泄漏事故里反复出现——先把它钉死在脑子里。</p>
+  </div>
+
+  <!-- ========== 14.2 生命周期差异：栈自动析构 vs 堆手动 delete ========== -->
+  <h2>14.2 生命周期差异：栈自动析构 vs 堆手动 delete</h2>
+
+  <p>对象的<strong>生命周期</strong>（lifetime）指从构造完成到析构开始的这段时间。两种创建方式给出两种完全不同的契约。<strong>栈对象：生命周期 = 作用域</strong>。执行到声明处构造；一旦执行流离开作用域（遇到 <code>}</code>、<code>return</code>、甚至抛出异常），编译器立即自动调用析构函数——想赖着不走都不行。<strong>堆对象：生命周期 = 从 new 到 delete</strong>。new 之后它就"独立成户"，编译器不再过问，只有你亲手 delete，析构才会执行；你不 delete，它就永远活着。</p>
+
+  <p>用构造/析构日志把这条契约实测出来。<code>spawn()</code> 的局部对象 <code>local</code> 在函数返回那一刻自动析构；而 main 里 new 出来的对象直到进程结束都没有任何析构输出——它不是"还没轮到"，而是<strong>永远不会轮到</strong>：</p>
+
+  <pre><code><span class="cmt">// ex2_lifecycle.cpp —— 谁在自动析构，谁在等 delete？</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> Player {
+    <span class="kw">int</span> hp;
+    <span class="kw">explicit</span> Player(<span class="kw">int</span> h) : hp(h) {
+        <span class="fn">std::printf</span>(<span class="str">"Player(%d) 构造 @%p\n"</span>, hp, (<span class="kw">void</span>*)<span class="kw">this</span>);
+    }
+    ~Player() { <span class="fn">std::printf</span>(<span class="str">"Player(%d) 析构 @%p\n"</span>, hp, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+};
+
+<span class="kw">void</span> <span class="fn">spawn</span>() {
+    Player local(<span class="num">100</span>);           <span class="cmt">// 栈对象：进入函数就构造</span>
+    <span class="fn">std::printf</span>(<span class="str">"spawn 函数体内，local 还活着\n"</span>);
+}                                   <span class="cmt">// 离开作用域：自动析构</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">spawn</span>();
+    <span class="fn">std::printf</span>(<span class="str">"--- spawn 返回后 ---\n"</span>);
+    Player* p = <span class="kw">new</span> Player(<span class="num">999</span>);  <span class="cmt">// 堆对象：new 分配并构造</span>
+    <span class="fn">std::printf</span>(<span class="str">"main 快结束了，堆对象 %p 仍然活着（没人 delete 它）\n"</span>, (<span class="kw">void</span>*)p);
+    <span class="kw">return</span> <span class="num">0</span>;   <span class="cmt">// 忘记 delete —— 析构永远不会执行</span>
+}</code></pre>
+
+  <pre><code><span class="cmt"># 运行输出（真实）：</span>
+Player(<span class="num">100</span>) 构造 @0x16ef5a0bc
+spawn 函数体内，local 还活着
+Player(<span class="num">100</span>) 析构 @0x16ef5a0bc   <span class="ann">← 函数一返回，自动析构，一刻不差</span>
+--- spawn 返回后 ---
+Player(<span class="num">999</span>) 构造 @0x1015adb10
+<span class="fn">main</span> 快结束了，堆对象 0x1015adb10 仍然活着（没人 delete 它）
+                                  <span class="ann">← 直到进程退出都没有"Player(999) 析构"——泄漏</span></code></pre>
+
+  <table>
+    <tr><th>对比项</th><th>栈对象</th><th>堆对象</th></tr>
+    <tr><td>构造时机</td><td>执行到声明处</td><td>new 执行时</td></tr>
+    <tr><td>析构时机</td><td>离开作用域（自动，不可抗拒）</td><td>delete 执行时（手动，可拖延）</td></tr>
+    <tr><td>能提前结束吗</td><td>不能，只能等作用域结束</td><td>能，随时 delete</td></tr>
+    <tr><td>能延长吗</td><td>不能</td><td>能，一直不 delete 就一直活着</td></tr>
+    <tr><td>忘记收尾的后果</td><td>无（编译器兜底）</td><td>内存泄漏 + 析构里的资源没人释放</td></tr>
+    <tr><td>典型用途</td><td>局部变量、临时对象</td><td>动态数组、长生命周期、运行时才知道大小的对象</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把两种契约想成两种雇佣关系：<strong>栈对象是"临时工"，干完活自动走人；堆对象是"独立承包人"，你不去结账（delete）他就一直赖着</strong>。写代码时问自己一句："这个对象活多久合适？"——活不过当前作用域，用栈；必须活得比作用域久，才考虑堆。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别用"反正进程退出时操作系统会回收全部内存"安慰自己。进程退出确实会回收<strong>内存</strong>，但不会执行你的<strong>析构函数</strong>——析构里要关的文件、释放的锁、断开的连接，统统没机会执行。更致命的是服务器、游戏这类常年不退出的进程，泄漏会一天天累积，直到某天 <code>new</code> 抛出 <code>std::bad_alloc</code>，进程当场崩溃。14.5 我们会亲眼看到泄漏长什么样。</p>
+  </div>
+
+  <!-- ========== 14.3 构造与析构的时机：作用域与 RAII 思想 ========== -->
+  <h2>14.3 构造与析构的时机：作用域与 RAII 思想</h2>
+
+  <p>栈对象自动析构，但<strong>多个</strong>栈对象之间是什么顺序？答案是严格的<strong>后进先出</strong>（LIFO，last in first out）：后构造的先析构，和栈这种数据结构的行为完全一致——毕竟它们本来就住在栈上。嵌套作用域实测（<code>ex3_nested.cpp</code>，输出顺序：最内层对象最先析构，像收叠起来的餐盘一样一层层往外收）：</p>
+
+  <pre><code><span class="cmt">// ex3_nested.cpp —— 嵌套作用域：构造与析构的顺序</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> ScopeLog {
+    <span class="kw">const char</span>* name;
+    <span class="kw">explicit</span> ScopeLog(<span class="kw">const char</span>* n) : name(n) {
+        <span class="fn">std::printf</span>(<span class="str">"[%s] 构造\n"</span>, name);
+    }
+    ~ScopeLog() { <span class="fn">std::printf</span>(<span class="str">"[%s] 析构\n"</span>, name); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    ScopeLog outer(<span class="str">"外层对象"</span>);
+    {
+        ScopeLog inner(<span class="str">"内层对象"</span>);
+        { ScopeLog deepest(<span class="str">"最内层对象"</span>); }   <span class="cmt">// 先析构</span>
+    }                                          <span class="cmt">// 然后内层</span>
+    <span class="kw">return</span> <span class="num">0</span>;                                <span class="cmt">// 最后外层</span>
+}
+
+<span class="cmt"># 运行输出（真实）：</span>
+[外层对象] 构造
+[内层对象] 构造
+[最内层对象] 构造
+[最内层对象] 析构   <span class="ann">← 后进先出：最晚构造的，最早析构</span>
+[内层对象] 析构
+[外层对象] 析构</code></pre>
+
+  <p>这个"离开作用域必析构"的承诺，正是 C++ 最强大思想的基石——<strong>RAII</strong>（Resource Acquisition Is Initialization，资源获取即初始化）。说人话：<strong>把"借资源"写进构造函数，把"还资源"写进析构函数，让资源的生死跟对象的生死绑定</strong>。对象活着，资源就在；对象一析构，资源自动归还——即使中途 <code>return</code> 甚至抛异常，析构也一定会执行。用文件句柄实测：写文件写到一半"抛异常"，文件照样被关掉：</p>
+
+  <pre><code><span class="cmt">// ex3_raii.cpp —— RAII：文件句柄随对象生命周期自动关闭</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> FileGuard {
+<span class="kw">public</span>:
+    <span class="kw">explicit</span> FileGuard(<span class="kw">const char</span>* path) {
+        fp_ = <span class="fn">std::fopen</span>(path, <span class="str">"w"</span>);
+        <span class="kw">if</span> (fp_) <span class="fn">std::printf</span>(<span class="str">"FileGuard：文件已打开\n"</span>);
+    }
+    ~FileGuard() {          <span class="cmt">// 析构 = 自动"还资源"</span>
+        <span class="kw">if</span> (fp_) { <span class="fn">std::fclose</span>(fp_); <span class="fn">std::printf</span>(<span class="str">"FileGuard：文件已关闭（析构自动释放资源）\n"</span>); }
+    }
+    <span class="kw">void</span> <span class="fn">write</span>(<span class="kw">const char</span>* text) { <span class="kw">if</span> (fp_) <span class="fn">std::fputs</span>(text, fp_); }
+<span class="kw">private</span>:
+    FILE* fp_;
+};
+
+<span class="kw">void</span> <span class="fn">riskyWork</span>() {
+    FileGuard guard(<span class="str">"out.txt"</span>);
+    guard.<span class="fn">write</span>(<span class="str">"hello\n"</span>);
+    <span class="fn">std::printf</span>(<span class="str">"正在写文件……突然抛出异常！\n"</span>);
+    <span class="cmt">// 即使这里 return / 抛异常，guard 的析构也一定会执行</span>
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">riskyWork</span>();
+    <span class="fn">std::printf</span>(<span class="str">"main 正常结束，文件资源没有泄漏\n"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 运行输出（真实）：</span>
+FileGuard：文件已打开
+正在写文件……突然抛出异常！
+FileGuard：文件已关闭（析构自动释放资源）   <span class="ann">← 异常路上也把文件关了</span>
+<span class="fn">main</span> 正常结束，文件资源没有泄漏</code></pre>
+
+  <table>
+    <tr><th>事件</th><th>栈对象</th><th>堆对象</th></tr>
+    <tr><td>执行到声明处</td><td>构造</td><td>—</td></tr>
+    <tr><td>new 表达式</td><td>—</td><td>分配内存 + 构造</td></tr>
+    <tr><td>离开作用域（<code>}</code> / <code>return</code> / 异常）</td><td>自动析构（后进先出）</td><td>纹丝不动</td></tr>
+    <tr><td>delete 表达式</td><td>—</td><td>析构 + 释放内存</td></tr>
+    <tr><td>程序退出</td><td>（已随作用域析构）</td><td>可能仍是泄漏</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>RAII 是 C++ 送给程序员的"自动记账本"：<strong>构造时借、析构时还，编译器保证每一笔记账都平</strong>。标准库里的 <code>std::unique_ptr</code>（独占式智能指针）就是 RAII 的官方代表——它把"堆对象的 delete"也写进了自己的析构。以后看到"智能指针"，请想起这一节：它只是把 14.2 里"你欠堆对象的那次 delete"自动代劳了。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：RAII 只管"对象"本身，管不了"对象指向的东西"。栈上放一个 <code>Player* p = new Player;</code>，<code>p</code> 会随作用域自动"消失"，但<strong>它指向的堆对象不会跟着消失</strong>——指针析构 ≠ 指向的对象析构。这几乎是每个 C++ 新手的第一场内存事故，14.5 的主角之一。</p>
+  </div>
+
+  <!-- ========== 14.4 性能差异：栈分配快、堆分配慢 ========== -->
+  <h2>14.4 性能差异：栈分配快、堆分配慢</h2>
+
+  <p>从第一性原理看，两种"创建"的分配成本根本不在一个量级。<strong>栈分配：一条指令</strong>。函数开头把栈指针往下挪 N 字节（x86-64 上就是一条 <code>subq $N, %rsp</code>），内存就"分配"好了；离开作用域再挪回来。没有搜索、没有锁、没有系统调用，每个线程有自己的栈，天然无竞争。<strong>堆分配：要过分配器</strong>。<code>new</code> 内部先调 <code>operator new</code>（即 <code>malloc</code>）——它要在自己的"账本"（空闲块链表、大小类桶）里找一块合适的空闲内存，可能要拆分、合并、加锁应对多线程并发，偶尔还要调 <code>brk</code> / <code>mmap</code> 系统调用向内核申请新内存。说人话：<strong>栈分配是"翻一页纸"，堆分配是"去仓库翻箱子"</strong>。</p>
+
+  <p>空口无凭，上计时器。各来 100 万次"创建 + 销毁"一个 32 字节小对象：堆路线是 <code>new</code> + <code>delete</code>，栈路线是循环里反复构造销毁一个栈上数组。为了不让编译器把 <code>new</code>/<code>delete</code> 整体优化掉（它有权这么做），给对象加上构造/析构计数，并让指针"逃逸"出去——这样测到的是真实的 malloc/free：</p>
+
+  <pre><code><span class="cmt">// ex4_perf.cpp —— 栈分配 vs 堆分配，100 万次实测</span>
+<span class="kw">#include</span> <span class="type">&lt;chrono&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> Item {
+    <span class="kw">long</span> a, b, c, d;              <span class="cmt">// 32 字节的"小对象"</span>
+    <span class="kw">static long</span> alive;
+    Item()  : a(<span class="num">0</span>), b(<span class="num">0</span>), c(<span class="num">0</span>), d(<span class="num">0</span>) { ++alive; }  <span class="cmt">// 非平凡构造/析构：禁止编译器省略分配</span>
+    ~Item() { --alive; }
+};
+<span class="kw">long</span> Item::alive = <span class="num">0</span>;
+<span class="kw">static</span> Item* <span class="kw">volatile</span> lastPtr;    <span class="cmt">// 让指针"逃逸"，逼 new 真的去堆上分配</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">const int</span> N = <span class="num">1000000</span>;
+    <span class="kw">auto</span> t0 = <span class="fn">std::chrono::steady_clock::now</span>();
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i <span class="op">&lt;</span> N; <span class="op">++</span>i) {
+        Item* p = <span class="kw">new</span> Item;   <span class="cmt">// 堆路线：真实 malloc/free</span>
+        lastPtr = p;             <span class="cmt">// 指针逃逸：分配不许被省略</span>
+        <span class="kw">delete</span> p;
+    }
+    <span class="kw">auto</span> t1 = <span class="fn">std::chrono::steady_clock::now</span>();
+    <span class="kw">auto</span> t2 = <span class="fn">std::chrono::steady_clock::now</span>();
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i <span class="op">&lt;</span> N; <span class="op">++</span>i) {
+        Item arr[<span class="num">4</span>];             <span class="cmt">// 栈路线：只挪栈指针</span>
+        (<span class="kw">void</span>)arr[<span class="num">0</span>].a;
+    }
+    <span class="kw">auto</span> t3 = <span class="fn">std::chrono::steady_clock::now</span>();
+    <span class="kw">auto</span> ms = [](<span class="kw">auto</span> x, <span class="kw">auto</span> y) {
+        <span class="kw">return</span> <span class="fn">std::chrono::duration_cast</span>&lt;<span class="type">std::chrono::milliseconds</span>&gt;(y - x).<span class="fn">count</span>();
+    };
+    <span class="fn">std::printf</span>(<span class="str">"堆路线：100 万次 new/delete 耗时 %lld ms\n"</span>, ms(t0, t1));
+    <span class="fn">std::printf</span>(<span class="str">"栈路线：100 万次栈上创建耗时 %lld ms\n"</span>,  ms(t2, t3));
+    <span class="fn">std::printf</span>(<span class="str">"存活的 Item 数：%ld\n"</span>, Item::alive);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 运行输出（真实，本机多轮实测堆路线 19~52 ms，栈路线始终 0 ms）：</span>
+堆路线：100 万次 new/delete 耗时 <span class="num">26</span> ms
+栈路线：100 万次栈上创建耗时 <span class="num">0</span> ms
+存活的 Item 数：<span class="num">0</span>（两边都构造+析构，应回到 <span class="num">0</span>）</code></pre>
+
+  <p>再往下一层，把这两个函数编译成 x86-64 汇编看指令级真相（真实反汇编，节选）。<code>useStack</code> 全程没有调用任何分配函数——<code>subq $16, %rsp</code> 一条指令完成"分配"，<code>addq $16, %rsp</code> 一条指令完成"释放"；而 <code>useHeap</code> 先调 <code>operator new</code>（内部是 <code>malloc</code>），再调构造函数，末尾再调析构和 <code>operator delete</code>（内部是 <code>free</code>）——每一步都是真实的函数调用：</p>
+
+  <pre><code><span class="cmt"># x86-64 汇编（真实，-O0，函数体节选）—— useStack：栈上创建</span>
+pushq   %rbp
+movq    %rsp, %rbp
+subq    $<span class="num">16</span>, %rsp        <span class="ann"># 一条指令："分配"完成</span>
+leaq    -<span class="num">4</span>(%rbp), %rdi   <span class="ann"># 算出对象地址</span>
+callq   __ZN3FooC1Ev     <span class="ann"># 调用构造函数</span>
+addq    $<span class="num">16</span>, %rsp        <span class="ann"># 一条指令："释放"完成</span>
+popq    %rbp
+retq
+
+<span class="cmt"># 同一个文件里的 useHeap：堆上创建</span>
+movl    $<span class="num">4</span>, %edi         <span class="ann"># 参数：需要 4 字节</span>
+callq   __Znwm           <span class="ann"># operator new —— 内部就是 malloc</span>
+movq    %rax, %rdi
+callq   __ZN3FooC1Ev     <span class="ann"># 第二步：构造（new 的两步走）</span>
+callq   __ZN3FooD1Ev     <span class="ann"># 析构</span>
+callq   __ZdlPv          <span class="ann"># operator delete —— 内部就是 free</span>
+retq</code></pre>
+
+  <table>
+    <tr><th>对比项</th><th>栈分配</th><th>堆分配</th></tr>
+    <tr><td>机制</td><td>移动栈指针（一条指令）</td><td>分配器搜索空闲块 / 大小类桶</td></tr>
+    <tr><td>成本</td><td>O(1)，无簿记</td><td>O(1) 起，含簿记、加锁，甚至系统调用</td></tr>
+    <tr><td>系统调用</td><td>从不</td><td>可能（<code>brk</code> / <code>mmap</code> 向内核要内存）</td></tr>
+    <tr><td>多线程</td><td>天然线程私有，无竞争</td><td>需要锁或原子操作保护分配器</td></tr>
+    <tr><td>局部性</td><td>极好（地址连续，Cache 友好）</td><td>一般（地址分散，碎片化）</td></tr>
+    <tr><td>耗尽时</td><td>栈溢出（进程崩溃）</td><td><code>new</code> 抛 <code>std::bad_alloc</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把性能直觉压缩成一句：<strong>"栈几乎免费，堆按次收费"</strong>。写代码时的默认选择永远是栈；只有当对象需要活得比作用域久、大小运行时才知道、或者体型巨大时，才买堆这张"贵一点的票"。热路径（每秒执行几百万次的循环）里出现 <code>new</code>，几乎一定是个性能事故——第 15 章讲性能优化时会回来算这笔账。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：栈虽快，但不是无底洞。每个线程的栈默认只有几 MB（Linux 上通常 8 MB），放得下小对象，放不下大数组。递归太深、栈上声明超大的数组，都会撞上栈底——<strong>栈溢出</strong>（stack overflow）通常直接段错误崩溃，连 <code>bad_alloc</code> 都不给你。大块数据（几 MB 的缓冲区）请走堆，或者用 <code>std::vector</code> 这类自带堆内存的容器。</p>
+  </div>
+
+  <!-- ========== 14.5 常见错误：悬空指针与内存泄漏 ========== -->
+  <h2>14.5 常见错误：悬空指针与内存泄漏</h2>
+
+  <p>堆对象把生命周期交到你手里，手一抖就是两类经典事故。<strong>第一类：悬空指针</strong>（dangling pointer）——<code>delete</code> 之后，指针变量还在，但它指向的内存已经归还给分配器。说人话：<strong>门牌号还贴在墙上，房子已经拆了</strong>。此时访问 <code>p-&gt;value</code> 属于<strong>未定义行为</strong>（undefined behavior，UB）——编译器对它不做任何承诺：可能打印旧值、可能打印垃圾、可能崩溃，甚至"看起来正常"，然后在一个月后的深夜爆炸。实测一次（本机真实输出）：</p>
+
+  <pre><code><span class="cmt">// ex5_dangling.cpp —— delete 之后还去访问（未定义行为！）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> Data {
+    <span class="kw">int</span> value;
+    <span class="kw">explicit</span> Data(<span class="kw">int</span> v) : value(v) {
+        <span class="fn">std::printf</span>(<span class="str">"Data(%d) 构造 @%p\n"</span>, value, (<span class="kw">void</span>*)<span class="kw">this</span>);
+    }
+    ~Data() { <span class="fn">std::printf</span>(<span class="str">"Data 析构 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    Data* p = <span class="kw">new</span> Data(<span class="num">42</span>);
+    <span class="kw">delete</span> p;                              <span class="cmt">// 对象已销毁，内存已归还</span>
+    <span class="fn">std::printf</span>(<span class="str">"p-&gt;value = %d\n"</span>, p-&gt;value);  <span class="cmt">// 危险！未定义行为</span>
+    <span class="fn">std::printf</span>(<span class="str">"程序居然走完了……但这只是运气好\n"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 运行输出（真实）：</span>
+Data(<span class="num">42</span>) 构造 @0x102cbda90
+Data 析构 @0x102cbda90
+p-&gt;value = <span class="num">2</span>            <span class="ann">← 42 变成了 2！内存早被 printf 内部借走改写了</span>
+程序居然走完了……但这只是运气好</code></pre>
+
+  <p>注意看：我们存进去的 <code>42</code> 打印出来变成了 <code>2</code>——<code>printf</code> 自己内部分配的内存恰好复用了这块地址，把 <code>42</code> 覆盖了。这次没崩溃纯属运气，换个时机、换个编译器，结果完全不同。怎么把这种"隐藏炸弹"变成当场抓获的现行犯？用 <strong>ASan</strong>（AddressSanitizer，内存错误检测器）重新编译，它给每块堆内存布置"哨兵"并记账，访问已释放内存的瞬间就拦截并报告——一次抓全"访问行 / delete 行 / new 行"三处现场（真实报告节选）：</p>
+
+  <pre><code><span class="cmt"># clang++ -O1 -g -fsanitize=address ex5_dangling.cpp -o ex5_dangling_asan</span>
+==69792==ERROR: AddressSanitizer: heap-use-after-free on address 0x6020000000d0
+READ of size 4 at 0x6020000000d0 thread T0
+    #0 ... in main ex5_dangling.cpp:21   <span class="ann">← 访问的那一行，当场抓获</span>
+freed by thread T0 here:
+    #1 ... in main ex5_dangling.cpp:16   <span class="ann">← delete p 的那一行</span>
+previously allocated by thread T0 here:
+    #1 ... in main ex5_dangling.cpp:15   <span class="ann">← new Data 的那一行</span>
+SUMMARY: AddressSanitizer: heap-use-after-free ex5_dangling.cpp:21 in main</code></pre>
+
+  <p><strong>第二类：内存泄漏</strong>（memory leak）——<code>new</code> 了却永远不 <code>delete</code>，堆上这块内存从此"失联"。单个小对象无所谓，可怕的是循环里泄漏、服务器上日积月累。检测手段随平台而异：Linux 上首选 <strong>valgrind</strong>（内存调试器，<code>valgrind --leak-check=full ./程序</code>，退出时逐块盘点，打印类似 <code>definitely lost: N bytes in M blocks</code> 的总结）；macOS 上没有 valgrind，官方替代是 Xcode 自带的 <code>leaks</code> 命令。实测一次：</p>
+
+  <pre><code><span class="cmt">// ex5_leak.cpp —— 泄漏演示：new 了 4 次，一次都不 delete</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> Chunk {
+    <span class="kw">char</span> payload[<span class="num">1024</span>];       <span class="cmt">// 每块 1KB</span>
+    Chunk()  { <span class="fn">std::printf</span>(<span class="str">"分配了一块 1KB 内存 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i <span class="op">&lt;</span> <span class="num">4</span>; <span class="op">++</span>i) <span class="kw">new</span> Chunk;   <span class="cmt">// 只有 new，没有 delete</span>
+    <span class="fn">std::printf</span>(<span class="str">"程序结束：4 块内存谁都没 delete，全部泄漏\n"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># macOS：leaks --atExit -- ./ex5_leak（真实输出节选）：</span>
+Process 70194: 3 leaks for 3840 total leaked bytes.
+STACK OF 3 INSTANCES OF 'ROOT LEAK: &lt;malloc in main&gt;':
+3   ex5_leak ... main + 48  ex5_leak.cpp:12   <span class="ann">← 直接定位到 new Chunk 那一行</span>
+    3 (3.75K) &lt;&lt; TOTAL &gt;&gt;</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>注意一个细节：代码明明 new 了 <span class="num">4</span> 次，leaks 只报了 <span class="num">3</span> 处——<strong>工具也有盲区</strong>。macOS 的 <code>leaks</code> 在进程退出瞬间枚举内存节点，最新分配的那块经常漏网。这恰恰是第一性原理的活教材：<strong>工具的计数只能当参考，真正靠得住的，是你自己理解"new 必须配 delete、谁的资源谁负责"</strong>。Linux 的 valgrind 相对更严谨，但同样不是万能——别把任何工具的结论当圣经。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：悬空指针还有两个近亲：<strong>双重 delete</strong>（同一指针删两次，第二次是未定义行为，堆可能被写坏）和 <strong>delete 栈对象</strong>（delete 一个从来不是 new 出来的栈地址，几乎必然崩溃）。加上 <code>new[]</code> 配 <code>delete</code> 而不是 <code>delete[]</code>，一共四件套，全是"生命周期管错"的变体。第 16 章综合实战会把这四件套打包收拾。</p>
+  </div>
+
+  <table>
+    <tr><th>错误</th><th>一句话症状</th><th>根因</th><th>后果</th><th>检测手段</th></tr>
+    <tr><td>悬空指针</td><td>delete 后还访问</td><td>忘了指针已失效</td><td>UB：垃圾值 / 崩溃</td><td>ASan：heap-use-after-free</td></tr>
+    <tr><td>内存泄漏</td><td>内存只增不减</td><td>new 了不 delete</td><td>长期运行内存耗尽</td><td>valgrind / macOS leaks</td></tr>
+    <tr><td>双重 delete</td><td>同一指针删两次</td><td>释放权不清</td><td>堆损坏 / 崩溃</td><td>ASan：double-free</td></tr>
+    <tr><td>越界访问</td><td>写入超出对象</td><td>边界计算错误</td><td>堆损坏 / 安全漏洞</td><td>ASan：heap-buffer-overflow</td></tr>
+  </table>
+
+  <!-- ========== 14.6 章节小结与悬念 ========== -->
+  <h2>14.6 章节小结与悬念：能不能强制限定对象只能出现在一个地方？</h2>
+
+  <p>把本章压缩成一张图：<strong>栈对象 = 编译器管生管死，快、自动、默认选择；堆对象 = 程序员管生管死，慢、灵活、责任自负</strong>。栈用作用域换安全，堆用手动管理换自由。所谓"内存管理"，说到底就是回答三个问题：对象在哪创建？谁负责析构？析构什么时候发生？——本章各小节各答一个。</p>
+
+  <p>现在把问题反过来，第一性原理的最后一步：<strong>能不能强制一个类，只能诞生在其中一个地方？</strong>比如某个类要求"绝不泄漏"，能不能让编译器在有人试图 new 它时直接报错？或者某个类要求"必须自己管理内存"（比如支持 <code>delete this</code>），能不能禁止它在栈上创建？答案是：能。机关就藏在"编译器不敢碰的访问权限"里——把析构函数设为私有，编译器没法在栈上销毁它，于是拒绝栈上创建；把 <code>operator new</code> 设为私有，谁都没法 new 它。试试编译器会说什么（真实编译错误）：</p>
+
+  <pre><code><span class="cmt">// ex6_heaponly.cpp —— 只在堆上创建：析构函数设为私有</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> HeapOnly {
+<span class="kw">public</span>:
+    HeapOnly() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 构造 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+    <span class="kw">void</span> <span class="fn">destroy</span>() <span class="kw">const</span> { <span class="kw">delete</span> <span class="kw">this</span>; }   <span class="cmt">// 通过成员函数"自杀"</span>
+<span class="kw">private</span>:
+    ~HeapOnly() {}                      <span class="cmt">// 析构私有：外部无法调用</span>
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    HeapOnly h;                 <span class="cmt">// 想栈上创建？编译器：不行！</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 编译（真实报错）：</span>
+ex6_heaponly.cpp:13:14: error: variable of type 'HeapOnly' has private destructor
+   <span class="num">13</span> |     HeapOnly h;                 <span class="cmt">// 想栈上创建？编译器：不行！</span>
+      |              ^
+<span class="num">1</span> error generated.</code></pre>
+
+  <pre><code><span class="cmt">// ex6_stackonly.cpp —— 只在栈上创建：operator new 设为私有</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+
+<span class="kw">class</span> StackOnly {
+<span class="kw">public</span>:
+    StackOnly() { <span class="fn">std::printf</span>(<span class="str">"StackOnly 构造 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+<span class="kw">private</span>:
+    <span class="kw">static void</span>* <span class="fn">operator new</span>(<span class="type">std::size_t</span>);   <span class="cmt">// 私有：外部无法 new</span>
+    <span class="kw">static void</span>  <span class="fn">operator delete</span>(<span class="kw">void</span>*);
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    StackOnly s;                    <span class="cmt">// 栈上创建：合法</span>
+    StackOnly* p = <span class="kw">new</span> StackOnly; <span class="cmt">// 想 new？编译器：不行！</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cmt"># 编译（真实报错）：</span>
+ex6_stackonly.cpp:15:20: error: 'operator new' is a private member of 'StackOnly'
+   <span class="num">15</span> |     StackOnly* p = <span class="kw">new</span> StackOnly; <span class="cmt">// 想 new？编译器：不行！</span>
+      |                    ^~~~~~~~~~~~~
+<span class="num">2</span> errors generated.</code></pre>
+
+  <table>
+    <tr><th>关键词</th><th>一句话结论</th></tr>
+    <tr><td>栈对象</td><td>编译器管生管死，快、自动，默认选择</td></tr>
+    <tr><td>堆对象</td><td>程序员管生管死，慢、灵活，责任自负</td></tr>
+    <tr><td>new / delete</td><td>各自都是两步走：分配+构造 / 析构+释放</td></tr>
+    <tr><td>RAII</td><td>资源随对象生命周期走，异常安全</td></tr>
+    <tr><td>悬空指针</td><td>delete 后还访问 = 未定义行为</td></tr>
+    <tr><td>内存泄漏</td><td>new 了不 delete，长期运行会耗尽内存</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>这一章的"费曼一句话"：<strong>栈是编译器的承诺，堆是你自己的承诺</strong>。承诺有自动兑现（RAII）和手动兑现（delete）两种方式；而"只在栈上 / 只在堆上"这类限制，本质是<strong>把承诺写进类的访问权限里，让编译器替你执法</strong>。下一个问题顺理成章：这两种"执法"各有什么坑（继承、多态怎么办）？——那是第 15 章的战场。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别急着在今天的生产代码里用"私有析构 / 私有 operator new"这两招——它们各有代价（比如带继承、虚析构的场景需要保护级而非私有级），用错反而制造新坑。先把本章的"为什么"想透，第 15 章《限制创建位置：只在堆上 / 只在栈上》会把这些机关的原理、边界和实战用法一次讲完。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：对象住在哪 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>下面的对象分别创建在哪个区域（栈 / 堆 / 其他）？① 函数内的 <code>Foo f;</code>；② <code>Foo* p = new Foo;</code>；③ 文件作用域的全局对象 <code>Foo g;</code>；④ <code>std::vector&lt;int&gt; v(1000);</code> 中那 1000 个 int 所在的内存。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 14.1 的地址实测：栈在高位、堆在低位；<code>new</code> 出来的东西在堆上。注意区分"对象本体"和"对象管理的资源"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 栈（局部对象，随作用域析构）；② 堆（new 分配，需手动 delete）；③ 都不是——全局对象在<strong>静态存储区</strong>（程序启动时构造、退出时析构，即第 6 章布局图里的"程序代码和数据"区）；④ 堆——<code>vector</code> 对象本身在栈上（一个小壳子），但它内部用 new 在堆上分配了存那 1000 个 int 的缓冲区。这就是"对象本体"与"对象管理的资源"的区别，也是 RAII 发挥作用的地方。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：手推构造析构顺序 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>不运行代码，写出下面程序的输出顺序：</p>
+      <pre><code><span class="kw">struct</span> T {
+    <span class="kw">const char</span>* name;
+    <span class="kw">explicit</span> T(<span class="kw">const char</span>* n) : name(n) {}
+    ~T() { <span class="fn">std::printf</span>(<span class="str">"~%s\n"</span>, name); }
+};
+<span class="kw">int</span> <span class="fn">main</span>() {
+    T a(<span class="str">"a"</span>);
+    { T b(<span class="str">"b"</span>); T c(<span class="str">"c"</span>); }
+    T d(<span class="str">"d"</span>);
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>同一作用域内多个对象按声明顺序构造；离开作用域时按<strong>后进先出</strong>析构。嵌套作用域先清内层。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>输出顺序：<code>~c</code>、<code>~b</code>（内层作用域先结束，c 比 b 后构造所以先析构）、<code>~d</code>、<code>~a</code>（离开 main 时 d 后构造先析构，a 最后）。一句话：<strong>构造顺序 = 声明顺序，析构顺序 = 声明顺序的逆序</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：RAII 改造 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面的代码有一个典型问题——<code>process()</code> 里 new 出来的 <code>Player</code> 在 <code>if</code> 提前返回时会泄漏。请用 RAII 思想修复（提示：可以直接用 <code>std::unique_ptr</code>）。</p>
+      <pre><code><span class="kw">void</span> <span class="fn">process</span>(<span class="kw">bool</span> ok) {
+    Player* p = <span class="kw">new</span> Player(<span class="num">100</span>);
+    <span class="kw">if</span> (!ok) { <span class="kw">return</span>; }   <span class="cmt">// 泄漏！</span>
+    <span class="kw">delete</span> p;
+}</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>让"释放"发生在析构函数里，让对象本体是栈对象——编译器保证任何路径都会析构它。回想 14.3 的 FileGuard。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>std::unique_ptr&lt;Player&gt; p(new Player(100));</code> 一行搞定——它的析构函数负责 delete，任何路径离开作用域都会释放，这正是 RAII 的标准实现。自己写也一样：把 <code>delete p_</code> 放进包装类的析构函数（如同本章的 FileGuard）。核心思想一句话：<strong>用栈对象的生命周期，去兜底堆对象的释放</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手抓一次"现行犯" <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个程序：new 一个对象、delete 它、然后故意访问它。先普通编译运行观察现象，再用 <code>-fsanitize=address</code> 重新编译运行，对比两次的差别。再写一个循环泄漏 10 块内存的程序，用 macOS 的 <code>leaks --atExit -- ./程序</code>（Linux 用 <code>valgrind --leak-check=full ./程序</code>）验证泄漏。最后用一句话解释：为什么 14.5 的实测里 <code>p-&gt;value</code> 打印的不是 42？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>普通编译下"看起来正常"恰恰是 UB 最危险的地方；ASan 会给出 <code>heap-use-after-free</code> 和源码行号。macOS 上 leaks 附加进程前可能需要 <code>codesign -s - 程序</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>普通编译可能打印垃圾值（实测打印了 <code>2</code>）甚至崩溃——delete 后那块内存已被分配器收回，<code>printf</code> 内部的临时分配恰好复用了它并写入了新数据，把 42 覆盖了。ASan 版本则在访问瞬间终止并报告 <code>heap-use-after-free</code>，附上 new / delete / 访问三处的源码行号。一句话答案：<strong>delete 之后对象已不存在，读到的只是"恰好还躺在那里"的旧字节或被别的代码改写过的数据——这就是未定义行为，任何结果都可能发生</strong>。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

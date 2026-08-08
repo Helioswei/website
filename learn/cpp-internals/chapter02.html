@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第2章：手动走一遍编译：-E / -S / -c - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter02.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第2章：手动走一遍编译：-E / -S / -c - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter02.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="2" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第2章：手动走一遍编译：-E / -S / -c</h1>
+  <p class="chapter-subtitle">上章站在山顶画了全景图，这章下山抡锤子：用一个 hello.cpp 亲手走完预处理、编译、汇编、链接四道工序，把 .i / .s / .o 每件中间产物都拿到灯下看仔细</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「别人讲编译原理，喜欢画流程图；我带你抡锤子——把 -E / -S / -c 四道工序逐一上手，亲眼看看 .i、.s、.o 每一件中间产物长什么样。老木匠开工前要先摸一遍家什：刨子快不快、墨斗有没有墨。工具认得准、看得懂，编译器在你眼里就不再是黑盒，而是一条闭着眼都能走完的流水线。这章读完，你手里就有了真家伙。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 2.1 准备工作区与工具 ========== -->
+  <h2>2.1 准备工作区与工具：先认准你的家伙什</h2>
+
+  <p>第 1 章我们站在山顶画了张全景图：预处理 → 编译 → 汇编 → 链接，四道工序、四件中间产物，一条 <code>g++ -o hello hello.cpp</code> 全部代劳。这章鲁班带你下山，把每条命令亲手敲一遍，把每件产物拿到灯下看仔细。开工前先把工具认清楚——主角是 <strong>GNU 的 gcc / g++</strong>，Linux 发行版默认的那对编译器。老规矩：先确认工具在不在、什么版本：</p>
+
+  <pre><code><span class="cmt"># 1) 建一个干净的工作区，别在乱七八糟的目录里练手艺</span>
+mkdir -p ~/cpp-internals
+cd ~/cpp-internals
+
+<span class="cmt"># 2) 确认编译器在不在、是什么版本</span>
+gcc --version | head -n 1
+g++ --version | head -n 1</code></pre>
+
+  <p>版本输出里藏着一个重要的平台事实。本章所有产物都是在一台 <strong>macOS（Apple Silicon）</strong>机器上用 <strong>GNU GCC 15</strong> 实测跑出来的——注意，macOS 自带的 <code>g++</code> 其实是 <strong>Apple Clang</strong> 的"马甲"（同一件外衣，内里是另一家编译器）；装 Homebrew 的 gcc 包后才有真正的 GNU GCC，命令带版本号后缀 <code>gcc-15</code> / <code>g++-15</code>。Linux 上直接敲 <code>g++</code> 即可，看到的就是下面这种真实输出：</p>
+
+  <pre><code><span class="cmt"># 本机实测：macOS 自带的 g++ 长这样（其实是 Apple Clang）</span>
+$ g++ --version
+Apple clang version 21.0.0 (clang-2100.1.1.101)
+
+<span class="cmt"># 装上 Homebrew 的 gcc 后，真正的 GNU GCC 长这样</span>
+$ g++-15 --version
+g++-15 (Homebrew GCC 15.2.0_1) 15.2.0
+
+<span class="cmt"># 顺带确认 CPU 架构——它决定了后面汇编长什么样</span>
+$ uname -m
+arm64</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>命令名一样，不代表编译器一样。<strong>macOS 的 g++ 是 Apple Clang 的马甲</strong>，Linux 的 g++ 通常是真正的 GNU GCC；想逐字复现本章输出，Linux 用户直接照敲，macOS 用户装 <code>brew install gcc</code> 后用 <code>g++-15</code>。工具认准了，后面每一道工序的产物才靠得住。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：版本确认不是走形式。编译器版本不同，警告文案、默认标准、甚至目标文件格式都可能不同（第 1 章展示过 GCC 15 的警告措辞）。先确认工具再动手，能省掉大量"我的输出怎么和教程不一样"的困惑。</p>
+  </div>
+
+  <!-- ========== 2.2 预处理 -E：头文件与宏如何展开 ========== -->
+  <h2>2.2 预处理 -E：头文件与宏如何展开</h2>
+
+  <p>主角登场——14 行的 <code>hello.cpp</code>。它故意把 <code>#include</code> 和 <code>#define</code> 都占了：一个是"头文件灌入"，一个是"宏文本替换"，正是预处理阶段的两大招牌手艺。说人话：<strong>预处理干的活就两件——把 <code>#include</code> 的头文件内容整个"粘贴"进源码，把 <code>#define</code> 定义的宏在代码里"原地替换"</strong>。它不检查语法、不生成任何机器码，只是一个文本加工车间：</p>
+
+  <pre><code><span class="cmt">// hello.cpp —— 本章的"解剖样本"，14 行，五脏俱全</span>
+<span class="kw">#include</span> <span class="type">&lt;iostream&gt;</span>     <span class="cmt">// 标准输入输出流：std::cout 在这里</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>        <span class="cmt">// C 风格输出：printf 在这里</span>
+
+<span class="kw">#define</span> <span class="param">MAX_ITEMS</span> <span class="num">3</span>              <span class="cmt">// 对象宏：给"3"起个名字</span>
+<span class="kw">#define</span> <span class="fn">SQUARE</span>(<span class="param">x</span>) ((<span class="param">x</span>) <span class="op">*</span> (<span class="param">x</span>))   <span class="cmt">// 函数宏：定义一段"迷你代码"</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> <span class="param">count</span> = <span class="param">MAX_ITEMS</span>;      <span class="cmt">// 用宏给变量赋值</span>
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">i</span> = <span class="num">0</span>; <span class="param">i</span> &lt; <span class="param">count</span>; <span class="param">i</span><span class="op">++</span>) {
+        <span class="fn">printf</span>(<span class="str">"i = %d, square = %d\n"</span>, <span class="param">i</span>, <span class="fn">SQUARE</span>(<span class="param">i</span>));
+    }
+    <span class="param">std::cout</span> <span class="op">&lt;&lt;</span> <span class="str">"hello, cpp-internals"</span> <span class="op">&lt;&lt;</span> <span class="fn">std::endl</span>;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>跑第一道工序。<code>-E</code> 的意思是"只做预处理，干完就收工"，<code>-o</code> 指定产物文件名。产物 <code>hello.i</code> 是纯文本，但它不再是你那 14 行小诗了——<code>iostream</code> 连同它 include 的一串兄弟头文件全被灌了进来：<strong>14 行源码变成 35,264 行、约 957KB 的文本</strong>。这就是为什么平时没人直接看 .i——近 1MB 的"头文件税"，不是给人读的。</p>
+
+  <pre><code><span class="cmt"># 只做预处理：展开 #include 与 #define，产物 hello.i 仍是纯文本</span>
+$ g++-15 -E hello.cpp -o hello.i
+
+<span class="cmt"># 数一数行数：14 行的源码，展开后变成了多少行？</span>
+$ wc -l hello.cpp hello.i
+    14 hello.cpp
+ 35264 hello.i</code></pre>
+
+  <p>打开 <code>hello.i</code> 瞄一眼开头。这些以 <code>#</code> 开头、格式像 <code># 行号 "文件名"</code> 的行叫<strong>行标记</strong>（linemarker）——它们不是注释，是预处理器留下的路标，告诉后续阶段"这段代码来自哪个文件的第几行"，报错时编译器靠它把位置指回你的源文件。那些 <code>/opt/homebrew/...</code> 绝对路径，就是 <code>iostream</code> 在系统里的真实藏身之处（随系统而异）：</p>
+
+  <pre><code><span class="cmt"># hello.i 开头（真实输出，节选）——以 # 开头的是行标记，不是注释</span>
+# 0 "hello.cpp"
+# 0 "&lt;built-in&gt;"
+# 0 "&lt;command-line&gt;"
+# 1 "hello.cpp"
+# 1 "/opt/homebrew/Cellar/gcc/15.2.0_1/include/c++/15/iostream" 1 3
+# 40 "/opt/homebrew/Cellar/gcc/15.2.0_1/include/c++/15/iostream" 3
+# 1 "/opt/homebrew/Cellar/gcc/15.2.0_1/include/c++/15/bits/requires_hosted.h" 1 3
+<span class="cmt"># ...（中间是 iostream 展开出的数万行声明，直接快进到我们的代码）...</span>
+# 2 "hello.cpp" 2
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> <span class="param">count</span> = <span class="num">3</span>;              <span class="cmt">// 注意：MAX_ITEMS 已经变成 3 了！</span>
+    <span class="kw">for</span> (<span class="kw">int</span> <span class="param">i</span> = <span class="num">0</span>; <span class="param">i</span> &lt; <span class="param">count</span>; <span class="param">i</span><span class="op">++</span>) {</code></pre>
+
+  <p>宏呢？<code>grep</code> 一下，证据就在眼前——<strong>宏名 SQUARE 在 .i 里彻底消失了</strong>（<code>grep -c</code> 输出 0），但展开后的"尸体"还躺在第 35,260 行：<code>SQUARE(i)</code> 变成了 <code>((i) * (i))</code>。这就是"宏在编译开始之前就已完成"的铁证——编译器拿到的永远是替换后的文本：</p>
+
+  <pre><code><span class="cmt"># 证据一：SQUARE 这个名字在 .i 里消失了（grep -c 输出 0）</span>
+$ grep -c SQUARE hello.i
+0
+
+<span class="cmt"># 证据二：展开后的文本还躺在第 35260 行</span>
+$ grep -n '((i) \* (i))' hello.i
+35260:       printf("i = %d, square = %d\n", i, ((i) * (i)));</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>宏替换是<strong>纯文本替换</strong>，不是函数调用。<code>SQUARE(x)</code> 定义里里外外全是括号，这是防坑的手艺：若写成 <code>x * x</code>，<code>SQUARE(a + b)</code> 会被替换成 <code>a + b * a + b</code>，完全跑偏。以后在宏里看到一堆括号，就知道是前人踩过坑。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别用编辑器直接打开 957KB 的 <code>hello.i</code>——大部分文本编辑器会卡成幻灯片。处理大文本的基本功是 <code>head</code>（看头）、<code>tail</code>（看尾）、<code>grep</code>（按内容找）、<code>wc -l</code>（数行数），按需取用，不要整卷通读。</p>
+  </div>
+
+  <!-- ========== 2.3 编译 -S：汇编输出初识 ========== -->
+  <h2>2.3 编译 -S：汇编输出初识</h2>
+
+  <p>第二道工序——编译。说人话：<strong>这一步翻译官上场，把 C++ 翻译成汇编语言</strong>。汇编语言是"机器码的助记符版"：CPU 的指令本质是二进制位，汇编给每条指令起了个简短英文名（<code>sub</code> 减法、<code>mul</code> 乘法、<code>bl</code> 调用函数……），这些名字叫<strong>助记符</strong>（mnemonic）。汇编仍是文本、人能读懂，是观察"编译器把你的代码变成了什么"的最佳窗口。命令就一条，<code>-S</code> 表示"编译到汇编就停"：</p>
+
+  <pre><code><span class="cmt"># 编译到汇编就停：把 .i 翻译成 .s（汇编语言，仍然是文本）</span>
+$ g++-15 -S hello.i -o hello.s
+
+<span class="cmt"># 也可以直接吃源码——编译器会自动先跑预处理，产物与上面完全一致（已实测比对）</span>
+$ g++-15 -S hello.cpp -o hello.s</code></pre>
+
+  <p>打开 <code>hello.s</code> 先看骨架（真实输出，节选）。前几行全是"环境说明"：<code>.arch</code> 声明指令集是 armv8.5-a（Apple Silicon）；<code>.text</code> 宣布"以下是代码节"；<code>.zerofill</code> 在 .bss 节预留 1 字节——iostream 的全局初始化哨兵（2.5 节还会见到）；<code>.cstring</code> 里躺着两串"文案"：<code>lC0</code> 是格式串，<code>lC1</code> 是那句问候。字符串在编译时就被收进只读区，运行时按地址引用：</p>
+
+  <pre><code><span class="ann">.arch</span> armv8.5-a
+<span class="ann">.build_version</span> macos,  26, 0
+<span class="ann">.text</span>
+<span class="ann">.zerofill</span> __DATA,__bss,__ZStL8__ioinit,1,0
+<span class="ann">.cstring</span>
+<span class="ann">.align</span>	<span class="num">3</span>
+<span class="fn">lC0</span>:
+	<span class="ann">.ascii</span> <span class="str">"i = %d, square = %d\12\0"</span>
+<span class="ann">.align</span>	<span class="num">3</span>
+<span class="fn">lC1</span>:
+	<span class="ann">.ascii</span> <span class="str">"hello, cpp-internals\0"</span>
+<span class="ann">.text</span>
+<span class="ann">.align</span>	<span class="num">2</span>
+<span class="ann">.globl</span> <span class="fn">_main</span>
+<span class="fn">_main</span>:</code></pre>
+
+  <p>再看 <code>main</code> 的本体（同一段真实输出，这次加上中文注释）。第 1 章讲的故事全都在：函数开头用 <code>sub</code> / <code>stp</code> / <code>add</code> 搭建<strong>栈帧</strong>（说人话：函数在栈上给自己划一块"工作台"存局部变量，退出时还原现场）；<code>mov w0, 3</code>——注意这个 <code>3</code>！它就是 <code>MAX_ITEMS</code>，宏名早已被换成字面量；<code>mul w0, w0, w0</code>——<code>SQUARE(i)</code> 的平方运算；<code>bl _printf</code>——调用函数；<code>cmp</code> / <code>b.lt</code>——for 循环的条件判断与回跳：</p>
+
+  <pre><code><span class="fn">_main</span>:
+	<span class="kw">sub</span>	<span class="param">sp</span>, <span class="param">sp</span>, <span class="num">#48</span>      <span class="cmt">// 开栈：划出 48 字节"工作台"</span>
+	<span class="kw">stp</span>	<span class="param">x29</span>, <span class="param">x30</span>, [<span class="param">sp</span>, 16] <span class="cmt">// 保存调用者现场（旧栈帧指针与返回地址）</span>
+	<span class="kw">add</span>	<span class="param">x29</span>, <span class="param">sp</span>, 16       <span class="cmt">// 建立新栈帧基址</span>
+	<span class="kw">mov</span>	<span class="param">w0</span>, <span class="num">3</span>            <span class="cmt">// ← 注意这个 3！它就是 MAX_ITEMS</span>
+	<span class="kw">str</span>	<span class="param">w0</span>, [<span class="param">x29</span>, 24]      <span class="cmt">// count = 3，存入局部变量槽位</span>
+	<span class="kw">str</span>	<span class="param">wzr</span>, [<span class="param">x29</span>, 28]     <span class="cmt">// i = 0（wzr 是"恒为零"寄存器）</span>
+	<span class="kw">b</span>	<span class="fn">L2</span>                 <span class="cmt">// 跳到循环条件判断</span>
+<span class="fn">L3</span>:                            <span class="cmt">// —— 循环体 ——</span>
+	<span class="kw">ldr</span>	<span class="param">w0</span>, [<span class="param">x29</span>, 28]      <span class="cmt">// 读 i</span>
+	<span class="kw">mul</span>	<span class="param">w0</span>, <span class="param">w0</span>, <span class="param">w0</span>       <span class="cmt">// ← SQUARE(i)：乘法指令，i * i</span>
+	<span class="kw">str</span>	<span class="param">w0</span>, [<span class="param">sp</span>, 8]        <span class="cmt">// 临时保存计算结果</span>
+	<span class="kw">ldr</span>	<span class="param">w0</span>, [<span class="param">x29</span>, 28]      <span class="cmt">// 再读一次 i（printf 的实参）</span>
+	<span class="kw">str</span>	<span class="param">w0</span>, [<span class="param">sp</span>]           <span class="cmt">// 实参入栈</span>
+	<span class="kw">adrp</span>	<span class="param">x0</span>, <span class="fn">lC0</span>@PAGE       <span class="cmt">// 取格式串 "i = %d, ..." 的地址</span>
+	<span class="kw">add</span>	<span class="param">x0</span>, <span class="param">x0</span>, <span class="fn">lC0</span>@PAGEOFF
+	<span class="kw">bl</span>	<span class="fn">_printf</span>             <span class="cmt">// 调用 printf</span>
+<span class="fn">L2</span>:                            <span class="cmt">// —— 循环条件：i &lt; count ？ ——</span>
+	<span class="kw">ldr</span>	<span class="param">w1</span>, [<span class="param">x29</span>, 28]      <span class="cmt">// 读 i</span>
+	<span class="kw">ldr</span>	<span class="param">w0</span>, [<span class="param">x29</span>, 24]      <span class="cmt">// 读 count</span>
+	<span class="kw">cmp</span>	<span class="param">w1</span>, <span class="param">w0</span>            <span class="cmt">// 比较 i 和 count</span>
+	<span class="kw">blt</span>	<span class="fn">L3</span>                 <span class="cmt">// 若 i &lt; count，跳回循环体</span>
+	<span class="kw">mov</span>	<span class="param">w0</span>, <span class="num">0</span>            <span class="cmt">// return 0 的 0</span>
+	<span class="kw">ret</span>                      <span class="cmt">// 函数返回</span></code></pre>
+
+  <table>
+    <tr><th>助记符</th><th>含义</th><th>说人话</th></tr>
+    <tr><td><code>sub</code></td><td>subtract（减法）</td><td><code>sub sp, sp, #48</code> = 栈指针下移 48 字节，给自己"腾地方"（开栈帧）</td></tr>
+    <tr><td><code>stp</code> / <code>ldp</code></td><td>store pair / load pair</td><td>一次把两个寄存器压栈 / 弹栈，保存与还原现场</td></tr>
+    <tr><td><code>mov</code></td><td>move（搬移）</td><td>把立即数或寄存器值搬进寄存器，<code>mov w0, 3</code> 就是 w0 = 3</td></tr>
+    <tr><td><code>str</code> / <code>ldr</code></td><td>store / load</td><td>存内存 / 取内存：把寄存器值写进栈上槽位，或读回来</td></tr>
+    <tr><td><code>mul</code></td><td>multiply（乘法）</td><td><code>mul w0, w0, w0</code> 就是 w0 = w0 × w0，SQUARE 的化身</td></tr>
+    <tr><td><code>cmp</code> / <code>blt</code></td><td>compare / branch if less</td><td>比较两个数，前者小于后者就跳转——for 循环条件就靠它</td></tr>
+    <tr><td><code>bl</code> / <code>ret</code></td><td>branch with link / return</td><td>调用函数 / 从函数返回</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：汇编长得像天书是正常的——这一章只要求"会认"，不要求"会写"。而且<strong>指令集随 CPU 架构而变</strong>：本机是 Apple Silicon（arm64），所以是 <code>sub</code> / <code>mul</code> / <code>bl</code> 这套；x86-64（Intel / AMD）Linux 上则是 <code>pushq</code> / <code>movq</code> / <code>callq</code> 这套（第 1 章展示过），名字不同，思路一一对应——别被吓到。</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>注意夹在指令之间的 <code>lC0</code>、<code>L2</code>、<code>L3</code>、<code>LFB2027</code> 这类<strong>标签</strong>（label）——它们是"地名牌"，让跳转指令（<code>b</code> / <code>blt</code>）知道往哪跳，也让 <code>_printf</code> 这类外部符号有个挂靠点。汇编器在下一道工序会把它们全部换算成具体地址——所以 .s 是"人读的中间稿"，.o 才是"机器读的成品"。</p>
+  </div>
+
+  <!-- ========== 2.4 汇编 -c 与链接：生成可执行文件 ========== -->
+  <h2>2.4 汇编 -c 与链接：生成可执行文件</h2>
+
+  <p>第三道工序——汇编。<code>-S</code> 的产物还是文本，CPU 只认二进制。汇编器（as）把 <code>.s</code> 逐条翻译成机器码字节，打包成<strong>目标文件</strong> <code>.o</code>。说人话：<code>hello.o</code> 是"半成品零件"——里面有 <code>main</code> 的机器码，但还留着一堆"待补的洞"：<code>printf</code>、<code>std::cout</code> 的实现都在标准库里，还没接上。命令是 <code>-c</code>，意为"只编译、不链接"：</p>
+
+  <pre><code><span class="cmt"># 汇编：把 .s 翻译成机器码，打包成目标文件 .o（二进制！）</span>
+$ g++-15 -c hello.s -o hello.o
+$ file hello.o
+hello.o: Mach-O 64-bit object arm64</code></pre>
+
+  <p>怎么证明 .o 是二进制？<code>file</code> 一眼看穿格式，<code>xxd</code> 把字节摆上台面。<strong>Mach-O</strong> 是 macOS 的可执行文件格式（Linux 上叫 <strong>ELF</strong>，格式不同、道理一样）；文件开头 4 字节 <code>cf fa ed fe</code> 是 Mach-O 的<strong>魔数</strong>（magic number，文件格式的"身份证"；ELF 的身份证是 <code>7f 45 4c 46</code>，即 ASCII ".ELF"）。右侧 ASCII 栏全是乱码——它压根不是文本：</p>
+
+  <pre><code><span class="cmt"># 十六进制查看器：hello.o 的头 4 字节 cffa edfe 就是 Mach-O 的魔数</span>
+$ xxd hello.o | head -3
+00000000: cffa edfe 0c00 0001 0000 0000 0100 0000  ................
+00000010: 0400 0000 a802 0000 0020 0000 0000 0000  ......... ......
+00000020: 1900 0000 2802 0000 0000 0000 0000 0000  ....(...........</code></pre>
+
+  <p>第四道工序——链接。链接器（ld）把 <code>hello.o</code> 与标准库预编译好的 <code>printf</code>、iostream 实现"拼装"起来，填上所有"待补的洞"，产出可执行文件 <code>hello</code>。跑一下：三行平方数加一句问候，四步走完，一块木头变成成品。每步产物与体积本机实测如下——.i 暴涨又骤降，故事全在数字里：</p>
+
+  <pre><code><span class="cmt"># 链接：把 hello.o 和标准库拼装成可执行文件</span>
+$ g++-15 hello.o -o hello
+$ file hello
+hello: Mach-O 64-bit executable arm64
+
+<span class="cmt"># 跑起来！</span>
+$ ./hello
+i = 0, square = 0
+i = 1, square = 1
+i = 2, square = 4
+hello, cpp-internals</code></pre>
+
+  <table>
+    <tr><th>步骤</th><th>命令</th><th>产物</th><th>性质</th><th>本机实测体积</th></tr>
+    <tr><td>预处理</td><td><code>g++ -E hello.cpp -o hello.i</code></td><td>hello.i</td><td>文本（头文件已展开）</td><td>957,253 B ≈ 935 KB，35,264 行</td></tr>
+    <tr><td>编译</td><td><code>g++ -S hello.i -o hello.s</code></td><td>hello.s</td><td>文本（汇编语言）</td><td>3,904 B，220 行</td></tr>
+    <tr><td>汇编</td><td><code>g++ -c hello.s -o hello.o</code></td><td>hello.o</td><td>二进制（机器指令）</td><td>2,184 B</td></tr>
+    <tr><td>链接</td><td><code>g++ hello.o -o hello</code></td><td>hello</td><td>二进制（可执行文件）</td><td>34,168 B</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>分步走完这四步，不等于你以后必须这么干——日常开发一条 <code>g++ hello.cpp -o hello</code> 就够了，驱动程序内部会自动按四步跑完。分步的价值在于<strong>出问题时知道卡在哪一步</strong>。另外注意：中间产物名可以随便起，但扩展名有讲究——<code>.i</code> / <code>.s</code> / <code>.o</code> 是驱动程序判断"该从哪一步开始"的依据，别乱改。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：链接成功的 <code>hello</code> 是 34KB，而你亲手写的 <code>main</code> 机器码只有几百字节——多出来的是标准库的"嫁妆"（启动代码、iostream 初始化）。体积暴涨别慌，这是正常现象，2.5 节的 <code>size</code> 会解剖它。</p>
+  </div>
+
+  <!-- ========== 2.5 解剖产物：objdump 与 size ========== -->
+  <h2>2.5 解剖产物：objdump 与 size</h2>
+
+  <p>成品做出来了，匠人的习惯是拆开检查。两个趁手工具：<code>size</code> 看身材，<code>objdump</code> 看内脏。<code>size</code> 输出三列：<strong>text</strong> 是代码字节数，<strong>data</strong> 是已初始化全局数据，<strong>bss</strong> 是未初始化数据（不占文件体积，运行时才清零），dec / hex 是合计。对照 <code>hello.o</code> 与 <code>hello</code>：代码从 461 涨到 525 字节，多出来的是链接器塞进的启动代码：</p>
+
+  <pre><code><span class="cmt"># size：text 是代码，data 是已初始化的数据，bss 是未初始化数据</span>
+$ size hello.o hello
+   text	   data	    bss	    dec	    hex	filename
+    461	      8	      1	    470	    1d6	hello.o
+    525	     64	      1	    590	    24e	hello</code></pre>
+
+  <p><code>objdump -d</code> 是<strong>反汇编</strong>（说人话：把 .o 里的机器码字节"翻译回"汇编，给想看内脏的人看）。逐列解读：最左是偏移地址，中间是机器码字节（十六进制），右边是反汇编出的助记符。真实输出如下——注意第 <code>c</code> 行 <code>mov w0, #0x3</code>：<strong>MAX_ITEMS 的 3 已经被编进指令的立即数</strong>；第 <code>20</code> 行 <code>mul w0, w0, w0</code> 是 SQUARE(i) 的乘法；地址 <code>38</code> 的 <code>bl 0 &lt;_printf&gt;</code> 是函数调用指令，链接后那个 <code>0</code> 会被填成 printf 的真实地址——这就是我们说的"待补的洞"之一：</p>
+
+  <pre><code><span class="cmt"># objdump -d：把机器码"反汇编"回汇编，逐条翻译</span>
+$ objdump -d hello.o
+
+hello.o:     file format mach-o-arm64
+
+Disassembly of section .text:
+
+0000000000000000 &lt;_main&gt;:
+   0:	d100c3ff 	sub	sp, sp, #0x30
+   4:	a9017bfd 	stp	x29, x30, [sp, #16]
+   8:	910043fd 	add	x29, sp, #0x10
+   c:	52800060 	mov	w0, #0x3                  	<span class="cmt">// #3</span>
+  10:	b9001ba0 	str	w0, [x29, #24]
+  14:	b9001fbf 	str	wzr, [x29, #28]
+  18:	1400000c 	b	48 &lt;_main+0x48&gt;
+  1c:	b9401fa0 	ldr	w0, [x29, #28]
+  20:	1b007c00 	mul	w0, w0, w0
+  24:	b9000be0 	str	w0, [sp, #8]
+  28:	b9401fa0 	ldr	w0, [x29, #28]
+  2c:	b90003e0 	str	w0, [sp]
+  30:	90000000 	adrp	x0, 88 &lt;lC0&gt;
+  34:	91000000 	add	x0, x0, #0x0
+  38:	94000000 	bl	0 &lt;_printf&gt;
+  3c:	b9401fa0 	ldr	w0, [x29, #28]
+  40:	11000400 	add	w0, w0, #0x1
+  44:	b9001fa0 	str	w0, [x29, #28]
+  48:	b9401fa1 	ldr	w1, [x29, #28]
+  4c:	b9401ba0 	ldr	w0, [x29, #24]
+  50:	6b00003f 	cmp	w1, w0
+  54:	54fffe4b 	b.lt	1c &lt;_main+0x1c&gt;  <span class="cmt">// b.tstop</span>
+  58:	90000000 	adrp	x0, a0 &lt;lC1&gt;
+  5c:	91000001 	add	x1, x0, #0x0
+  60:	90000000 	adrp	x0, 0 &lt;__ZSt4cout&gt;
+  64:	f9400000 	ldr	x0, [x0]
+  68:	94000000 	bl	0 &lt;__ZStlsISt11char_traitsIcEERSt13basic_ostreamIcT_ES5_PKc&gt;
+  6c:	90000001 	adrp	x1, 0 &lt;__ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_&gt;
+  70:	f9400021 	ldr	x1, [x1]
+  74:	94000000 	bl	0 &lt;__ZNSolsEPFRSoS_E&gt;
+  78:	52800000 	mov	w0, #0x0                  	<span class="cmt">// #0</span>
+  7c:	a9417bfd 	ldp	x29, x30, [sp, #16]
+  80:	9100c3ff 	add	sp, sp, #0x30
+  84:	d65f03c0 	ret</code></pre>
+
+  <p><code>objdump -h</code> 则列出目标文件的<strong>节表</strong>——每个节装什么、占多大，一目了然。真实输出里，.text 是代码节（0x88 = 136 字节），.cstring 是只读字符串节，.bss 是未初始化数据节，还有两个"幕后工作者"：<code>__TEXT.__StaticInit</code> 与 <code>.mod_init_func</code>——它们负责 <code>std::cout</code> 的"点火仪式"（用 cout 前要先构造它的全局对象，即 2.3 节那个 1 字节哨兵的来历）：</p>
+
+  <pre><code><span class="cmt"># objdump -h：列出节表——每个节装什么、占多大</span>
+$ objdump -h hello.o
+
+Sections:
+Idx Name          Size      VMA               LMA               File off  Algn
+  0 .text         00000088  0000000000000000  0000000000000000  000002c8  2**2
+  1 .bss          00000001  00000000000001d8  00000000000001d8  00000000  2**0
+  2 .cstring      0000002d  0000000000000088  0000000000000088  00000350  2**3
+  3 __TEXT.__StaticInit 00000050  00000000000000b8  00000000000000b8  00000380  2**2
+  4 .eh_frame     000000c8  0000000000000108  0000000000000108  000003d0  2**3
+  5 .mod_init_func 00000008  00000000000001d0  00000000000001d0  00000498  2**3</code></pre>
+
+  <table>
+    <tr><th>节名</th><th>装什么</th><th>说人话</th></tr>
+    <tr><td><code>.text</code></td><td>机器指令</td><td>你的 main 编译出的代码本体（136 字节）</td></tr>
+    <tr><td><code>.cstring</code></td><td>只读字符串</td><td>"i = %d, square = %d" 和 "hello, cpp-internals" 两句文案</td></tr>
+    <tr><td><code>.bss</code></td><td>未初始化数据</td><td>iostream 的全局初始化哨兵，只有 1 字节</td></tr>
+    <tr><td><code>__TEXT.__StaticInit</code></td><td>静态初始化代码</td><td>cout 用之前要先"点火"的构造逻辑</td></tr>
+    <tr><td><code>.eh_frame</code></td><td>异常处理 / 栈回溯信息</td><td>程序崩溃时用来打印调用栈的"地图"</td></tr>
+    <tr><td><code>.mod_init_func</code></td><td>构造器函数指针表</td><td>程序启动时自动调用的初始化函数清单</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>在 Linux 上你更习惯用 <code>readelf</code> 看节表、<code>nm</code> 看符号——<strong>macOS 没有 readelf，但 objdump -h / size / nm 全都有</strong>，信息等价。本章命令在 Linux 上照敲不误，只是节名风格略有差异（Linux 直接叫 <code>.text</code> / <code>.rodata</code> / <code>.bss</code>，没有 <code>__TEXT.__StaticInit</code> 这种双段名）。命令不同，道理同一。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：反汇编出来的是"编译器优化后的成品"，不是源码的逐句翻译。没开优化时它比较"老实"；一旦开了 <code>-O2</code>，编译器会重排指令、合并计算、删掉它认为"没用"的代码，看起来像在"乱改你的代码"。看反汇编永远要带着"这是优化后的产物"这个觉悟——第 15 章讲性能优化时会反复用到这条。</p>
+  </div>
+
+  <!-- ========== 2.6 gcc 与 g++ 的分工 ========== -->
+  <h2>2.6 gcc 与 g++ 的分工：为什么 C++ 代码要用 g++ 链接</h2>
+
+  <p>第 1 章结尾埋了伏笔：为什么 C++ 代码要用 <code>g++</code> 链接？现在现场翻车。同一个 <code>hello.cpp</code>，换成 <code>gcc</code> 编译链接——<strong>编译阶段一声不吭，链接阶段炸了</strong>：链接器点名 <code>std::cout</code>、<code>std::endl</code> 一串"未定义符号"（真实输出，节选）：</p>
+
+  <pre><code><span class="cmt"># 用 gcc 编译并链接 C++ 源码：编译过了，链接炸了（本机真实输出，节选）</span>
+$ gcc-15 hello.cpp -o hello
+Undefined symbols for architecture arm64:
+  "std::ostream::operator&lt;&lt;(std::ostream&amp; (*)(std::ostream&amp;))", referenced from:
+      _main in ccKI9cT8.o
+  "std::ios_base::Init::Init()", referenced from:
+      __static_initialization_and_destruction_0() in ccKI9cT8.o
+  "std::cout", referenced from:
+      _main in ccKI9cT8.o
+<span class="cmt"># ...（中间还省略了 std::endl 等一串未定义符号）...</span>
+ld: symbol(s) not found for architecture arm64
+collect2: error: ld returned 1 exit status</code></pre>
+
+  <p>说人话：<strong>gcc 是 C 语言的编译器</strong>，前端恰好也认得 C++ 语法（所以编译能过），但链接时它只连 C 标准库（libc）；<code>std::cout</code> 所在的 C++ 标准库（libstdc++）没人帮它连，链接器只能喊"找不着"。Linux 上同样的错，文案是 <code>undefined reference to 'std::cout'</code>——同一件事，两种方言。</p>
+
+  <p>关键点：<strong>错误只出现在链接阶段</strong>。分步验证给你看——<code>gcc -c</code> 编译好好的，<code>gcc</code> 链接才炸；同一个 .o 交给 <code>g++</code> 链接，一次通过。两种修复都实测可用：</p>
+
+  <pre><code><span class="cmt"># 分步看：编译阶段 gcc 一声不吭，问题只出在链接</span>
+$ gcc-15 -c hello.cpp -o hello_c.o     <span class="cmt"># -c 只编译不链接：成功！</span>
+$ gcc-15 hello_c.o -o hello            <span class="cmt"># 链接：失败</span>
+Undefined symbols for architecture arm64:
+  "std::cout", referenced from:
+      _main in hello_c.o
+ld: symbol(s) not found for architecture arm64
+collect2: error: ld returned 1 exit status
+
+<span class="cmt"># 修复 1（推荐）：用 g++ 链接，它会自动带上 C++ 标准库</span>
+$ g++-15 hello_c.o -o hello
+$ ./hello
+i = 0, square = 0
+i = 1, square = 1
+i = 2, square = 4
+hello, cpp-internals
+
+<span class="cmt"># 修复 2：坚持用 gcc，但手动把 C++ 标准库补上（-l 是"链接某个库"）</span>
+$ gcc-15 hello_c.o -o hello -lstdc++
+$ ./hello
+hello, cpp-internals</code></pre>
+
+  <p>再往深挖一层：为什么链接器认不出 <code>std::cout</code> 这个名字？用 <code>nm</code> 看 <code>hello.o</code> 的符号表（说人话：符号表就是目标文件里的"花名册"，记录它用到哪些名字、提供哪些名字）：</p>
+
+  <pre><code><span class="cmt"># nm：U 表示 Undefined（未定义）——这些符号等着链接阶段来"认领"</span>
+$ nm hello.o | grep -E 'cout|printf'
+                 U __ZSt4cout
+                 U __ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_
+                 U _printf</code></pre>
+
+  <p>注意那些怪名字——这就是<strong>名字修饰</strong>（name mangling）。C++ 允许函数重载：两个同名、不同参数列表的函数可以共存，链接器必须能区分它们，于是编译器把"函数名 + 参数类型"编码成独特符号。<code>__ZSt4cout</code> 就是 <code>std::cout</code>；<code>__ZSt4endl&lt;...&gt;</code> 是 <code>std::endl</code> 的模板实例；而 <code>printf</code> 没有重载，符号朴素（macOS 惯例加下划线前缀 <code>_printf</code>，Linux 直接是 <code>printf</code>）。链接器看到 <code>U __ZSt4cout</code> 却没人在花名册里"认领"——因为 libstdc++ 没被链接进来——于是当场报"未定义符号"。</p>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>判断用哪个：<strong>源文件是 .c 用 gcc，是 .cpp / .cc 用 g++</strong>。g++ 链接时会顺带把 C 标准库也连上（C++ 标准库依赖它），是"超集"。C++ 工程一律用 g++，省心、少踩坑。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：有个隐蔽的坑：如果 C++ 程序碰巧只用 <code>printf</code> 不用 <code>cout</code>，用 <code>gcc</code> 链接居然也能成功（<code>printf</code> 在 libc 里）！这让新人误以为"gcc 可以编译 C++"，直到加了第一行 <code>std::cout</code>，链接突然爆炸。记住：<strong>能跑 ≠ 配置正确</strong>，从第一天起就用 g++。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：宏去哪了 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>预处理之后，在 <code>hello.i</code> 里用 <code>grep</code> 还能找到宏名 <code>SQUARE</code> 吗？为什么？如果找不到，那 <code>SQUARE(i)</code> 去哪了？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 2.2 节的两条 grep 命令：<code>grep -c SQUARE hello.i</code> 的输出是什么？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>找不到，<code>grep -c SQUARE hello.i</code> 输出 0。宏在预处理阶段就被"原地文本替换"：<code>SQUARE(i)</code> 变成了 <code>((i) * (i))</code>，.i 里只留下展开后的文本，宏名本身彻底消失。用 <code>grep -n '((i) \* (i))' hello.i</code> 能在第 35,260 行看到它的"尸体"。这就是"宏在编译开始之前就已完成"的铁证。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令与产物连线 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面四条命令各产出什么文件、是什么性质？① <code>g++ -E hello.cpp -o hello.i</code>；② <code>g++ -S hello.i -o hello.s</code>；③ <code>g++ -c hello.s -o hello.o</code>；④ <code>g++ hello.o -o hello</code>。再用 <code>file</code> 命令检查 hello.o 与 hello，两者的输出有何不同？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回看 2.4 节的四步表格；<code>file</code> 的输出里 object 与 executable 是两个关键词。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① hello.i——文本，头文件已展开；② hello.s——文本，汇编语言；③ hello.o——二进制，机器码目标文件；④ hello——二进制，可执行文件。file 输出：<code>hello.o: Mach-O 64-bit object arm64</code> vs <code>hello: Mach-O 64-bit executable arm64</code>——前者是"半成品零件"（object），后者是"成品"（executable）；Linux 上对应 <code>ELF relocatable</code> 与 <code>ELF pie executable</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：一个数字的旅程 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 <code>hello.s</code> 里有一行 <code>mov w0, 3</code>，这个 3 是哪来的？源码里明明写的是 <code>MAX_ITEMS</code>，为什么汇编里变成了 3？这说明了预处理阶段的什么特性？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 <code>#define MAX_ITEMS 3</code> 在哪个阶段起作用，编译器拿到的是哪份文本。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>3 来自 <code>#define MAX_ITEMS 3</code>。预处理阶段把标识符 <code>MAX_ITEMS</code> 替换成字面量 3，编译器拿到的是替换之后的文本，于是把 3 直接编进了指令的立即数字段（arm64 的 <code>mov w0, #3</code>，机器码 <code>52800060</code>）。这说明预处理是编译之前的纯文本加工——宏在编译开始前就已完成，编译阶段再也见不到宏名。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：一次链接事故的完整排障 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用 <code>gcc</code> 编译链接一个用了 <code>std::cout</code> 的 .cpp 文件，链接时报 <code>Undefined symbols for architecture arm64: "std::cout"</code>（Linux 上是 <code>undefined reference to 'std::cout'</code>）。① 解释原因；② 给出两种修复命令；③ 更进一步：用 <code>objdump -d</code> 检查编译出的 hello.o，你能在 .text 节里找到哪条指令佐证宏 <code>MAX_ITEMS</code> 确实被替换了？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想 2.6 节的 gcc/g++ 分工；宏替换会体现在指令的立即数上——回看 2.5 节反汇编输出第 <code>c</code> 行。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① gcc 是 C 编译器，链接时只带 C 标准库 libc，而 <code>std::cout</code> 的实现躺在 C++ 标准库 libstdc++ 里，没人帮它链接，于是符号未定义。注意编译阶段 gcc 不报错（语法语义都正确），问题只出在链接阶段。② 修复 1：<code>g++ hello_c.o -o hello</code>（g++ 自动带 libstdc++）；修复 2：<code>gcc hello_c.o -o hello -lstdc++</code>（-l 手动链接库）。③ 在反汇编中找到 <code>mov w0, #0x3</code>（机器码 <code>52800060</code>，位于偏移 0xc）——<code>MAX_ITEMS</code> 已被替换成立即数 3 编进指令；顺带还能看到偏移 0x20 的 <code>mul w0, w0, w0</code>，正是 <code>SQUARE(i)</code> 编译出的乘法指令。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

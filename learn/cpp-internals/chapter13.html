@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第13章：继承体系的内存布局：单继承与多态代价 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter13.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第13章：继承体系的内存布局：单继承与多态代价 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter13.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="13" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第13章：继承体系的内存布局：单继承与多态代价</h1>
+  <p class="chapter-subtitle">继承不是玄学，是内存里的一笔笔账：基类子对象排在前、自己的成员跟在后，vptr 藏在对象开头——多态的全部魔法都建立在这些字节的排列上。本章的每一处布局都上机实测，把单继承、多继承、虚继承的大小与代价盘个明明白白</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「升堂断案，最忌拍脑袋。继承、虚函数、多继承、虚继承——这些词听着玄，其实每一桩都是一本账：对象占几字节、vptr 藏在哪个偏移、基类子对象排在第几格，账上都写得清清楚楚。这一章我们不当法师当仵作，把每一类对象的'尸体'摆上解剖台：sizeof 是尺，地址是秤，量出来的数字不会说谎。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 13.1 单继承的布局：基类子对象 + 自己的成员 ========== -->
+  <h2>13.1 单继承的布局：基类子对象 + 自己的成员</h2>
+
+  <p>先立一条最朴素的总账规则：<strong>继承在内存里的本质，就是把基类的成员"原样搬进"派生类对象</strong>。搬进来的这一整段连续内存，叫<strong>基类子对象</strong>（base class subobject，说人话：基类在派生类对象里占据的那段区域，它不是指针、不是引用，就是实实在在的一段成员序列）。在<strong>单继承</strong>（只有一个直接基类）下，布局规则只有一句：<strong>基类子对象排最前，自己的成员接在后面</strong>。第 12 章说过成员函数不占对象空间，所以算账只数成员变量，再套用第 10 章的对齐规则。</p>
+
+  <p>看个最简单的实测：基类 <code>Base</code> 有两个 <code>int</code>，派生类 <code>Son</code> 自己加一个 <code>int</code>。如果"继承是引用"的错觉成立，<code>Son</code> 应只比 <code>Base</code> 大一个指针；真相是：</p>
+
+  <pre><code><span class="cmt">// inherit1.cpp —— 单继承：基类子对象 + 自己的成员（本机实测）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+
+<span class="kw">struct</span> <span class="type">Base</span> { <span class="kw">int</span> a; <span class="kw">int</span> b; };
+<span class="kw">struct</span> <span class="type">Son</span> : <span class="kw">public</span> <span class="type">Base</span> { <span class="kw">int</span> c; };
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"sizeof(Base)=%zu sizeof(Son)=%zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Base</span>), <span class="kw">sizeof</span>(<span class="type">Son</span>));
+    <span class="fn">printf</span>(<span class="str">"offsetof: a=%zu b=%zu c=%zu\n"</span>,
+            <span class="fn">offsetof</span>(<span class="type">Son</span>, a), <span class="fn">offsetof</span>(<span class="type">Son</span>, b), <span class="fn">offsetof</span>(<span class="type">Son</span>, c));
+    <span class="type">Son</span> s; <span class="type">Base</span>* p <span class="op">=</span> <span class="op">&amp;</span>s;
+    <span class="fn">printf</span>(<span class="str">"&amp;s=%p 基类子对象=%p 偏移=%td\n"</span>,
+            <span class="op">(</span><span class="kw">void</span><span class="op">*)</span><span class="op">&amp;</span>s, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>p, <span class="op">(</span><span class="kw">char</span><span class="op">*)</span>p <span class="op">-</span> <span class="op">(</span><span class="kw">char</span><span class="op">*)</span><span class="op">&amp;</span>s);
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（Apple clang 21 / arm64）</span>
+sizeof(Base)=<span class="num">8</span> sizeof(Son)=<span class="num">12</span>
+offsetof: a=<span class="num">0</span> b=<span class="num">4</span> c=<span class="num">8</span>
+<span class="op">&amp;</span>s=0x16f1fe0c4 基类子对象=0x16f1fe0c4 偏移=<span class="num">0</span></code></pre>
+
+  <p>数字对上了总账：<code>a</code>、<code>b</code> 原封不动排在偏移 0 和 4，自己的 <code>c</code> 从 8 开始，共 12 字节，正好 <code>4+4+4</code>。而 <code>(Base*)&amp;s</code> 与 <code>&amp;s</code> 地址相同、偏移为 0——单继承下<strong>基类子对象就住在对象开头</strong>，指针转换"一个字节都不用挪"。布局图画出来就是：</p>
+
+  <pre><code><span class="cmt"># Son 布局（偏移：字节）</span>
+偏移: <span class="num">0</span>    <span class="num">4</span>    <span class="num">8</span>    <span class="num">12</span>
+     ┌──────┬──────┬──────┐
+Son  │ a    │ b    │ c    │
+     ├──────┴──────┤      │
+     │ Base 子对象  │ 自己的 │
+     └─────────────┴──────┘
+<span class="ann">@基类子对象在偏移 0 大小 8；自己的 c 接在 8~11；共 12</span></code></pre>
+
+  <table>
+    <tr><th>类型</th><th>成员</th><th>sizeof</th><th>基类子对象偏移</th><th>说明</th></tr>
+    <tr><td>Base</td><td><code>int a; int b;</code></td><td>8</td><td>—</td><td>基类自己就是普通结构体</td></tr>
+    <tr><td>Son : Base</td><td>+ <code>int c;</code></td><td>12</td><td>0</td><td>基类子对象整体搬入，自己的成员接后</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>记住这条总账：<strong>继承 = 把基类的成员序列原样嵌入派生类对象</strong>，单继承下基类子对象固定排在偏移 0。派生类对象"就是一个基类对象 + 多出来的尾巴"，所以 <code>Base*</code> 指向 <code>Son</code> 时读到的永远是完整的基类部分——多态的根基就埋在这里。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别把继承理解成"对象里存了一个指向基类的指针"。<code>sizeof(Son) = 12</code> 而不是 <code>8 + 8</code>，铁证如山：<strong>基类子对象是按值嵌入的成员序列，不是引用</strong>。加多少个基类成员，就多占多少字节（还要按第 10 章规则对齐取整）。</p>
+  </div>
+
+  <!-- ========== 13.2 虚函数继承：vptr 与 vtable 的传承 ========== -->
+  <h2>13.2 虚函数继承：vptr 与 vtable 的传承</h2>
+
+  <p>第 12 章我们见过：类只要声明了虚函数，对象开头就多出一个<strong>虚表指针</strong>（vptr，virtual table pointer，指向虚函数表的指针，占 8 字节）。派生类继承了虚函数，vptr 怎么排？答案很干脆：<strong>vptr 跟着基类子对象走，仍在对象开头</strong>，派生类不新造 vptr，只在自己的尾部加成员。但有个关键细节：对象里存的是"指向哪张表"的指针，而<strong>虚函数表</strong>（vtable，按槽位排着函数指针的表）是<strong>每个类一张、全类对象共享</strong>的。构造 <code>Son</code> 对象时，编译器会把 vptr 填成"指向 <code>Son</code> 自己的虚表"——哪怕基类子对象排在开头，这张表也已经换成儿子的了。上机看：</p>
+
+  <p>给 <code>Base</code> 加一个虚函数 <code>print()</code>，<code>Son</code> 重写它并加 <code>int c</code>。按总账推算：<code>Base</code> = vptr(8) + a(4) + b(4) = 16；<code>Son</code> = 16 + c(4) = 20，对齐到 8 = 24。实测并打印两个对象首字节处的 vptr：</p>
+
+  <pre><code><span class="cmt">// inherit2.cpp —— 虚函数继承：vptr 的传承（本机实测）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+
+<span class="kw">struct</span> <span class="type">Base</span> {
+    <span class="kw">int</span> a; <span class="kw">int</span> b;
+    <span class="kw">virtual void</span> <span class="fn">print</span>() <span class="kw">const</span> { <span class="fn">printf</span>(<span class="str">"Base::print\n"</span>); }
+};
+<span class="kw">struct</span> <span class="type">Son</span> : <span class="kw">public</span> <span class="type">Base</span> {
+    <span class="kw">int</span> c;
+    <span class="kw">void</span> <span class="fn">print</span>() <span class="kw">const</span> <span class="kw">override</span> { <span class="fn">printf</span>(<span class="str">"Son::print\n"</span>); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"sizeof(Base) = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Base</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(Son)  = %zu\n"</span>, <span class="kw">sizeof</span>(<span class="type">Son</span>));
+    <span class="fn">printf</span>(<span class="str">"offsetof: a=%zu b=%zu c=%zu\n"</span>,
+            <span class="fn">offsetof</span>(<span class="type">Son</span>, a), <span class="fn">offsetof</span>(<span class="type">Son</span>, b), <span class="fn">offsetof</span>(<span class="type">Son</span>, c));
+    <span class="type">Base</span> b; <span class="type">Son</span> s;
+    <span class="fn">printf</span>(<span class="str">"&amp;b = %p, vptr = %p\n"</span>, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span><span class="op">&amp;</span>b, <span class="op">*</span><span class="op">(</span><span class="kw">void</span><span class="op">**)</span><span class="op">&amp;</span>b);
+    <span class="fn">printf</span>(<span class="str">"&amp;s = %p, vptr = %p\n"</span>, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span><span class="op">&amp;</span>s, <span class="op">*</span><span class="op">(</span><span class="kw">void</span><span class="op">**)</span><span class="op">&amp;</span>s);
+    <span class="type">Base</span>* p <span class="op">=</span> <span class="op">&amp;</span>s;
+    p<span class="op">-&gt;</span><span class="fn">print</span>();   <span class="cmt">// 动态分派：调用的却是 Son::print</span>
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（地址是 ASLR 随机值，每次运行不同）</span>
+sizeof(Base) = <span class="num">16</span>
+sizeof(Son)  = <span class="num">24</span>
+offsetof: a=<span class="num">8</span> b=<span class="num">12</span> c=<span class="num">16</span>
+<span class="op">&amp;</span>b = 0x16fd120c0, vptr = 0x1000f0020
+<span class="op">&amp;</span>s = 0x16fd120a8, vptr = 0x1000f0048
+Son::print</code></pre>
+
+  <p>账目完全对上：vptr 占 0~7，<code>a</code> 从 8、<code>b</code> 从 12、自己的 <code>c</code> 从 16 开始，总大小 24。<code>Base</code> 与 <code>Son</code> 对象的 vptr 值<strong>不一样</strong>——它们指向各自的虚表。所谓<strong>动态分派</strong>（dynamic dispatch，运行时才决定调用哪个函数）说人话就三步：① 从对象开头读 vptr；② 按虚函数在虚表中的槽位取函数指针；③ 间接调用。虚表每个槽位 8 字节，按虚函数声明顺序排号。下面这段是本机编译的真实汇编（arm64，<code>-O0</code>），<code>f</code> 是 <code>Base</code> 的第 3 个虚函数（前两个槽位被析构相关项占用），槽位偏移 <code>2×8=16</code>：</p>
+
+  <pre><code><span class="cmt"># call_virtual：b.f() 的虚调用汇编节选（arm64）</span>
+        ldr     x0, [sp, #8]      <span class="ann">; 加载对象地址（this）</span>
+        ldr     x8, [x0]          <span class="ann">; 第 1 跳：读对象开头的 vptr</span>
+        ldr     x8, [x8, #16]     <span class="ann">; 第 2 跳：按槽位偏移 16 取函数指针</span>
+        blr     x8                <span class="ann">; 间接调用：目标运行时才定</span>
+<span class="cmt"># 对比：非虚函数 g() 的调用</span>
+        bl      __ZNK4Base1gEv    <span class="ann">; 直接跳转：地址编译期写死</span></code></pre>
+
+  <table>
+    <tr><th>Son 的成员</th><th>偏移</th><th>大小</th><th>说明</th></tr>
+    <tr><td>vptr（虚表指针）</td><td>0</td><td>8</td><td>继承自基类子对象，指向 Son 自己的虚表</td></tr>
+    <tr><td>a</td><td>8</td><td>4</td><td>基类成员</td></tr>
+    <tr><td>b</td><td>12</td><td>4</td><td>基类成员</td></tr>
+    <tr><td>c</td><td>16</td><td>4</td><td>派生类自己的成员</td></tr>
+    <tr><td colspan="2">总计（对齐后）</td><td>24</td><td>20 对齐到 8 的整数倍</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>vptr 的"传承"一句话：<strong>继承的是"拥有虚函数"这件事，不是那张表</strong>。每个多态类一张虚表、类内对象共享；对象里的 vptr 是构造时按"实际构造的类型"填写的——构造 <code>Son</code> 时填指向 Son 虚表的地址。这就是为什么用 <code>Base*</code> 调 <code>print()</code> 能喊出 <code>Son::print</code>。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：虚函数有"起步价"——哪怕一个成员变量都没有，只要有一个虚函数，对象就有 8 字节（本机实测：空类 1 字节、带普通成员函数仍 1 字节、带一个虚函数立刻 8 字节、再加 <code>int</code> 变 16 字节）。这个 8 字节 vptr 是<strong>每个对象</strong>都要付的，对象一多账单就大——13.5 节专门算这笔总账。</p>
+  </div>
+
+  <!-- ========== 13.3 多继承的布局：多个基类子对象 ========== -->
+  <h2>13.3 多继承的布局：多个基类子对象</h2>
+
+  <p><strong>多继承</strong>（multiple inheritance，一个类同时继承两个或更多基类）的布局就是总账规则的直接延伸：<strong>几个基类子对象按声明顺序依次排列，然后才是自己的成员</strong>。注意：多继承和 13.4 节的虚继承是两码事——普通多继承下每个基类子对象都是完整的一份，谁都不让谁。让两个基类 <code>A</code>、<code>B</code> 各自带一个虚函数（于是各自有 vptr），<code>C : A, B</code> 再加 <code>int c</code>：</p>
+
+  <p>先手算：vptrA(0~8) + a(8~12)，为了让第二个 vptr 对齐到 8，12~16 是填充；vptrB(16~24) + b(24~28)，c 从 28 到 32。共 32 字节。账本手算容易错，上机量：</p>
+
+  <pre><code><span class="cmt">// inherit3.cpp —— 多继承：多个基类子对象依次排列（本机实测）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+
+<span class="kw">struct</span> <span class="type">A</span> { <span class="kw">int</span> a; <span class="kw">virtual void</span> <span class="fn">fa</span>() <span class="kw">const</span> {} };
+<span class="kw">struct</span> <span class="type">B</span> { <span class="kw">int</span> b; <span class="kw">virtual void</span> <span class="fn">fb</span>() <span class="kw">const</span> {} };
+<span class="kw">struct</span> <span class="type">C</span> : <span class="type">A</span>, <span class="type">B</span> {
+    <span class="kw">int</span> c;
+    <span class="kw">void</span> <span class="fn">fa</span>() <span class="kw">const</span> <span class="kw">override</span> {}   <span class="cmt">// 重写 A 的虚函数</span>
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"sizeof(A)=%zu sizeof(B)=%zu sizeof(C)=%zu\n"</span>,
+            <span class="kw">sizeof</span>(<span class="type">A</span>), <span class="kw">sizeof</span>(<span class="type">B</span>), <span class="kw">sizeof</span>(<span class="type">C</span>));
+    <span class="fn">printf</span>(<span class="str">"offsetof: a=%zu b=%zu c=%zu\n"</span>,
+            <span class="fn">offsetof</span>(<span class="type">C</span>, a), <span class="fn">offsetof</span>(<span class="type">C</span>, b), <span class="fn">offsetof</span>(<span class="type">C</span>, c));
+    <span class="type">C</span> c;
+    <span class="type">A</span>* pa <span class="op">=</span> <span class="op">&amp;</span>c; <span class="type">B</span>* pb <span class="op">=</span> <span class="op">&amp;</span>c;
+    <span class="fn">printf</span>(<span class="str">"&amp;c=%p 转A*=%p（偏移%td）转B*=%p（偏移%td）\n"</span>,
+            <span class="op">(</span><span class="kw">void</span><span class="op">*)</span><span class="op">&amp;</span>c, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>pa, <span class="op">(</span><span class="kw">char</span><span class="op">*)</span>pa<span class="op">-</span><span class="op">(</span><span class="kw">char</span><span class="op">*)</span><span class="op">&amp;</span>c,
+            <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>pb, <span class="op">(</span><span class="kw">char</span><span class="op">*)</span>pb<span class="op">-</span><span class="op">(</span><span class="kw">char</span><span class="op">*)</span><span class="op">&amp;</span>c);
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（Apple clang 21 / arm64）</span>
+sizeof(A)=<span class="num">16</span> sizeof(B)=<span class="num">16</span> sizeof(C)=<span class="num">32</span>
+offsetof: a=<span class="num">8</span> b=<span class="num">24</span> c=<span class="num">28</span>
+<span class="op">&amp;</span>c=0x16d0fa0b0 转A*=0x16d0fa0b0（偏移<span class="num">0</span>）转B*=0x16d0fa0c0（偏移<span class="num">16</span>）</code></pre>
+
+  <p>测量和手算一致：C 对象里依次排着 A 子对象（vptrA + a，0~15）、B 子对象（vptrB + b，16~27）、自己的 c（28~31），共 32 字节。注意 <code>b</code> 的偏移是 24 而不是 12——B 子对象整体被推到了偏移 16。文字版布局：</p>
+
+  <pre><code><span class="cmt"># C 布局（偏移：字节）</span>
+偏移: <span class="num">0</span>      <span class="num">8</span>    <span class="num">12</span>  <span class="num">16</span>     <span class="num">24</span>   <span class="num">28</span> <span class="num">32</span>
+     ┌──────┬────┬────┬──────┬────┬────┐
+C    │ vptrA│ a  │填充│ vptrB│ b  │ c  │
+     └──────┴────┴────┴──────┴────┴────┘
+     │◄── A 子对象 ──►│◄── B 子对象 ──►│
+<span class="ann">@12~16 是给 vptrB 对齐的填充；自己的成员排最后</span></code></pre>
+
+  <p>布局的连锁反应是<strong>指针调整</strong>（pointer adjustment，说人话：派生类指针转基类指针时地址要挪动）：<code>C*</code> 转 <code>A*</code> 不用动（A 在开头），转 <code>B*</code> 却要加 16 字节。这个调整是编译器在 <code>static_cast</code> / 隐式转换时自动算好的（编译期算好偏移，转换时加一条指令）；把一个对象当 B 用（如传给 <code>void use(B&amp;)</code>），传的就是那个偏移 16 的地址。</p>
+
+  <table>
+    <tr><th>指针转换</th><th>转换后地址</th><th>相对 C 开头偏移</th><th>原因</th></tr>
+    <tr><td><code>C*</code> → <code>A*</code></td><td>0x16d0fa0b0</td><td>0</td><td>A 子对象在开头，不用挪</td></tr>
+    <tr><td><code>C*</code> → <code>B*</code></td><td>0x16d0fa0c0</td><td>16</td><td>B 子对象在偏移 16，指针要加 16</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>多继承就是"总账规则的重复应用"：<strong>N 个基类 = N 段依次排列的基类子对象 + 自己的成员</strong>。基类各自带虚函数就有 N 个 vptr。指针调整平时由编译器代劳，但 <code>(B*)&amp;c</code> 和 <code>(void*)&amp;c</code> 不是同一个值这个事实，是排查"地址对不上"类 bug 的第一线索。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<strong>多继承 ≠ 虚继承</strong>，两个概念别混。普通多继承下每个基类子对象都是完整的一份；如果两个基类都继承自同一个祖先（菱形），祖先就会在对象里出现<strong>两份</strong>——这是 13.4 节要解决的事。另外多继承有二义性坑：两个基类有同名成员时 <code>obj.name</code> 直接编译报错，必须 <code>obj.A::name</code> 指名道姓。</p>
+  </div>
+
+  <!-- ========== 13.4 虚继承：菱形继承问题的解法 ========== -->
+  <h2>13.4 虚继承：菱形继承问题的解法</h2>
+
+  <p>把 13.3 再推一步，就撞上著名的<strong>菱形继承问题</strong>（diamond inheritance）：<code>Y</code>、<code>Z</code> 都继承自 <code>X</code>，<code>W</code> 又同时继承 <code>Y</code> 和 <code>Z</code>——按普通多继承的规则，<code>W</code> 对象里会塞进<strong>两份 X 子对象</strong>（一份走 Y 的路径、一份走 Z 的路径），形成"两个爷爷"的窘境：访问 <code>x</code> 有歧义，改其中一份另一份不知道，内存也白费。验证很简单，把两条路径的 X 地址打出来比一比：</p>
+
+  <p><strong>虚继承</strong>（virtual inheritance）就是为解这个问题而生的：继承时加一个 <code>virtual</code> 关键字，声明"这个基类我不独占，大家共享"。实现上，对象里不再把 X 完整嵌入每个分支，而是放一个<strong>虚基类指针</strong>（vbptr，virtual base pointer）——<strong>虚基类表</strong>（vbtable）里记录着"共享的虚基类子对象排在对象哪个偏移"，运行时靠它去"找"那份唯一的 X。用真实代码同时量虚继承和非虚菱形：</p>
+
+  <pre><code><span class="cmt">// inherit4.cpp —— 虚继承 vs 普通菱形：X 子对象是否重复（本机实测）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">struct</span> <span class="type">A</span> { <span class="kw">int</span> a; };
+<span class="kw">struct</span> <span class="type">B</span> : <span class="kw">virtual</span> <span class="type">A</span> { <span class="kw">int</span> b; };   <span class="cmt">// 虚继承：B、C 共享 A</span>
+<span class="kw">struct</span> <span class="type">C</span> : <span class="kw">virtual</span> <span class="type">A</span> { <span class="kw">int</span> c; };
+<span class="kw">struct</span> <span class="type">D</span> : <span class="type">B</span>, <span class="type">C</span> { <span class="kw">int</span> d; };
+
+<span class="kw">struct</span> <span class="type">X</span> { <span class="kw">int</span> x; };
+<span class="kw">struct</span> <span class="type">Y</span> : <span class="type">X</span> { <span class="kw">int</span> y; };          <span class="cmt">// 对照：普通菱形，各自持有一份 X</span>
+<span class="kw">struct</span> <span class="type">Z</span> : <span class="type">X</span> { <span class="kw">int</span> z; };
+<span class="kw">struct</span> <span class="type">W</span> : <span class="type">Y</span>, <span class="type">Z</span> { <span class="kw">int</span> w; };
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"== 虚继承 ==\n"</span>);
+    <span class="fn">printf</span>(<span class="str">"sizeof(A)=%zu sizeof(B)=%zu sizeof(C)=%zu sizeof(D)=%zu\n"</span>,
+            <span class="kw">sizeof</span>(<span class="type">A</span>), <span class="kw">sizeof</span>(<span class="type">B</span>), <span class="kw">sizeof</span>(<span class="type">C</span>), <span class="kw">sizeof</span>(<span class="type">D</span>));
+    <span class="type">D</span> d;
+    <span class="type">A</span>* a1 <span class="op">=</span> <span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">A</span><span class="op">*&gt;</span><span class="op">(</span><span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">B</span><span class="op">*&gt;</span><span class="op">(&amp;</span>d<span class="op">)</span><span class="op">)</span>;
+    <span class="type">A</span>* a2 <span class="op">=</span> <span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">A</span><span class="op">*&gt;</span><span class="op">(</span><span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">C</span><span class="op">*&gt;</span><span class="op">(&amp;</span>d<span class="op">)</span><span class="op">)</span>;
+    <span class="fn">printf</span>(<span class="str">"经B路径A=%p 经C路径A=%p 判定:%s\n"</span>, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>a1, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>a2,
+            a1 <span class="op">==</span> a2 ? <span class="str">"同一份A(共享)"</span> : <span class="str">"两份A(重复)"</span>);
+
+    <span class="fn">printf</span>(<span class="str">"== 普通菱形 ==\n"</span>);
+    <span class="fn">printf</span>(<span class="str">"sizeof(X)=%zu sizeof(Y)=%zu sizeof(Z)=%zu sizeof(W)=%zu\n"</span>,
+            <span class="kw">sizeof</span>(<span class="type">X</span>), <span class="kw">sizeof</span>(<span class="type">Y</span>), <span class="kw">sizeof</span>(<span class="type">Z</span>), <span class="kw">sizeof</span>(<span class="type">W</span>));
+    <span class="type">W</span> w;
+    <span class="type">X</span>* x1 <span class="op">=</span> <span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">X</span><span class="op">*&gt;</span><span class="op">(</span><span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">Y</span><span class="op">*&gt;</span><span class="op">(&amp;</span>w<span class="op">)</span><span class="op">)</span>;
+    <span class="type">X</span>* x2 <span class="op">=</span> <span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">X</span><span class="op">*&gt;</span><span class="op">(</span><span class="kw">static_cast</span><span class="op">&lt;</span><span class="type">Z</span><span class="op">*&gt;</span><span class="op">(&amp;</span>w<span class="op">)</span><span class="op">)</span>;
+    <span class="fn">printf</span>(<span class="str">"经Y路径X=%p 经Z路径X=%p 判定:%s\n"</span>, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>x1, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>x2,
+            x1 <span class="op">==</span> x2 ? <span class="str">"同一份X"</span> : <span class="str">"两份X(菱形重复!)"</span>);
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（Apple clang 21 / arm64）</span>
+== 虚继承 ==
+sizeof(A)=<span class="num">4</span> sizeof(B)=<span class="num">16</span> sizeof(C)=<span class="num">16</span> sizeof(D)=<span class="num">40</span>
+经B路径A=0x16ee3e0c8 经C路径A=0x16ee3e0c8 判定:同一份A(共享)
+== 普通菱形 ==
+sizeof(X)=<span class="num">4</span> sizeof(Y)=<span class="num">8</span> sizeof(Z)=<span class="num">8</span> sizeof(W)=<span class="num">20</span>
+经Y路径X=0x16ee3e094 经Z路径X=0x16ee3e09c 判定:两份X(菱形重复!)</code></pre>
+
+  <p>证据确凿：虚继承下，从 B 路径和从 C 路径拿到的 A 子对象是<strong>同一个地址</strong>——整个 D 里只有一份 A，大家共享；普通菱形下两个地址差了 8 字节，X 被复制成两份。代价也写在账上：虚继承的 D 有 40 字节（vbptrB + b + vbptrC + c + d + 共享 A），而普通菱形 W 只有 20 字节——A 很小（4 字节）时，省下的一份 A 却要多付两个 vbptr（16 字节）。所以虚继承<strong>买的是"语义正确"，不是"省内存"</strong>。B 的布局：vbptr(0~8) + b(8~12) + 共享 A(12~16)，共 16 字节。</p>
+
+  <table>
+    <tr><th>继承方式</th><th>sizeof</th><th>祖先子对象份数</th><th>多出的指针</th><th>访问祖先成员</th></tr>
+    <tr><td>普通菱形 W : Y, Z : X</td><td>20</td><td>2（重复）</td><td>无</td><td>直接偏移访问，但有二义性</td></tr>
+    <tr><td>虚继承 D : B, C : virtual A</td><td>40</td><td>1（共享）</td><td>vbptr × 2</td><td>查 vbtable 间接定位</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>虚继承的判案手法很直接：<strong>地址相等 = 共享，地址不等 = 重复</strong>。菱形继承里你到底踩没踩"两个爷爷"的坑，把两条路径的祖先子对象地址打出来比一比，一眼定罪。vbtable 就是一张"共享基类位置表"，运行时告诉程序那份唯一的虚基类住在当前对象的哪个偏移——这也是虚继承访问成员比普通继承慢一拍的原因。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：虚继承不是免费的：① 每个带虚基类的子对象多一个 vbptr（8 字节）；② 访问虚基类成员要间接寻址，性能打折；③ 构造函数责任链变复杂（最派生类负责构造虚基类）；④ 布局不再"基类在前"，指针转换要查表。所以<strong>能不用就不用</strong>——业界普遍把它当最后手段，优先用组合（把共同部分做成成员对象）避开菱形。</p>
+  </div>
+
+  <!-- ========== 13.5 多态的内存代价小结 ========== -->
+  <h2>13.5 多态的内存代价小结</h2>
+
+  <p>把前三节拆开的账汇总，多态的代价一共三笔：<strong>第一笔，空间代价——vptr</strong>。每个多态对象多 8 字节（虚继承再加 vbptr）；vtable/vbtable 虽然类级共享，对象大小却是实打实涨上去的。<strong>第二笔，性能代价——间接调用</strong>。13.2 的汇编看得很清楚：非虚调用一条 <code>bl</code> 直接跳转；虚调用要"取 vptr → 查槽位 → 间接跳"三条指令，还因此<strong>无法内联</strong>（编译器不知道运行时到底调哪个函数），热点循环里的虚调用尤其肉疼。<strong>第三笔，也是最阴险的——按位复制陷阱</strong>：对象里藏着 vptr，用 <code>memcpy</code> 把对象当"一坨字节"拷贝，vptr 也被复制过去；更致命的是<strong>指针成员被复制成同一份，双双释放 = 双重释放崩溃</strong>。上机演一遍：</p>
+
+  <p>下面程序先通过 <code>Base*</code> 完成一次多态调用，再把 <code>Derived</code> 对象用 <code>memcpy</code> 按位拷给另一个 <code>Derived</code>——编译器当场发出警告（<code>-Wdynamic-class-memaccess</code>，提示"vptr 将被覆盖"），执意运行则结局在意料之中：</p>
+
+  <pre><code><span class="cmt">// polycopy.cpp —— memcpy 按位复制多态对象的代价（本机实测）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstring&gt;</span>
+
+<span class="kw">struct</span> <span class="type">Base</span> {
+    <span class="kw">virtual</span> ~<span class="type">Base</span>() {}
+    <span class="kw">virtual const char</span>* <span class="fn">who</span>() <span class="kw">const</span> { <span class="kw">return</span> <span class="str">"Base"</span>; }
+};
+<span class="kw">struct</span> <span class="type">Derived</span> : <span class="type">Base</span> {
+    <span class="kw">int</span>* big;
+    <span class="kw">const char</span>* <span class="fn">who</span>() <span class="kw">const</span> <span class="kw">override</span> { <span class="kw">return</span> <span class="str">"Derived"</span>; }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">Derived</span> d1; d1.big <span class="op">=</span> <span class="kw">new int</span>[<span class="num">1000</span>];
+    <span class="type">Base</span>* p <span class="op">=</span> <span class="op">&amp;</span>d1;
+    <span class="fn">fprintf</span>(<span class="type">stderr</span>, <span class="str">"虚调用输出: %s\n"</span>, p<span class="op">-&gt;</span><span class="fn">who</span>());   <span class="cmt">// Derived</span>
+    <span class="type">Derived</span> d2;
+    <span class="fn">memcpy</span>(<span class="op">&amp;</span>d2, <span class="op">&amp;</span>d1, <span class="kw">sizeof</span>(<span class="type">Derived</span>));  <span class="cmt">// 连 vptr + big 一起按位拷</span>
+    <span class="fn">fprintf</span>(<span class="type">stderr</span>, <span class="str">"d1.big=%p d2.big=%p（同一块！）\n"</span>,
+            <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>d1.big, <span class="op">(</span><span class="kw">void</span><span class="op">*)</span>d2.big);
+    <span class="kw">delete</span><span class="op">[]</span> d1.big;
+    <span class="fn">fprintf</span>(<span class="type">stderr</span>, <span class="str">"继续释放 d2.big...\n"</span>);
+    <span class="kw">delete</span><span class="op">[]</span> d2.big;   <span class="cmt">// 同一块内存释放两次 → 崩溃</span>
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译警告（真实，GCC/Clang 都报）：</span>
+g++ polycopy.cpp -o polycopy
+<span class="cmt"># warning: destination for this 'memcpy' call is a pointer to dynamic class 'Derived';</span>
+<span class="cmt">#   vtable pointer will be overwritten [-Wdynamic-class-memaccess]</span>
+<span class="cmt"># 运行（真实输出）：</span>
+虚调用输出: Derived
+d1.big=0x1050e5f90 d2.big=0x1050e5f90（同一块！）
+继续释放 d2.big...
+Trace/BPT trap: <span class="num">5</span>   <span class="cmt"># 双重释放，进程当场死亡（exit 133）</span></code></pre>
+
+  <p>同类陷阱还有<strong>切片</strong>（slicing，说人话：把派生类对象按值赋给基类对象，派生部分被"切掉"）：<code>Derived d; Base b = d;</code> 只拷贝基类子对象，b 的 vptr 指向 Base 的虚表，所以 <code>b.who()</code> 输出 <code>Base</code> 而非 <code>Derived</code>（本机实测）。拷贝多态对象的正解是<strong>拷贝构造/赋值、或虚 clone() 函数</strong>，容器里存<strong>指针或智能指针</strong>而不是裸对象。</p>
+
+  <table>
+    <tr><th>代价</th><th>具体表现</th><th>规避手段</th></tr>
+    <tr><td>vptr 空间</td><td>每个多态对象 +8 字节；虚继承再加 vbptr</td><td>只在需要多态处用虚函数；对象池化</td></tr>
+    <tr><td>间接调用</td><td>虚调用 3 条指令且无法内联；vbtable 查表更慢</td><td>热点代码用 final 类让编译器去虚拟化（devirtualize）</td></tr>
+    <tr><td>按位复制</td><td>memcpy 连 vptr 一起拷 → 双重释放崩溃；值传递 → 切片</td><td>拷贝构造/虚 clone；容器存指针；禁用拷贝（=delete）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>三笔账一句话：<strong>多态 = 拿 8 字节和一次间接寻址，换"一份代码对多种类型生效"</strong>。划不划算看对象数量：几百万个对象的集合，每个多 8 字节就是几十 MB；热点循环里的虚调用可能就是性能瓶颈。狄某的建议：<strong>先量，再算，别拍脑袋</strong>。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>memcpy</code> 拷多态对象是教科书级事故现场，但编译器其实早就提醒过你——<code>-Wdynamic-class-memaccess</code> 就是在喊"vptr 要被覆盖了"。养成习惯：<strong>把编译器警告当线索，别当噪音</strong>。任何"把对象当字节数组处理"的操作（序列化、写文件、套网络协议）都要先问：这个类有多态吗？有，就别直接按位操作。</p>
+  </div>
+
+  <!-- ========== 13.6 章节小结 ========== -->
+  <h2>13.6 章节小结</h2>
+
+  <p>本章的账目收拢成一条主线：<strong>对象的字节排列 = 基类子对象序列 + 自己的成员 + 必要时附加的指针（vptr / vbptr）</strong>。单继承最简单——基类子对象在偏移 0，自己接尾巴；多继承是总账的重复应用——N 个基类 N 段子对象，转换指针要挪地址；虚继承把重复的祖先收敛成一份，代价是多付 vbptr 和一次间接寻址。所有规则都服从第 10 章的对齐、第 12 章的 vptr 起步价。</p>
+
+  <p>把所有实测数字收进一张总表——这就是本章的"结案陈词"（Apple clang 21 / arm64 实测）：</p>
+
+  <table>
+    <tr><th>继承形态</th><th>示例</th><th>sizeof</th><th>布局要点</th><th>代价</th></tr>
+    <tr><td>单继承（无虚函数）</td><td>Son : Base{2×int} + int</td><td>12</td><td>基类子对象偏移 0，成员接后</td><td>无</td></tr>
+    <tr><td>单继承（有虚函数）</td><td>Son : Base{virtual} + int</td><td>24</td><td>vptr 在开头，a/b/c 偏移 8/12/16</td><td>+8 字节 vptr</td></tr>
+    <tr><td>多继承（两个虚基类）</td><td>C : A, B + int</td><td>32</td><td>A 子对象 0~15、B 子对象 16~27、c 28~31</td><td>两个 vptr；B* 转换 +16</td></tr>
+    <tr><td>虚继承菱形</td><td>D : B, C : virtual A + int</td><td>40</td><td>一份共享 A；B@0、C@16、d@28、A@32</td><td>两个 vbptr；间接寻址</td></tr>
+    <tr><td>普通菱形（对照）</td><td>W : Y, Z : X + int</td><td>20</td><td>两份 X 子对象，地址不同</td><td>状态重复、二义性</td></tr>
+  </table>
+
+  <p>最后留一张"断案口诀"和一道开卷自测：下面的 <code>A/B/C</code> 依次继承，先动笔预测三个 sizeof，再上机验证——预测对了，说明总账规则你已吃透：</p>
+
+  <pre><code><span class="cmt">// 断案口诀（狄仁杰版）</span>
+单继承：基类排最前，自己接尾巴
+多继承：基类排成队，转换要挪址
+虚继承：祖先只一份，vbptr 去认领
+算大小：成员排好队，对齐再加 vptr</code></pre>
+
+  <pre><code><span class="cmt">// selfcheck.cpp —— 开卷自测：先预测，再上机验证</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">struct</span> <span class="type">A</span> { <span class="kw">int</span> a; <span class="kw">virtual void</span> <span class="fn">f</span>() {} };
+<span class="kw">struct</span> <span class="type">B</span> : <span class="type">A</span> { <span class="kw">int</span> b; };
+<span class="kw">struct</span> <span class="type">C</span> : <span class="type">B</span> { <span class="kw">int</span> c; };
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"sizeof(A)=%zu sizeof(B)=%zu sizeof(C)=%zu\n"</span>,
+            <span class="kw">sizeof</span>(<span class="type">A</span>), <span class="kw">sizeof</span>(<span class="type">B</span>), <span class="kw">sizeof</span>(<span class="type">C</span>));
+}</code></pre>
+
+  <p>本机实测答案：<code>16 / 16 / 24</code>——A = vptr(8) + a(4) + 填充 = 16；B 复用基类的 vptr，vptr + a + b = 16；C = 20 对齐到 8 = 24。</p>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>系统分析的方法论收个尾：<strong>先建模型（布局规则），再用证据（sizeof/地址）校验，最后按证据修正认知</strong>。本章的数字不是背下来的，是量出来的——换 32 位机器、换 MSVC，数字会变（vptr 从 8 字节变 4 字节），但"基类子对象 + 成员 + vptr"这条总账永远成立。把方法带走，比把数字带走值钱。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：本章所有 sizeof 均为 <strong>macOS / Apple clang 21 / arm64 64 位</strong> 实测，遵循 Itanium C++ ABI 的布局规则。换平台必须重测：32 位平台上指针只有 4 字节，MSVC 的虚继承布局是另一套体系。不声明平台的 sizeof 讨论，都是耍流氓。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边的概念与右边的描述配对：① 基类子对象；② vptr；③ vtable；④ vbptr。候选描述：A. 对象开头指向虚函数表的指针；B. 基类在派生类对象里占据的那段成员序列；C. 指向虚基类表的指针，用来定位共享的虚基类；D. 每个多态类一张、全类对象共享的函数指针表。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回看 13.1 的总账规则、13.2 的 vptr/vtable 分工、13.4 的虚继承实现。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → B（按值嵌入的成员序列）；② → A（对象里的指针）；③ → D（类级共享的表）；④ → C（服务于虚继承）。记住：<strong>对象里放指针，表是类级共享的</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：预测 sizeof <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>本章小结的自测代码：<code>A{int a; virtual f()}</code>、<code>B : A{int b}</code>、<code>C : B{int c}</code>（64 位平台）。先预测三个 sizeof 并写出 C 的成员偏移，再上机验证。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>vptr 8 字节起步；B 不新造 vptr；最后结果对齐到 8 的整数倍。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>A = vptr(8) + a(4) = 12，对齐到 8 = 16；B 复用基类的 vptr：vptr(0~8) + a(8~12) + b(12~16) = 16；C = vptr(0~8) + a(8~12) + b(12~16) + c(16~20) = 20，对齐到 8 = 24。实测 <code>16 / 16 / 24</code>。要点：<strong>vptr 只有一个（在开头），逐层加成员，最后整体对齐</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：多继承的指针调整 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>13.3 节里 <code>(B*)&amp;c</code> 比 <code>(void*)&amp;c</code> 大了 16 字节，而 <code>(A*)&amp;c</code> 与 <code>&amp;c</code> 相等。为什么 B 子对象不在开头？这个调整是谁做的、发生在什么时候？如果把 <code>C : A, B</code> 改成 <code>C : B, A</code>，<code>(A*)&amp;c</code> 的偏移会变成多少？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>基类子对象按声明顺序排列；第一个基类在偏移 0，后面的顺延。调整由编译器在转换时自动完成。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>B 子对象排在 A 之后（声明顺序 A 在前），所以 B 住在偏移 16。调整是编译器在 <code>static_cast</code> 或隐式转换时自动加的（编译期算好偏移，转换时加一条指令），无需运行时查表。若改成 <code>C : B, A</code>，B 回到偏移 0，A 被推后，<code>(A*)&amp;c</code> 会偏移 16 字节。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手验证菱形继承 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一段程序同时定义"普通菱形"和"虚继承菱形"（参考 13.4 的 inherit4.cpp），打印：① 两类 D 对象的 sizeof；② 从两条路径取到的祖先子对象地址是否相等；③ 解释虚继承为什么能消除重复。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>地址相等 = 共享。虚继承下祖先只有一份；vbtable 记录的是"虚基类相对当前子对象的偏移"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>普通菱形（本机实测）：X=4、Y=8、Z=8、W=20，两条路径的 X 地址不同（相差 8 字节）——两份 X，访问 <code>w.x</code> 编译报二义性错误。虚继承：A=4、B=16、C=16、D=40，两条路径地址完全相同——A 只构造一次、只存一份。原理：虚继承把 A 从"各分支内嵌"改为"对象末尾共享一份 + 各分支用 vbptr 指向 vbtable（表里记着 A 的偏移）"，于是无论从 B 还是 C 找 A，都定位到同一个地址。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

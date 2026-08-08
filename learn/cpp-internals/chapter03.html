@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第3章：目标文件与 ELF：可重定位目标文件解剖 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter03.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第3章：目标文件与 ELF：可重定位目标文件解剖 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter03.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="3" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第3章：目标文件与 ELF：可重定位目标文件解剖</h1>
+  <p class="chapter-subtitle">汇编阶段产出的 .o 文件究竟是什么？三种目标文件怎么区分？ELF 的节与符号表如何组织？本章把它放上解剖台，用 readelf 一层层拆给你看</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「断案如解剖：再复杂的案件，只要拆成一个个事实片段，脉络就清晰了。目标文件也一样——它看起来是一坨二进制乱码，可当你按节、按符号、按重定位条目一层层拆开，会发现每个字节都有它的来路与去处。这一章，我们把 .o 文件放上解剖台。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 3.1 三种目标文件：可重定位 / 可执行 / 共享目标文件 ========== -->
+  <h2>3.1 三种目标文件：可重定位 / 可执行 / 共享目标文件</h2>
+
+  <p>第 1 章我们讲过编译四阶段，其中<strong>汇编阶段</strong>（汇编器 as 执行）的产物，就是把汇编语言翻译成机器语言指令后打包成的<strong>可重定位目标文件</strong>——也就是 <code>hello.o</code> 这类文件。当时特别强调过：<strong>.o 是二进制文件，用文本编辑器打开只会看到一堆乱码</strong>。今天的主角就是它，但我们先把视野拉远一点：<strong>目标文件</strong>（object file，编译/汇编后产出的、包含机器码和数据的文件）一共有<strong>三种形式</strong>，.o 只是其中一种。</p>
+
+  <p>说人话区分三兄弟：<strong>可重定位目标文件</strong>是"半成品"——包含二进制代码和数据，其形式可以在编译时与其他可重定位目标文件<strong>合并</strong>起来，最终创建一个可执行目标文件；<strong>可执行目标文件</strong>是"成品"——可以直接被拷贝到存储器并运行；<strong>共享目标文件</strong>是"随时可被借用的半成品"——一种特殊类型的可重定位目标文件，可以在加载时或运行时被<strong>动态</strong>地加载到存储器并链接。谁生产谁，一句话记牢：<strong>编译器和汇编器生成可重定位目标文件（共享目标文件也算），链接器生成可执行目标文件</strong>。</p>
+
+  <pre><code><span class="cmt"># file 命令：让文件自己报出真实格式（不靠后缀名猜）</span>
+file swap.o        <span class="cmt"># 真实输出：ELF 64-bit LSB relocatable, x86-64（可重定位）</span>
+file hello         <span class="cmt"># Linux 上：ELF 64-bit LSB pie executable, x86-64（可执行）</span>
+file libmath.so    <span class="cmt"># Linux 上：ELF 64-bit LSB shared object, x86-64（共享）</span></code></pre>
+
+  <p>三条"产线"长这样——注意箭头方向：左边是原料，右边是产物。可执行文件是链接器把多个 <code>.o</code>（以及库里的目标文件）合并出来的，共享库则是在编译时加 <code>-fPIC -shared</code> 两个选项直接产出，第 5 章会专门讲它：</p>
+
+  <pre><code><span class="cmt"># 目标文件的"三条产线"</span>
+hello.c --<span class="fn">gcc</span> -c --&gt; hello.o      <span class="cmt"># 可重定位（本章解剖对象）</span>
+hello.o + printf.o --<span class="fn">ld</span>--&gt; hello    <span class="cmt"># 可执行</span>
+hello.c --<span class="fn">gcc</span> -fPIC -shared --&gt; libhello.so  <span class="cmt"># 共享</span></code></pre>
+
+  <table>
+    <tr><th>目标文件</th><th>典型后缀</th><th>由谁生成</th><th>能直接运行吗</th><th>说人话</th></tr>
+    <tr><td>可重定位目标文件</td><td><code>.o</code></td><td>编译器 + 汇编器</td><td>不能</td><td>半成品，等链接器合并</td></tr>
+    <tr><td>可执行目标文件</td><td>无（如 hello）</td><td>链接器</td><td>能</td><td>成品，加载即运行</td></tr>
+    <tr><td>共享目标文件</td><td><code>.so</code></td><td>编译器 + 汇编器</td><td>不能单独运行</td><td>可被动态加载的半成品</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>别被<strong>后缀名</strong>骗了：<code>.so</code> 本质是"特殊类型的可重定位目标文件"；<code>.o</code> 与可执行文件唯一的本质区别，是<strong>地址定了没有</strong>（重定位完成没有），这个伏笔 3.5 节揭开。判断文件到底是什么，永远以 <code>file</code> 命令输出为准。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：可执行文件也是"目标文件"的一种，别被"目标"吓到。三兄弟共用同一套内部格式（ELF），只是"加工进度"不同——本章解剖 .o 学到的节、符号、重定位知识，对三者完全通用：解剖一次，三处受益。</p>
+  </div>
+
+  <!-- ========== 3.2 ELF 头与节：.text/.data/.bss/.rodata/.symtab/.rela.text 等真实节的职责 ========== -->
+  <h2>3.2 ELF 头与节：.text/.data/.bss/.rodata/.symtab/.rela.text 等真实节的职责</h2>
+
+  <p>Linux 上所有目标文件都遵循同一种容器格式：<strong>ELF</strong>（Executable and Linkable Format，可执行与可链接格式）——说人话，就是"装代码和数据的通用文件盒"，规定了文件开头有哪些头信息、内容如何组织。ELF 文件的内部是按<strong>节</strong>（section）组织的：节就是把文件里的字节按"用途"分门别类——代码放一屋、已初始化的数据放一屋、待填地址的补丁清单放一屋。汇编器生成 <code>.o</code> 时就把每个符号"分好了屋子"。</p>
+
+  <p>先看解剖样本 <code>hello.c</code>。每个符号会被汇编器分到哪个节，注释已标好：有初值的全局变量进 <code>.data</code>，无初值的进 <code>.bss</code>，字符串字面量进 <code>.rodata</code>（read-only data，只读数据节），函数进 <code>.text</code>。而调用外部函数 <code>printf</code> 这件事本身，会被记进 <code>.rela.text</code>——重定位节（relocation section，存放"哪些机器码位置将来需要修补地址"的清单）：</p>
+
+  <pre><code><span class="cmt">// hello.c —— 解剖样本：每个符号被汇编器"分到"一个节</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">int</span> x = <span class="num">42</span>;                      <span class="cmt">// 有初值的全局变量 -&gt; .data</span>
+<span class="kw">int</span> y;                           <span class="cmt">// 无初值的全局变量 -&gt; .bss（不占文件空间）</span>
+<span class="kw">const</span> <span class="kw">char</span>* msg = <span class="str">"hello, ELF"</span>;  <span class="cmt">// 指针 msg -&gt; .data；字符串本体 -&gt; .rodata</span>
+<span class="kw">static</span> <span class="kw">int</span> secret;              <span class="cmt">// static 全局 -&gt; .bss，且符号对外不可见</span>
+
+<span class="kw">int</span> <span class="fn">main</span>()                       <span class="cmt">// 函数 -&gt; .text</span>
+{
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, x);           <span class="cmt">// 调用外部符号 printf -&gt; 记入 .rela.text</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <p>各节的具体职责先记一张表（<code>readelf -S</code> 命令，S 即 Sections，列出目标文件里所有节的名字、类型、大小和标志）：</p>
+
+  <table>
+    <tr><th>节名</th><th>存放什么</th><th>说人话</th></tr>
+    <tr><td><code>.text</code></td><td>编译后的机器指令</td><td>函数的"身体"，可执行</td></tr>
+    <tr><td><code>.data</code></td><td>已初始化的全局/静态变量</td><td>有初值的"档案柜"</td></tr>
+    <tr><td><code>.bss</code></td><td>未初始化的全局/静态变量</td><td>全是零的"空地"，不占文件字节</td></tr>
+    <tr><td><code>.rodata</code></td><td>只读数据（字符串字面量、const 常量）</td><td>只许看不许改</td></tr>
+    <tr><td><code>.symtab</code></td><td>符号表（函数和全局变量的名字清单）</td><td>所有符号的登记簿</td></tr>
+    <tr><td><code>.rela.text</code> / <code>.rela.data</code></td><td>重定位条目（待修补地址的位置清单）</td><td>链接器手里的"待办事项"</td></tr>
+    <tr><td><code>.strtab</code> / <code>.shstrtab</code></td><td>符号名 / 节名的字符串存储区</td><td>名字的"字典"，符号表只存编号</td></tr>
+  </table>
+
+  <p>眼见为实——在真实的 <code>hello.o</code> 上跑 <code>readelf -S</code>，14 个节排得清清楚楚（本机实测：clang 交叉编译目标 x86_64-linux-gnu 生成的真实 ELF，与 Linux 上 gcc -c 的产物同构；<code>.llvm_addrsig</code> 是 LLVM 专属节，GCC 不产生，其余一致）：</p>
+
+  <pre><code><span class="cmt"># readelf -S hello.o —— 节表全貌（真实输出）</span>
+There are 14 section headers, starting at offset 0x308:
+
+Section Headers:
+  [Nr] Name              Type             Address           Offset
+       Size              EntSize          Flags  Link  Info  Align
+  [ 0]                   NULL             0000000000000000  00000000
+       0000000000000000  0000000000000000           0     0     0
+  [ 1] .strtab           STRTAB           0000000000000000  0000026a
+       000000000000009a  0000000000000000           0     0     1
+  [ 2] .text             PROGBITS         0000000000000000  00000040
+       000000000000002b  0000000000000000  AX       0     0     16
+  [ 3] .rela.text        RELA             0000000000000000  000001f0
+       0000000000000048  0000000000000018   I      13     2     8
+  [ 4] .data             PROGBITS         0000000000000000  00000070
+       0000000000000010  0000000000000000  WA       0     0     8
+  [ 5] .rela.data        RELA             0000000000000000  00000238
+       0000000000000018  0000000000000018   I      13     4     8
+  [ 6] .rodata.str1.1    PROGBITS         0000000000000000  00000080
+       000000000000000f  0000000000000001 AMS       0     0     1
+  [ 7] .bss              NOBITS           0000000000000000  00000090
+       0000000000000004  0000000000000000  WA       0     0     4
+  [ 8] .comment          PROGBITS         0000000000000000  00000090
+       0000000000000031  0000000000000001  MS       0     0     1
+<span class="cmt">  # ...（.note.GNU-stack / .eh_frame / .llvm_addrsig 等辅助节省略）...</span>
+  [13] .symtab           SYMTAB           0000000000000000  00000100
+       00000000000000f0  0000000000000018           1     5     8</code></pre>
+
+  <p>几个值得细看的点。第一，<code>.text</code> 大小 <code>0x2b</code>（43 字节）——这就是 <code>main</code> 函数编译后的机器码总长度，3.5 节反汇编出来正好 43 字节，可以对账。第二，<code>.data</code> 大小 <code>0x10</code>（16 字节）：<code>x</code> 占 4 字节、<code>msg</code> 指针占 8 字节，加上对齐补足，正好 16。第三，<code>.rodata.str1.1</code> 存着字符串 <code>"hello, ELF"</code> 的 15 个字节（含结尾的 <code>\0</code>）——它本质就是 <code>.rodata</code> 家族，GCC 和 clang 对可合并的字符串常量都这么命名。第四，注意 <code>.bss</code> 的类型是 <code>NOBITS</code>，大小 4 字节，但它的文件偏移和 <code>.comment</code> 一样都是 <code>0x90</code>——玄机就在这。</p>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p><strong>.bss 是"画出来的地皮"，不是"砌好的房子"</strong>。它的类型叫 NOBITS（没有位），意思是：文件里根本不存这 4 个字节，只是登记"将来加载时这里要有 4 字节的零"。所以未初始化的全局变量<strong>不占 .o 的文件空间</strong>——文件多大，取决于 .text/.data/.rodata，与 .bss 无关。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>int x = 42;</code> 和 <code>int y;</code> 一字之差，归宿天壤之别——有初值进 <code>.data</code>（占文件空间），无初值进 <code>.bss</code>（不占）。更隐蔽的是：<code>static</code> 变量无论有没有初值，也都按同一规则进 <code>.data</code> 或 <code>.bss</code>，只是它在符号表里的"可见性"不同——那是 3.4 节的事。</p>
+  </div>
+
+  <!-- ========== 3.3 从源码到 .o：gcc -c 与 readelf 实测 ========== -->
+  <h2>3.3 从源码到 .o：gcc -c 与 readelf 实测</h2>
+
+  <p>汇编阶段的命令第 1 章见过：<code>gcc -c hello.s -o hello.o</code>（或直接从源码 <code>gcc -c hello.c -o hello.o</code>）。产物是二进制，<code>hexdump</code> 只能得到天书，但有一个工具能把结构翻译成人话——<strong>readelf</strong>（读 ELF，显示目标文件完整结构的工具），<code>-h</code> 选项看 ELF 头（header，文件最开头的"身份证"）。下面用符号更丰富的 <code>swap.c</code> 做样本——它包含外部引用、有初值全局变量、static 变量和一个函数，五脏俱全：</p>
+
+  <pre><code><span class="cmt"># 汇编阶段：产生可重定位目标文件（素材命令原样）</span>
+gcc -c swap.c -o swap.o
+
+<span class="cmt"># 查看 ELF 头（真实输出；Type 为 REL）</span>
+readelf <span class="param">-h</span> swap.o
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Type:                              REL (Relocatable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Entry point address:               0x0
+  Start of section headers:          736 (bytes into file)
+  Size of this header:               64 (bytes)
+  Size of program headers:           0 (bytes)
+  Number of program headers:         0
+  Size of section headers:           64 (bytes)
+  Number of section headers:         13
+  Section header string table index: 1</code></pre>
+
+  <p>逐行解读这份"身份证"。<strong>Magic</strong>（魔数）一栏的 <code>7f 45 4c 46</code> 就是 ASCII 码 <code>.ELF</code> 四个字符——任何 ELF 文件都以此为开头，操作系统和工具靠它认出"这是个 ELF"。<strong>Type: REL (Relocatable file)</strong>——这是本文件最关键的属性：可重定位文件！链接后的可执行文件会显示 <code>EXEC</code> 或 <code>DYN</code>。<strong>Entry point address: 0x0</strong>——入口地址是 0，因为 .o 还没被链接，代码从地址 0 开始"待命"。<strong>Number of program headers: 0</strong>——program header（程序头，描述"加载进内存后怎么摆放"的表格）数量为零：可重定位文件只有节（section），没有段（segment），段是链接之后才形成的。</p>
+
+  <p>这里必须如实交代一个平台差异：<strong>本章语境是 Linux（ELF），而本机是 macOS（Mach-O）</strong>——macOS 上 <code>gcc</code> 是苹果 clang 的别名，产出的 .o 是 Mach-O 文件，GNU readelf 根本读不了。为拿到上面的真实 ELF 输出，我用 clang 交叉编译目标 <code>--target=x86_64-linux-gnu</code> 生成真正的 ELF .o 再跑 readelf——与 Linux 上 gcc -c 完全同构。本机"原生态"观察如下：</p>
+
+  <pre><code><span class="cmt"># 本机（macOS）原生态实测：gcc -c 产出的是 Mach-O，不是 ELF</span>
+gcc -c swap.c -o swap.o &amp;&amp; file swap.o
+<span class="cmt">#   swap.o: Mach-O 64-bit object arm64</span>
+
+nm swap.o        <span class="cmt"># macOS 符号名带下划线前缀，字母含义与 ELF 一致</span>
+<span class="cmt">#                 U _buf      （未定义：buf 在别处）</span>
+<span class="cmt"># 0000000000000040 D _bufp0    （.data 里的全局变量）</span>
+<span class="cmt"># 0000000000000068 b _bufp1    （小写 b：.bss 里的局部符号）</span>
+<span class="cmt"># 0000000000000000 T _swap     （.text 里的全局函数）</span>
+
+readelf -h swap.o    <span class="cmt"># GNU readelf 读不了 Mach-O，直接报错：</span>
+<span class="cmt">#   readelf: Error: Not an ELF file - it has the wrong magic bytes at the start</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>跨平台的"翻译对照"记住三条：① 文件格式看 <code>file</code> 命令，macOS 是 <code>Mach-O 64-bit object</code>，Linux 是 <code>ELF 64-bit LSB relocatable</code>；② 符号名在 macOS 上多一个下划线前缀（<code>_swap</code> vs <code>swap</code>），这是 Mach-O 的约定，ELF 没有；③ 工具与格式绑定——readelf/ldd 是 ELF 专用，macOS 的对应物是 otool。理解了这层，两台机器上的"差异"就不再神秘：<strong>只是容器格式不同，装的货一样</strong>。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：readelf 在 Mach-O 文件上直接报 <code>Not an ELF file</code> 并退出，这不是工具坏了，而是它天生只认 ELF；反过来，Linux 上用 <code>otool</code> 也读不了 ELF。排查"工具报错"前，先确认<strong>文件格式与工具是否匹配</strong>——跨平台开发的第一坑。</p>
+  </div>
+
+  <!-- ========== 3.4 符号表：符号的类型与作用域 ========== -->
+  <h2>3.4 符号表：符号的类型与作用域</h2>
+
+  <p><strong>符号</strong>（symbol）说人话就是：目标文件里给"函数和全局变量"起的名字。链接器不关心你的代码长什么样，它只关心一件事——你<strong>定义了哪些符号、引用了哪些符号</strong>。这份名单就登记在 <strong>符号表</strong>（symbol table，即 <code>.symtab</code> 节）里，<code>readelf -s</code>（s 即 symbols）把它打印出来。目标文件中的符号分三类：<strong>全局符号</strong>（本模块定义、能被其他模块引用）、<strong>外部符号</strong>（其他模块定义、本模块引用）、<strong>局部符号</strong>（用 <code>static</code> 定义的，只在本模块内可见）。</p>
+
+  <p>看真实的 <code>swap.o</code> 符号表，8 个条目一一对号入座。重点看 <code>Ndx</code>（Index，该符号所在节的编号）和 <code>Bind</code>（绑定属性，GLOBAL 全局 / LOCAL 局部）两列：</p>
+
+  <pre><code><span class="cmt"># readelf -s swap.o —— 符号表（真实输出）</span>
+Symbol table <span class="str">'.symtab'</span> contains 8 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS swap.c
+     2: 0000000000000000     0 SECTION LOCAL  DEFAULT    2 .text
+     3: 0000000000000000     4 OBJECT  LOCAL  DEFAULT    6 bufp1
+     4: 0000000000000000     0 SECTION LOCAL  DEFAULT    6 .bss
+     5: 0000000000000000    52 FUNC    GLOBAL DEFAULT    2 swap
+     6: 0000000000000000     8 OBJECT  GLOBAL DEFAULT    4 bufp0
+     7: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND buf</code></pre>
+
+  <p>逐条破案：<code>swap</code> 是 <strong>FUNC GLOBAL</strong>（全局函数），52 字节，在 <code>.text</code>（节 2）里；<code>bufp0</code> 是 <strong>OBJECT GLOBAL</strong>（全局对象），8 字节，在 <code>.data</code>（节 4）里——它是指针，x86-64 上一个指针正好 8 字节；<code>bufp1</code> 是 <strong>OBJECT LOCAL</strong>（局部对象），4 字节，在 <code>.bss</code>（节 6）里——注意它的 Bind 是 <strong>LOCAL</strong>，因为源码里写了 <code>static</code>；<code>buf</code> 是 <strong>GLOBAL + UND</strong>（UND 即 undefined，未定义）——它在 <code>swap.c</code> 里被 <code>extern</code> 声明，定义在别的模块，符号表里只登记"我引用了它"。那些 SECTION/FILE 条目是工具链自己加的"路标"，可以暂时无视。</p>
+
+  <p><strong>nm</strong>（name list，列出目标文件符号表中定义的符号的工具）是符号表的"速记版"，用单字母缩写表达同样信息。真实输出如下——<strong>大写全局、小写局部</strong>：</p>
+
+  <pre><code><span class="cmt"># nm swap.o —— 真实输出</span>
+                 U buf
+0000000000000000 D bufp0
+0000000000000000 b bufp1
+0000000000000000 T swap
+
+<span class="cmt"># nm hello.o —— 真实输出</span>
+000000000000000b r .L.str.1
+0000000000000000 T main
+0000000000000008 D msg
+                 U printf
+0000000000000000 D x
+0000000000000000 B y</code></pre>
+
+  <table>
+    <tr><th>nm 字母</th><th>含义</th><th>说人话</th></tr>
+    <tr><td><code>T</code> / <code>t</code></td><td>Text 节里的符号</td><td>大写：全局函数；小写：static 函数</td></tr>
+    <tr><td><code>D</code> / <code>d</code></td><td>.data 节里的符号</td><td>大写：全局已初始化变量；小写：static 的</td></tr>
+    <tr><td><code>B</code> / <code>b</code></td><td>.bss 节里的符号</td><td>大写：全局未初始化变量；小写：static 的</td></tr>
+    <tr><td><code>U</code></td><td>Undefined（未定义）</td><td>引用了别人家的符号（extern）</td></tr>
+    <tr><td><code>r</code></td><td>.rodata 里的只读符号</td><td>字符串字面量等，只读</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>记住 <code>nm</code> 的"大小写密码"：<strong>大写 = 全局（别人看得见），小写 = 局部（自家藏着）</strong>。看到 <code>T</code> 就知道是导出的函数，看到 <code>U</code> 就知道这个符号需要链接器去别处找——链接报错 <code>undefined reference</code> 时，八成就是某个 <code>U</code> 符号没人提供定义。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>static</code> 是符号的"隐身术"——文件里的 <code>static int bufp1</code> 在符号表里 Bind 是 LOCAL，链接器在合并多个 .o 时<strong>根本看不见它</strong>，所以不同文件里各自定义同名 static 变量完全不会冲突。反过来，<strong>非 static 的全局变量一旦重名，链接器就会报"多重定义"</strong>——这正是头文件里声明要加 <code>extern</code>、定义只放一个 .c 里的原因。</p>
+  </div>
+
+  <!-- ========== 3.5 链接器眼中的目标文件：字节块集合 ========== -->
+  <h2>3.5 链接器眼中的目标文件：字节块集合</h2>
+
+  <p>素材里有一句链接器世界观的"原话"：<strong>目标文件纯粹是字节块的集合。这些块中，有些包含程序代码，有些包含程序数据，而其他的则包含指导链接器和加载器的数据结构。</strong>把"节"换成"块"，就是链接器看 .o 的视角——它不关心你的源码长什么样，只关心：哪些块要合并到一起、块里的哪些位置将来要填什么地址。链接器的两个核心任务由此而来：<strong>符号解析</strong>（symbol resolution，把每个符号引用和它的定义对上号）和<strong>重定位</strong>（relocation，把从零开始的节搬到最终的内存位置，并修改所有引用让它们指向新位置）。前者是"认人"，后者是"改地址"——第 4 章会完整展开，本章先看证据。用 <code>readelf -r</code>（r 即 relocations，显示重定位条目）解剖真实的 <code>hello.o</code>，看看汇编器留下的"待办清单"长什么样：</p>
+
+  <pre><code><span class="cmt"># readelf -r hello.o —— 重定位清单（真实输出）</span>
+Relocation section <span class="str">'.rela.text'</span> at offset 0x1f0 contains 3 entries:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000000011  000600000002 R_X86_64_PC32     0000000000000000 x - 4
+000000000018  000300000002 R_X86_64_PC32     000000000000000b .L.str.1 - 4
+00000000001f  000700000004 R_X86_64_PLT32    0000000000000000 printf - 4
+
+Relocation section <span class="str">'.rela.data'</span> at offset 0x238 contains 1 entry:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000000008  000400000001 R_X86_64_64       0000000000000000 .rodata.str1.1 + 0</code></pre>
+
+  <p>翻译成人话：<code>.rela.text</code> 里三条待办——<strong>偏移 0x11</strong> 处填对 <code>x</code> 的引用（main 里加载 x 的指令）、<strong>0x18</strong> 处填对字符串 <code>.L.str.1</code> 的引用、<strong>0x1f</strong> 处填对 <code>printf</code> 的调用（那声 call）。<code>.rela.data</code> 还有一条：<code>msg</code> 指针的 8 个字节（偏移 0x8）将来填上字符串的内存地址。这些"偏移"都<strong>相对本节起点计算</strong>——因为整个节还在地址 0 待命。</p>
+
+  <p>把机器码和清单对照着看最震撼。反汇编 <code>hello.o</code> 的 <code>.text</code>（<strong>objdump -d</strong>，objdump 是"所有二进制工具之母"，-d 即 disassemble，反汇编），注意三条指令里扎眼的 <code>00 00 00 00</code>——汇编器留下的空地址，等链接器来填：</p>
+
+  <pre><code><span class="cmt"># objdump -d hello.o —— .text 反汇编（真实输出，节选）</span>
+Disassembly of section .text:
+
+0000000000000000 &lt;main&gt;:
+   0:  55                      push   %rbp
+   1:  48 89 e5                mov    %rsp,%rbp
+   4:  48 83 ec 10             sub    $0x10,%rsp
+   8:  c7 45 fc 00 00 00 00    movl   $0x0,-0x4(%rbp)
+   f:  8b 35 00 00 00 00       mov    0x0(%rip),%esi        <span class="cmt"># 待填：x 的地址</span>
+  15:  48 8d 3d 00 00 00 00    lea    0x0(%rip),%rdi        <span class="cmt"># 待填：字符串的地址</span>
+  1c:  b0 00                   mov    $0x0,%al
+  1e:  e8 00 00 00 00          call   23 &lt;main+0x23&gt;         <span class="cmt"># 待填：printf 的地址</span>
+  23:  31 c0                   xor    %eax,%eax
+  25:  48 83 c4 10             add    $0x10,%rsp
+  29:  5d                      pop    %rbp
+  2a:  c3                      ret</code></pre>
+
+  <p>对照重定位清单：偏移 <code>0x11</code> 正是 <code>mov 0x0(%rip),%esi</code> 里那 4 个零字节的位置，<code>0x1f</code> 正是 <code>call</code> 指令 <code>e8</code> 后面那 4 个零字节的位置。也就是说：<strong>汇编器只管"留坑"，链接器负责"填坑"</strong>——等链接器合并 .o、把节安放到最终内存地址，这些零会被替换成真实地址，机器码才真正"能跑"。</p>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>为什么汇编器非要留零、不能直接算出地址？因为<strong>它不知道最终地址</strong>：每个 .o 的节都从地址 0 开始，链接器合并多个 .o 时谁前谁后、中间隔多少字节，只有链接那一刻才知道——素材里那句"编译器和汇编器生成<strong>从零开始的代码和数据节</strong>"说的就是这个。所以"地址待定"不是缺陷，而是分工的必然。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别拿文本编辑器或 <code>hexdump</code> 在 .o 里翻找字符串——你会被乱码淹没。找可打印字符串要用 <code>strings</code>（列出所有可打印字符串的工具），看结构用 readelf，看符号用 nm，反汇编用 objdump。<strong>工具选对了，二进制文件就是透明的</strong>。下一节把工具箱完整摆一遍。</p>
+  </div>
+
+  <!-- ========== 3.6 目标文件工具箱：binutils 一览 ========== -->
+  <h2>3.6 目标文件工具箱：binutils 一览</h2>
+
+  <p>解剖到这里，工具已出场大半。它们大多来自 <strong>GNU binutils</strong> 包（一套专门处理目标文件的工具集，Linux 上随 gcc 安装）：<code>ar</code>、<code>strings</code>、<code>strip</code>、<code>nm</code>、<code>size</code>、<code>readelf</code>、<code>objdump</code>、<code>ldd</code>。除 <code>ar</code> 和 <code>ldd</code>（第 5 章主角）外，本章主角已全部亮相。一张表收编：</p>
+
+  <table>
+    <tr><th>工具</th><th>作用</th><th>说人话</th></tr>
+    <tr><td><code>readelf</code></td><td>显示 ELF 完整结构（头/节/符号/重定位）</td><td>ELF 文件的"X 光机"</td></tr>
+    <tr><td><code>nm</code></td><td>列出符号表里定义的符号</td><td>点名册，看谁定义了谁</td></tr>
+    <tr><td><code>size</code></td><td>列出各节的名字和大小</td><td>给文件"称体重、量三围"</td></tr>
+    <tr><td><code>objdump</code></td><td>反汇编 .text 等节，显示一切信息</td><td>二进制工具之母，能看机器码</td></tr>
+    <tr><td><code>strings</code></td><td>列出所有可打印字符串</td><td>在乱码里"捞字符串"</td></tr>
+    <tr><td><code>strip</code></td><td>删除符号表等信息</td><td>给二进制"脱衣服"减重</td></tr>
+    <tr><td><code>ar</code></td><td>创建/维护静态库</td><td>把一堆 .o 打包成一本书（第 5 章）</td></tr>
+    <tr><td><code>ldd</code></td><td>列出运行时依赖的共享库</td><td>查"户口"，看程序靠谁活（第 5 章）</td></tr>
+  </table>
+
+  <p>两个快速实测。先是 <code>size</code> 给 <code>swap.o</code> "称体重"——<code>text</code>（代码）、<code>data</code>（已初始化数据）、<code>bss</code>（未初始化数据）三栏一清二楚，和我们 3.2 节从节表里读到的 .text 0x34（52 字节）、.data 8 字节、.bss 4 字节对得上。再是 <code>strings</code> 在二进制里"捞字符串"——你能看到节名、符号名、源文件名，都是可以打印的文本：</p>
+
+  <pre><code><span class="cmt"># size swap.o —— 各节大小（真实输出）</span>
+   text   data    bss    dec    hex    filename
+    108      8      4    120     78    swap.o
+
+<span class="cmt"># strings swap.o —— 可打印字符串（真实输出，节选）</span>
+.rela.text
+.comment
+.bss
+swap
+.note.GNU-stack
+.llvm_addrsig
+.rela.eh_frame
+swap.c
+.strtab
+.symtab
+.rela.data
+bufp1
+bufp0</code></pre>
+
+  <p>最后看 <code>strip</code> 的"瘦身"效果（真实数字）：把 <code>swap.o</code> 复制一份再 strip，符号表被删除，文件从 1568 字节缩到 896 字节——删掉了近一半！再跑 <code>nm</code>，它无奈地报告 <code>no symbols</code>（没有符号）。注意：strip 后程序照样能跑——运行只需代码和数据，符号表是给人（调试器、链接器）看的，所以发布版二进制普遍"光溜溜"：</p>
+
+  <pre><code><span class="cmt"># strip 实战：删掉符号表，文件立刻瘦身（真实输出）</span>
+cp swap.o swap_stripped.o &amp;&amp; strip swap_stripped.o
+nm swap_stripped.o
+<span class="cmt">#   nm: swap_stripped.o: no symbols</span>
+ls -l swap.o swap_stripped.o
+<span class="cmt">#   1568 swap.o</span>
+<span class="cmt">#    896 swap_stripped.o    &lt;- 符号表被删掉 672 字节</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>本章武器库的口诀：<strong>看结构用 readelf，看符号用 nm，称大小用 size，捞字符串用 strings，看机器码用 objdump</strong>。遇到"不明二进制"按这个顺序走一遍，五分钟内就能说出它的出身和成分——系统分析的第一课：先盘点，再判断。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：strip 是发布前的常规操作，但调试阶段千万别 strip——符号表是排错时的命根子，没了它崩溃栈里只剩地址没有函数名（第 1 章说过"懂编译系统 = 会排错"）。要瘦身又要可调试，正规做法是编译时加 <code>-g</code>、发布时单独剥离调试信息。</p>
+  </div>
+
+  <p>解剖完毕，按系统分析的方法复盘全程：一个 .o 文件，拆开看是<strong>ELF 头</strong>（身份证）+ <strong>若干节</strong>（代码屋、数据屋、只读屋、符号登记簿）+ <strong>重定位清单</strong>（待填坑表）三大部分；三种目标文件只是"加工进度"不同；链接器眼里的它，就是一堆等待合并的字节块。下一章链接器登场——符号解析怎么"认人"、重定位怎么"填坑"，<code>undefined reference</code> 与"多重定义"又是怎么来的，第 4 章见分晓。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：三兄弟认亲 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>在 Linux 上执行 <code>file</code> 命令得到以下三种输出，请分别说出它们对应哪种目标文件：A. <code>ELF 64-bit LSB relocatable, x86-64</code>；B. <code>ELF 64-bit LSB pie executable, x86-64</code>；C. <code>ELF 64-bit LSB shared object, x86-64</code>。并回答：这三种文件分别由谁生成？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 3.1 节的"三条产线"和表格：relocatable / executable / shared object 分别对应哪个后缀？谁生成谁？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>A 是可重定位目标文件（.o），由编译器 + 汇编器生成；B 是可执行目标文件，由链接器生成；C 是共享目标文件（.so），由编译器 + 汇编器（加 -fPIC -shared）生成。记住口诀：<strong>编译汇编出半成品，链接器出成品，共享库是能动态加载的半成品</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：给符号分屋子 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>以下代码片段里，每个符号会进哪个节？<code>int g1 = 7;</code>、<code>int g2;</code>、<code>static int s1 = 3;</code>、<code>static int s2;</code>、<code>const char* p = "hi";</code>（其中字符串 "hi" 和指针 p 分开回答）、函数 <code>void f() {}</code>。另外，哪些符号在符号表里的 Bind 是 LOCAL？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>规则只有两条：有初值进 .data，无初值进 .bss；字符串字面量进 .rodata。static 只影响 Bind（LOCAL），不影响分节。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>g1</code> 进 .data；<code>g2</code> 进 .bss；<code>s1</code> 进 .data；<code>s2</code> 进 .bss；字符串 "hi" 进 .rodata，指针 <code>p</code> 进 .data（指针有初值，它指向的字符串才是只读的）；函数 <code>f</code> 进 .text。Bind 为 LOCAL 的是 <code>s1</code> 和 <code>s2</code>（static 的隐身术），其余是 GLOBAL。static 只改可见性，不改归宿。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：解码 nm 点名册 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>某 .o 文件的 <code>nm</code> 输出如下，请逐行解释每个符号的类型、作用域和所在节：<code>T main</code>、<code>D x</code>、<code>B y</code>、<code>U printf</code>、<code>b z</code>、<code>r .L.str.1</code>。哪一行预示"这个 .o 单独链接不了，缺一个定义"？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>用 3.4 节的"大小写密码"：大写全局、小写局部；T=text、D=data、B=bss、U=undefined、r=rodata。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>T main</code>：.text 里的全局函数 main；<code>D x</code>：.data 里的全局已初始化变量；<code>B y</code>：.bss 里的全局未初始化变量；<code>U printf</code>：未定义的外部符号，定义在 libc 里；<code>b z</code>：.bss 里的局部（static）变量；<code>r .L.str.1</code>：.rodata 里的只读字符串。预示"缺定义"的是 <code>U printf</code>——链接器必须在别的目标文件或库里找到它的定义，否则报 <code>undefined reference</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手解剖一个 .o <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在 Linux（或任意有 gcc + binutils 的环境）上完成一次完整解剖：① 写 <code>swap.c</code>（含一个 extern 引用、一个有初值全局变量、一个 static 变量、一个函数）；② <code>gcc -c swap.c -o swap.o</code>；③ 依次执行 <code>readelf -h</code>、<code>readelf -S</code>、<code>readelf -s</code>、<code>readelf -r</code>、<code>nm</code>、<code>size</code>，把每个命令的输出记录下来；④ <code>cp swap.o t.o &amp;&amp; strip t.o</code>，对比 strip 前后文件大小和 <code>nm</code> 输出；⑤ 用 <code>objdump -d</code> 找出一条机器码里含 <code>00 00 00 00</code> 占位地址的指令，并对照 <code>readelf -r</code> 的重定位条目，说出它会被链接器填成什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>命令都在本章出现过；对照输出时注意重定位条目里的 Offset 与反汇编指令的偏移要能对上（3.5 节演示过 0x11/0x1f 的对照法）。占位地址会被填成真实运行时地址，指向被引用符号所在的位置。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>①-④ 的输出应与 3.2~3.6 节真实输出同构：readelf -h 显示 Type: REL、入口 0x0；extern 符号是 GLOBAL UND，static 变量是 LOCAL；strip 后文件变小且 nm 报 no symbols。⑤ 以调用外部函数的 call 为例：反汇编中 <code>e8 00 00 00 00</code> 的 4 个零字节，对应 .rela.text 里 Symbol 为该函数名的重定位条目；链接后被改写为"目标地址 - 下一条指令地址"的差值（x86 的 PC 相对寻址），代码从此可执行。做完这题，你就亲手走完了"解剖 → 对照 → 理解重定位"的闭环。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

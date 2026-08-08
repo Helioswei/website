@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第8章：整数与浮点数的存储：原码/反码/补码与 IEEE 754 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter08.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第8章：整数与浮点数的存储：原码/反码/补码与 IEEE 754 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter08.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="8" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第8章：整数与浮点数的存储：原码/反码/补码与 IEEE 754</h1>
+  <p class="chapter-subtitle">从"数字在内存里究竟长什么样"出发：为什么负数要用补码存、浮点数为什么总有精度问题——把两种最常用数值的编码规则一路拆到比特级</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「内存里没有'数字'，只有一串串比特。所谓 -1、所谓 0.1，都只是我们约定好的一种'解读方式'。这一章我们就从第一性原理出发：为什么全世界的 CPU 都选了补码来存整数？为什么 0.1 + 0.2 不等于 0.3？把这两件事在比特层面亲手算一遍，你就再也不会被它们咬到。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 8.1 整数表示的三兄弟：原码 / 反码 / 补码 ========== -->
+  <h2>8.1 整数表示的三兄弟：原码 / 反码 / 补码</h2>
+
+  <p>第 7 章我们看了字节在内存里怎么排（大小端），但还有个更根本的问题没回答：<strong>一个 int 变量里的 32 个比特，究竟按什么规则被"解读"成一个数字？</strong>说人话：同一串比特，解读规则不同，读出来的数就完全不同。整数存储分两条路线：<strong>无符号</strong>（unsigned，只能表示非负数，直接存二进制）和<strong>有符号</strong>（signed，正、零、负都要能表示）。有符号这条路，历史上出现过三种编码方案——<strong>原码</strong>、<strong>反码</strong>、<strong>补码</strong>，我们叫它"三兄弟"。先给定义，全部用 8 位二进制（一个字节）举例：</p>
+
+  <p><strong>原码</strong>（符号加绝对值）：最直觉的方案。最高位当<strong>符号位</strong>（sign bit，用 1 个比特标记正负：0 非负、1 为负），其余位存绝对值。<strong>反码</strong>：正数的反码就是原码；负数的反码是<strong>符号位保持不变，其余位全部取反</strong>（1 变 0、0 变 1）。<strong>补码</strong>：正数的补码就是原码；负数的补码是<strong>反码再加 1</strong>。以 -1 为例，三兄弟长得完全不同：</p>
+
+  <pre><code><span class="cmt"># 8 位二进制下 -1 的三种表示（最高位是符号位）</span>
+原码：<span class="num">10000001</span>   <span class="cmt">符号位 1（负）+ 绝对值 0000001</span>
+反码：<span class="num">11111110</span>   <span class="cmt">符号位不动，数值位取反：0000001 → 1111110</span>
+补码：<span class="num">11111111</span>   <span class="cmt">反码 + 1：11111110 + 00000001</span>
+<span class="ann">@注意</span> -1 的补码是 8 个 1——"最负的数"在补码里反而长得最"满"</code></pre>
+
+  <p>纸上谈兵不算数，让计算机把位模式打印出来。用 <code>int8_t</code>（一个字节的有符号整数）存 -1 和 -2，逐位打印内存里的真实比特：</p>
+
+  <pre><code><span class="cmt">// bits.cpp —— 打印 8 位有符号整数的真实位模式</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdint&gt;</span>
+
+<span class="cmt">// 打印一个字节的 8 位二进制位模式</span>
+<span class="kw">void</span> <span class="fn">print_bits</span>(<span class="kw">unsigned</span> <span class="kw">char</span> x) {
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">7</span>; i &gt;= <span class="num">0</span>; --i)
+        <span class="fn">printf</span>(<span class="str">"%d"</span>, (x &gt;&gt; i) <span class="op">&amp;</span> <span class="num">1</span>);
+}
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int8_t</span> a = <span class="num">-1</span>, b = <span class="num">-2</span>;
+
+    <span class="fn">printf</span>(<span class="str">"-1 的补码（8 位）: "</span>);
+    <span class="fn">print_bits</span>((<span class="kw">unsigned</span> <span class="kw">char</span>)a);          <span class="cmt">// 11111111</span>
+    <span class="fn">printf</span>(<span class="str">"\n-2 的补码（8 位）: "</span>);
+    <span class="fn">print_bits</span>((<span class="kw">unsigned</span> <span class="kw">char</span>)b);          <span class="cmt">// 11111110</span>
+    <span class="fn">printf</span>(<span class="str">"\n"</span>);
+
+    <span class="cmt">// 8 位加法：0xFF + 0x01 = 0x100，第 9 位溢出丢弃，剩 0x00</span>
+    <span class="kw">unsigned</span> <span class="kw">char</span> r = (<span class="kw">unsigned</span> <span class="kw">char</span>)a + <span class="num">1</span>;
+    <span class="fn">printf</span>(<span class="str">"-1 + 1 = %d，结果位模式: "</span>, (<span class="kw">int</span>)(<span class="kw">int8_t</span>)r);
+    <span class="fn">print_bits</span>(r);                          <span class="cmt">// 00000000</span>
+    <span class="fn">printf</span>(<span class="str">"\n"</span>);
+
+    <span class="cmt">// 32 位视角：int 的 -1 是 32 个 1</span>
+    <span class="fn">printf</span>(<span class="str">"int  -1 的补码 = 0x%08X\n"</span>, (<span class="kw">uint32_t</span>)<span class="num">-1</span>);
+    <span class="fn">printf</span>(<span class="str">"int  +1 的补码 = 0x%08X\n"</span>, (<span class="kw">uint32_t</span>)<span class="num">1</span>);
+    <span class="fn">printf</span>(<span class="str">"-1 + 1 = %d\n"</span>, <span class="num">-1</span> + <span class="num">1</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（g++ 15.2.0 / macOS arm64 实测）：</span>
+-1 的补码（8 位）: <span class="num">11111111</span>
+-2 的补码（8 位）: <span class="num">11111110</span>
+-1 + 1 = 0，结果位模式: <span class="num">00000000</span>
+int  -1 的补码 = 0xFFFFFFFF
+int  +1 的补码 = 0x00000001
+-1 + 1 = 0</code></pre>
+
+  <table>
+    <tr><th>编码方案</th><th>8 位 -1 的表示</th><th>最高位含义</th><th>说人话</th></tr>
+    <tr><td>原码</td><td><code>10000001</code></td><td>符号位（1 = 负）</td><td>符号 + 绝对值，最直觉但最笨</td></tr>
+    <tr><td>反码</td><td><code>11111110</code></td><td>符号位（负数其余位取反）</td><td>按位取反，是"补码的中间步骤"</td></tr>
+    <tr><td>补码</td><td><code>11111111</code></td><td>符号位（负数 = 反码 + 1）</td><td>唯一活到今天的方案</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>名字里有线索：<strong>"反"码 = 每一位反过来</strong>；<strong>"补"码 = 反码再"补"上 1</strong>。补码还有个隐藏优点：<strong>0 只有一种表示</strong>。原码里 +0 是 <code>00000000</code>、-0 是 <code>10000000</code>，两个零并存；补码里 <code>00000000</code> 就是唯一的零。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：今天所有主流 CPU 和编译器都用<strong>补码</strong>存有符号整数，原码和反码只活在教科书里（C++20 之前的标准甚至允许其他编码，但实践中没有任何主流平台这么做）。所以后面全部以补码为准——你只需要认识三兄弟，剩下的时间都花在补码身上。</p>
+  </div>
+
+  <!-- ========== 8.2 补码为什么胜出：-1 + 1 = 0 ========== -->
+  <h2>8.2 补码为什么胜出：-1 + 1 = 0</h2>
+
+  <p>为什么全世界都选了补码？第一性原理地问：<strong>CPU 的加法器是核心硬件，一切算术最好都能复用加法器</strong>——减法最好也能用加法实现。用原码做 <code>-1 + 1</code>：<code>10000001 + 00000001 = 10000010</code>，按原码解读是 -2！完全错了，因为符号位"不参与运算"，还得额外写一套"同号相加、异号相减、再比大小"的规则。反码稍好一点：<code>11111110 + 00000001 = 11111111</code>，解读成 -0，勉强对但不漂亮。而补码呢？直接加：</p>
+
+  <pre><code><span class="cmt"># 8 位补码加法：-1 + 1 = 0（真实位运算）</span>
+    <span class="num">11111111</span>   <span class="cmt">-1 的补码</span>
+  + <span class="num">00000001</span>   <span class="cmt">+1 的补码（正数补码 = 原码）</span>
+  ───────────
+ 1<span class="num">00000000</span>   <span class="cmt">第 9 位是进位，寄存器只有 8 位宽，直接丢弃</span>
+   <span class="num">00000000</span>   <span class="cmt">结果 0，完全正确——减法被加法免费收编</span>
+<span class="ann">@关键</span> 溢出丢弃的是"进位"不是"错误"：补码 = 加法 + 自动取模</code></pre>
+
+  <p>背后的数学叫<strong>模运算</strong>（modular arithmetic，说人话：数到上限自动回到 0 重新数）。8 位加法本质是"模 256 加法"：结果对 256 取余数。而 <code>-1 ≡ 255 (mod 256)</code>（同余，两数除以 256 余数相同），所以 -1 的补码就是 255 的二进制 <code>11111111</code>。<strong>-1 + 1 等于 255 + 1 = 256 ≡ 0 (mod 256)</strong>，进位那位 1 恰好是 256，被模掉——这就是"溢出丢弃低位"的真相。更妙的是符号位也"自然参与运算"，没有特殊待遇，进位照样往它身上加。三兄弟同做一道题的对比：</p>
+
+  <table>
+    <tr><th>编码方案</th><th>-1 + 1 的位运算</th><th>按自身规则解读</th><th>结果</th></tr>
+    <tr><td>原码</td><td><code>10000001 + 00000001 = 10000010</code></td><td>-2</td><td>❌ 错</td></tr>
+    <tr><td>反码</td><td><code>11111110 + 00000001 = 11111111</code></td><td>-0（还有 -0 这个幽灵）</td><td>⚠️ 勉强</td></tr>
+    <tr><td>补码</td><td><code>11111111 + 00000001 = 00000000</code></td><td>0</td><td>✅ 完全正确</td></tr>
+  </table>
+
+  <p>眼见为实。溢出到底长什么样？把 8 位有符号数推到顶（127）再走一步，以及把无符号数推到顶（255）再走一步——下面这段程序把两个现场都拍了下来：</p>
+
+  <pre><code><span class="cmt">// overflow.cpp —— 溢出回绕现场（真实编译运行验证）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdint&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int8_t</span> x = <span class="num">127</span>;               <span class="cmt">// 8 位有符号能表示的最大正数</span>
+    <span class="kw">int8_t</span> y = x + <span class="num">1</span>;            <span class="cmt">// 01111111 + 1 = 10000000</span>
+    <span class="fn">printf</span>(<span class="str">"127 + 1 = %d\n"</span>, (<span class="kw">int</span>)y);    <span class="cmt">// 实测输出 -128</span>
+    <span class="kw">unsigned</span> <span class="kw">char</span> z = <span class="num">255</span>;
+    <span class="kw">unsigned</span> <span class="kw">char</span> w = z + <span class="num">1</span>;     <span class="cmt">// 11111111 + 1 = 00000000</span>
+    <span class="fn">printf</span>(<span class="str">"255 + 1 = %d\n"</span>, (<span class="kw">int</span>)w);     <span class="cmt">// 实测输出 0</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（g++ 15.2.0 / macOS arm64 实测）：</span>
+127 + 1 = -128
+255 + 1 = 0</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把 8 位有符号数想象成一个"循环刻度盘"：<code>0 → 1 → … → 127 → -128 → -127 → … → -1 → 0</code>。从 127 往前一步不是 128（放不下），而是绕回 -128——这就是<strong>回绕</strong>（wraparound，数值绕回另一头继续转）。配上"补码 = 模 256 加法"这个模型，一切整数溢出都变得可预测。第 16 章讲安全时你会看到，<code>INT_MAX + 1</code> 这种回绕正是无数漏洞的源头。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：这里必须拎清边界——<strong>无符号数的回绕是 C++ 标准明确保证的行为</strong>（<code>unsigned char</code> 的 <code>255 + 1</code> 一定是 0）；而<strong>有符号数的溢出是未定义行为</strong>（UB，undefined behavior，标准不承诺任何结果）。我们实测 <code>127 + 1</code> 在 x86/ARM 上回绕成 -128，但这只是"这台机器恰好这么干"，编译器完全有权假设"有符号数永远不会溢出"并据此优化。规矩：<strong>unsigned 溢出可依赖，signed 溢出是 bug</strong>。</p>
+  </div>
+
+  <!-- ========== 8.3 有符号与无符号的坑：unsigned 陷阱 ========== -->
+  <h2>8.3 有符号与无符号的坑：unsigned 陷阱</h2>
+
+  <p>补码很好用，但"有符号"和"无符号"两套解读规则并存，就埋下了雷：<strong>当有符号和无符号混在同一个表达式里，C++ 会做隐式转换</strong>（说人话：编译器偷偷把一方转成另一方）。为什么总是有符号被转？因为规则是"保精度优先"：当 <code>int</code> 和 <code>unsigned int</code> 位数相同，谁都无法无损装下对方，于是约定俗成——<code>int</code> 被转成 <code>unsigned int</code>。于是恐怖片开场了：</p>
+
+  <pre><code><span class="kw">int</span> a = <span class="num">-1</span>;
+<span class="kw">unsigned</span> <span class="kw">int</span> b = <span class="num">0</span>;
+<span class="kw">if</span> (a &gt; b) {  <span class="cmt">// 你以为在比较 -1 和 0？</span>
+    <span class="cmt">// 编译器先把 a 转成 unsigned：-1 → 4294967295（2^32 - 1）</span>
+    <span class="cmt">// 于是 4294967295 &gt; 0 成立 —— -1 &gt; 0 为真！</span>
+}</code></pre>
+
+  <p><strong><code>-1 &gt; 0</code> 在 C++ 里竟然为真</strong>，这个反直觉的事实每年坑掉无数人。真正的重灾区是 <code>size_t</code> 与 <code>int</code> 混用：<code>std::vector::size()</code> 返回 <code>size_t</code>（无符号，64 位平台最大值 18446744073709551615）。经典连环坑：① <code>v.size() - 1</code> 在空 vector 上不是 -1，而是下溢成天文数字；② <code>for (size_t i = v.size() - 1; i &gt;= 0; --i)</code> 倒序遍历，i 减到 0 再减 1 就回绕成巨大值，<code>i &gt;= 0</code> 永远成立——死循环。全部实测：</p>
+
+  <pre><code><span class="cmt">// trap.cpp —— 三个 unsigned 陷阱现场</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;vector&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="cmt">// 陷阱 1：-1 &gt; 0 为真</span>
+    <span class="kw">int</span> a = <span class="num">-1</span>;
+    <span class="kw">unsigned</span> <span class="kw">int</span> b = <span class="num">0</span>;
+    <span class="fn">printf</span>(<span class="str">"a &gt; b ? %s   （a = %d, b = %u）\n"</span>, (a &gt; b) ? <span class="str">"true"</span> : <span class="str">"false"</span>, a, b);
+    <span class="fn">printf</span>(<span class="str">"把 a 当作 unsigned 看：(unsigned)a = %u\n"</span>, (<span class="kw">unsigned</span>)a);
+
+    <span class="cmt">// 陷阱 2：空 vector 时 v.size() - 1 无符号下溢</span>
+    std::vector&lt;<span class="kw">int</span>&gt; v;
+    <span class="kw">size_t</span> n = v.<span class="fn">size</span>() - <span class="num">1</span>;
+    <span class="fn">printf</span>(<span class="str">"空 vector: v.size() = %zu, v.size() - 1 = %zu\n"</span>, v.<span class="fn">size</span>(), n);
+
+    <span class="cmt">// 对比：int 循环正常结束</span>
+    std::vector&lt;<span class="kw">int</span>&gt; w = {<span class="num">10</span>, <span class="num">20</span>, <span class="num">30</span>};
+    <span class="kw">for</span> (<span class="kw">int</span> i = (<span class="kw">int</span>)w.<span class="fn">size</span>() - <span class="num">1</span>; i &gt;= <span class="num">0</span>; --i)
+        <span class="fn">printf</span>(<span class="str">"  int  循环: w[%d] = %d\n"</span>, i, w[i]);
+
+    <span class="cmt">// 陷阱 3：size_t 循环 i &gt;= 0 永不退出（加保护截断）</span>
+    <span class="kw">size_t</span> guard = <span class="num">0</span>;
+    <span class="kw">for</span> (<span class="kw">size_t</span> i = w.<span class="fn">size</span>() - <span class="num">1</span>; i &gt;= <span class="num">0</span>; --i) {
+        <span class="fn">printf</span>(<span class="str">"  size_t 循环: i = %zu\n"</span>, i);
+        <span class="kw">if</span> (++guard &gt;= <span class="num">5</span>) { <span class="fn">printf</span>(<span class="str">"  （0 减 1 回绕成巨大值，死循环，人为截断）\n"</span>); <span class="kw">break</span>; }
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（g++ 15.2.0 / macOS arm64 实测）：</span>
+a &gt; b ? <span class="kw">true</span>   （a = -1, b = 0）
+把 a 当作 unsigned 看：(unsigned)a = <span class="num">4294967295</span>
+空 vector: v.size() = 0, v.size() - 1 = <span class="num">18446744073709551615</span>
+  int  循环: w[2] = 30
+  int  循环: w[1] = 20
+  int  循环: w[0] = 10
+  size_t 循环: i = 2
+  size_t 循环: i = 1
+  size_t 循环: i = 0
+  size_t 循环: i = <span class="num">18446744073709551615</span>
+  size_t 循环: i = <span class="num">18446744073709551614</span>
+  （0 减 1 回绕成巨大值，死循环，人为截断）</code></pre>
+
+  <table>
+    <tr><th>陷阱场景</th><th>实际现象</th><th>正确姿势</th></tr>
+    <tr><td><code>-1 &gt; 0u</code></td><td>-1 被隐式转成 unsigned，变 4294967295，比较为真</td><td>两侧统一类型：<code>a &gt; (int)b</code></td></tr>
+    <tr><td>空容器 <code>v.size() - 1</code></td><td>下溢成 18446744073709551615</td><td>先 <code>v.empty()</code> 判空再算</td></tr>
+    <tr><td><code>for (size_t i = size - 1; i &gt;= 0; --i)</code></td><td>0 减 1 回绕，死循环</td><td><code>for (size_t i = size; i-- &gt; 0;)</code></td></tr>
+    <tr><td><code>v.size() &gt; -1</code></td><td>恒为真（-1 先转成巨大 unsigned）</td><td>两侧都写 unsigned：<code>v.size() &gt; 0</code></td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：这类 bug 编译器往往<strong>一声不吭</strong>。开 <code>-Wall -Wextra</code> 对部分场景会给 <code>-Wsign-compare</code> 警告，但 <code>v.size() - 1</code> 这种写法连警告都没有——它"合法"地下溢了。别指望编译器当保姆，规矩是：<strong>写比较和减法前，先问"两边是不是都是无符号？"</strong></p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>防御姿势三件套：① <strong>显式转换</strong>——混用点写清楚 <code>(int)v.size()</code> 或 <code>static_cast</code>，把意图交给编译器检查；② <strong>倒序循环用 <code>i-- &gt; 0</code></strong>——先判断后自减，i 到 0 时条件为假立即退出，永远不回绕；③ <strong>别写 <code>x - 1</code> 这种裸减法</strong>——它默认了"x 至少是 1"。第 9 章数组下标会再次用到这些姿势。</p>
+  </div>
+
+  <!-- ========== 8.4 浮点数的 IEEE 754：符号位 / 指数 / 尾数 ========== -->
+  <h2>8.4 浮点数的 IEEE 754：符号位 / 指数 / 尾数</h2>
+
+  <p>整数讲完了，轮到小数。<strong>0.5 和 1/3 用整数怎么表示？</strong>没法表示——所以需要一种能"移动小数点"的编码，这就是<strong>浮点数</strong>（floating-point，说人话：小数点可以在二进制里浮动，靠"指数"指定它落在哪）。全世界的浮点数遵循同一个标准：<strong>IEEE 754</strong>（电气电子工程师学会制定的浮点数存储标准，1985 年定稿），今天每台电脑的 float 和 double 都按它存。它的本质是<strong>二进制的科学计数法</strong>——像十进制的 <code>1.5 × 10³</code>，二进制版写成：</p>
+
+  <pre><code><span class="cmt"># IEEE 754 单精度（float，32 位）解剖图</span>
+┌────┬──────────────┬──────────────────────┐
+│ 符号 │    指数 E      │      尾数 M           │
+│ S   │    8 位       │      23 位            │
+└────┴──────────────┴──────────────────────┘
+ 1 位    偏移 127            隐含 1. 开头
+
+数值 = (-1)^S × 1.M × 2^(E - 127)
+
+<span class="ann">@说人话</span> S 管正负（0 正 1 负，和补码符号位同理）；
+E 存"真实指数 + 127"（<span class="ann">指数偏移</span>）；
+M 只存小数点<span class="ann">后面</span>的部分，开头的 1 是隐含的</code></pre>
+
+  <p><strong>符号位</strong>（sign，1 比特）负责正负，和补码的符号位一个思路。<strong>指数</strong>（exponent，8 比特）负责"数量级"，存的是"真实指数 + 127"——这个 127 叫<strong>指数偏移量</strong>（bias，让指数无需符号位也能表示负数：真实指数 -127 到 +128，存成 0 到 255）。<strong>尾数</strong>（mantissa，23 比特）负责"有效数字"，且开头的 1 是<strong>隐含的</strong>：任何正规浮点数都能写成 <code>1.xxx</code> 形式，那个 1 永远在，干脆不占位——白赚 1 位精度。</p>
+
+  <p>拿 1.5 练手：二进制科学计数法 <code>1.5 = 1.1₂ × 2⁰</code>，所以 S = 0（正数）、指数字段 = 0 + 127 = 127、尾数存隐含 1 后面的部分（.1₂ 就是最高位 1、其余 22 位 0）。拼起来 <code>0 | 01111111 | 10000000000000000000000</code> = <code>0x3FC00000</code>，与下方实测一致。看真实位模式最直接的方式是<strong>联合体</strong>（union，让多个变量共用同一块内存）——把 float 的 32 位内存原样当成无符号整数读出来，再按位拆解：</p>
+
+  <pre><code><span class="cmt">// ieee.cpp —— 用 union 拆解 float 的位模式</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdint&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">union</span> {
+        <span class="kw">float</span> f;
+        <span class="kw">uint32_t</span> u;      <span class="cmt">// 和 float 共用同一块 32 位内存</span>
+    } x;
+
+    x.f = <span class="num">1.5f</span>;
+    <span class="fn">printf</span>(<span class="str">"1.5f  = 0x%08X\n"</span>, x.u);
+    <span class="fn">printf</span>(<span class="str">"  符号位 = %u, 指数 = %u, 尾数 = 0x%X\n"</span>,
+           (x.u &gt;&gt; <span class="num">31</span>) <span class="op">&amp;</span> <span class="num">1</span>, (x.u &gt;&gt; <span class="num">23</span>) <span class="op">&amp;</span> <span class="num">0xFF</span>, x.u <span class="op">&amp;</span> <span class="num">0x7FFFFF</span>);
+
+    x.f = <span class="num">0.1f</span>;
+    <span class="fn">printf</span>(<span class="str">"0.1f  = 0x%08X\n"</span>, x.u);
+    <span class="fn">printf</span>(<span class="str">"  符号位 = %u, 指数 = %u, 尾数 = 0x%X\n"</span>,
+           (x.u &gt;&gt; <span class="num">31</span>) <span class="op">&amp;</span> <span class="num">1</span>, (x.u &gt;&gt; <span class="num">23</span>) <span class="op">&amp;</span> <span class="num">0xFF</span>, x.u <span class="op">&amp;</span> <span class="num">0x7FFFFF</span>);
+
+    x.f = <span class="num">-2.0f</span>;
+    <span class="fn">printf</span>(<span class="str">"-2.0f = 0x%08X\n"</span>, x.u);
+    <span class="fn">printf</span>(<span class="str">"  符号位 = %u, 指数 = %u, 尾数 = 0x%X\n"</span>,
+           (x.u &gt;&gt; <span class="num">31</span>) <span class="op">&amp;</span> <span class="num">1</span>, (x.u &gt;&gt; <span class="num">23</span>) <span class="op">&amp;</span> <span class="num">0xFF</span>, x.u <span class="op">&amp;</span> <span class="num">0x7FFFFF</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（g++ 15.2.0 / macOS arm64 实测）：</span>
+1.5f  = <span class="num">0x3FC00000</span>
+  符号位 = 0, 指数 = 127, 尾数 = 0x400000
+0.1f  = <span class="num">0x3DCCCCCD</span>
+  符号位 = 0, 指数 = 123, 尾数 = 0x4CCCCD
+-2.0f = <span class="num">0xC0000000</span>
+  符号位 = 1, 指数 = 128, 尾数 = 0x0</code></pre>
+
+  <p>对照验证：<code>1.5f</code> 指数字段 127 → 真实指数 0，尾数 <code>0x400000</code> 即 <code>1000...0</code>（隐含 1. 后跟一个 1），合起来 <code>1.1₂ × 2⁰ = 1.5</code> ✅。<code>-2.0f</code> 符号 1、指数 128 → 真实指数 1、尾数全 0，即 <code>-1.0₂ × 2¹ = -2.0</code> ✅。注意 <code>0.1f</code> 尾数 <code>0x4CCCCD</code> 以 <code>...CD</code> 结尾——这个 <code>D</code> 是舍入上去的：0.1 的二进制是 <code>0.00011001100110011001100...</code>，无限循环，23 位尾数放不下，只能四舍五入截断。这一笔"舍入的账"，就是 8.5 节所有精度问题的总根源。</p>
+
+  <table>
+    <tr><th>类型</th><th>总位数</th><th>符号位</th><th>指数（含偏移）</th><th>尾数（含隐含 1）</th><th>有效精度（十进制位）</th></tr>
+    <tr><td>float（单精度）</td><td>32 位</td><td>1 位</td><td>8 位（偏移 127）</td><td>23 位</td><td>约 7 位</td></tr>
+    <tr><td>double（双精度）</td><td>64 位</td><td>1 位</td><td>11 位（偏移 1023）</td><td>52 位</td><td>约 15~16 位</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>两个设计巧思值得记一辈子：<strong>指数偏移</strong>让"指数正负"不需要单独的符号位，比大小直接比位模式就行；<strong>隐含的 1</strong> 让 23 位尾数实际表达了 24 位精度。再记几个"户口"：指数全 0 是<strong>次正规数</strong>（subnormal，0 附近更密的刻度）、指数全 1 尾数全 0 是<strong>无穷</strong>（inf，除以 0 的结果）、指数全 1 尾数非 0 是 <strong>NaN</strong>（Not a Number，0/0 的结果）——先混个脸熟，第 16 章再见面。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：浮点数是有"刻度"的，不是连续直线上的任意点。float 在 1 附近刻度间隔约 <code>1.19e-7</code>（2⁻²³），到 16777216 附近刻度间隔已经是 1——超过 2²⁴ 后<strong>连整数都不能精确表示</strong>。用 float 存时间戳、存 ID、存金额，都会在某个量级悄悄丢精度。double 好得多，但同样有天花板。记住：<strong>浮点数的"精确"永远是有范围、有条件的</strong>。</p>
+  </div>
+
+  <!-- ========== 8.5 浮点精度之谜：0.1 + 0.2 != 0.3 ========== -->
+  <h2>8.5 浮点精度之谜：0.1 + 0.2 != 0.3</h2>
+
+  <p>现在谜底呼之欲出。先看"犯罪现场"——每个程序员迟早都会撞见的一行：<code>0.1 + 0.2 == 0.3</code> 在 C++ 里是 <code>false</code>。用 <code>printf</code> 把两位小数展开到 20 位，真相立刻现形：</p>
+
+  <pre><code><span class="cmt">// epsilon.cpp —— 0.1 + 0.2 的现场还原</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cmath&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">double</span> a = <span class="num">0.1</span>;
+    <span class="kw">double</span> b = <span class="num">0.2</span>;
+    <span class="kw">double</span> c = a + b;
+
+    <span class="fn">printf</span>(<span class="str">"0.1 + 0.2 = %.20f\n"</span>, c);
+    <span class="fn">printf</span>(<span class="str">"0.3       = %.20f\n"</span>, <span class="num">0.3</span>);
+    <span class="fn">printf</span>(<span class="str">"c == 0.3 ? %s\n"</span>, (c == <span class="num">0.3</span>) ? <span class="str">"true"</span> : <span class="str">"false"</span>);
+
+    <span class="cmt">// 正确姿势：用 epsilon 容差比较</span>
+    <span class="kw">const</span> <span class="kw">double</span> eps = <span class="num">1e-9</span>;
+    <span class="kw">if</span> (<span class="fn">fabs</span>(c - <span class="num">0.3</span>) &lt; eps)
+        <span class="fn">printf</span>(<span class="str">"|c - 0.3| = %.2e &lt; eps，视为相等\n"</span>, <span class="fn">fabs</span>(c - <span class="num">0.3</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（g++ 15.2.0 / macOS arm64 实测）：</span>
+0.1 + 0.2 = 0.30000000000000004441
+0.3       = 0.29999999999999998890
+c == 0.3 ? <span class="kw">false</span>
+|c - 0.3| = 5.55e-17 &lt; eps，视为相等</code></pre>
+
+  <p><strong>为什么？</strong>把 8.4 节的原理串起来：0.1 的二进制是无限循环小数，double 存不下，只能存"最接近它的那个 64 位近似值"；0.2 同理。两个近似值相加，结果再舍入一次，落点恰好比 0.3 的近似值高了一点点——差 5.55e-17。这不是 bug，是 <strong>IEEE 754 的必然代价：用有限 64 位表示无限小数，误差是设计的一部分</strong>。精确到位的账本（double 实际存的值，十六进制位模式已用程序核实）：</p>
+
+  <pre><code>0.1     = 0.1000000000000000055511151231257827021181583404541015625
+0.2     = 0.200000000000000011102230246251565404236316680908203125
+0.3     = 0.299999999999999988897769753748434595763683319091796875
+0.1+0.2 = 0.3000000000000000444089209850062616169452667236328125
+                                       ↑ 差 1/18014398509481984 ≈ 5.55e-17
+<span class="ann">@教训</span> 0.1+0.2 的结果比 0.3 大了一小格——两个近似值凑巧没对上</code></pre>
+
+  <table>
+    <tr><th>直觉上的等式</th><th>double 实际结果</th><th>为什么</th></tr>
+    <tr><td><code>0.1 + 0.2 == 0.3</code></td><td>false（差 5.55e-17）</td><td>三个数都是近似值，舍入误差没抵消</td></tr>
+    <tr><td><code>0.1 + 0.7 == 0.8</code></td><td>false（类似偏差）</td><td>0.7 同样不是精确二进制小数</td></tr>
+    <tr><td><code>1.0 / 10 * 10 == 1.0</code></td><td>有时 false</td><td>中间结果先舍入，再乘回去对不上</td></tr>
+    <tr><td><code>1.5 + 0.25 == 1.75</code></td><td>true ✅</td><td>这三个数都是精确的二进制小数（0.5、0.25 是 2 的负幂）</td></tr>
+  </table>
+
+  <p>那浮点比较的正确姿势是什么？<strong>别用 <code>==</code>，用"差值的绝对值小于一个容差"</strong>。这个容差就是 <strong>epsilon</strong>（希腊字母 ε，这里指允许的误差上限）：<code>fabs(a - b) &lt; eps</code>。更讲究的写法是按数量级缩放（相对误差）：<code>fabs(a - b) &lt;= eps * max(fabs(a), fabs(b))</code>——因为 1 附近的误差和 10⁹ 附近的误差不是一回事，容差应该跟着数的大小走。工程常见选择：double 用 <code>1e-9</code>（机器精度 2⁻⁵² ≈ 2.2e-16，留足余量），float 用 <code>1e-5</code> 左右。</p>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把原理压缩成一句话：<strong>凡是 2 的负幂能凑出来的小数（0.5、0.25、0.125…）都精确，其余十进制小数（0.1、0.2、0.3…）在二进制里都是无限循环，存进有限位必然有舍入误差</strong>。所以判断"该不该担心精度"只需问：这个数能不能写成 <code>k/2ⁿ</code>？能，放心；不能，小心。这个心智模型比背任何结论都管用。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<strong>钱（货币金额）绝对不能用 float/double 算</strong>。一分钱在二进制里同样不精确，金额累加千次万次，误差会滚雪球成真金白银的差额。正确做法：用整数存"分"（<code>long long</code> 存最小货币单位），或用专门的十进制定点库。另外记住 <code>NaN != NaN</code>——NaN 和自己都不相等，比较前先 <code>std::isnan</code> 检查，否则 <code>==</code> 永远 false。</p>
+  </div>
+
+  <!-- ========== 8.6 本章小结 ========== -->
+  <h2>8.6 本章小结</h2>
+
+  <p>把这一章压成一条主线：<strong>内存里只有比特，没有数字；"数"是我们和 CPU 约定的解读方式</strong>。整数这条路，人类试过原码、反码、补码三种编码，最终补码胜出——减法变加法、符号位自然参与运算、消灭 -0，代价只是"溢出丢弃低位"一条规则。浮点数这条路，全世界统一到 IEEE 754：符号位 + 偏移指数 + 隐含 1 的尾数，用有限位数换超大的表示范围，代价是十进制小数大多存不精确——<code>0.1 + 0.2 != 0.3</code> 不是玄学，是舍入误差的必然。</p>
+
+  <p>费曼式收束：如果你能用三句话给大一新生讲清这两件事，本章就毕业了。① 负数为什么要用补码？——因为补码让 <code>-1 + 1</code> 在比特层面自动等于 0，减法免费；② unsigned 为什么危险？——因为有符号数会被悄悄转成无符号，<code>-1 &gt; 0</code> 都能成立；③ 浮点为什么有精度问题？——因为 0.1 的二进制是无限循环小数，64 位装不下，只能存近似值。全部结论速查：</p>
+
+  <pre><code><span class="cmt"># 本章一分钟速查</span>
+<span class="kw">int</span>   -1 的补码  = <span class="num">0xFFFFFFFF</span>          <span class="cmt">32 位下 32 个 1</span>
+<span class="kw">unsigned</span> 回绕  = 标准保证（<span class="num">255</span>+<span class="num">1</span> → <span class="num">0</span>）   <span class="cmt">可依赖</span>
+<span class="kw">signed</span>   溢出  = 未定义行为（实测回绕）    <span class="cmt">别依赖</span>
+<span class="kw">float</span>  <span class="num">1.5</span>  = <span class="num">0x3FC00000</span>            <span class="cmt">指数偏移 127，尾数 0x400000</span>
+<span class="kw">float</span>  <span class="num">0.1</span>  = <span class="num">0x3DCCCCCD</span>            <span class="cmt">无限循环小数，舍入截断</span>
+<span class="kw">double</span> <span class="num">0.1</span>  = <span class="num">0x3FB999999999999A</span>     <span class="cmt">64 位版，偏移 1023</span>
+<span class="kw">double</span> epsilon = <span class="num">2.220446049250313e-16</span>  <span class="cmt">机器精度，比较用容差</span></code></pre>
+
+  <pre><code><span class="cmt"># 自查命令：-Wall -Wextra 编译本章示例，观察警告</span>
+g++ -std=c++17 -Wall -Wextra trap.cpp -o trap
+<span class="cmt"># 混用 int 与 unsigned 的比较处会出现 -Wsign-compare 警告；</span>
+<span class="cmt"># 而 v.size() - 1 这种下溢写法编译器一声不吭——正是要你自己留神的点</span></code></pre>
+
+  <table>
+    <tr><th>主题</th><th>一句话结论</th><th>对应小节</th></tr>
+    <tr><td>整数编码</td><td>补码胜出：减法变加法、符号位自然运算、零唯一</td><td>8.1 / 8.2</td></tr>
+    <tr><td>溢出</td><td>unsigned 回绕是标准行为，signed 溢出是 UB</td><td>8.2</td></tr>
+    <tr><td>混用陷阱</td><td>有符号被隐式转成无符号，-1 &gt; 0 为真</td><td>8.3</td></tr>
+    <tr><td>浮点编码</td><td>IEEE 754：符号 + 偏移指数 + 隐含 1 的尾数</td><td>8.4</td></tr>
+    <tr><td>浮点精度</td><td>0.1 二进制无限循环，比较用 epsilon 容差，钱用整数</td><td>8.5</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>下一章（第 9 章）我们带着"数字的位模式"这个装备，去看数组与指针：地址怎么算、下标为什么从 0 开始、指针加减到底加了多少字节——那些问题的答案，全都踩在"每个类型占几个字节、字节里存的什么位模式"这两块地基上。本章的位模式视角，就是第 9 章的地图。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别急着合上书——本章所有结论都值得亲手验证一遍。把 <code>bits.cpp</code>、<code>trap.cpp</code>、<code>ieee.cpp</code>、<code>epsilon.cpp</code> 四个程序自己敲出来跑一遍（代码都在正文里），再改几个数试试：<code>-3</code> 的补码？<code>0.5f</code> 的位模式？<code>0.1f + 0.2f</code>（注意是 float 不是 double）的结果？亲自动手之后，这些结论才会从"别人说的"变成"我验证过的"。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：手写三兄弟 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>写出 8 位二进制下 -5 的原码、反码、补码，并说明 -5 的补码加 5 的补码，按 8 位加法会得到什么。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>先写 +5 的二进制 00000101；负数的符号位是 1。原码 = 符号位 + 绝对值；反码 = 符号位不动、其余取反；补码 = 反码 + 1。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>-5 原码 <code>10000101</code> → 反码 <code>11111010</code> → 补码 <code>11111011</code>。-5 补码 <code>11111011</code> + 5 补码 <code>00000101</code> = <code>1 00000000</code>，第 9 位进位丢弃，得 <code>00000000</code> = 0——这就是补码"减法变加法"的现场。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：真假判断 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>在 64 位平台上，下面三个表达式分别是什么结果？① <code>-1 &gt; 0u</code>；② 空 <code>std::vector&lt;int&gt; v</code> 的 <code>v.size() - 1</code>；③ <code>for (size_t i = 3; i &gt;= 0; --i)</code> 这个循环（不截断）会执行多少次。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回忆 8.3 节：有符号和无符号混用，int 会被转成 unsigned；size_t 在 64 位平台是 64 位无符号。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 为 true：-1 转成 unsigned 后是 4294967295，大于 0。② 是 18446744073709551615：0 减 1 无符号下溢。③ 永远不会结束：i 到 0 后 <code>--i</code> 回绕成 18446744073709551615，<code>i &gt;= 0</code> 永远成立——教科书级死循环，倒序遍历请用 <code>for (size_t i = n; i-- &gt; 0;)</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：手推位模式 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>不运行程序，手推 <code>1.5f</code> 的 IEEE 754 位模式（写出 32 位二进制和十六进制），再用 8.4 节的 union 程序验证。提示：1.5 = 1.1₂ × 2⁰。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>符号位 S=0；真实指数 0 加偏移 127 得 127；尾数只存隐含 1 后面的部分：.1₂ 就是"最高位是 1，其余 22 位是 0"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>符号 0 | 指数 <code>01111111</code>（=127）| 尾数 <code>10000000000000000000000</code>（0x400000），拼成 <code>0 01111111 10000000000000000000000</code> = 十六进制 <code>0x3FC00000</code>，与程序实测一致。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：拆解 double <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>把 8.4 节的 union 程序改成拆 <code>double</code>：用 <code>uint64_t</code> 与 <code>double</code> 共用内存，拆出 0.1 的符号位（1 位）、指数（11 位，偏移 1023）、尾数（52 位），并解释它和 <code>0.1f</code>（0x3DCCCCCD）为什么不一样。顺带实现一个相对误差版浮点比较函数。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>移位量改成 63 和 52，掩码改成 <code>0x7FF</code> 和 <code>0xFFFFFFFFFFFFF</code>（13 个 F）；打印用 <code>%016llX</code>。0.1 在 double 里位模式是 0x3FB999999999999A——尾数更长，舍入发生在更低位。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>double 0.1 = <code>0x3FB999999999999A</code>：符号 0，指数字段 0x3FB = 1019 → 真实指数 1019 - 1023 = -4，尾数 <code>0x999999999999A</code>（52 位）。它和 float 版存的是同一个无限循环小数 0.00011001100…₂ 的不同精度近似：float 只有 23 位尾数、舍入到 <code>...CCCD</code>；double 有 52 位、舍入到 <code>...999A</code>。相对误差比较：<code>fabs(a - b) &lt;= eps * std::max(fabs(a), fabs(b))</code>——0.1+0.2 与 0.3 的差 5.55e-17 远小于容差，判定相等；注意 a、b 都为 0 时此式退化，可加 <code>a == b</code> 短路。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

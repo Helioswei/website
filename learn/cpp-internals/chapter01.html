@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第1章：从源码到可执行文件：编译四阶段全景 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter01.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第1章：从源码到可执行文件：编译四阶段全景 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter01.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="1" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第1章：从源码到可执行文件：编译四阶段全景</h1>
+  <p class="chapter-subtitle">从位与字节出发，把"源码变成可执行文件"这条流水线的四个阶段逐一拆开，再追到运行时与操作系统——先把整张地图画清楚</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔬</span>
+      <div class="mentor-info">
+        <h3>本章导师：费曼</h3>
+        <p class="mentor-method">核心方法论：第一性原理</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「如果你不能把一个概念讲给大一新生听，你就还没有真正理解它。这一章我们不背命令，而是从最底层出发：一段源码究竟经历了什么，才变成 CPU 能执行的程序？把这条链路上的每个环节都亲手拆开看过，你以后再遇到编译错误、链接错误、程序莫名崩溃，就都有了可以推理的起点。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 1.1 零基础铺垫：从位到程序 ========== -->
+  <h2>1.1 零基础铺垫：从位到程序</h2>
+
+  <p>用第一性原理问一个问题：<strong>一段程序，归根结底是什么？</strong>答案朴素得惊人——程序就是一堆 <strong>0 和 1</strong>。机器（CPU）只认二进制，它不认识"Hello"也不认识 <code>int</code>，只认识两种电压状态：有电（记作 1）、没电（记作 0）。这个最小的信息单位叫<strong>位</strong>（bit，比特），是计算机世界的原子。一个位太孤单，计算机把 8 个位组织成一组，称为一个<strong>字节</strong>（byte，1 字节 = 8 位），字节才是计算机处理信息的基本单位。</p>
+
+  <p>那文字是怎么变成字节的？靠一张"翻译表"。大部分操作系统使用 <strong>ASCII 标准</strong>来表示文本字符：每个字符被映射成一个唯一的、恰好一字节大小的整数值。比如大写字母 <code>A</code> 对应十进制 65（二进制 01000001），换行符 <code>\n</code> 对应十进制 10。说人话：<strong>你写的每一行源码，在磁盘上就是一组按 ASCII 编码的字节序列</strong>——所谓"源程序"，本质上就是一个字节序列，仅此而已。下面这个程序就是本书的常驻主角，先混个脸熟：</p>
+
+  <pre><code><span class="cmt">// hello.c —— 本章的"解剖样本"</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>   <span class="cmt">// 预处理指令：把标准输入输出头文件"粘贴"进来</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span>* argv[])   <span class="cmt">// 程序入口函数</span>
+{
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, <span class="num">1111</span>);   <span class="cmt">// 向屏幕输出数字 1111</span>
+}</code></pre>
+
+  <p>眼见为实——用十六进制转储工具 <code>hexdump</code>（十六进制查看器，逐字节显示文件内容）看看这个源码文件在磁盘上的真实样子。你会看到第一行 <code>#include</code> 的每个字符都对应一个字节：<code>23</code> 是 <code>#</code>，<code>69</code> 是 <code>i</code>，<code>6e</code> 是 <code>n</code>……右侧的 ASCII 列就是这些字节还原出来的文字：</p>
+
+  <pre><code><span class="cmt"># hexdump -C：以十六进制 + ASCII 双栏显示文件字节</span>
+hexdump -C hello.c
+<span class="cmt"># 输出（真实转储，节选）：</span>
+00000000  23 69 6e 63 6c 75 64 65  20 3c 73 74 64 69 6f 2e  |#include &lt;stdio.|
+00000010  68 3e 0a 69 6e 74 20 6d  61 69 6e 28 69 6e 74 20  |h&gt;.int main(int |
+00000020  61 72 67 63 2c 20 63 68  61 72 2a 20 61 72 67 76  |argc, char* argv|</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>记住这个起点：<strong>源码是给人看的字节序列，机器码是给 CPU 看的字节序列</strong>。本章要回答的问题只有一个——前者是怎么变成后者的？中间的每一步，都会有一个真实存在的工具、一个真实存在的中间文件。把这条链走通，底层原理的地基就打好了。</p>
+  </div>
+
+  <!-- ========== 1.2 编译四阶段：预处理/编译/汇编/链接 ========== -->
+  <h2>1.2 编译四阶段：预处理 / 编译 / 汇编 / 链接</h2>
+
+  <p>为了在系统上运行 <code>hello.c</code>，这条源码必须被其他程序转换成一系列<strong>低级机器语言指令</strong>（CPU 直接执行的指令），然后这些指令按照一种称为<strong>可执行目标程序</strong>的格式打包好，以<strong>二进制磁盘文件</strong>的形式存放。在 Unix 系统上，这个转换由<strong>编译器驱动程序</strong>完成——对 C 是 <code>gcc</code>，对 C++ 是 <code>g++</code>。一条 <code>gcc -o hello hello.c</code> 背后，其实藏着四个独立程序在接力，它们合起来构成<strong>编译系统</strong>（compilation system）：</p>
+
+  <p><strong>阶段一：预处理</strong>（preprocessing）。由<strong>预处理器</strong>（cpp）执行，它处理所有以 <code>#</code> 开头的命令：<code>#include</code> 指令让它读取系统头文件（如 <code>stdio.h</code>）的内容并直接插入程序文本，<code>#define</code> 指令让它做文本替换。产物是另一个 C/C++ 程序，通常以 <code>.i</code> 为扩展名。<strong>阶段二：编译</strong>（compilation）。由<strong>编译器</strong>（GCC 内部叫 cc1）把 <code>hello.i</code> 翻译成 <code>hello.s</code>——一个<strong>汇编语言程序</strong>，每条语句以标准文本格式精确描述一条低级机器指令。<strong>阶段三：汇编</strong>（assembly）。由<strong>汇编器</strong>（as）把 <code>hello.s</code> 翻译成<strong>机器语言指令</strong>，打包成<strong>可重定位目标程序</strong>格式，存为 <code>hello.o</code>——这是一个二进制文件，用文本编辑器打开只会看到乱码。<strong>阶段四：链接</strong>（linking）。我们的程序调用了 <code>printf</code>，它存在于一个单独预编译好的 <code>printf.o</code> 目标文件中，<strong>链接器</strong>（ld）负责把它并入 <code>hello.o</code>，最终得到可执行文件 <code>hello</code>。四个阶段对应四条真实命令：</p>
+
+  <pre><code><span class="cmt"># 阶段一：预处理 —— 展开 #include / #define，产出 hello.i</span>
+gcc -E hello.c -o hello.i
+
+<span class="cmt"># 阶段二：编译 —— 把 C 源码翻译成汇编语言，产出 hello.s</span>
+gcc -S hello.i -o hello.s
+
+<span class="cmt"># 阶段三：汇编 —— 把汇编翻译成机器码目标文件，产出 hello.o</span>
+gcc -c hello.s -o hello.o
+
+<span class="cmt"># 阶段四：链接 —— 把 hello.o 与 printf.o 等拼装成可执行文件</span>
+gcc hello.o -o hello
+
+<span class="cmt"># 一条命令等价于以上四步（编译器驱动程序内部自动完成）</span>
+gcc -o hello hello.c</code></pre>
+
+  <p>每个阶段都有看得见摸得着的产物。预处理后的 <code>hello.i</code> 不再只有 5 行——<code>stdio.h</code> 的内容全被"灌"了进来。文件开头那串 <code># 行号 "文件名"</code> 的行标记（linemarkers）是预处理器留下的路标，告诉后续阶段"这段代码来自哪个文件的第几行"，方便报错定位。下面是真实的 <code>hello.i</code> 开头（头文件的绝对路径随系统不同而异）：</p>
+
+  <pre><code><span class="cmt"># gcc -E hello.c -o hello.i 之后，文件开头长这样（真实输出节选）：</span>
+<span class="cmt"># 1 "hello.c"</span>
+<span class="cmt"># 1 "&lt;built-in&gt;" 1</span>
+<span class="cmt"># 1 "&lt;command line&gt;" 1</span>
+<span class="cmt"># 1 "hello.c" 2</span>
+<span class="cmt"># 1 "/usr/include/stdio.h" 1 3 4</span>
+<span class="cmt"># 61 "/usr/include/stdio.h" 3 4</span>
+<span class="cmt"># 1 "/usr/include/_stdio.h" 1 3 4</span>
+<span class="cmt"># 69 "/usr/include/_stdio.h" 3 4</span>
+<span class="cmt">...（中间是 stdio.h 展开出的几百行声明）...</span>
+<span class="cmt"># 2 "hello.c" 2</span>
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span>* argv[])
+{
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, <span class="num">1111</span>);
+}</code></pre>
+
+  <p>编译阶段的产物 <code>hello.s</code> 是汇编语言——它比 C 更接近机器，但仍然是文本，人能读懂。比如 main 函数的开头几条指令：<code>pushq</code> 把旧栈帧基址压栈保存，<code>movq</code> 设置新栈帧，<code>movl</code> 把参数搬到寄存器（x86-64 架构上，函数前几个参数放在 <code>%edi</code>、<code>%esi</code> 等寄存器里），<code>addl</code> 做加法，<code>ret</code> 返回。真实的汇编输出形如（不同编译器/架构细节略有差异）：</p>
+
+  <pre><code><span class="cmt"># gcc -S hello.i -o hello.s 之后，main 函数的汇编（真实格式，x86-64）：</span>
+        .globl  main
+main:
+        pushq   %rbp
+        movq    %rsp, %rbp
+        movl    %edi, -4(%rbp)
+        movl    %esi, -8(%rbp)
+        movl    $1111, %esi
+        leaq    L_.str(%rip), %rdi
+        callq   _printf
+        xorl    %eax, %eax
+        popq    %rbp
+        retq</code></pre>
+
+  <table>
+    <tr><th>阶段</th><th>执行程序</th><th>命令</th><th>产物</th><th>产物性质</th></tr>
+    <tr><td>预处理</td><td>预处理器（cpp）</td><td><code>gcc -E hello.c -o hello.i</code></td><td>hello.i</td><td>文本（头文件已展开）</td></tr>
+    <tr><td>编译</td><td>编译器（cc1）</td><td><code>gcc -S hello.i -o hello.s</code></td><td>hello.s</td><td>文本（汇编语言）</td></tr>
+    <tr><td>汇编</td><td>汇编器（as）</td><td><code>gcc -c hello.s -o hello.o</code></td><td>hello.o</td><td>二进制（机器指令）</td></tr>
+    <tr><td>链接</td><td>链接器（ld）</td><td><code>gcc hello.o -o hello</code></td><td>hello</td><td>二进制（可执行文件）</td></tr>
+  </table>
+
+  <div class="warning">
+    <p><strong>注意</strong>：阶段一、二、三报错通常是<strong>语法/语义错误</strong>（你写错了代码），而阶段四链接报错则完全不同——它多半是"<strong>引用了一个不存在的函数</strong>"或"<strong>没连上对应的库</strong>"。比如声明了 <code>printf</code> 却忘了 <code>#include</code> 头文件，编译器会警告；但如果你调用了某个库函数却没链接那个库，编译器根本不会报错，是链接器在最后一步喊"找不到符号"。第 4 章会专门攻链接错误，先记住这个分界：<strong>编译错误是"写错了"，链接错误是"找不着"</strong>。</p>
+  </div>
+
+  <p>最后强调一个实用细节：<strong>C++ 的编译过程同理</strong>，只是驱动命令从 <code>gcc</code> 换成 <code>g++</code>，上面分步编译的命令完全适用（<code>g++ -E / -S / -c</code> 照用不误）。区别在于：<code>g++</code> 会自动链接 C++ 标准库，而 <code>gcc</code> 不会——第 2 章实操时你会亲眼看到这个差别。</p>
+
+  <!-- ========== 1.3 为什么程序员要理解编译系统 ========== -->
+  <h2>1.3 为什么程序员要理解编译系统</h2>
+
+  <p>现代编译器都是成熟的工具，通常能生成很好的代码——多数时候你无需为了写出高效代码而深入编译器内部。但<strong>为了在程序里做出好的代码选择，你确实需要懂一点"编译器会把我的代码变成什么"</strong>。这是理解编译系统的第一个好处：<strong>优化程序性能</strong>。比如：一个 <code>switch</code> 语句是不是总比一串 <code>if-else</code> 高效？一次函数调用到底要付出多大代价？<code>while</code> 循环比 <code>do-while</code> 更高效吗？指针引用比数组引用更高效吗？这些问题的答案都藏在"编译器如何把 C/C++ 语句翻译成汇编"里——不懂汇编，你只能靠猜；懂了，你就能在性能敏感处做出有依据的选择。</p>
+
+  <p>第二个好处：<strong>理解链接时出现的错误</strong>。根据经验，一些最令人困扰的程序错误往往与链接器有关，尤其是构建大型软件系统时。链接器报告"无法解析一个引用"是什么意思？静态变量和全局变量的区别是什么？静态库和动态库的区别是什么？<code>-l</code>、<code>-L</code> 这些神秘参数在做什么？这些问题的答案都在链接器的工作方式里——第 4、5 章的主战场。</p>
+
+  <p>第三个好处：<strong>避免安全漏洞</strong>。近年来，<strong>缓冲区溢出</strong>（buffer overflow，向固定大小的内存区域写入超出容量的数据，导致相邻内存被覆盖）错误造成了大多数网络和 Internet 服务器上的安全漏洞。这些错误的存在，是因为大多数程序员忽视了"编译器用来为函数产生代码的<strong>堆栈规则</strong>"。理解栈的组织方式，你就知道为什么 <code>strcpy</code> 这类函数是危险的、为什么编译器会发出警告——下面这个 8 字节的缓冲区硬塞 36 个字符的例子，编译器直接亮起了红灯（真实警告）：</p>
+
+  <pre><code><span class="cmt">// overflow.cpp —— 经典缓冲区溢出示例</span>
+<span class="kw">#include</span> <span class="type">&lt;cstring&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">char</span> buf[<span class="num">8</span>];                          <span class="cmt">// 只有 8 字节的小缓冲区</span>
+    <span class="fn">strcpy</span>(buf, <span class="str">"this string is way too long"</span>);  <span class="cmt">// 硬塞 28 个字符</span>
+    <span class="fn">printf</span>(<span class="str">"%s\n"</span>, buf);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译（真实警告，GCC 15）：</span>
+g++ overflow.cpp -o overflow
+<span class="cmt"># warning: 'void* __builtin_memcpy(void*, const void*, long unsigned int)'</span>
+<span class="cmt">#   writing 28 bytes into a region of size 8 overflows the destination</span>
+<span class="cmt">#   [-Wstringop-overflow=]</span>
+<span class="cmt">#     5 |     strcpy(buf, "this string is way too long");</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>把三个好处串成一句话：<strong>懂编译系统 = 会优化 + 会排错 + 会防守</strong>。编译器警告不是噪音——<code>-Wstringop-overflow</code> 这类警告是编译器在用它的方式提醒你"这里会出事"。本章之后，第 3 章解剖目标文件、第 4 章攻链接、第 6 章看虚拟地址空间、第 14 章讲栈与堆，都是在给这三个好处补细节。</p>
+  </div>
+
+  <!-- ========== 1.4 程序运行时发生了什么 ========== -->
+  <h2>1.4 程序运行时发生了什么</h2>
+
+  <p>编译结束了，可执行文件 <code>hello</code> 躺在磁盘上。当你在终端敲下 <code>./hello</code>，系统里发生了什么？要回答这个问题，先认识一台典型计算机的<strong>硬件组织</strong>。它由四类部件构成：<strong>总线</strong>（bus，贯穿系统的一组电子管道，负责在部件间搬运信息字节）、<strong>I/O 设备</strong>（input/output，输入输出设备，系统与外界的联系通道，如键盘、鼠标、显示器、磁盘）、<strong>主存</strong>（main memory，临时存储设备，程序运行时用来存放程序和程序处理的数据）、<strong>处理器</strong>（CPU，中央处理单元，解释并执行主存中指令的引擎）。</p>
+
+  <p>几个关键部件说人话：<strong>总线</strong>被设计成传送定长的字节块，这个定长叫<strong>字</strong>（word），字长是基本系统参数——x86-64 系统的字长是 8 字节（64 位），小型嵌入式控制器往往只有 1 或 2 字节。<strong>主存</strong>物理上由 <strong>DRAM</strong>（动态随机存储器，一种靠电容存电来保存数据的芯片）组成，逻辑上是一个<strong>线性的字节数组</strong>，每个字节有唯一地址（数组下标），从 0 开始。<strong>CPU</strong> 的核心是一个叫<strong>程序计数器</strong>（PC，program counter）的寄存器，它永远指向主存中"下一条要执行的机器指令"。CPU 从通电到断电，一直重复同一件基本任务：<strong>从 PC 指向的地址取指令 → 解释指令中的位 → 执行指令指示的简单操作 → 更新 PC 指向下一条指令</strong>。这些简单操作在主存、寄存器文件和 <strong>ALU</strong>（算术/逻辑单元，负责计算新数据和地址值）之间循环。</p>
+
+  <pre><code><span class="cmt"># CPU 的"无限循环"（第一性原理视角）</span>
+<span class="kw">while</span> (系统通电) {
+    取指令：从 PC 指向的主存地址读取一条机器指令;
+    译指令：解释这条指令的二进制位是什么意思;
+    执行：  在主存 / 寄存器文件 / ALU 之间完成简单操作;
+    更新：  PC 指向下一条指令（不一定是相邻的那条）;
+}</code></pre>
+
+  <pre><code><span class="cmt"># ./hello 的三幕旅程：把信息从一处搬到另一处</span>
+<span class="cmt"># 第一幕：shell 读取命令（逐字符读入 ./hello）</span>
+键盘 --输入--&gt; 寄存器 --存储--&gt; 主存
+<span class="cmt"># 第二幕：加载程序——DMA 直通，不经过 CPU</span>
+磁盘(<span class="param">hello</span> 可执行文件) <span class="op">--DMA--&gt;</span> 主存
+<span class="cmt"># 第三幕：执行——取指 / 译码 / 执行循环</span>
+主存 <span class="op">--&gt;</span> CPU <span class="op">--&gt;</span> 显示设备   <span class="cmt"># 输出 "1111"</span>
+<span class="ann">@DMA</span> 是磁盘到主存的直接通道：CPU 不参与搬运，只负责发号施令</code></pre>
+
+  <p>现在串起 <code>./hello</code> 的完整旅程。第一幕：<strong>shell 读取命令</strong>。shell（外壳程序，就是你敲命令的那个终端程序）等待我们输入命令，当你敲入 <code>./hello</code>，它逐字符把输入读进寄存器、再存入主存。第二幕：<strong>加载程序</strong>。回车后，shell 执行一系列指令，把 <code>hello</code> 文件中的代码和数据从磁盘<strong>拷贝到主存</strong>——利用 <strong>DMA</strong>（direct memory access，直接存储器存取）技术，数据可以不经过处理器，直接从磁盘到达主存。第三幕：<strong>执行</strong>。一旦代码和数据加载完毕，CPU 开始执行 main 的机器指令，把 <code>"1111\n"</code> 这些字节从主存拷贝到寄存器，再从寄存器拷贝到显示设备，最终显示在屏幕上。这个过程揭示了一课：<strong>系统花了大量时间把信息从一个地方搬到另一个地方</strong>——磁盘 → 主存 → CPU → 显示设备。所以系统设计者的首要目标，就是让这些拷贝尽可能快，由此诞生了<strong>存储器层次结构</strong>：</p>
+
+  <table>
+    <tr><th>层级</th><th>速度</th><th>容量</th><th>成本</th><th>说人话</th></tr>
+    <tr><td>寄存器（CPU 内）</td><td>最快（纳秒级）</td><td>几十~几百字节</td><td>最贵</td><td>CPU 手里的草稿纸</td></tr>
+    <tr><td>高速缓存（Cache）</td><td>极快</td><td>几 MB</td><td>很贵</td><td>主存的"常用抽屉"</td></tr>
+    <tr><td>主存（DRAM）</td><td>快</td><td>几 GB~几十 GB</td><td>中等</td><td>程序运行的大本营</td></tr>
+    <tr><td>磁盘（SSD/HDD）</td><td>慢（毫秒级）</td><td>几百 GB~几 TB</td><td>便宜</td><td>长期仓库</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">费曼提示</div>
+    <p>存储器层次的核心思想一句话：<strong>越靠近 CPU 越快、越贵、越小；越远离 CPU 越慢、越便宜、越大</strong>。程序员的性能直觉大多来自这张表——为什么局部性好的代码快？因为数据大概率落在 Cache 里，不用去慢吞吞的主存甚至磁盘搬。第 15 章讲性能优化时会反复用到这张图。</p>
+  </div>
+
+  <!-- ========== 1.5 操作系统：进程/虚拟存储器/文件的抽象 ========== -->
+  <h2>1.5 操作系统：进程 / 虚拟存储器 / 文件的抽象</h2>
+
+  <p>注意一个细节：当 shell 加载运行 hello、hello 输出消息时，<strong>程序从头到尾都没有直接访问键盘、显示器、磁盘或主存</strong>——它靠的是操作系统提供的服务。操作系统（OS，operating system）是插在<strong>应用程序和硬件之间的一层软件</strong>，所有应用程序对硬件的操作都必须经过它。它有两个基本功能：<strong>防止硬件被失控的应用程序滥用</strong>（比如禁止你的程序乱写别人的内存、霸占 CPU 不放）；<strong>为应用程序提供简单一致的方法来控制复杂又千差万别的低级硬件</strong>（你不需要知道磁盘的磁头怎么动，只需调用"写文件"）。</p>
+
+  <p>操作系统通过三个基本抽象实现这两个功能：<strong>文件</strong>（file）、<strong>虚拟存储器</strong>（virtual memory）、<strong>进程</strong>（process）。<strong>文件：对 I/O 设备的抽象表示</strong>。文件只不过就是字节序列，每个 I/O 设备——磁盘、键盘、显示器，甚至网络——都可以被看成文件。系统中所有输入输出，都通过称为 <strong>Unix I/O</strong> 的一小组系统函数调用读写文件来实现。<strong>虚拟存储器：对主存和磁盘 I/O 设备的抽象表示</strong>。它为每个进程提供一个假象：好像每个进程都在独占地使用主存。每个进程看到的存储器都是一致的，称为<strong>虚拟地址空间</strong>（virtual address space）。<strong>进程：对处理器、主存和 I/O 设备的抽象表示</strong>——它是"正在运行的程序"的化身，是操作系统管理 CPU 时间的基本单位。</p>
+
+  <p>Linux 进程的虚拟地址空间（其他 Unix 系统设计类似）自下而上分为几个区。最上面约四分之一预留给操作系统内核的代码和数据（对所有进程都一样），底部四分之三存放用户进程的代码和数据。从上到下依次是：<strong>内核虚拟存储器</strong>（顶部预留区，应用程序禁止读写）、<strong>用户栈</strong>（编译器用来实现函数调用，每次调用函数栈就增长、返回就收缩）、<strong>共享库</strong>（如 C 标准库这种被多个进程共用的代码和数据）、<strong>堆</strong>（随 <code>malloc</code>/<code>free</code> 调用在运行时动态扩展收缩）、<strong>程序代码和数据</strong>（从固定地址开始，由可执行目标文件直接初始化）：</p>
+
+  <pre><code><span class="cmt"># Linux 进程虚拟地址空间布局（地址从下往上增大）</span>
+0xFFFFFFFF  ┌──────────────────────┐
+            │  内核虚拟存储器      │  ← 顶部 1/4，用户不可读写
+            ├──────────────────────┤
+            │  用户栈（向下生长）  │  ← 函数调用在此压栈/弹栈
+            │          ↓           │
+            │          ↑           │
+            ├──────────────────────┤
+            │  共享库              │  ← libc、libstdc++ 等
+            ├──────────────────────┤
+            │  堆（向上生长）      │  ← malloc/new 在这里分配
+            │          ↑           │
+            ├──────────────────────┤
+            │  程序代码和数据      │  ← 可执行文件加载进来
+0x00000000  └──────────────────────┘</code></pre>
+
+  <pre><code><span class="cmt"># 验证"文件即字节序列"：标准库函数背后都是 Unix I/O 系统调用</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    FILE* fp = <span class="fn">fopen</span>(<span class="str">"hello.txt"</span>, <span class="str">"w"</span>);   <span class="cmt">// 打开一个文件</span>
+    <span class="fn">fprintf</span>(fp, <span class="str">"hello\n"</span>);              <span class="cmt">// 写入字节序列</span>
+    <span class="fn">fclose</span>(fp);                          <span class="cmt">// 关闭文件</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>fopen</code> 这类函数并不是"最终干活的人"——它们内部最终会调用操作系统提供的 <code>open</code> / <code>write</code> / <code>close</code> 等<strong>系统调用</strong>（syscall，应用程序请求操作系统代劳的正式通道）。用户程序运行在"用户态"，不能直接碰硬件；一旦要读写文件、分配内存，就通过系统调用切到"内核态"由操作系统代办。这个"隔一层"的设计，正是防止程序把硬件搞坏的铁闸。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把左边的产物与右边的描述配对：① hello.i；② hello.s；③ hello.o；④ hello。候选描述：A. 二进制可执行文件；B. 头文件已展开的文本程序；C. 二进制机器码目标文件；D. 汇编语言程序。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 1.2 节的四阶段表格：预处理 → 编译 → 汇编 → 链接，每个阶段的产物是什么性质？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → B（hello.i，预处理后头文件展开）；② → D（hello.s，汇编语言）；③ → C（hello.o，机器码目标文件）；④ → A（hello，可执行文件）。记住口诀：<strong>i 是文本、s 是文本、o 是二进制、hello 是最终可执行文件</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：补齐四阶段命令 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>假设你只有一条完整命令 <code>gcc hello.c -o hello</code>，请写出把它拆成四个阶段的四条命令，并说明每条命令的产物文件名。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>四个阶段分别是 -E、-S、-c 和最后的链接；记得每个阶段都要用 -o 指定输出文件名。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>gcc -E hello.c -o hello.i</code> → <code>gcc -S hello.i -o hello.s</code> → <code>gcc -c hello.s -o hello.o</code> → <code>gcc hello.o -o hello</code>。注意最后一步不再需要 <code>-c</code>，因为链接是默认动作；也不需要 <code>-S</code>/<code>-E</code>，因为输入已经是目标文件。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：错误分诊 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面两个报错分别发生在编译的哪个阶段？(a) 编译器说 <code>expected ';' after expression</code>（表达式后缺少分号）；(b) 链接器说 <code>undefined reference to 'foo'</code>（找不到符号 foo）。它们背后的原因有何本质不同？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回想 1.2 节的 warning：编译错误是"写错了"，链接错误是"找不着"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 发生在编译阶段（cc1），是语法错误——你的代码不符合 C/C++ 语法规则。(b) 发生在链接阶段（ld），是"引用解析失败"——你调用了一个函数/变量，但链接器在所有目标文件和库里都找不到它的定义。本质区别：编译错误说明"代码本身写得不对"，链接错误说明"代码可能写得对，但缺少某个定义或库"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手解剖一条流水线 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>用编辑器写一个 <code>hello.c</code>（打印 1111），然后完整执行：① 依次运行 <code>gcc -E / -S / -c</code> 四步，用 <code>wc -l</code> 数一数 hello.i 比 hello.c 多多少行；② 用 <code>hexdump -C hello.o</code> 观察目标文件是二进制；③ 用 <code>file hello</code> 查看最终可执行文件的格式。把每步的输出记录下来。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>命令都在 1.2 节出现过；<code>wc -l</code> 统计行数，<code>hexdump -C</code> 十六进制转储，<code>file</code> 显示文件类型。在 Linux 上如果提示没有 gcc，先 <code>sudo apt install build-essential</code>。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① hello.c 约 5 行，hello.i 通常几百行（stdio.h 展开）；② <code>hexdump -C hello.o</code> 右侧 ASCII 列是乱码，证明是二进制机器码而非文本；③ <code>file hello</code> 会输出类似 <code>ELF 64-bit LSB pie executable, x86-64</code>（Linux）或 <code>Mach-O 64-bit executable arm64</code>（macOS）——这就是"可执行目标文件"的格式名。三关全过，你就亲手走完了本章的完整流水线。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

@@ -215,6 +215,39 @@ window.SITE_NAV = {
           { num: 16, title: "生态收尾：图像工具链全景回顾", mentor: "达芬奇", method: "融会贯通" }
         ]}
       ]
+    },
+    {
+      id: "cpp-internals",
+      name: "C++ 底层原理",
+      accent: "#8a5a44",
+      desc: "C++ 底层原理教程（编译 / 链接 / 内存 / 对象模型）",
+      tagline: "从编译到内存：程序如何被构建、加载与运行，一条吃透 C++ 背后机制的路径",
+      parts: [
+        { title: "编译与链接", chapters: [
+          { num: 1, title: "从源码到可执行文件：编译四阶段全景", mentor: "费曼", method: "第一性原理" },
+          { num: 2, title: "手动走一遍编译：-E / -S / -c", mentor: "鲁班", method: "工欲善其事" },
+          { num: 3, title: "目标文件与 ELF：可重定位目标文件解剖", mentor: "狄仁杰", method: "系统分析" },
+          { num: 4, title: "链接的职责：符号解析与重定位", mentor: "福尔摩斯", method: "排除不可能" },
+          { num: 5, title: "库与动态链接：.a / .so / dlopen 插件化", mentor: "鲁班", method: "工欲善其事" }
+        ]},
+        { title: "内存与数据表示", chapters: [
+          { num: 6, title: "虚拟地址空间：进程内存布局全景", mentor: "狄仁杰", method: "系统分析" },
+          { num: 7, title: "字节序与数据表示：大小端与基本类型", mentor: "柯南", method: "真相只有一个" },
+          { num: 8, title: "整数与浮点数的存储：原码/反码/补码与 IEEE 754", mentor: "费曼", method: "第一性原理" },
+          { num: 9, title: "数组与指针：地址计算与指针运算", mentor: "柯南", method: "追踪数据流" }
+        ]},
+        { title: "C++ 对象的内存模型", chapters: [
+          { num: 10, title: "内存对齐：为什么结构体大小不是成员之和", mentor: "达芬奇", method: "艺术与工程" },
+          { num: 11, title: "对齐控制实战：#pragma pack 与联合体", mentor: "鲁班", method: "工欲善其事" },
+          { num: 12, title: "类的大小：空类、成员函数与虚函数指针", mentor: "包青天", method: "铁面无私" },
+          { num: 13, title: "继承体系的内存布局：单继承与多态代价", mentor: "狄仁杰", method: "系统分析" }
+        ]},
+        { title: "对象生命周期与内存控制", chapters: [
+          { num: 14, title: "栈与堆：对象创建的两种方式", mentor: "费曼", method: "第一性原理" },
+          { num: 15, title: "限制创建位置：只在堆上 / 只在栈上", mentor: "诸葛亮", method: "运筹帷幄" },
+          { num: 16, title: "综合实战：内存控制与安全收尾", mentor: "诸葛亮", method: "融会贯通" }
+        ]}
+      ]
     }
   ]
 };

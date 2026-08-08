@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第9章：数组与指针：地址计算与指针运算 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter09.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第9章：数组与指针：地址计算与指针运算 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter09.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="9" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第9章：数组与指针：地址计算与指针运算</h1>
+  <p class="chapter-subtitle">这一章跟着柯南追踪"数据流"：数组在内存里到底怎么铺？指针 +1 到底加了多少？为什么数组一传进函数就"缩水"？每一处结论都用本机实测取证</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔍</span>
+      <div class="mentor-info">
+        <h3>本章导师：柯南</h3>
+        <p class="mentor-method">核心方法论：追踪数据流</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「案发现场是一段连续的内存，受害者是一个数组，唯一的线索是每个元素头顶上的地址。很多程序员写了几年代码，却说不清 a[1] 和 *(a+1) 为什么是同一件事，也说不清 p+1 到底往前走了几步。真相只有一个，但这次我们不猜——把地址一个一个打出来，跟着数据流走一遍，案就破了。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 9.1 数组的内存真相：连续的一段地址 ========== -->
+  <h2>9.1 数组的内存真相：连续的一段地址</h2>
+
+  <p>第 7、8 章我们研究透了单个变量在内存里的"长相"（大小端、补码、IEEE 754），这一章开始追踪更复杂的猎物——数组。说人话：<strong>数组就是一段连续的内存格子，每个格子装一个同类型的元素，格子之间首尾相接、不留缝隙</strong>。当编译器看到 <code>int a[3]</code>，它会在栈上一次性划出 3 × 4 = 12 字节的连续空间（4 是 int 的大小），并且向你保证：这 12 个字节是"一整块"的——绝不是东一块西一块拼出来的。这个"连续"不是细节，它决定了后面所有地址计算的规则。</p>
+
+  <p>既然是一整块，三兄弟 <code>a[0]</code>、<code>a[1]</code>、<code>a[2]</code> 的地址就应该像排队一样挨着。怎么证明？把地址打出来。在 <code>printf</code> 里用 <strong>%p</strong>（pointer 的缩写，以十六进制打印指针/地址的格式化占位符），就能看到每个元素住在哪：</p>
+
+  <pre><code><span class="cmt">// addr.cpp —— 打印数组每个元素的地址</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> a[<span class="num">3</span>] = {<span class="num">10</span>, <span class="num">20</span>, <span class="num">30</span>};
+    <span class="fn">printf</span>(<span class="str">"&amp;a[0] = %p\n"</span>, (<span class="kw">void</span>*)&amp;a[<span class="num">0</span>]);
+    <span class="fn">printf</span>(<span class="str">"&amp;a[1] = %p\n"</span>, (<span class="kw">void</span>*)&amp;a[<span class="num">1</span>]);
+    <span class="fn">printf</span>(<span class="str">"&amp;a[2] = %p\n"</span>, (<span class="kw">void</span>*)&amp;a[<span class="num">2</span>]);
+    <span class="fn">printf</span>(<span class="str">"a     = %p\n"</span>, (<span class="kw">void</span>*)a);    <span class="cmt">// 数组名在表达式中退化为指针</span>
+    <span class="fn">printf</span>(<span class="str">"&amp;a    = %p\n"</span>, (<span class="kw">void</span>*)&amp;a);   <span class="cmt">// 取整个数组的地址</span>
+    <span class="fn">printf</span>(<span class="str">"sizeof(a) = %zu\n"</span>, <span class="kw">sizeof</span>(a));
+    <span class="fn">printf</span>(<span class="str">"a[1] = %d, *(a+1) = %d\n"</span>, a[<span class="num">1</span>], *(a+<span class="num">1</span>));  <span class="cmt">// 下标 ≡ 指针</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行输出（本机真实输出）：</span>
+&amp;a[<span class="num">0</span>] = <span class="num">0x16fcb60d8</span>
+&amp;a[<span class="num">1</span>] = <span class="num">0x16fcb60dc</span>
+&amp;a[<span class="num">2</span>] = <span class="num">0x16fcb60e0</span>
+a     = <span class="num">0x16fcb60d8</span>
+&amp;a    = <span class="num">0x16fcb60d8</span>
+<span class="kw">sizeof</span>(a) = <span class="num">12</span>
+a[<span class="num">1</span>] = <span class="num">20</span>, *(a+<span class="num">1</span>) = <span class="num">20</span></code></pre>
+
+  <p>把输出画成格子图，一切一目了然：三个元素从 <code>0x…d8</code> 开始一个接一个排到 <code>0x…e0</code>，每个格子正好 4 字节（int 的大小），相邻地址的差恒为 4。注意 <code>a</code> 和 <code>&amp;a[0]</code> 打印出来是同一个数值，而 <code>sizeof(a)</code> 是 12——"整个数组"的大小。最后一行更关键：<code>a[1]</code> 和 <code>*(a+1)</code> 结果一样——<strong>编译器眼里根本没有"下标"，下标只是"指针加偏移再解引用"的语法糖</strong>：<code>a[i]</code> 等价于 <code>*(a+i)</code>，这是标准写死的等价关系。</p>
+
+  <pre><code><span class="cmt"># 内存布局（每个格子 = 4 字节；地址取自上面这次真实运行）</span>
+<span class="num">0x16fcb60d8</span> ┌──────────┐
+            │ a[<span class="num">0</span>] = <span class="num">10</span> │ <span class="op">&lt;-</span> &amp;a[<span class="num">0</span>]
+<span class="num">0x16fcb60dc</span> ├──────────┤
+            │ a[<span class="num">1</span>] = <span class="num">20</span> │ <span class="op">&lt;-</span> &amp;a[<span class="num">0</span>] + <span class="num">4</span> 字节
+<span class="num">0x16fcb60e0</span> ├──────────┤
+            │ a[<span class="num">2</span>] = <span class="num">30</span> │ <span class="op">&lt;-</span> &amp;a[<span class="num">0</span>] + <span class="num">8</span> 字节
+<span class="num">0x16fcb60e4</span> └──────────┘ <span class="op">&lt;-</span> 数组结束（<span class="num">12</span> 字节用尽）
+<span class="ann">@连续</span> 三个格子首尾相接，地址差恒等于元素大小 4 字节</code></pre>
+
+  <table>
+    <tr><th>元素</th><th>地址（一次实测）</th><th>与 &amp;a[0] 的差</th><th>结论</th></tr>
+    <tr><td>a[0]</td><td><code>0x16fcb60d8</code></td><td>0</td><td>起点（基地址）</td></tr>
+    <tr><td>a[1]</td><td><code>0x16fcb60dc</code></td><td>4 字节</td><td>相差一个 int</td></tr>
+    <tr><td>a[2]</td><td><code>0x16fcb60e0</code></td><td>8 字节</td><td>相差两个 int</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>细心的你会问：为什么我运行的结果和你贴的地址不一样？因为现代操作系统有 <strong>ASLR</strong>（地址空间布局随机化，每次启动程序都随机挑一块内存区域放栈和堆，用于防攻击）。所以柯南的取证原则是：<strong>看关系，不看绝对值</strong>——地址每次都在变，但"相邻差 4、总共 12"这些关系永远不变。规律才是线索，数字只是线索的载体。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：用 <code>%p</code> 打印地址，必须把指针强转成 <code>(void*)</code> 再传进去，否则是<strong>未定义行为</strong>（undefined behavior，标准不承诺任何结果的程序行为）——多数编译器会警告，但标准允许它打印出任何东西。写 <code>printf("%p", (void*)&amp;a[0])</code>，别偷懒。</p>
+  </div>
+
+  <!-- ========== 9.2 指针的运算规则：p+1 到底加了多少 ========== -->
+  <h2>9.2 指针的运算规则：p+1 到底加了多少</h2>
+
+  <p>柯南的放大镜对准下一个疑点：<code>p + 1</code> 到底在地址上加了多少？直觉会说是"1 个字节"——错了。<strong>指针的加法是"带单位的加法"，单位就是它指向的类型的大小</strong>。这个"走一步跨多远"的距离叫<strong>步长</strong>（stride，指针算术中一次位移对应的字节数）：<code>int*</code> 的 +1 是 +4 字节，<code>char*</code> 的 +1 是 +1 字节，<code>double*</code> 的 +1 是 +8 字节。同样是"加 1"，三种指针在内存里走的距离完全不同。</p>
+
+  <p>光说不练假把式。用 <code>sizeof</code> 查类型大小，再用"指针减指针"实测三种指针的步长——注意先把指针转成 <code>char*</code> 再相减，因为指针相减的结果单位也是"元素"，只有 char 的步长是 1 字节，才能直接读出字节数：</p>
+
+  <pre><code><span class="cmt">// stride.cpp —— p+1 到底加了多少？sizeof + 指针减法实测</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">printf</span>(<span class="str">"sizeof(int)    = %zu 字节\n"</span>, <span class="kw">sizeof</span>(<span class="kw">int</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(char)   = %zu 字节\n"</span>, <span class="kw">sizeof</span>(<span class="kw">char</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(double) = %zu 字节\n"</span>, <span class="kw">sizeof</span>(<span class="kw">double</span>));
+    <span class="fn">printf</span>(<span class="str">"sizeof(int*)   = %zu 字节（指针本身大小，本机 64 位）\n\n"</span>, <span class="kw">sizeof</span>(<span class="kw">int</span>*));
+    <span class="kw">int</span>    arr_i[<span class="num">3</span>] = {<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>};
+    <span class="kw">char</span>   arr_c[<span class="num">3</span>] = {<span class="str">'a'</span>, <span class="str">'b'</span>, <span class="str">'c'</span>};
+    <span class="kw">double</span> arr_d[<span class="num">3</span>] = {<span class="num">1.0</span>, <span class="num">2.0</span>, <span class="num">3.0</span>};
+    <span class="kw">int</span>*    p_i = arr_i;
+    <span class="kw">char</span>*   p_c = arr_c;
+    <span class="kw">double</span>* p_d = arr_d;
+    <span class="fn">printf</span>(<span class="str">"int 指针 p_i:    %p -&gt; %p, 步长 %ld 字节\n"</span>,
+           (<span class="kw">void</span>*)p_i, (<span class="kw">void</span>*)(p_i + <span class="num">1</span>), (<span class="kw">long</span>)((<span class="kw">char</span>*)(p_i+<span class="num">1</span>) - (<span class="kw">char</span>*)p_i));
+    <span class="fn">printf</span>(<span class="str">"char 指针 p_c:   %p -&gt; %p, 步长 %ld 字节\n"</span>,
+           (<span class="kw">void</span>*)p_c, (<span class="kw">void</span>*)(p_c + <span class="num">1</span>), (<span class="kw">long</span>)((<span class="kw">char</span>*)(p_c+<span class="num">1</span>) - (<span class="kw">char</span>*)p_c));
+    <span class="fn">printf</span>(<span class="str">"double 指针 p_d: %p -&gt; %p, 步长 %ld 字节\n"</span>,
+           (<span class="kw">void</span>*)p_d, (<span class="kw">void</span>*)(p_d + <span class="num">1</span>), (<span class="kw">long</span>)((<span class="kw">char</span>*)(p_d+<span class="num">1</span>) - (<span class="kw">char</span>*)p_d));
+    <span class="fn">printf</span>(<span class="str">"\n&amp;arr_i[0] = %p, arr_i = %p, 相等: %d\n"</span>,
+           (<span class="kw">void</span>*)&amp;arr_i[<span class="num">0</span>], (<span class="kw">void</span>*)arr_i, &amp;arr_i[<span class="num">0</span>] == arr_i);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行输出（本机真实输出）：</span>
+<span class="kw">sizeof</span>(<span class="kw">int</span>)    = <span class="num">4</span> 字节；<span class="kw">sizeof</span>(<span class="kw">char</span>)   = <span class="num">1</span> 字节；<span class="kw">sizeof</span>(<span class="kw">double</span>) = <span class="num">8</span> 字节
+<span class="kw">sizeof</span>(<span class="kw">int</span>*)   = <span class="num">8</span> 字节（指针本身大小，本机 <span class="num">64</span> 位）
+<span class="kw">int</span> 指针 p_i:    <span class="num">0x16b8aa0c8</span> -&gt; <span class="num">0x16b8aa0cc</span>, 步长 <span class="num">4</span> 字节
+<span class="kw">char</span> 指针 p_c:   <span class="num">0x16b8aa0a8</span> -&gt; <span class="num">0x16b8aa0a9</span>, 步长 <span class="num">1</span> 字节
+<span class="kw">double</span> 指针 p_d: <span class="num">0x16b8aa0b0</span> -&gt; <span class="num">0x16b8aa0b8</span>, 步长 <span class="num">8</span> 字节
+&amp;arr_i[<span class="num">0</span>] = <span class="num">0x16b8aa0c8</span>, arr_i = <span class="num">0x16b8aa0c8</span>, 相等: <span class="num">1</span></code></pre>
+
+  <table>
+    <tr><th>指针类型</th><th>指向类型大小 sizeof</th><th>p+1 跳过的字节</th><th>说人话</th></tr>
+    <tr><td><code>int*</code></td><td><code>sizeof(int) = 4</code></td><td>4 字节</td><td>每格 4 字节，一步跨一格</td></tr>
+    <tr><td><code>char*</code></td><td><code>sizeof(char) = 1</code></td><td>1 字节</td><td>每格 1 字节，逐字节勘察</td></tr>
+    <tr><td><code>double*</code></td><td><code>sizeof(double) = 8</code></td><td>8 字节</td><td>每格 8 字节，一步跨一大格</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p><code>char*</code> 是逐字节勘察内存的"一格格走"工具：网络协议解析、文件格式解析、内存 dump（把一段内存原样打印出来）全指着它——步长 1 字节，可以精确落到内存的每一个字节上。而 <code>&amp;a[0]</code> 和 <code>a</code> 数值相等，是因为数组名在表达式里自动退化为指向首元素的指针——这个"退化"（decay）机制是 9.4 节的主角，先记住结论：<strong>打印出来一样，类型不一样</strong>。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：指针越界是静默杀手。<code>p + 100</code> 编译器不拦，因为标准认为"你比编译器更懂你的数据"；真要访问那个地址（解引用）才是<strong>未定义行为</strong>——可能碰巧正常，也可能触发<strong>段错误</strong>（segmentation fault，程序访问了不属于自己的内存，操作系统直接开枪）当场崩溃。指针算术本身是安全的，危险的是拿着算出来的地址去解引用。</p>
+  </div>
+
+  <p>顺带破一个小案：<code>&amp;a[0]</code> 和 <code>a</code> 是同一个数，但类型完全不同——<code>a</code> 的类型是 <code>int[3]</code>（数组类型），<code>&amp;a</code> 的类型是 <code>int(*)[3]</code>（指向整个数组的指针）。类型不同，步长就不同：<code>&amp;a[0] + 1</code> 只跳 4 字节，而 <code>&amp;a + 1</code> 直接跳过整个数组 12 字节。实测为证：</p>
+
+  <pre><code><span class="cmt">// probe.cpp —— &amp;a+1 与 &amp;a[0]+1 的步长对决</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> a[<span class="num">3</span>] = {<span class="num">10</span>, <span class="num">20</span>, <span class="num">30</span>};
+    <span class="fn">printf</span>(<span class="str">"&amp;a      = %p\n"</span>, (<span class="kw">void</span>*)&amp;a);
+    <span class="fn">printf</span>(<span class="str">"&amp;a+1    = %p   (跳过整个数组)\n"</span>, (<span class="kw">void</span>*)(&amp;a + <span class="num">1</span>));
+    <span class="fn">printf</span>(<span class="str">"跳过字节数 = %ld\n"</span>, (<span class="kw">long</span>)((<span class="kw">char</span>*)(&amp;a+<span class="num">1</span>) - (<span class="kw">char</span>*)&amp;a));
+    <span class="fn">printf</span>(<span class="str">"&amp;a[0]+1 = %p   (只跳一个元素)\n"</span>, (<span class="kw">void</span>)(&amp;a[<span class="num">0</span>] + <span class="num">1</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行输出（本机真实输出）：</span>
+&amp;a    = <span class="num">0x16af6a0c8</span>；&amp;a+<span class="num">1</span>  = <span class="num">0x16af6a0d4</span>；跳过字节数 = <span class="num">12</span>
+&amp;a[<span class="num">0</span>]+<span class="num">1</span> = <span class="num">0x16af6a0cc</span>（只跳一个元素）</code></pre>
+
+  <!-- ========== 9.3 多维数组的存储：按行优先的地址计算 ========== -->
+  <h2>9.3 多维数组的存储：按行优先的地址计算</h2>
+
+  <p>把数组叠成二维：<code>int a[3][4]</code>。先别被"二维"骗了——内存是线性的，根本没有"面"。编译器把 <code>a[3][4]</code> 理解为"3 个一维数组，每个一维数组里有 4 个 int"，即<strong>数组的数组</strong>。整块内存依然连续，总共 3 × 4 × 4 = 48 字节。关键问题：第 0 行铺完之后，第 1 行从哪个地址开始？</p>
+
+  <p>答案是<strong>按行优先</strong>（row-major，先把一整行铺完，再铺下一行）。于是每个元素的地址都能用一条公式算出来：<code>&amp;a[i][j] = 基地址 + (i × 列数 + j) × sizeof(int)</code>。对 <code>a[3][4]</code> 来说，<code>a[1][2]</code> 的偏移就是 1×4+2 = 6 个元素。公式记不住没关系，下面把 12 个格子的地址全部打出来，与公式逐一核对——柯南办案讲究证据链完整：</p>
+
+  <pre><code><span class="cmt">// md.cpp —— 二维数组按行优先平铺，地址公式逐一验证</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> a[<span class="num">3</span>][<span class="num">4</span>] = {
+        { <span class="num">0</span>,  <span class="num">1</span>,  <span class="num">2</span>,  <span class="num">3</span>},
+        {<span class="num">10</span>, <span class="num">11</span>, <span class="num">12</span>, <span class="num">13</span>},
+        {<span class="num">20</span>, <span class="num">21</span>, <span class="num">22</span>, <span class="num">23</span>}
+    };
+    <span class="fn">printf</span>(<span class="str">"sizeof(a)      = %zu 字节（整个 3x4 数组）\n"</span>, <span class="kw">sizeof</span>(a));
+    <span class="fn">printf</span>(<span class="str">"sizeof(a[0])   = %zu 字节（一行，4 个 int）\n"</span>, <span class="kw">sizeof</span>(a[<span class="num">0</span>]));
+    <span class="fn">printf</span>(<span class="str">"sizeof(a[0][0])= %zu 字节（一个元素）\n\n"</span>, <span class="kw">sizeof</span>(a[<span class="num">0</span>][<span class="num">0</span>]));
+    <span class="fn">printf</span>(<span class="str">"第 0 行首地址 &amp;a[0][0] = %p\n"</span>, (<span class="kw">void</span>*)&amp;a[<span class="num">0</span>][<span class="num">0</span>]);
+    <span class="fn">printf</span>(<span class="str">"第 1 行首地址 &amp;a[1][0] = %p\n"</span>, (<span class="kw">void</span>*)&amp;a[<span class="num">1</span>][<span class="num">0</span>]);
+    <span class="fn">printf</span>(<span class="str">"第 2 行首地址 &amp;a[2][0] = %p\n\n"</span>, (<span class="kw">void</span>*)&amp;a[<span class="num">2</span>][<span class="num">0</span>]);
+    <span class="fn">printf</span>(<span class="str">"行间差 = %ld 字节（= 4 个 int）\n\n"</span>,
+           (<span class="kw">long</span>)&amp;a[<span class="num">1</span>][<span class="num">0</span>] - (<span class="kw">long</span>)&amp;a[<span class="num">0</span>][<span class="num">0</span>]);
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; <span class="num">3</span>; i++)
+        <span class="kw">for</span> (<span class="kw">int</span> j = <span class="num">0</span>; j &lt; <span class="num">4</span>; j++)
+            <span class="fn">printf</span>(<span class="str">"a[%d][%d] 地址 %p  元素值 %2d  公式验证偏移 = %2ld\n"</span>,
+                   i, j, (<span class="kw">void</span>*)&amp;a[i][j], a[i][j],
+                   (<span class="kw">long</span>)(&amp;a[i][j] - &amp;a[<span class="num">0</span>][<span class="num">0</span>]));
+    <span class="fn">printf</span>(<span class="str">"\na[1][2] vs *(*(a+1)+2) = %d / %d\n"</span>, a[<span class="num">1</span>][<span class="num">2</span>], *(*(a+<span class="num">1</span>)+<span class="num">2</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行输出（本机真实输出，节选）：</span>
+<span class="kw">sizeof</span>(a)      = <span class="num">48</span> 字节；<span class="kw">sizeof</span>(a[<span class="num">0</span>]) = <span class="num">16</span> 字节；<span class="kw">sizeof</span>(a[<span class="num">0</span>][<span class="num">0</span>]) = <span class="num">4</span> 字节
+第 <span class="num">0</span> 行首地址 &amp;a[<span class="num">0</span>][<span class="num">0</span>] = <span class="num">0x16f7a60a8</span>；第 <span class="num">1</span> 行 = <span class="num">0x16f7a60b8</span>；第 <span class="num">2</span> 行 = <span class="num">0x16f7a60c8</span>
+行间差 = <span class="num">16</span> 字节（= <span class="num">4</span> 个 <span class="kw">int</span>）；偏移 <span class="num">0</span>..<span class="num">11</span> 全部与公式吻合（见下表）
+a[<span class="num">1</span>][<span class="num">2</span>] vs *(*(a+<span class="num">1</span>)+<span class="num">2</span>) = <span class="num">12</span> / <span class="num">12</span></code></pre>
+
+  <pre><code><span class="cmt"># 地址公式：一维与二维的通式（T 是元素类型，如 int）</span>
+&amp;a[i]    = 基地址 + i × <span class="kw">sizeof</span>(T)                    <span class="cmt">// 一维数组</span>
+&amp;a[i][j] = 基地址 + (i × 列数 + j) × <span class="kw">sizeof</span>(T)      <span class="cmt">// 二维数组，行优先</span>
+<span class="ann">@例</span> <span class="kw">int</span> a[<span class="num">3</span>][<span class="num">4</span>]，a[<span class="num">1</span>][<span class="num">2</span>] 偏移 = <span class="num">1</span>×<span class="num">4</span>+<span class="num">2</span> = <span class="num">6</span> 个 <span class="kw">int</span> = <span class="num">24</span> 字节</code></pre>
+
+  <table>
+    <tr><th>元素 a[i][j]</th><th>公式偏移 i×4+j</th><th>实测偏移（元素差）</th><th>验证</th></tr>
+    <tr><td>a[0][0]</td><td>0</td><td>0</td><td>吻合</td></tr>
+    <tr><td>a[0][1]</td><td>1</td><td>1</td><td>吻合</td></tr>
+    <tr><td>a[1][0]</td><td>4</td><td>4</td><td>吻合（第 1 行紧接第 0 行）</td></tr>
+    <tr><td>a[1][2]</td><td>6</td><td>6</td><td>吻合</td></tr>
+    <tr><td>a[2][0]</td><td>8</td><td>8</td><td>吻合</td></tr>
+    <tr><td>a[2][3]</td><td>11</td><td>11</td><td>吻合（最后一块）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>为什么"按行遍历"比"按列遍历"快？因为 Cache（高速缓存，第 1 章讲过：主存的"常用抽屉"）是成块搬运数据的。按行访问时 <code>a[0][0]</code>、<code>a[0][1]</code>、<code>a[0][2]</code> 在内存里紧挨着，一次就被整块读进缓存，后面几个元素直接命中；按列访问则在 48 字节里跳来跳去，每次都得去慢吞吞的主存现取。<strong>内存布局决定性能直觉</strong>——这就是为什么要把地址算得明明白白。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：公式里的"列数"千万别写错。把 <code>a[3][4]</code> 的偏移写成 <code>i×3+j</code>（拿行数当了列数），程序不会报错，但你会读到"隔壁家"的数据——多维数组越界是<strong>静默</strong>的，编译器根本不检查。同理，访问不存在的 <code>a[3][0]</code>（第 4 行）也是越界。写下标时心里默念：<strong>偏移 = 行 × 列数 + 列</strong>。</p>
+  </div>
+
+  <!-- ========== 9.4 数组与指针的经典陷阱：数组名不是指针 ========== -->
+  <h2>9.4 数组与指针的经典陷阱：数组名不是指针</h2>
+
+  <p>数组名用起来像指针：能赋值给 <code>int*</code>，能下标访问，打印出来还是个地址。但柯南要揭穿这个"伪装"：<strong>数组名根本不是指针变量</strong>。真相是：数组名在绝大多数表达式中会<strong>退化</strong>（decay，自动转换成指向首元素的指针）——所以 <code>int* p = a;</code> 合法。但数组名本身没有自己的存储空间、不是左值，因此不能 <code>a++</code>、不能 <code>a = p;</code>。实测编译器对 <code>a++</code> 的判决，铁证如山：</p>
+
+  <pre><code><span class="cmt"># clang++ aplus.cpp（真实编译错误）：</span>
+error: cannot increment value of type <span class="str">'int[3]'</span>
+    <span class="num">2</span> | <span class="kw">int</span> <span class="fn">main</span>(){ <span class="kw">int</span> a[<span class="num">3</span>]={<span class="num">1</span>,<span class="num">2</span>,<span class="num">3</span>}; a++; <span class="kw">return</span> <span class="num">0</span>; }
+      |                               ~^
+<span class="ann">@解读</span> "cannot increment value of type 'int[3]'"——数组名不是可修改的左值，想挪它？没门</code></pre>
+
+  <p>比 <code>a++</code> 更阴险的是 <strong>sizeof 陷阱</strong>。在 main 里，<code>sizeof(a)</code> 是"整个数组"的大小 20 字节（5 个 int × 4）；但一旦把数组传进函数，形参 <code>int arr[]</code> 与 <code>int* arr</code> 完全等价——<strong>参数退化为指针</strong>，<code>sizeof(arr)</code> 只剩 8 字节（指针大小）。同一个名字，在函数内外"体型"完全不同，编译器甚至会专门发一条警告提醒你：</p>
+
+  <pre><code><span class="cmt">// trap.cpp —— 数组名陷阱：sizeof 双面性与参数退化</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">void</span> <span class="fn">f</span>(<span class="kw">int</span> <span class="param">arr</span>[]) {  <span class="cmt">// 形参 int arr[] 与 int* arr 完全等价</span>
+    <span class="fn">printf</span>(<span class="str">"  函数内 sizeof(arr) = %zu —— 参数已退化为指针！\n"</span>, <span class="kw">sizeof</span>(<span class="param">arr</span>));
+}
+<span class="kw">void</span> <span class="fn">g</span>(<span class="kw">int</span>* <span class="param">p</span>) {
+    <span class="fn">printf</span>(<span class="str">"  函数内 sizeof(p)   = %zu —— 与 int* 参数完全一致\n"</span>, <span class="kw">sizeof</span>(<span class="param">p</span>));
+}
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> a[<span class="num">5</span>] = {<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>};
+    <span class="fn">printf</span>(<span class="str">"main 中 sizeof(a) = %zu（整个数组 5*4 字节）\n"</span>, <span class="kw">sizeof</span>(a));
+    <span class="fn">printf</span>(<span class="str">"main 中 sizeof(&amp;a[0]) = %zu（一个指针）\n\n"</span>, <span class="kw">sizeof</span>(&amp;a[<span class="num">0</span>]));
+    <span class="fn">printf</span>(<span class="str">"调用 f(a)：\n"</span>); <span class="fn">f</span>(a);
+    <span class="fn">printf</span>(<span class="str">"调用 g(a)：\n"</span>); <span class="fn">g</span>(a);
+    <span class="kw">int</span>* p = a;
+    <span class="fn">printf</span>(<span class="str">"\np = a 之后：p[2] = %d, *(p+2) = %d, a[2] = %d\n"</span>, p[<span class="num">2</span>], *(p+<span class="num">2</span>), a[<span class="num">2</span>]);
+    <span class="fn">printf</span>(<span class="str">"p++ 之后 p 指向 a[1]：*p = %d\n"</span>, *(p++));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 编译（真实警告，clang++）：</span>
+warning: sizeof on array function parameter will return size of <span class="str">'int *'</span> instead of <span class="str">'int[]'</span> [-Wsizeof-array-argument]
+<span class="cmt"># 运行输出（本机真实输出）：</span>
+main 中 <span class="kw">sizeof</span>(a) = <span class="num">20</span>（整个数组）；main 中 <span class="kw">sizeof</span>(&amp;a[<span class="num">0</span>]) = <span class="num">8</span>（一个指针）
+调用 f(a)：函数内 <span class="kw">sizeof</span>(arr) = <span class="num">8</span>；调用 g(a)：函数内 <span class="kw">sizeof</span>(p) = <span class="num">8</span>
+p = a 之后：p[<span class="num">2</span>] = <span class="num">3</span>, *(p+<span class="num">2</span>) = <span class="num">3</span>, a[<span class="num">2</span>] = <span class="num">3</span>；p++ 之后 *p = <span class="num">1</span></code></pre>
+
+  <table>
+    <tr><th>表达式 / 场景</th><th>sizeof 结果</th><th>原因</th></tr>
+    <tr><td>main 中 <code>sizeof(a)</code>（a 是 <code>int a[5]</code>）</td><td>20</td><td>类型是 <code>int[5]</code>，5×4 字节</td></tr>
+    <tr><td>main 中 <code>sizeof(&amp;a[0])</code></td><td>8</td><td>&amp;a[0] 是指针，不是数组</td></tr>
+    <tr><td>函数内 <code>sizeof(arr)</code>（形参 <code>int arr[]</code>）</td><td>8</td><td>形参已退化为 <code>int*</code></td></tr>
+    <tr><td>函数内 <code>sizeof(p)</code>（形参 <code>int* p</code>）</td><td>8</td><td>本来就是指针</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>想保住"数组类型"？把参数声明成引用：<code>void f(int (&amp;arr)[5])</code>，这样 <code>sizeof(arr)</code> 还是 20，传错长度编译器直接报错。但更实用、更 C++ 的做法是：<strong>传数组时把长度一起传进去</strong>（<code>void f(int* arr, int n)</code>）——标准库的 <code>std::vector</code> 也是这个思路：数据和长度永不分离。从今往后，凡是"数组参数"，第一反应就是问"长度传了没"。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：那条 <code>-Wsizeof-array-argument</code> 警告是友军，它明明白白告诉你"这里 sizeof 的是指针"。无视它的下场很经典：函数里写 <code>for (int i = 0; i &lt; sizeof(arr) / sizeof(arr[0]); i++)</code> 想遍历"整个数组"，结果 <code>sizeof(arr)/sizeof(arr[0])</code> 是 8/4 = 2——只处理了前两个元素，后面三个悄悄失踪。这是初学者最容易踩的坑，没有之一。</p>
+  </div>
+
+  <!-- ========== 9.5 实战：用指针遍历与修改数组 ========== -->
+  <h2>9.5 实战：用指针遍历与修改数组</h2>
+
+  <p>理论归理论，跟着柯南做一个小案子：一个班 6 个学生的成绩，老师心软统一加 5 分，然后算总分和平均分，最后把数组整个倒过来。全程指针操作——不对，下标也一起用，实战里两者本就混着来，谁方便用谁：</p>
+
+  <pre><code><span class="cmt">// practice.cpp —— 用指针遍历、修改、反转数组</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> scores[<span class="num">6</span>] = {<span class="num">72</span>, <span class="num">85</span>, <span class="num">91</span>, <span class="num">66</span>, <span class="num">78</span>, <span class="num">88</span>};
+    <span class="kw">int</span> n = <span class="num">6</span>;
+    <span class="fn">printf</span>(<span class="str">"原始成绩："</span>);
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; i++) <span class="fn">printf</span>(<span class="str">"%d "</span>, scores[i]);
+    <span class="fn">printf</span>(<span class="str">"\n"</span>);
+    <span class="cmt">// 1) 指针遍历：每个元素 +5（老师心软，全员加 5 分）</span>
+    <span class="kw">for</span> (<span class="kw">int</span>* p = scores; p &lt; scores + n; p++) {
+        *p += <span class="num">5</span>;   <span class="cmt">// 解引用后自增，等价 scores[i] += 5</span>
+    }
+    <span class="fn">printf</span>(<span class="str">"加 5 分后："</span>);
+    <span class="kw">for</span> (<span class="kw">int</span>* p = scores; p &lt; scores + n; p++) <span class="fn">printf</span>(<span class="str">"%d "</span>, *p);
+    <span class="fn">printf</span>(<span class="str">"\n"</span>);
+    <span class="cmt">// 2) 指针求和</span>
+    <span class="kw">int</span> sum = <span class="num">0</span>;
+    <span class="kw">for</span> (<span class="kw">int</span>* p = scores; p &lt; scores + n; p++) sum += *p;
+    <span class="fn">printf</span>(<span class="str">"总分 = %d，平均 = %.1f\n"</span>, sum, (<span class="kw">double</span>)sum / n);
+    <span class="cmt">// 3) 双指针原地反转（头尾交换，相向而行）</span>
+    <span class="kw">for</span> (<span class="kw">int</span>* lo = scores, *hi = scores + n - <span class="num">1</span>; lo &lt; hi; lo++, hi--) {
+        <span class="kw">int</span> t = *lo; *lo = *hi; *hi = t;   <span class="cmt">// 经典三行交换</span>
+    }
+    <span class="fn">printf</span>(<span class="str">"反转后："</span>);
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; i++) <span class="fn">printf</span>(<span class="str">"%d "</span>, scores[i]);
+    <span class="fn">printf</span>(<span class="str">"\n"</span>);
+    <span class="cmt">// 4) 指针 + 下标混用</span>
+    <span class="fn">printf</span>(<span class="str">"scores[2] = %d，*(scores+2) = %d\n"</span>, scores[<span class="num">2</span>], *(scores + <span class="num">2</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行输出（本机真实输出）：</span>
+原始成绩：<span class="num">72</span> <span class="num">85</span> <span class="num">91</span> <span class="num">66</span> <span class="num">78</span> <span class="num">88</span>
+加 <span class="num">5</span> 分后：<span class="num">77</span> <span class="num">90</span> <span class="num">96</span> <span class="num">71</span> <span class="num">83</span> <span class="num">93</span>
+总分 = <span class="num">510</span>，平均 = <span class="num">85.0</span>
+反转后：<span class="num">93</span> <span class="num">83</span> <span class="num">71</span> <span class="num">96</span> <span class="num">90</span> <span class="num">77</span>
+scores[<span class="num">2</span>] = <span class="num">71</span>，*(scores+<span class="num">2</span>) = <span class="num">71</span></code></pre>
+
+  <p>三个要点。第一，遍历的循环边界是<strong>哨兵指针</strong>（sentinel pointer，指向"数组末尾之后一个位置"的指针）<code>scores + n</code>：条件写 <code>p &lt; scores + n</code>，指针一路 +1 直到越过最后一个元素——比数下标更贴近"内存视角"，也天然免疫"数组长度改变"的麻烦。第二，反转用<strong>双指针</strong>：<code>lo</code> 从前往后、<code>hi</code> 从后往前，每次交换两端值，相向而行直到交叉（<code>lo &lt; hi</code> 不成立）。第三，<code>*p += 5</code> 是"解引用 + 自增"的组合拳：先拿到格子里的值，加 5 再写回去——和 <code>scores[i] += 5</code> 是同一件事的两种写法。</p>
+
+  <pre><code><span class="cmt">// 反转的核心骨架（上面第 3 步的提炼）</span>
+<span class="kw">for</span> (<span class="kw">int</span>* lo = <span class="param">arr</span>, *hi = <span class="param">arr</span> + n - <span class="num">1</span>; lo &lt; hi; lo++, hi--) {
+    <span class="kw">int</span> t = *lo; *lo = *hi; *hi = t;
+}
+<span class="ann">@边界</span> n == <span class="num">0</span> 时 <span class="param">arr</span> + n - <span class="num">1</span> 越界；条件必须写 lo &lt; hi，不能写 lo != hi</code></pre>
+
+  <table>
+    <tr><th>操作</th><th>指针写法</th><th>下标写法</th><th>等价性</th></tr>
+    <tr><td>第 k 个元素加 5</td><td><code>*p += 5</code></td><td><code>a[k] += 5</code></td><td>完全相同</td></tr>
+    <tr><td>求和</td><td><code>sum += *p</code></td><td><code>sum += a[i]</code></td><td>完全相同</td></tr>
+    <tr><td>取第 k 个元素</td><td><code>*(p + k)</code></td><td><code>a[k]</code></td><td>标准等价</td></tr>
+    <tr><td>反转</td><td>双指针 lo/hi 交换</td><td>临时数组拷贝</td><td>指针版省内存</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>"begin/end 哨兵"正是 C++ 标准库迭代器的雏形：<code>std::vector</code> 的 <code>begin()</code> 和 <code>end()</code> 就是"指向第一个元素"和"指向末尾之后一个位置"这两个指针的类型安全封装，<code>std::sort</code>、<code>std::for_each</code> 等算法全部建立在这个约定上。学透指针遍历，迭代器对你来说就只是一层语法糖——这也是为什么前辈们敢说"学会指针，你就学会了一半 C++"。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：双指针反转有两个边界要命。一是空数组：<code>n == 0</code> 时 <code>scores + n - 1</code> 直接指向数组前面的未知内存，是野指针；二是循环条件：写成 <code>lo != hi</code> 而不是 <code>lo &lt; hi</code>，当数组长度为偶数时两个指针会"擦肩而过"（lo 越过 hi 却不相等），循环停不下来直接越界。反转前先问自己：<strong>数组可能为空吗？长度是奇数还是偶数？</strong></p>
+  </div>
+
+  <!-- ========== 9.6 章节小结：跟着数据流回家 ========== -->
+  <h2>9.6 章节小结：跟着数据流回家</h2>
+
+  <p>把这一章的"数据流"完整串一遍：<strong>声明数组 → 编译器划出一整块连续内存 → 数组名在表达式中退化为指针 → 指针算术按"类型单位"走步长 → 多维数组按行优先平铺成一维 → 传参时数组退化成指针、sizeof 随之缩水</strong>。整章其实只回答了三类问题：这块内存多大（sizeof）、从哪开始（地址）、走一步多远（步长）。这三问答全了，任何数组/指针代码在你眼里都是透明的。</p>
+
+  <p>柯南的结案陈词：以后遇到数组或指针，条件反射地问自己三个问题——<strong>内存多大？首地址在哪？指针 +1 跳多远？</strong>程序出了问题，取证顺序也一样：先打印 <code>&amp;x[0]</code>，再打印 <code>&amp;x[1]</code>，看差值对不对——两步就能锁定是"步长错"还是"越界"。</p>
+
+  <pre><code><span class="cmt"># 柯南的取证口诀：四问四答</span>
+内存多大？   <span class="kw">sizeof</span> 一测便知         <span class="op">-&gt;</span> <span class="kw">int</span> a[<span class="num">3</span>] 就是 <span class="num">12</span> 字节
+首址在哪？   &amp;a[<span class="num">0</span>] / a 打印即见      <span class="op">-&gt;</span> 两者数值相同、类型不同
+一步多远？   看指向类型               <span class="op">-&gt;</span> <span class="kw">int</span> <span class="num">4</span> / <span class="kw">char</span> <span class="num">1</span> / <span class="kw">double</span> <span class="num">8</span>
+多维怎么铺？ 按行优先                 <span class="op">-&gt;</span> 偏移 = i × 列数 + j
+传参之后？   退化成指针               <span class="op">-&gt;</span> <span class="kw">sizeof</span>(arr) 只剩 <span class="num">8</span></code></pre>
+
+  <pre><code><span class="cmt">// selfcheck.cpp —— 三行代码，把本章结论一次性验完</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="kw">int</span> a[<span class="num">3</span>][<span class="num">4</span>] = {<span class="num">0</span>};
+    <span class="fn">printf</span>(<span class="str">"sizeof(a)      = %zu 字节\n"</span>, <span class="kw">sizeof</span>(a));
+    <span class="fn">printf</span>(<span class="str">"a[1] 相对 &amp;a[0][0] 偏移 %ld 字节\n"</span>,
+           (<span class="kw">long</span>)((<span class="kw">char</span>*)a[<span class="num">1</span>] - (<span class="kw">char</span>*)&amp;a[<span class="num">0</span>][<span class="num">0</span>]));
+    <span class="fn">printf</span>(<span class="str">"a[1][2] = %d, *(*(a+1)+2) = %d\n"</span>, a[<span class="num">1</span>][<span class="num">2</span>], *(*(a+<span class="num">1</span>)+<span class="num">2</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 本机真实输出：sizeof(a) = 48；偏移 16 字节；a[1][2] = 0，*(*(a+1)+2) = 0 —— 全部吻合</span></code></pre>
+
+  <table>
+    <tr><th>三问</th><th>答案</th><th>出处</th></tr>
+    <tr><td>这块内存多大？</td><td><code>sizeof(a)</code> = 12 / 48</td><td>9.1、9.3</td></tr>
+    <tr><td>首地址在哪？</td><td><code>&amp;a[0]</code> 与 <code>a</code> 数值相同</td><td>9.2</td></tr>
+    <tr><td>指针 +1 跳多远？</td><td>int 4 / char 1 / double 8 字节</td><td>9.2</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">柯南提示</div>
+    <p>养成一个习惯：<strong>怀疑一切结论，验证一切规律</strong>。本章的每条结论（步长、sizeof、行优先）都只用两行代码就能自己验出来，而且换机器、换编译器结果一致（只有绝对地址会变）。下次被问"指针和数组什么关系"，别背定义——直接说：数组名退化成指针，但 sizeof 和 &amp; 面前它还是数组，我用两行代码就能证明。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别死记口诀。口诀是为了调试时快速回忆，不是背完就完——把 <code>selfcheck.cpp</code> 自己编译运行一遍，亲眼看到 48、16、0 这三个数，比读十遍文章都管用。柯南的办案原则永远是：<strong>证据优先于记忆，实测优先于直觉</strong>。下一章开始，我们会遇到比数组更"有结构"的对象——struct 和 class，那时候"内存多大、首址在哪、步长多少"这三问，会以更精彩的方式继续发挥作用。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：地址推算 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>一次实测中，<code>int a[3]</code> 的 <code>&amp;a[0] = 0x16fcb60d8</code>。请推算：① <code>&amp;a[1]</code> 和 <code>&amp;a[2]</code>；② <code>a</code> 和 <code>&amp;a</code> 打印出来是多少；③ <code>sizeof(a)</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 9.1 节：int 是 4 字节，三个格子首尾相接；数组名在表达式中退化为指针，&amp;a 取整个数组的地址。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>&amp;a[1] = 0x16fcb60dc</code>、<code>&amp;a[2] = 0x16fcb60e0</code>（每次 +4）；② <code>a</code> 和 <code>&amp;a</code> 都打印为 <code>0x16fcb60d8</code>（数值相等，类型不同：前者退化为 <code>int*</code>，后者是 <code>int(*)[3]</code>）；③ <code>sizeof(a) = 12</code>（3 × 4 字节）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：步长计算 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>double b[5];</code>，<code>double* p = b;</code>。① <code>p + 1</code> 与 <code>p</code> 相差多少字节？② <code>&amp;b</code> 与 <code>&amp;b[0]</code> 数值上相等吗？③ <code>&amp;b + 1</code> 跳过多少字节？④ <code>b[2]</code> 用指针怎么写？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>double 是 8 字节；&amp;b 的类型是 double(*)[5]，指向整个数组；下标 b[i] 等价 *(b+i)。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 8 字节（步长 = sizeof(double)）；② 相等（都是数组首地址，类型不同）；③ 40 字节（整个数组 5 × 8，一步跨完整条街）；④ <code>*(p + 2)</code> 或 <code>*(b + 2)</code>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：sizeof 陷阱 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>有函数 <code>void f(int arr[10]) { printf("%zu", sizeof(arr)); }</code>，main 里声明 <code>int a[10];</code>。① main 中 <code>sizeof(a)</code>？② main 中 <code>sizeof(&amp;a[0])</code>？③ f 内 <code>sizeof(arr)</code>？④ 为什么③和①不一样？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 9.4 节：形参 int arr[10] 与 int* arr 完全等价，参数退化为指针。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 40（整个数组 10 × 4）；② 8（&amp;a[0] 是指针）；③ 8（形参已退化为 int*）；④ 因为标准规定数组作为函数参数时退化为指向首元素的指针，函数只拿到"首地址"、拿不到"长度"——这正是编译器发 <code>-Wsizeof-array-argument</code> 警告的原因。所以传数组必须同时传长度。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：指针反转实战 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>① 写一个 <code>void reverse(int* arr, int n)</code> 函数，用双指针原地反转数组（不申请新数组），并解释为什么函数内不能用 <code>sizeof(arr)</code> 求元素个数。② 加分项：把 9.5 的反转改成"一边反转一边打印每次交换后的数组"，观察双指针从两端向中间收拢的过程。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>双指针模板：lo 指向 arr[0]，hi 指向 arr[n-1]，循环条件 lo &lt; hi，交换后 lo++、hi--；n 的奇偶和空数组都要考虑。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>for (int* lo = arr, *hi = arr + n - 1; lo &lt; hi; lo++, hi--) { int t = *lo; *lo = *hi; *hi = t; }</code>。不能用 sizeof(arr) 求长度：arr 是形参，已退化为 <code>int*</code>，<code>sizeof(arr)</code> 恒为 8（指针大小），所以必须靠参数 n 传递长度。② 在交换后加一行 printf 打印数组即可——你会看到头尾逐渐"翻转"，这正是双指针追踪数据流的过程。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

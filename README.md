@@ -13,9 +13,9 @@ website/
 │   ├── linux/          ← Linux 系统（10 篇）
 │   ├── database/       ← 数据库（8 篇）
 │   └── tools/          ← 开发工具（12 篇）
-├── learn/              ← 技术教程模块（六线：Kotlin / LVGL / ESP32 电子墨水屏 / SF32 电子书移植 / C++ 工程实践 / 图像与视觉实战）
+├── learn/              ← 技术教程模块（七线：Kotlin / LVGL / ESP32 电子墨水屏 / SF32 电子书移植 / C++ 工程实践 / 图像与视觉实战 / C++ 底层原理）
 │   ├── index.html      ← 教程门户
-│   ├── kotlin/  lvgl/  epub/  sifli/  cpp/  graphics/   ← 各线 16 章
+│   ├── kotlin/  lvgl/  epub/  sifli/  cpp/  graphics/  cpp-internals/   ← 各线 16 章
 │   ├── style.css site-nav.js script.js ← 站内导航/样式（随目录走）
 │   └── CLAUDE.md       ← 章节制作规范
 ├── about/              ← 关于页

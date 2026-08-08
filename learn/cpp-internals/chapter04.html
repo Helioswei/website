@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第4章：链接的职责：符号解析与重定位 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter04.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第4章：链接的职责：符号解析与重定位 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter04.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="4" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第4章：链接的职责：符号解析与重定位</h1>
+  <p class="chapter-subtitle">编译四阶段跑完，最后一棒交给链接器：把散落各处的目标文件拼成能运行的程序。这一章拆开链接器的两大任务——符号解析与重定位，再用三个真实报错，练一遍福尔摩斯式的排错</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🎩</span>
+      <div class="mentor-info">
+        <h3>本章导师：福尔摩斯</h3>
+        <p class="mentor-method">核心方法论：排除不可能</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「当你排除了所有不可能的情况，剩下的，不管多么难以置信，那就是真相。链接错误从来不是随机的：每一个 undefined reference 背后，都藏着一个没被满足的约定。这一章我们不猜、不试、不撞运气——先看清链接器到底在做什么，再沿着'排除不可能'的清单，把报错一步一步逼到死角。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 4.1 链接器到底做什么：符号解析与重定位 ========== -->
+  <h2>4.1 链接器到底做什么：符号解析与重定位</h2>
+
+  <p>上一章我们解剖了目标文件（<code>.o</code>，编译与汇编的产物，里面是机器指令和数据的"半成品"）。但一个 <code>.o</code> 是跑不起来的——真实程序由几十上百个源文件编译而来，每个源文件只生成了自己的那一小块。把它们拼成一个整体、让互相的调用都对上号的，就是<strong>链接</strong>（linking，把不同代码和数据收集、组合成一个可执行文件的过程）和<strong>链接器</strong>（linker，干这件事的程序，GCC 体系里是 <code>ld</code>）。说人话：<strong>编译是各自为战，链接是战后收编</strong>。链接器有两大任务——<strong>符号解析</strong>（symbol resolution）和<strong>重定位</strong>（relocation）。</p>
+
+  <p>先造一个最小案例。两个文件：<code>math.cpp</code> 定义计算平方的函数，<code>use_math.cpp</code> 调用它。注意 <code>use_math.cpp</code> 里只有一行<strong>声明</strong>（declaration，只说明"存在这么个函数"）而没有<strong>定义</strong>（definition，函数体本身）——这正是链接器要解决的第一个问题：<strong>谁来兑现这张"欠条"？</strong></p>
+
+  <pre><code><span class="cmt">// math.cpp —— 定义（definition）：函数体在这里</span>
+<span class="kw">int</span> <span class="fn">square</span>(<span class="kw">int</span> <span class="param">x</span>) {
+    <span class="kw">return</span> x * x;
+}
+
+<span class="cmt">// use_math.cpp —— 只有声明（declaration），没有定义</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> <span class="fn">square</span>(<span class="kw">int</span> <span class="param">x</span>);       <span class="cmt">// 声明：告诉编译器"有这函数"，但没给函数体</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">std::printf</span>(<span class="str">"%d\n"</span>, <span class="fn">square</span>(<span class="num">6</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 先把两个源文件分别编译成目标文件，再链接（实测通过，输出 36）</span>
+g++ -c math.cpp -o math.o
+g++ -c use_math.cpp -o use_math.o
+g++ use_math.o math.o -o app
+./app
+<span class="num">36</span></code></pre>
+
+  <p>任务一：<strong>符号解析</strong>。符号（symbol）就是函数名、变量名在二进制世界里的"身份证"——编译时，源文件里的每个函数和全局变量都会被登记成一个符号，记进目标文件的<strong>符号表</strong>（symbol table，一张"名字 → 类型/地址"的登记簿）。链接时，<code>use_math.o</code> 引用了 <code>square</code> 却没定义它，<code>math.o</code> 定义了 <code>square</code> 却没被引用——符号解析做的，就是<strong>把每个"引用"和它的"定义"对上号</strong>。用 <code>nm</code>（列出目标文件符号表的工具）看这两个文件，一目了然：</p>
+
+  <pre><code><span class="cmt"># nm 列出符号表：U = undefined（未定义引用），T = 已定义的代码符号</span>
+$ nm use_math.o
+                 <span class="ann">U</span> __Z6squarei        <span class="cmt"># square(int) 的"修饰名"——有人引用，没人定义</span>
+<span class="num">0000000000000000</span> <span class="ann">T</span> _main              <span class="cmt"># main 已定义，住在 .text 节</span>
+                 <span class="ann">U</span> _printf            <span class="cmt"># 连 printf 也是未定义——它住在 C 标准库里</span>
+
+$ nm math.o
+<span class="num">0000000000000000</span> <span class="ann">T</span> __Z6squarei        <span class="cmt"># 定义在这里！符号解析就是把它俩对上号</span></code></pre>
+
+  <table>
+    <tr><th>nm 符号类型</th><th>含义</th><th>说人话</th></tr>
+    <tr><td><code>U</code></td><td>undefined</td><td>欠条：有人引用，还没人兑现</td></tr>
+    <tr><td><code>T</code></td><td>text（代码节）已定义</td><td>函数定义，链接时可以被"兑付"</td></tr>
+    <tr><td><code>D</code></td><td>已初始化的全局数据</td><td>带初值的全局变量</td></tr>
+    <tr><td><code>B</code></td><td>bss（未初始化数据）</td><td>不带初值的全局变量，运行时清零</td></tr>
+    <tr><td>小写（d/t/b）</td><td>局部符号</td><td>static 修饰，只在本文件可见（4.3 节见它）</td></tr>
+  </table>
+
+  <p>任务二：<strong>重定位</strong>。编译器和汇编器生成代码时有个偷懒的前提：<strong>每个 .o 都假设自己从地址 0 开始</strong>。可两个 .o 拼在一起，不可能都住在地址 0。所以链接器把每个符号定义<strong>安排到最终的内存位置</strong>，再回去<strong>修改所有引用它的地方，让它们指向这个新位置</strong>——这个"改地址"的过程就是重定位。名字里的"位"是位置的位：<strong>符号解析回答"你是谁"，重定位回答"你在哪"</strong>。</p>
+
+  <pre><code><span class="cmt"># 链接前：use_math.o 里对 square 的调用是个占位地址</span>
+use_math.o（从地址 0 开始）          math.o（也从地址 0 开始）
+  <span class="num">0x0000</span>: call <span class="num">0x00000000</span>          <span class="num">0x0000</span>: square 的机器指令...
+
+<span class="cmt"># 链接后：合并进同一个地址空间，引用被改写为真实地址</span>
+可执行文件 app
+  <span class="num">0x1000</span>: call <span class="num">0x1040</span>  <span class="op">-&gt;</span>  <span class="cmt">square 的代码被安排在 0x1040，引用已改指</span>
+  <span class="num">0x1040</span>: square 的机器指令...</code></pre>
+
+  <pre><code><span class="cmt"># 链接器的完整工作流（把"素材块"按规则拼成成品）</span>
+<span class="cmt"># ① 收集：把命令行上的 .o 和库里的 .o 全部收进来</span>
+<span class="cmt"># ② 符号解析：把每个引用和定义对上号（对不上的 = undefined reference）</span>
+<span class="cmt"># ③ 重定位：合并各节，给符号分配最终地址，改写所有引用点</span>
+<span class="cmt"># ④ 产出：可执行目标文件（或共享库）</span>
+输入(.o, .a, .so) <span class="op">--&gt;</span> 链接器 <span class="op">--&gt;</span> 输出(可执行文件/共享库)</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>记住这一节的"对子"：<strong>符号解析 = 对号入座（谁引用了谁），重定位 = 改地址（都搬去最终位置）</strong>。本章后面所有报错，本质都是这两个任务中某一步出了岔子——解析失败叫 undefined reference，解析撞车叫 multiple definition，全都能归到这张图上。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：链接器对 C++ 语义一窍不通——它只看<strong>修饰后的符号名</strong>。C++ 编译器会把函数名"改名"（name mangling，把参数类型编码进名字里），所以 <code>square(int)</code> 在符号表里是 <code>_Z6squarei</code>。这也是重载函数能共存的原因：<code>foo(int)</code> 和 <code>foo(double)</code> 修饰后是两个不同符号，链接器把它们当两个毫不相干的名字。反过来，C 函数没有修饰名——这就是 C++ 调用 C 库时要用 <code>extern "C"</code> 的原因，否则两边对不上号（第 4.4 节会见到它的报错形态）。</p>
+  </div>
+
+  <!-- ========== 4.2 链接发生的三个时机：编译时 / 加载时 / 运行时 ========== -->
+  <h2>4.2 链接发生的三个时机：编译时 / 加载时 / 运行时</h2>
+
+  <p>链接不一定非得发生在"编译那一下"。素材里说得明白：<strong>链接可以发生于编译时</strong>（源代码被翻译成机器代码时），<strong>也可以发生于加载时</strong>（程序被加载器装入内存执行时），<strong>甚至发生于运行时</strong>（由应用程序自己来执行）。三个时机对应三种链接形态，也对应三种不同的"打包程度"：编译时链接把一切钉死，加载时链接留一半到启动时再解，运行时链接则把决定权交给程序本身。</p>
+
+  <pre><code><span class="cmt"># ① 编译时链接：链接器在生成可执行文件时，把静态库（.a）里的成员并入</span>
+g++ use_math.o libmath.a -o app
+
+<span class="cmt"># ② 加载时链接：可执行文件里只记一个"待解析"标记，</span>
+<span class="cmt">#    程序启动时由动态链接器把共享库（.so）装进来并解析符号</span>
+g++ use_math.o -lmath -o app
+ldd ./app        <span class="cmt"># Linux：查看这个程序加载时需要哪些共享库</span>
+otool -L app     <span class="cmt"># macOS：等价的查看命令</span>
+
+<span class="cmt"># ③ 运行时链接：程序自己调 dlopen 现装现用（第 5 章的主角）</span>
+<span class="kw">void</span>* h = <span class="fn">dlopen</span>(<span class="str">"./libmath.so"</span>, RTLD_LAZY);</code></pre>
+
+  <pre><code><span class="cmt"># 加载时链接的幕后流程（.so 的符号在第 6 章虚拟地址空间里继续展开）：</span>
+./app --启动--&gt; 加载器(loader) --&gt; 动态链接器(ld-linux.so)
+                 <span class="cmt"># 按可执行文件里的 NEEDED 列表逐个加载 .so</span>
+                 <span class="cmt"># 把 app 里未定义的符号与 .so 导出的符号对上号</span>
+                 <span class="cmt"># 全部就绪，才跳进 main()</span></code></pre>
+
+  <p>眼见为实。上面链接出的 <code>good</code> 程序，用 <code>otool -L</code> 能看到它启动时要加载的动态库清单；在 Linux 上，等价的 <code>ldd</code> 会显示类似的结构——程序自己写的代码之外，libc 这类"基础设施"都是靠加载时链接进来的，这也解释了 4.1 节里 <code>printf</code> 为什么是 <code>U</code> 符号：它到加载那一刻才被兑现。</p>
+
+  <pre><code><span class="cmt"># macOS 实测：otool -L 显示 good 启动时要加载的动态库</span>
+$ otool -L good
+good:
+        /usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 2100.43.0)
+        /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)
+
+<span class="cmt"># Linux 上等价的 ldd（canonical 输出示例）</span>
+$ ldd ./app
+        linux-vdso.so.1 (0x00007ffe2c3f9000)
+        libc.so.6 =&gt; /lib/x86_64-linux-gnu/libc.so.6 (0x00007f8e4a200000)
+        /lib64/ld-linux-x86-64.so.2 (0x00007f8e4a430000)</code></pre>
+
+  <table>
+    <tr><th>时机</th><th>谁执行</th><th>什么时候</th><th>典型形态</th><th>说人话</th></tr>
+    <tr><td>编译时</td><td>链接器（ld）</td><td>生成可执行文件那一刻</td><td>静态库 <code>.a</code> 并入</td><td>快递当场签收，全部钉死</td></tr>
+    <tr><td>加载时</td><td>动态链接器</td><td>程序启动、跳进 main 之前</td><td>共享库 <code>.so</code></td><td>到货了才签收，边用边解</td></tr>
+    <tr><td>运行时</td><td>应用程序自己</td><td>程序运行中任意时刻</td><td><code>dlopen</code> / <code>dlsym</code></td><td>现用现买，还能退（卸载）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>三选一的直觉：<strong>要部署简单、跑起来不依赖环境 → 编译时静态链接；要省内存、多程序共享代码、能升级库不重编 → 加载时共享库；要插件化、热插拔、程序自己决定装谁 → 运行时 dlopen</strong>。这三条线的具体手艺（ar 打包、-fPIC、dlopen 全家桶）都是第 5 章的主场，本章先记住"时机"这张地图。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：链接发生得越晚，错误暴露得越晚，代价越大。编译时链接的错误在你敲编译命令时就现形；加载时链接的错误拖到<strong>程序启动时</strong>才炸，典型的像 <code>./app: symbol lookup error: undefined symbol: square</code>；运行时链接的错误则在运行中途才出现。福尔摩斯的建议：<strong>能早发现的问题不要拖到运行时</strong>——这也是为什么测试环境要尽量贴近生产环境（库版本、加载路径一致），否则"我这儿好好的"会成为排查时最头疼的干扰项。</p>
+  </div>
+
+  <!-- ========== 4.3 为什么要懂链接：五个好处 ========== -->
+  <h2>4.3 为什么要懂链接：五个好处</h2>
+
+  <p>对入门课堂里构造小程序的学生来说，链接器"安静地"处理一切，从来不是个议题——一个小程序就一两个文件，链接几乎不可能出错。可一旦进入真实项目，不懂链接的代价会成倍放大。素材给了五个好处：<strong>① 帮你构造大型程序</strong>——大型项目最常见的链接错误是"缺模块、缺库、库版本不兼容"，不懂"链接器如何解析引用"，这些报错永远像天书；<strong>② 帮你避免危险的编程错误</strong>——链接器在默认情况下会<strong>不动声色</strong>地放行某些错误的定义，让程序带着雷运行；<strong>③ 帮你理解作用域规则</strong>——全局/局部、<code>static</code> 到底意味着什么，答案不在语法书里，而在符号表里；<strong>④ 帮你理解系统概念</strong>——加载器、动态链接器、虚拟内存都绕着链接转；<strong>⑤ 帮你开发共享库</strong>——现代软件靠共享库在运行时升级、打补丁。②和③，我们用两个真实实验证明。</p>
+
+  <pre><code><span class="cmt">/* tent_a.c —— C 语言：两个文件都写"不带初始化"的全局变量 */</span>
+<span class="kw">int</span> g_counter;
+
+<span class="cmt">/* tent_b.c */</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+<span class="kw">int</span> g_counter;
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>) {
+    <span class="fn">printf</span>(<span class="str">"%d\n"</span>, g_counter);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 实测（本机）：C 语言竟然链接成功，还打印了 0！</span>
+$ gcc tent_a.c tent_b.c -o tent <span class="op">&amp;&amp;</span> ./tent
+<span class="num">0</span>
+
+<span class="cmt"># 同样的两个文件，用 g++ 编译：立刻报错（macOS 实测）</span>
+$ g++ tent_a.c tent_b.c -o tentcpp
+duplicate symbol '_g_counter' in:
+    .../tent_a-xxx.o
+    .../tent_b-xxx.o
+ld: 1 duplicate symbols</code></pre>
+
+  <p>第二个实验：<strong>static 的作用域</strong>。两个文件都声明 <code>static int counter</code>——名字一模一样，但它们是两个完全独立的符号，谁也不知道谁的存在。用 <code>nm</code> 看，两个 <code>.o</code> 里各有一个小写 <code>d</code>（local，局部数据符号）的 <code>counter</code>：<strong>static 把符号的"可见范围"锁死在本文件</strong>，这就是"内部链接"（internal linkage）在符号表里的样子。</p>
+
+  <pre><code><span class="cmt">// loc_a.cpp                     // loc_b.cpp</span>
+<span class="kw">static</span> <span class="kw">int</span> counter = <span class="num">100</span>;    <span class="kw">static</span> <span class="kw">int</span> counter = <span class="num">1</span>;   <span class="cmt">// 同名，互不相干</span>
+
+<span class="kw">int</span> <span class="fn">bump_a</span>() { <span class="kw">return</span> ++counter; }   <span class="kw">int</span> <span class="fn">bump_b</span>() { <span class="kw">return</span> counter * <span class="num">10</span>; }</code></pre>
+
+  <pre><code><span class="cmt"># 实测：两个 .o 里各有各的 counter，地址不同，互不干扰</span>
+$ nm loc_a.o | grep counter
+<span class="num">000000000000006c</span> <span class="ann">d</span> __ZL7counter
+$ nm loc_b.o | grep counter
+<span class="num">0000000000000014</span> <span class="ann">d</span> __ZL7counter
+
+<span class="cmt"># 把两个文件一起链接、运行（本机实测）：</span>
+$ g++ loc_a.cpp loc_b.cpp -o loc <span class="op">&amp;&amp;</span> ./loc
+<span class="num">203</span>   <span class="cmt"># bump_a 的 counter 从 100 加到 102，bump_b 的 counter 一直是 1</span></code></pre>
+
+  <table>
+    <tr><th>好处</th><th>说人话</th><th>对应技能</th></tr>
+    <tr><td>① 构造大型程序</td><td>模块拆开、库来复用，出错知道去哪查</td><td>看懂链接报错、<code>-l</code> / <code>-L</code> 参数</td></tr>
+    <tr><td>② 避免危险编程错误</td><td>链接器的"静默放行"可能埋雷</td><td>C 的弱符号陷阱（本章 4.4/4.5）</td></tr>
+    <tr><td>③ 理解作用域规则</td><td>全局/局部/static 的真相在符号表里</td><td>nm 读符号、内部链接与外部链接</td></tr>
+    <tr><td>④ 理解系统概念</td><td>加载器、动态链接器、虚拟内存互相咬合</td><td>第 5、6 章的整条链路</td></tr>
+    <tr><td>⑤ 开发共享库</td><td>运行时升级、插件化、热加载</td><td>第 5 章：.a / .so / dlopen</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>把五个好处串成一句话：<strong>懂链接 = 大型程序不迷路 + 躲开静默埋雷 + 看懂作用域真相 + 打通系统概念 + 玩转共享库</strong>。你不需要成为链接器专家，但"链接器是怎么想问题的"这个视角，会让后面每一章的排错都少走弯路。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：C 语言那个"静默通过"不是福利，是雷区。两个文件都写不带初始化的 <code>int g_counter;</code>，C 编译器会把它们合并成一个 <strong>COMMON 符号</strong>（弱符号，多个定义取其一），链接器不警告——如果两个文件对它的初值各有期待，运行时就会悄悄出错，且极难调试。这正是素材里说的"<strong>错误的定义多个全局变量的程序将通过链接器而不产生任何警告</strong>"。而 C++ 选择了更严格的路：<code>int g_counter;</code> 在 C++ 里就是定义，两个定义直接报错（4.5 节的主角）。</p>
+  </div>
+
+  <!-- ========== 4.4 实战排错一：undefined reference ========== -->
+  <h2>4.4 实战排错一：undefined reference</h2>
+
+  <p>现在把方法论用起来。福尔摩斯的原则：<strong>排除所有不可能，剩下的就是真相</strong>——排错第一步永远是"确认这是什么错误"，而不是盯着报错乱猜。链接错误和编译错误长得像，性质完全不同：编译错误是"代码写错了"（语法/类型），链接错误是"<strong>找不着</strong>"（有引用，没定义）。下面这个例子，编译阶段安然无恙，链接阶段当场爆炸：</p>
+
+  <pre><code><span class="cmt">// undef.cpp —— 声明了 square，却从未定义它</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">int</span> <span class="fn">square</span>(<span class="kw">int</span> <span class="param">x</span>);   <span class="cmt">// 只有声明，没有定义</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">std::printf</span>(<span class="str">"%d\n"</span>, <span class="fn">square</span>(<span class="num">5</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译：没有任何问题（-c 只做到汇编，链接是后话）</span>
+$ g++ -c undef.cpp -o undef.o
+
+<span class="cmt"># 链接：报错了。Linux（g++）的经典报错长这样：</span>
+$ g++ undef.o -o undef
+/usr/bin/ld: undef.o: in function `main':
+undef.cpp:(.text+0x14): undefined reference to `square(int)'
+collect2: error: ld returned 1 exit status</code></pre>
+
+  <pre><code><span class="cmt"># 本机 macOS（Apple clang）实测，同一个错误长这样：</span>
+$ g++ undef.cpp -o undef
+Undefined symbols for architecture arm64:
+  "square(int)", referenced from:
+      _main in undef-309db3.o
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)</code></pre>
+
+  <p>两句话就能看懂报错：<strong>Linux 版直说 "undefined reference to `square(int)'"，macOS 版说 "Undefined symbols: square(int), referenced from _main"</strong>——意思完全一样：main 里引用了一个符号，但链接器在所有输入里都找不到它的定义。排查思路按"排除不可能"逐条过：<strong>① 符号真的存在吗？</strong>用 <code>nm</code> 看目标文件，确认 <code>U</code> 符号是谁；<strong>② 定义在哪个文件/库里？</strong>全工程搜一遍定义；<strong>③ 定义所在的文件/库，链接命令带上没有？顺序对不对？</strong>（顺序问题 4.5 节专治）；<strong>④ 名字对吗？</strong>注意 C++ 修饰名和 <code>extern "C"</code>；<strong>⑤ 被宏/条件编译裁掉了？</strong>比如定义被 <code>#ifdef</code> 包住而宏没开。</p>
+
+  <pre><code><span class="cmt"># 排查第一刀：nm 看符号到底存不存在（本机实测）</span>
+$ nm undef.o
+                 <span class="ann">U</span> __Z6squarei        <span class="cmt"># 果然：U 符号，引用存在，定义缺失</span>
+<span class="num">0000000000000000</span> <span class="ann">T</span> _main
+
+<span class="cmt"># 排查第二刀：全工程搜定义（.cpp 里有没有 square 的函数体）</span>
+$ grep -rn "square" . --include=*.cpp
+
+<span class="cmt"># 修复：补上定义（或把 libmath.a 加进链接命令），重编重链（实测输出 25）</span>
+$ g++ undef_fixed.cpp -o undef <span class="op">&amp;&amp;</span> ./undef
+<span class="num">25</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>看到 <code>_Z6squarei</code> 这种"乱码"名字别慌，它是 <code>square(int)</code> 的修饰名（mangled name）。用 <code>c++filt</code> 一秒还原人话：<code>c++filt _Z6squarei</code> 输出 <code>square(int)</code>。注意 macOS 的符号表在修饰名前还会多加一个下划线（<code>__Z6squarei</code>），用 <code>c++filt</code> 时去掉一个前缀下划线再喂给它——这是平台差异，不是 bug。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：undefined reference 的报错信息里藏着"嫌疑清单"，但别只盯着最后一行。常见的五种病因：<strong>声明了没定义</strong>、<strong>库忘连</strong>（调用了函数却没用 <code>-l</code>）、<strong>库顺序错</strong>、<strong>C/C++ 名字对不上</strong>（缺 <code>extern "C"</code>）、<strong>条件编译把定义裁掉了</strong>。福尔摩斯式做法：把报错里的符号名记下来 → nm 确认引用 → 搜定义 → 核对链接命令，一次只改一处，改完立刻重链。永远不要靠"加一个 -l 试试"撞运气。</p>
+  </div>
+
+  <!-- ========== 4.5 实战排错二：multiple definition 与链接顺序 ========== -->
+  <h2>4.5 实战排错二：multiple definition 与链接顺序</h2>
+
+  <p>第二个高频链接错误：<strong>multiple definition</strong>（多重定义，同一个符号被定义了不止一次）。它的报错逻辑和 undefined reference 正好相反——那是"<strong>要的没有</strong>"，这是"<strong>给的太多</strong>"。最经典的场景：两个源文件都定义了同名全局变量（还记得 4.3 节 C++ 的严格规则吗？）：</p>
+
+  <pre><code><span class="cmt">// dup_a.cpp —— 全局变量 g_counter 的定义之一</span>
+<span class="kw">int</span> g_counter = <span class="num">0</span>;
+
+<span class="cmt">// dup_b.cpp —— g_counter 的另一个定义！</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">int</span> g_counter = <span class="num">0</span>;
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="fn">std::printf</span>(<span class="str">"%d\n"</span>, g_counter);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># Linux（g++）经典报错（canonical 格式）：</span>
+$ g++ dup_a.cpp dup_b.cpp -o dup
+/usr/bin/ld: dup_b.o: in function `main':
+dup_b.cpp:4: multiple definition of `g_counter'; dup_a.o:dup_a.cpp:1: first defined here
+collect2: error: ld returned 1 exit status
+
+<span class="cmt"># 本机 macOS 实测，同一个错误长这样：</span>
+$ g++ dup_a.cpp dup_b.cpp -o dup
+duplicate symbol '_g_counter' in:
+    .../dup_b-627e5f.o
+    .../dup_a-de48df.o
+ld: 1 duplicate symbols
+clang++: error: linker command failed with exit code 1</code></pre>
+
+  <p>修复的思路顺着"为什么会有两个定义"展开：<strong>① 本意是共享？</strong>留一个定义，其他文件用 <code>extern</code> 声明引用它；<strong>② 本意是各自独立？</strong>加 <code>static</code> 变成内部链接（见 4.3 节），或包进 <code>namespace</code> 用名字隔离；<strong>③ 是头文件里的定义被多个 <code>.cpp</code> 包含？</strong>把定义挪进 <code>.cpp</code>，头文件只留声明——这也是"头文件里不要放定义"这条纪律的底层原因。注意：多个 <code>.cpp</code> 包含同一头文件不会触发这个错误（预处理后每个编译单元各有一份拷贝）；报错只发生在"不同编译单元各定义了一份"时。</p>
+
+  <p>第二个坑：<strong>链接顺序</strong>。Linux 的 GNU ld 对命令行上的文件做<strong>单遍、从左到右扫描</strong>：遇到目标文件（<code>.o</code>）全部并入；遇到静态库（<code>.a</code>）只抽取"<strong>当前尚未解析的引用</strong>"所需的成员，抽完即过、不回头。所以<strong>库必须放在引用它的目标文件之后</strong>——把 <code>libmath.a</code> 放到 <code>use_math.o</code> 前面，扫描到库时 <code>square</code> 还没被引用，库成员一个都不抽，等轮到 <code>use_math.o</code> 时引用才出现——结果就是 4.4 节的报错换了个马甲重新登场：</p>
+
+  <pre><code><span class="cmt"># 库放对位置：成功（实测输出 36）</span>
+$ g++ use_math.o libmath.a -o app <span class="op">&amp;&amp;</span> ./app
+<span class="num">36</span>
+
+<span class="cmt"># 库放错位置（Linux）：报 undefined reference！</span>
+$ g++ libmath.a use_math.o -o app
+/usr/bin/ld: use_math.o: in function `main':
+use_math.cpp:(.text+0x14): undefined reference to `square(int)'
+collect2: error: ld returned 1 exit status</code></pre>
+
+  <pre><code><span class="cmt"># 本机 macOS 实测：两种顺序居然都能过！（ld64 用全局符号表，不按顺序扫）</span>
+$ g++ libmath.a use_math.o -o bad <span class="op">&amp;&amp;</span> ./bad
+<span class="num">36</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>两条实战纪律：<strong>① 源文件在前，库在后</strong>——写链接命令时把 <code>.o</code>/源文件放前面，<code>-l</code> 库统一放最后，这是 Linux 下的保命姿势；<strong>② 别拿 macOS 的宽容当通行证</strong>——同一个项目在 Linux 的 CI 上可能瞬间挂掉。库里成员互相依赖、两个库循环依赖（A 需要 B 的符号、B 又需要 A 的）时，还有 <code>--start-group</code>/<code>--end-group</code> 这类解法，第 5 章讲静态库时会系统展开。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：multiple definition 还有个隐蔽变体——<strong>头文件里定义了全局变量</strong>。假如 <code>globals.h</code> 里写了 <code>int g_counter = 0;</code>，两个 <code>.cpp</code> 都 <code>#include</code> 它，预处理后两份定义进到两个编译单元，链接照样报 duplicate symbol。同理还有"两个库都定义了同名符号"（比如误装了同名库的两个版本）。记住口诀：<strong>定义进 .cpp，声明进头文件；全局变量少用，用了就加 static 或进 namespace</strong>。</p>
+  </div>
+
+  <!-- ========== 4.6 小结：链接器的世界地图 ========== -->
+  <h2>4.6 小结：链接器的世界地图</h2>
+
+  <p>把这一章的碎片拼成一张图：编译四阶段走完，每个 <code>.o</code> 都是"从地址 0 开始、带着一堆欠条"的半成品；链接器收编它们，符号解析把欠条兑现（<code>U</code> 变 <code>T</code>），重定位给每个人安排最终地址；成品可执行文件在加载时还要靠动态链接器再解一轮 <code>.so</code> 的账。整条链路里，链接器是承上启下的总装配车间——这也是为什么第 1 章那张流程图里，链接是最后一棒。</p>
+
+  <pre><code><span class="cmt"># 链接器世界地图：从源码到运行的完整链路</span>
+源码 --编译--&gt; .o --符号解析+重定位--&gt; 可执行文件 --加载--&gt; 进程
+      (第2/3章)    （本章 4.1）        (第5章:库)  (第6章:内存)
+
+<span class="cmt"># 报错对照表（遇到就翻这里）：</span>
+undefined reference / Undefined symbols  = 有引用，没定义        --&gt; 4.4
+multiple definition / duplicate symbol   = 有引用，定义多了      --&gt; 4.5
+库顺序错（Linux）                         = 扫描时机不对          --&gt; 4.5
+symbol lookup error（加载时）             = 运行时库对不上        --&gt; 第5章</code></pre>
+
+  <pre><code><span class="cmt"># 福尔摩斯式排错四步（链接错误专用）：</span>
+<span class="num">1</span>. 确认阶段：是 ld 的错，不是 cc1 的错（编译错误 vs 链接错误）
+<span class="num">2</span>. 确认符号：nm 看 U/T，这个符号到底有没有定义
+<span class="num">3</span>. 确认来源：定义在哪个文件/库？链接命令带上没有？顺序对不对？
+<span class="num">4</span>. 动手修复：补定义 / 加库 / 调顺序，一次改一处，改完立刻重链</code></pre>
+
+  <p>下一站，第 5 章把"库"补完：静态库（<code>.a</code>）怎么打包、共享库（<code>.so</code>）怎么用 <code>-fPIC</code> 和 <code>-shared</code> 生成、<code>dlopen</code> 怎么在运行时现装现用、binutils 工具箱怎么解剖一切目标文件——4.2 节那张"三个时机"的表，会在那里逐一落地成命令。到那时你会发现，本章学到的符号与重定位，正是理解库的全部地基。</p>
+
+  <div class="tip">
+    <div class="tip-title">福尔摩斯提示</div>
+    <p>收束全章：<strong>链接错误就三类——找不到、给多了、来晚了</strong>。找不到（undefined reference）查定义在不在；给多了（multiple definition）查为什么定义了两份；来晚了（链接顺序）查库放没放对位置。配合"排除不可能"四步法，任何链接报错都能在几分钟内定位。把这章的四步流程抄在便签上，第 5 章排错时你会感谢自己。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：概念配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把术语与描述配对：① 符号解析；② 重定位；③ 符号表；④ 修饰名（mangled name）。候选描述：A. 把符号引用与符号定义对上号；B. 给符号分配最终地址并改写引用；C. "名字 → 类型/地址"的登记簿；D. C++ 把函数名编码进参数类型的产物。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 4.1 节的两个任务和 nm 输出；修饰名在 warning 里出现过（<code>_Z6squarei</code>）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → A（对号入座）；② → B（改地址）；③ → C（登记簿）；④ → D（<code>_Z6squarei</code> 就是 <code>square(int)</code> 的修饰名）。口诀：解析回答"你是谁"，重定位回答"你在哪"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：判读 nm 输出 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>下面是一份真实的 nm 输出（macOS 实测节选）。请回答：哪些符号是"有引用没定义"的？哪些已定义？<code>_printf</code> 为什么是未定义？</p>
+      <pre><code>$ nm undef.o
+                 <span class="ann">U</span> __Z6squarei
+<span class="num">0000000000000000</span> <span class="ann">T</span> _main
+                 <span class="ann">U</span> _printf</code></pre>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>U 和 T 分别代表什么？《printf 住在哪个库里》——4.2 节有线索。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>__Z6squarei</code>（即 <code>square(int)</code>）和 <code>_printf</code> 是 <code>U</code>（未定义引用）；<code>_main</code> 是 <code>T</code>（已定义代码符号）。<code>_printf</code> 之所以未定义，是因为它住在 C 标准库（libc/libSystem）里，要等链接（静态库并入或加载时动态链接）才被兑现——这正是 4.1 节 nm 里"欠条"的含义。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：链接错误分诊 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>三个报错分别是什么问题？怎么修？(a) <code>undefined reference to `square(int)'</code>；(b) <code>multiple definition of `g_counter'</code>；(c) Linux 下 <code>g++ libmath.a use_math.o -o app</code> 报 <code>undefined reference to `square(int)'</code>，但把顺序反过来就正常。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>(a)(b) 的区别是"找不到"与"给多了"；(c) 的报错文本和 (a) 一样，但病因不同——想想 GNU ld 的单遍扫描。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) 有引用没定义：补定义、加库，或核对 <code>extern "C"</code> / 拼写；(b) 定义了两份：留一份，其余用 <code>extern</code> 引用，或加 <code>static</code> / 进 <code>namespace</code>；(c) 是链接顺序问题：GNU ld 从左到右单遍扫描，遇到 <code>libmath.a</code> 时 <code>square</code> 的引用还没出现，成员没被抽取——把库放到引用它的目标文件之后即可。同样的命令在 macOS 上可能不报错（ld64 用全局符号表），这正是 4.5 节 tip 里"别拿 macOS 的宽容当通行证"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手复现三连错 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>在 Linux（或 macOS）上亲手制造并修复三个错误：① 写 <code>undef.cpp</code>（声明 <code>square</code> 不定义），记录编译与链接两个阶段的报错原文；② 写两个都定义 <code>int g_counter = 0;</code> 的文件，记录 multiple definition 报错；③ 用 <code>ar rcs libmath.a math.o</code> 打包 <code>square</code>，分别用 <code>g++ use_math.o libmath.a</code> 和 <code>g++ libmath.a use_math.o</code> 链接，对比结果。最后用 <code>nm</code> 和 <code>c++filt</code> 验证符号与修饰名。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>所有命令和报错样本都在 4.4/4.5 节；macOS 上若报 <code>cstdio not found</code>，是 SDK 路径问题（加 <code>-I</code> 指向 SDK 的 include 目录），与链接主题无关。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 编译（<code>-c</code>）无错，链接报 <code>undefined reference to 'square(int)'</code>（Linux）或 <code>Undefined symbols: "square(int)"</code>（macOS）；② 报 <code>multiple definition of 'g_counter'</code>（Linux）或 <code>duplicate symbol '_g_counter'</code>（macOS）；③ Linux 下顺序错误必挂、macOS 下两种顺序都过——把实测输出存下来，这就是你亲手验证的平台差异证据。<code>nm</code> 看到 <code>U</code>/<code>T</code> 符号，<code>c++filt _Z6squarei</code> 还原成 <code>square(int)</code>，全流程闭环。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

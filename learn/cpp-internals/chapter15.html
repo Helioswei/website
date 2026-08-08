@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第15章：限制创建位置：只在堆上 / 只在栈上 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter15.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第15章：限制创建位置：只在堆上 / 只在栈上 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter15.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="15" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第15章：限制创建位置：只在堆上 / 只在栈上</h1>
+  <p class="chapter-subtitle">对象在哪儿出生，凭什么由调用者随手决定？这一章让类设计者拍板——析构函数私有，对象只能在堆上降生；<code>operator new</code> 私有，对象只能在栈上安家。编译器的报错，就是最好的门卫</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🪶</span>
+      <div class="mentor-info">
+        <h3>本章导师：诸葛亮</h3>
+        <p class="mentor-method">核心方法论：运筹帷幄</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「打仗最怕的不是敌人太强，而是粮草在自己后院失火——内存泄漏就是这样的后院失火。与其等它烧起来再救火，不如在布阵时就把粮仓设在攻不进来的地方。这一章的两招，都在对象还没出生之前就替它定好归宿：用访问控制把错误的路径堵死，让编译器在编译期就把犯规的人拦在门外。未雨绸缪，胜过亡羊补牢。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 15.1 为什么需要限制：让对象在"该在的地方"出生 ========== -->
+  <h2>15.1 为什么需要限制：让对象在"该在的地方"出生</h2>
+
+  <p>上一章我们看到，<strong>栈上创建</strong>（<code>Foo f;</code>）和<strong>堆上创建</strong>（<code>Foo* p = new Foo;</code>）是两条完全不同的生命周期契约：栈对象由编译器管生管死，堆对象由你亲手管生管死。那么问题来了——<strong>到底在哪条道上出生，由谁决定？</strong>默认情况下是调用者随手决定。但对某些类来说，"让调用者随便选"本身就是风险：一个需要自我销毁的对象被建在栈上，一个本该零管理的类型被 new 到堆上，都是定时炸弹。</p>
+
+  <p>哪些场景要收回选择权？两种典型动机。第一种是<strong>只在堆上</strong>：有些对象需要"自我销毁"的能力——在成员函数里执行 <code>delete this</code>，把自己从内存里抹掉。这在堆对象里天经地义，在栈对象里却是灾难：栈对象的生死归编译器管，你一个 <code>delete this</code> 等于提前拆了编译器要收回的地基，程序随后必崩。第二种是<strong>只在栈上</strong>：有些类型要给你一个保障——"这种对象绝不会发生内存泄漏"。如果在嵌入式系统上工作，就可能遇到这种情况：<strong>嵌入式系统的堆空间非常珍贵，发生在它上面的内存泄漏非常严重</strong>，所以有些类宁可只许用栈。两类动机的代码雏形：</p>
+
+  <pre><code><span class="cmt">// 动机一：自我销毁的对象 —— 必须在堆上</span>
+<span class="kw">class</span> <span class="param">Session</span> {
+<span class="kw">public</span>:
+    <span class="kw">void</span> <span class="fn">close</span>() { <span class="kw">delete this</span>; }   <span class="cmt">// 只有堆对象才配拥有这句</span>
+    <span class="cmt">// 若调用者随手建了栈对象，这行就是悬垂指针的温床</span>
+};</code></pre>
+
+  <pre><code><span class="cmt">// 动机二：防泄漏的"安全类型" —— 只在栈上</span>
+<span class="cmt">// 嵌入式设备堆空间珍贵：禁止 new，从语法上消灭泄漏可能（15.4 节装锁）</span>
+<span class="kw">class</span> <span class="param">FixedBuffer</span> { };</code></pre>
+
+  <table>
+    <tr><th>场景</th><th>核心诉求</th><th>该限制到哪</th></tr>
+    <tr><td>单例 / 全局服务对象</td><td>生命周期覆盖整个程序</td><td>只在堆上</td></tr>
+    <tr><td>自我销毁对象（<code>delete this</code>）</td><td>对象能亲手了结自己</td><td>只在堆上</td></tr>
+    <tr><td>引用计数对象</td><td>计数归零才释放</td><td>只在堆上</td></tr>
+    <tr><td>嵌入式内存受限</td><td>堆空间珍贵，不许泄漏</td><td>只在栈上</td></tr>
+    <tr><td>短命临时对象</td><td>用完即走，零管理负担</td><td>只在栈上</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>两种限制放在一起看，本质是同一个思路：<strong>用设计约束管控生命周期，而不是用运行期检查碰运气</strong>。约束的价值在于——犯规的人<strong>根本编译不过</strong>，连拿到一个"能跑但会泄漏"的程序的机会都没有。编译期的报错，是最便宜的教训。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：这两种限制都是"设计层约定"，不是语言级的绝对封锁——15.4 节你会亲眼看到 <code>::new</code> 和 placement new 仍能绕过。所以它防的是<strong>常规路径上的无心之失</strong>（顺手写了个 new、顺手建了个栈对象），不是铁了心要绕过的人。</p>
+  </div>
+
+  <!-- ========== 15.2 只能在堆上创建：把析构函数设为私有 ========== -->
+  <h2>15.2 只能在堆上创建：把析构函数设为私有</h2>
+
+  <p>先试一条直觉方案：<strong>把构造函数设为私有</strong>。表面上说得通——外部无法调用构造函数，不就只能内部 new 了吗？但这条路<strong>走不通</strong>。回想第 14 章：<code>new</code> 运算符的执行分两步——先调用 <code>operator new</code> 分配内存，再调用构造函数完成构造。你虽然可以重载 <code>operator new</code>，但它只负责分配内存，<strong>无法提供构造功能</strong>；构造函数一旦私有，连 <code>new</code> 的第二步也一起被禁——结果是一个对象都造不出来（本机实测报错）：</p>
+
+  <pre><code><span class="cmt">// ex9_ctor_err.cpp 关键行 —— 构造函数私有，连 new 都被禁，此路不通</span>
+<span class="kw">private</span>:
+    <span class="param">NoCtor</span>() { }          <span class="cmt">// 构造函数私有</span>
+<span class="cmt">// main 里：</span>
+<span class="param">NoCtor</span>* p = <span class="kw">new</span> <span class="param">NoCtor</span>;   <span class="cmt">// new 第二步要调构造函数 —— 私有，也不许调！</span>
+<span class="cmt"># 编译报错（真实）：ex9_ctor_err.cpp:10:21: error: calling a private constructor of class 'NoCtor'</span></code></pre>
+
+  <p>正解是把目光从"入口"挪到"出口"：<strong>把析构函数设为私有</strong>。原理藏在栈对象的生命周期里：栈对象由<strong>编译器分配内存、调用构造函数</strong>，使用完毕再由编译器调用<strong>析构函数</strong>释放空间——整个生命周期都由编译器管理。那么反过来想：<strong>如果编译器无法调用类的析构函数呢？</strong>析构私有，编译器就无法调用它来释放内存。于是编译器在为类对象分配栈空间时，会先检查析构函数的可访问性——其实不光是析构函数，只要是非静态的成员函数，编译器都会进行检查；析构私有，编译器就不会在栈空间上为类对象分配内存，直接报错。而 <code>new</code> 只调用公有构造函数，堆上创建畅通无阻（本机实测报错）：</p>
+
+  <pre><code><span class="cmt">// ex2_stack_err.cpp —— 析构私有，栈上创建 → 编译报错</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+
+<span class="kw">class</span> <span class="param">HeapOnly</span> {
+<span class="kw">public</span>:
+    <span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 构造\n"</span>); }
+<span class="kw">private</span>:
+    ~<span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 析构\n"</span>); }
+};
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">HeapOnly</span> h;   <span class="cmt">// 编译器要在作用域结束时调用析构 —— 私有，不许调！</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译（真实报错，Apple clang 21 本机实测）：</span>
+g++ -std=c++17 ex2_stack_err.cpp -o ex2
+<span class="cmt"># ex2_stack_err.cpp:12:14: error: variable of type 'HeapOnly' has private destructor</span>
+<span class="cmt">#    12 |     HeapOnly h;   // 编译器要在作用域结束时调用析构 —— 私有，不许调！</span>
+<span class="cmt">#       |              ^</span>
+<span class="cmt"># ...（另附 note: declared private here，指向私有析构的声明行）</span>
+<span class="cmt"># 1 error generated.</span></code></pre>
+
+  <p>这一招还有个副作用：<strong>析构私有之后，外部的 <code>delete</code> 同样被堵死</strong>——因为 <code>delete</code> 也要先调用析构函数再归还内存（本机实测报错）：</p>
+
+  <pre><code><span class="cmt">// ex3_delete_err.cpp 关键行 —— 析构私有，delete 同样被堵（副作用）</span>
+<span class="param">HeapOnly</span>* p = <span class="kw">new</span> <span class="param">HeapOnly</span>;   <span class="cmt">// 合法：构造函数是公有的</span>
+<span class="kw">delete</span> p;                     <span class="cmt">// 非法：析构函数是私有的</span>
+<span class="cmt"># 编译报错（真实）：ex3_delete_err.cpp:13:12: error: calling a private destructor of class 'HeapOnly'</span></code></pre>
+
+  <p>再交代一个继承场景的坑：如果 <code>HeapOnly</code> 作为基类，析构函数通常要设为 <code>virtual</code> 供子类重写以实现多态——可 <code>private</code> 会堵死子类的调用。解决办法是把析构函数设为 <code>protected</code>（构造函数保持 <code>public</code>）：<strong>外部依旧无法栈建、无法 delete，但子类可以正常调用基类析构</strong>。实测：<code>Base</code> 直接建栈对象被拒，派生类 <code>Derived</code> 则堆上、栈上畅通无阻：</p>
+
+  <pre><code><span class="cmt">// ex4_protected_base.cpp —— 析构受保护：既限制直接栈对象，又不堵死继承（可编译可运行）</span>
+<span class="kw">class</span> <span class="param">Base</span> {
+<span class="kw">public</span>:
+    <span class="param">Base</span>() { <span class="fn">std::printf</span>(<span class="str">"Base 构造\n"</span>); }
+<span class="kw">protected</span>:
+    ~<span class="param">Base</span>() { <span class="fn">std::printf</span>(<span class="str">"Base 析构\n"</span>); }   <span class="cmt">// 外部 delete 不了，子类可以</span>
+};
+<span class="kw">class</span> <span class="param">Derived</span> : <span class="kw">public</span> <span class="param">Base</span> {
+<span class="kw">public</span>:
+    <span class="param">Derived</span>() { <span class="fn">std::printf</span>(<span class="str">"Derived 构造\n"</span>); }
+    ~<span class="param">Derived</span>() { <span class="fn">std::printf</span>(<span class="str">"Derived 析构\n"</span>); }   <span class="cmt">// 公有：把释放通道重新打开</span>
+};
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">Derived</span>* d = <span class="kw">new</span> <span class="param">Derived</span>;   <span class="cmt">// OK：堆上创建没问题</span>
+    <span class="kw">delete</span> d;                   <span class="cmt">// OK：Derived 析构公有，内部调 Base 受保护析构</span>
+    <span class="cmt">// Base b;                   // 编译错误：Base 析构受保护，不能建栈对象</span>
+}
+<span class="cmt"># 运行（真实）：Base 构造 / Derived 构造 / Derived 析构 / Base 析构</span></code></pre>
+
+  <table>
+    <tr><th>析构函数访问级别</th><th>外部栈上创建</th><th>外部 <code>new</code> + <code>delete</code></th><th>派生类</th></tr>
+    <tr><td><code>public</code></td><td>允许</td><td>允许</td><td>正常</td></tr>
+    <tr><td><code>protected</code></td><td>禁止（编译报错）</td><td>禁止（编译报错）</td><td>正常（子类析构内部可调用）</td></tr>
+    <tr><td><code>private</code></td><td>禁止（编译报错）</td><td>禁止（编译报错）</td><td>受阻（子类也无法调用基类析构）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>注意报错发生的<strong>时机和位置</strong>：错误出现在"尝试创建栈对象的那一行"（调用处），而不是类定义处——类本身完全合法，只是"在外面"不允许析构它。<strong>报错在编译期、定位在调用处</strong>，犯错的人当场被拦下，不用等程序跑起来才爆雷。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：素材里有一句原话值得细品——"不光是析构函数，只要是非静态的函数，编译器都会进行检查"。严谨地说，是编译器在离开作用域时必须<strong>生成对析构函数的调用</strong>，访问检查在这一步失败，于是栈对象的分配被一并否决。另外记住：<strong>析构私有 ≠ 不能创建堆对象</strong>，只是"外面的人"既不能 <code>delete</code> 也不能建栈对象——堆对象建了之后怎么释放？正是下一节要解决的事。</p>
+  </div>
+
+  <!-- ========== 15.3 只在堆上创建的正确释放姿势 ========== -->
+  <h2>15.3 只在堆上创建的正确释放姿势</h2>
+
+  <p>上一节把 <code>delete</code> 也一并堵死了——但堆对象总不能只生不死。破局思路很简单：<strong>门从外面锁死了，就从里面开一扇窗</strong>。谁有权访问私有析构？两类人：<strong>类的成员函数</strong>和<strong>友元函数</strong>。于是有两个常见姿势：一是类自己提供一个 <code>static</code> 成员函数 <code>destroy()</code>，把 <code>delete this</code> 收进内部——"自毁"成为类的内部事务；二是预约一个友元释放函数，让外部唯一的释放通道走它。两个版本都完整可编译、可运行（本机实测）：</p>
+
+  <pre><code><span class="cmt">// ex1_heaponly_ok.cpp —— 姿势一：静态成员 destroy() 封装 "delete this"（可编译可运行）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">class</span> <span class="param">HeapOnly</span> {
+<span class="kw">public</span>:
+    <span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 构造 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+    <span class="cmt">// 唯一的"合法死法"：成员函数有权访问私有析构</span>
+    <span class="kw">static void</span> <span class="fn">destroy</span>(<span class="param">HeapOnly</span>* p) {
+        <span class="fn">std::printf</span>(<span class="str">"destroy() 执行 delete this @%p\n"</span>, (<span class="kw">void</span>*)p);
+        <span class="kw">delete</span> p;
+    }
+<span class="kw">private</span>:
+    ~<span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 析构 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+};
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">HeapOnly</span>* p = <span class="kw">new</span> <span class="param">HeapOnly</span>;   <span class="cmt">// OK：new 只调用公有构造函数</span>
+    <span class="cmt">// delete p;                  // 编译错误：析构函数是私有的</span>
+    <span class="param">HeapOnly</span><span class="op">::</span><span class="fn">destroy</span>(p);         <span class="cmt">// OK：唯一的合法释放通道</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行（真实，本机实测；地址每次运行都不同）：</span>
+<span class="ann">HeapOnly 构造 @0x10140dab0</span>
+<span class="ann">destroy() 执行 delete this @0x10140dab0</span>
+<span class="ann">HeapOnly 析构 @0x10140dab0</span></code></pre>
+
+  <pre><code><span class="cmt">// ex5_friend_release.cpp —— 姿势二：友元释放函数（可编译可运行）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">class</span> <span class="param">HeapOnly</span> {
+<span class="kw">public</span>:
+    <span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 构造 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+    <span class="kw">friend void</span> <span class="fn">release</span>(<span class="param">HeapOnly</span>* p);   <span class="cmt">// 提前预约"释放人"</span>
+<span class="kw">private</span>:
+    ~<span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 析构 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+};
+<span class="kw">void</span> <span class="fn">release</span>(<span class="param">HeapOnly</span>* p) { <span class="kw">delete</span> p; }   <span class="cmt">// 友元享有和成员同等的访问权</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">HeapOnly</span>* p = <span class="kw">new</span> <span class="param">HeapOnly</span>;
+    <span class="fn">release</span>(p);
+}
+<span class="cmt"># 运行（真实）：HeapOnly 构造 @0x1053fd9a0 / HeapOnly 析构 @0x1053fd9a0</span></code></pre>
+
+  <p>两种姿势的差别在于"释放人"的归属。姿势一里 <code>destroy()</code> 是类的<strong>静态成员</strong>，随类走、命名空间干净，调用约定是 <code>HeapOnly::destroy(p)</code>——类自己掌握生死大权，自洽性最好，引用计数对象（计数归零自动释放）这类场景常用它。姿势二把释放权<strong>委托给外部友元</strong>，调用形式更像 C 风格的 <code>free(p)</code>——适合你想把"释放策略"外置、或一个释放函数打理多个类型的情形。对比如下：</p>
+
+  <table>
+    <tr><th>释放姿势</th><th>调用形式</th><th>访问权限来源</th><th>风格</th><th>典型用途</th></tr>
+    <tr><td>静态成员 <code>destroy()</code></td><td><code>HeapOnly::destroy(p)</code></td><td>成员函数天然可访问私有析构</td><td>类自管生死，内聚</td><td>引用计数对象、自毁型对象</td></tr>
+    <tr><td>友元函数 <code>release()</code></td><td><code>release(p)</code></td><td>友元声明授予同等访问权</td><td>释放策略外置，类 C 风格</td><td>多个类型共用一个释放函数</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>无论哪种姿势，对外暴露的<strong>合法死法只有一条通道</strong>：要么 <code>destroy()</code>，要么 <code>release()</code>。这就是设计约束的完整形态——堵死所有暗门，再光明正大地开一扇正门。调用方只需记住一个约定："new 出来的对象，一律走 destroy/release 释放"，其它写法都在编译期被拒。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>delete this</code> 有三条铁律。①<strong>释放后指针立即作废</strong>：<code>destroy(p)</code> 之后再碰 <code>p</code> 就是悬垂指针，读写即未定义行为。②<strong>销毁后别再访问成员</strong>：<code>destroy()</code> 里 <code>delete this</code> 之后又读 <code>this-&gt;data</code>，等于摸黑走钢丝。③<strong>不要重复释放</strong>：同一个指针只能 destroy 一次，双释是崩溃和堆损坏的头号元凶。</p>
+  </div>
+
+  <!-- ========== 15.4 只能在栈上创建：把 operator new 设为私有 ========== -->
+  <h2>15.4 只能在栈上创建：把 operator new 设为私有</h2>
+
+  <p>反过来：<strong>只许栈上创建，怎么禁掉堆上创建？</strong>你无法影响 <code>new</code> 运算符本身（它是 C++ 语言内建的），但可以利用一个事实：<strong><code>new</code> 运算符总是先调用 <code>operator new</code>，而后者是可以自行声明重写的</strong>。于是把 <code>operator new</code> 声明为私有，就禁止了对象被 <code>new</code> 在堆上——<code>new</code> 的第一步（分配内存）就被拦下。而栈上创建根本不经过 <code>operator new</code>，内存由编译器安排，畅通无阻（本机实测）：</p>
+
+  <pre><code><span class="cmt">// ex8_stackonly_ok.cpp —— 栈上创建畅通无阻（可编译可运行）</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+<span class="kw">class</span> <span class="param">StackOnly</span> {
+<span class="kw">public</span>:
+    <span class="param">StackOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"StackOnly 构造 @%p\n"</span>, (<span class="kw">void</span>*)<span class="kw">this</span>); }
+    ~<span class="param">StackOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"StackOnly 析构\n"</span>); }
+<span class="kw">private</span>:
+    <span class="kw">static void</span>* <span class="fn">operator new</span>(<span class="type">std::size_t</span>);      <span class="cmt">// 私有：拒绝"堆上出生"</span>
+    <span class="kw">static void</span> <span class="fn">operator delete</span>(<span class="kw">void</span>*) <span class="kw">noexcept</span>;
+};
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">StackOnly</span> s;          <span class="cmt">// 栈对象：编译器分配内存，不经过 operator new</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cmt"># 运行（真实）：StackOnly 构造 @0x16bae20db / StackOnly 析构</span></code></pre>
+
+  <p>一旦有人尝试 <code>new</code>，编译器在第一步就翻车。注意一个细节：报错里 <code>operator new</code> <strong>和</strong> <code>operator delete</code> 双双被点名——编译器为 <code>new</code> 生成代码时，还要顺手找一个配套的 <code>operator delete</code>，以备构造中途抛异常时回滚内存（本机实测报错）：</p>
+
+  <pre><code><span class="cmt">// ex6_stackonly_err.cpp —— 类定义同 ex8，仅 main 不同：</span>
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">StackOnly</span>* p = <span class="kw">new</span> <span class="param">StackOnly</span>;   <span class="cmt">// new 第一步就要调 operator new —— 私有，不许调！</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译（真实报错，本机实测）—— operator new 与 operator delete 双双被点名：</span>
+g++ -std=c++17 ex6_stackonly_err.cpp -o ex6
+<span class="cmt"># ex6_stackonly_err.cpp:15:20: error: 'operator new' is a private member of 'StackOnly'</span>
+<span class="cmt">#    15 |     StackOnly* p = new StackOnly;</span>
+<span class="cmt">#       |                    ^~~~~~~~~~~~~</span>
+<span class="cmt"># ex6_stackonly_err.cpp:15:20: error: 'operator delete' is a private member of 'StackOnly'</span>
+<span class="cmt"># ...（各附 note: declared private here，指向私有声明行）</span>
+<span class="cmt"># 2 errors generated.</span></code></pre>
+
+  <p>还有一层"意外之喜"值得实测：<strong>类作用域里一旦声明了 <code>operator new</code>，编译器就在类里找它，不再向外看全局版本</strong>——这个机制叫<strong>名字遮蔽</strong>（name hiding，说人话：类里的同名声明把全局的"挡"住了）。于是不只是普通 <code>new</code>，连 <code>new (std::nothrow)</code> 和普通（不带 <code>::</code> 前缀的）placement new 也一并被挡下。真正的洞只剩下：<strong>显式写成 <code>::new</code> 强制从全局作用域查找</strong>，或干脆 <code>malloc</code> + 手动构造。两个都实测给你看：</p>
+
+  <pre><code><span class="cmt">// ex7_placement_bypass.cpp 关键行 —— 普通 placement new 也翻不过这道墙（真实报错）</span>
+<span class="kw">alignas</span>(<span class="param">StackOnly</span>) <span class="kw">unsigned char</span> buf[<span class="kw">sizeof</span>(<span class="param">StackOnly</span>)];
+<span class="param">StackOnly</span>* p = <span class="kw">new</span> (buf) <span class="param">StackOnly</span>;   <span class="cmt">// 想直接在地基上构造</span>
+p-&gt;~<span class="param">StackOnly</span>();
+<span class="cmt"># 编译报错（真实）：no matching function for call to 'operator new'（20:20）</span>
+<span class="cmt"># note: candidate function not viable: requires 1 argument, but 2 were provided</span></code></pre>
+
+  <pre><code><span class="cmt">// ex10_global_bypass.cpp 关键行 —— ::new 显式全局作用域：真正的绕过通道（警示实验）</span>
+<span class="cmt">// :: 强制从全局作用域查找 —— 类的私有版本被跳过，禁令失效</span>
+<span class="param">StackOnly</span>* p = <span class="kw">::new</span> (buf) <span class="param">StackOnly</span>;
+<span class="cmt"># 编译 + 运行（真实）：地基地址 0x16b0ba0eb / StackOnly 构造 @0x16b0ba0eb / StackOnly 析构</span></code></pre>
+
+  <table>
+    <tr><th>堆上通道</th><th>写法</th><th>封锁情况</th><th>实测结果</th></tr>
+    <tr><td>普通 new</td><td><code>new StackOnly</code></td><td>堵死</td><td><code>'operator new' is a private member</code></td></tr>
+    <tr><td>不抛异常版</td><td><code>new (std::nothrow) StackOnly</code></td><td>堵死</td><td><code>no matching function</code>（被遮蔽）</td></tr>
+    <tr><td>普通 placement new</td><td><code>new (buf) StackOnly</code></td><td>堵死</td><td><code>no matching function</code>（被遮蔽）</td></tr>
+    <tr><td>显式全局 new</td><td><code>::new (buf) StackOnly</code></td><td>漏（可绕过）</td><td>编译通过，构造成功</td></tr>
+    <tr><td>malloc + 手动构造</td><td><code>malloc</code> + placement new</td><td>漏（可绕过）</td><td>完全不经过 operator new</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>名字遮蔽说人话就是<strong>"一夫当关"</strong>：类里一旦有叫 <code>operator new</code> 的成员，编译器在类作用域里"看见"它，就不再出门去找全局版本——哪怕这个成员参数对不上，也宁缺毋滥直接报错。所以声明一个私有的 <code>operator new(std::size_t)</code>，等于顺手把 <code>nothrow</code> 版和普通 placement 版一起关了，比直觉上防得更严。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：设计约束挡得住常规写法，挡不住铁了心的 <code>::new</code> 或 <code>malloc</code>。所以这条禁令的真正价值是：<strong>团队里任何人用正规写法 new 这个类型，都会当场编译失败</strong>——违规者必须写出"刻意绕过"的代码，代码审查一眼就能揪出来。用这类技巧的类，记得在头文件注释里写清楚约定。</p>
+  </div>
+
+  <!-- ========== 15.5 两种限制的对比与适用场景 ========== -->
+  <h2>15.5 两种限制的对比与适用场景</h2>
+
+  <p>把两招并排看，会发现它们一个管"出口"、一个管"入口"：<strong>析构函数私有</strong>，堵的是对象"离开"的环节——栈对象要离开作用域时编译器调不动析构，于是栈上创建被拒；<strong><code>operator new</code> 私有</strong>，堵的是对象"出生"的环节——<code>new</code> 的第一步分配被拒，于是堆上创建被禁。一个锁死后门，一个锁死前门，殊途同归：<strong>让类设计者拍板对象的出生地，收回调用者的选择权</strong>。两招的声明骨架放在一起，差异一眼可见：</p>
+
+  <pre><code><span class="cmt">// 招式一：只在堆上 —— 析构函数私有（出不去，就只能在堆上生）</span>
+<span class="kw">class</span> <span class="param">HeapOnly</span> {
+<span class="kw">public</span>:
+    <span class="param">HeapOnly</span>() {}
+    <span class="kw">static void</span> <span class="fn">destroy</span>(<span class="param">HeapOnly</span>*);   <span class="cmt">// 唯一合法死法</span>
+<span class="kw">private</span>:
+    ~<span class="param">HeapOnly</span>() {}
+};</code></pre>
+
+  <pre><code><span class="cmt">// 招式二：只在栈上 —— operator new 私有（进不去，就只能在栈上生）</span>
+<span class="kw">class</span> <span class="param">StackOnly</span> {
+<span class="kw">public</span>:
+    <span class="param">StackOnly</span>() {}
+    ~<span class="param">StackOnly</span>() {}
+<span class="kw">private</span>:
+    <span class="kw">static void</span>* <span class="fn">operator new</span>(<span class="type">std::size_t</span>);
+};</code></pre>
+
+  <p>两大招的核心参数对比如下——限制方式、原理、报错时机、典型场景一次看全：</p>
+
+  <table>
+    <tr><th>对比项</th><th>只在堆上创建</th><th>只在栈上创建</th></tr>
+    <tr><td>限制方式</td><td>析构函数设为 <code>private</code>（需继承时用 <code>protected</code>）</td><td><code>operator new</code> 声明为 <code>private</code></td></tr>
+    <tr><td>底层原理</td><td>栈对象离开作用域必须由编译器调用析构，私有则编译器拒绝分配栈空间</td><td><code>new</code> 第一步必调 <code>operator new</code>，私有则 <code>new</code> 第一步就被拦</td></tr>
+    <tr><td>报错时机</td><td>编译期（尝试创建栈对象的那一行）</td><td>编译期（写 <code>new</code> 的那一行）</td></tr>
+    <tr><td>报错样例</td><td><code>variable of type 'HeapOnly' has private destructor</code></td><td><code>'operator new' is a private member of 'StackOnly'</code></td></tr>
+    <tr><td>正确释放姿势</td><td>静态 <code>destroy()</code> 或友元释放函数</td><td>无需手动释放，离开作用域编译器自动析构</td></tr>
+    <tr><td>典型场景</td><td>单例、自我销毁对象、引用计数对象</td><td>嵌入式内存受限、防泄漏"安全类型"、短命临时对象</td></tr>
+  </table>
+
+  <p>选型时记住一个朴素的判断：<strong>对象需要"活得比作用域长"或"自己决定死期"，就只许堆上；对象小而短命、只想零管理，就只许栈上</strong>。有一点必须说透：两种限制<strong>不可兼得</strong>——一个对象不可能同时"必须住在堆上"又"必须住在栈上"。如果你真正想要的是"既不让人随便 new、也不让人随手建栈对象"的完全管控型类，那是另一类设计（比如工厂函数 + 私有构造），第 16 章会给出完整方案。</p>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>两句口诀收好：<strong>析构私有 → 栈上活不下去 → 只许堆上生；new 私有 → 堆上活不下去 → 只许栈上生</strong>。口诀背后是同一个底层图景：对象的生死契约由"谁有权调析构、谁有权调 operator new"这两个访问点决定——把访问点管住，生命周期就管住了。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别为"限制"而限制。每多一道约束，就多一分使用摩擦——调用方要背 <code>destroy()</code> 的规矩、要忍受不能 <code>delete</code> 的别扭。判断标准只有一个：<strong>这个类有没有明确的"资源归属故事"</strong>（谁拥有、谁释放、何时释放）。有，限制就是护身符；没有，限制就是官僚主义。</p>
+  </div>
+
+  <!-- ========== 15.6 章节小结 ========== -->
+  <h2>15.6 章节小结</h2>
+
+  <p>这一章的核心，是把上一章讲的"栈与堆两条生命周期契约"变成<strong>可由设计者强制执行的规则</strong>。两招的本质都是"用访问控制做设计约束"：<strong>析构私有</strong>，让编译器拒绝为栈对象分配空间（外加外部 <code>delete</code> 一并失效），再开 <code>destroy()</code>/友元这一扇正门；<strong><code>operator new</code> 私有</strong>，让 <code>new</code> 的第一步就翻车（名字遮蔽还顺手挡下 <code>nothrow</code> 与普通 placement new），只留 <code>::new</code> 这条刻意才能走的暗路。两条路共同点：<strong>报错都发生在编译期、都定位在调用处</strong>——犯错成本被压到最低，这正是运筹帷幄的含义：在代码跑起来之前，就把规则定好。</p>
+
+  <p>两招的完整形态收进一张速查卡（可编译可运行，可直接当样板抄）：</p>
+
+  <pre><code><span class="cmt">// 速查卡：两招合一（可编译可运行）—— 两行报错一并记住</span>
+<span class="kw">#include</span> <span class="type">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;cstddef&gt;</span>
+<span class="kw">class</span> <span class="param">HeapOnly</span> {                 <span class="cmt">// 招式一：只在堆上</span>
+<span class="kw">public</span>:
+    <span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 构造\n"</span>); }
+    <span class="kw">static void</span> <span class="fn">destroy</span>(<span class="param">HeapOnly</span>* p) { <span class="kw">delete</span> p; }
+<span class="kw">private</span>:
+    ~<span class="param">HeapOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"HeapOnly 析构\n"</span>); }
+};
+<span class="kw">class</span> <span class="param">StackOnly</span> {                 <span class="cmt">// 招式二：只在栈上</span>
+<span class="kw">public</span>:
+    <span class="param">StackOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"StackOnly 构造\n"</span>); }
+    ~<span class="param">StackOnly</span>() { <span class="fn">std::printf</span>(<span class="str">"StackOnly 析构\n"</span>); }
+<span class="kw">private</span>:
+    <span class="kw">static void</span>* <span class="fn">operator new</span>(<span class="type">std::size_t</span>);
+    <span class="kw">static void</span> <span class="fn">operator delete</span>(<span class="kw">void</span>*) <span class="kw">noexcept</span>;
+};
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="param">HeapOnly</span>* h = <span class="kw">new</span> <span class="param">HeapOnly</span>;   <span class="cmt">// 堆-only：new 合法</span>
+    <span class="param">HeapOnly</span><span class="op">::</span><span class="fn">destroy</span>(h);         <span class="cmt">// 堆-only：销毁走 destroy()</span>
+    <span class="param">StackOnly</span> s;                  <span class="cmt">// 栈-only：直接创建</span>
+    <span class="cmt">// StackOnly* p = new StackOnly;   // 栈-only：new 非法（编译错误）</span>
+}
+<span class="cmt"># 两条报错"真身"（本机实测）：has private destructor（堆-only 侧）/</span>
+<span class="cmt"># 'operator new' is a private member（栈-only 侧）</span></code></pre>
+
+  <table>
+    <tr><th>招式</th><th>关键字</th><th>管住什么</th><th>放行什么</th><th>记忆锚点</th></tr>
+    <tr><td>只在堆上</td><td>私有析构函数</td><td>栈对象、外部 <code>delete</code></td><td><code>new</code> + <code>destroy()</code>/友元</td><td>锁死后门（出口）</td></tr>
+    <tr><td>只在栈上</td><td>私有 <code>operator new</code></td><td><code>new</code>、<code>nothrow new</code>、普通 placement new</td><td>栈上直接创建</td><td>锁死前门（入口）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">诸葛亮提示</div>
+    <p>把这一章放回整条技术线里看位置：第 14 章给了你"栈与堆"的底层地图，本章教你在类定义层面<strong>立法</strong>，第 16 章的综合实战会把这些立法手段组合起来——工厂函数、禁止拷贝、引用计数、智能指针风格的内存控制，做成一个完整的"内存控制与安全"工具箱。到那时你会发现，这一章的两招只是开始。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：本章所有报错与运行输出均为本机（Apple clang 21，arm64 macOS）实测。不同编译器、不同版本的报错措辞可能略有差异——比如 GCC 可能说 <code>is private within this context</code>——但"访问私有成员被拒"的核心语义完全一致。实验时请以你自己的编译器输出为准，别背报错原文。</p>
+  </div>
+
+  <pre><code><span class="cmt"># 速查卡运行输出（本机实测）：两条路都走通，生命周期井井有条</span>
+g++ -std=c++17 cards.cpp -o cards <span class="op">&amp;&amp;</span> ./cards
+<span class="cmt"># HeapOnly 构造      &lt;- new 正常走公有构造函数</span>
+<span class="cmt"># HeapOnly 析构      &lt;- destroy() 这扇正门释放堆对象</span>
+<span class="cmt"># StackOnly 构造     &lt;- 栈对象正常构造</span>
+<span class="cmt"># StackOnly 析构     &lt;- 离开作用域自动析构</span></code></pre>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：访问级别配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把"控制手段"与"达成的限制"配对：① 析构函数设为 private；② operator new 设为 private；③ 构造函数设为 private。候选效果：A. 只能在栈上创建；B. 只能在堆上创建；C. 哪里都不能创建。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾 15.2 与 15.4：栈对象离开作用域要调析构，new 第一步要调 operator new，而构造函数是两种创建方式共同必经的一步。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① → B（析构私有，编译器拒绝为栈对象分配空间）；② → A（new 第一步 operator new 被拒）；③ → C（new 和栈上创建都要调构造函数，私有则全禁）。口诀：<strong>管析构管"出口"，管 operator new 管"入口"，管构造函数管一切</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：合规性判断 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>已知 <code>HeapOnly</code> 的析构函数是私有的，并提供了 <code>static void destroy(HeapOnly*)</code>。请判断以下四条语句哪些能通过编译：① <code>HeapOnly h;</code>；② <code>HeapOnly* p = new HeapOnly;</code>；③ <code>delete p;</code>；④ <code>HeapOnly::destroy(p);</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>逐条对照 15.2 / 15.3 的实测结果：栈上创建、外部 delete、new 与 destroy() 分别是什么命运？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>② 和 ④ 合法，① 和 ③ 编译报错。① 建栈对象需在作用域结束时调用私有析构——报 <code>has private destructor</code>；③ 外部 <code>delete</code> 同样要调私有析构——报 <code>calling a private destructor</code>；② <code>new</code> 只调公有构造函数，合法；④ <code>destroy()</code> 是成员函数，有权访问私有析构，合法。这套"只能 new + 只能 destroy"的纪律就是堆-only 类的完整用法。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：遮蔽与绕过 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p><code>StackOnly</code> 声明了私有 <code>operator new(std::size_t)</code>。为什么 <code>new (buf) StackOnly</code> 这样的普通 placement new 也会编译失败，而 <code>::new (buf) StackOnly</code> 却能成功？想进一步堵住 <code>::new</code> 这条暗路，可以怎么做？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>想想名字遮蔽发生在哪一级作用域：类作用域里"看见"成员 operator new 后还出不出去？<code>::</code> 前缀又是在强制什么？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>普通 placement new 在类作用域里查找到私有 <code>operator new</code> 成员，名字遮蔽让它不再去全局找 placement 版本，重载决议失败报 <code>no matching function</code>。<code>::new</code> 强制从全局作用域查找，跳过类成员，于是命中全局 <code>operator new(size_t, void*)</code>，绕过成功。想堵暗路，可以在类里<strong>再声明一个私有的 placement 版本</strong> <code>static void* operator new(std::size_t, void*)</code>——类作用域查到它，全局版本依旧被遮蔽；但坦白讲，恶意代码还能 <code>malloc</code> + 手动构造，所以设计约束的最终防线永远是代码审查。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：亲手立规矩 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>写一个 <code>StackOnly</code> 类（私有 <code>operator new</code>），依次尝试编译并记录结果：① <code>new StackOnly</code>；② <code>new (std::nothrow) StackOnly</code>；③ <code>new (buf) StackOnly</code>；④ <code>::new (buf) StackOnly</code>。再写一个 <code>HeapOnly</code> 类（私有析构 + <code>destroy()</code>），验证栈上创建与外部 <code>delete</code> 都报错、而 <code>destroy()</code> 正常释放。把四种 <code>new</code> 的结果整理成一张表。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>参考 15.4 节的 ex6/ex7/ex8/ex10 四个实验：②③的报错都长成 <code>no matching function for call to 'operator new'</code>，①的报错是 <code>'operator new' is a private member</code>，④能编译并运行成功。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 报 <code>'operator new' is a private member of 'StackOnly'</code>；②③ 报 <code>no matching function for call to 'operator new'</code>（名字遮蔽，candidate not viable）；④ 编译通过、构造成功（全局作用域绕过）。HeapOnly 侧：<code>HeapOnly h;</code> 报 <code>has private destructor</code>，<code>delete p</code> 报 <code>calling a private destructor</code>，<code>HeapOnly::destroy(p)</code> 正常输出"构造 → destroy() → 析构"三行。四表一张，你就把这章的两招彻底焊死在手上了。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

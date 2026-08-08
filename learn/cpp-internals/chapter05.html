@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第5章：库与动态链接：.a / .so / dlopen 插件化 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter05.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第5章：库与动态链接：.a / .so / dlopen 插件化 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter05.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="5" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第5章：库与动态链接：.a / .so / dlopen 插件化</h1>
+  <p class="chapter-subtitle">静态库、共享库与运行时插件——三种「复用代码」的手艺，加上一把能解剖任何二进制的工具刀</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🔨</span>
+      <div class="mentor-info">
+        <h3>本章导师：鲁班</h3>
+        <p class="mentor-method">核心方法论：工欲善其事，必先利其器</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「上一章，福尔摩斯带你们弄清了链接器在幕后怎么工作——符号解析、重定位，规矩都讲明白了。这一章轮到我上场：光懂规矩不够，还得趁手。静态库、共享库、运行时插件，是三件不同的家伙什；ar、nm、readelf、strace，是一整套解剖台。别被命令的数量吓到，跟着我把每一件都亲手抡一遍——这一章结束，你会拥有把任何 .a / .so 拆开看个底朝天的本事。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 5.1 静态库：ar 打包与链接 ========== -->
+  <h2>5.1 静态库：ar 打包与链接</h2>
+
+  <p>先给「库」这个词说句人话：<strong>库（library）就是别人——或者三个月前的你自己——写好的、打包好的现成代码</strong>。你写程序天天要用的 <code>printf</code>、<code>malloc</code>，实现它们的那一大坨代码就躺在系统的库里。库存在的意义只有一句话：<strong>把「经常要用的代码」写一遍、编一遍、存起来，谁要用谁来取</strong>。</p>
+
+  <p>库有两种打包方式，这一节先讲第一种。<strong>静态库（static library，.a 文件）的本质，就是一堆 .o 目标文件的「压缩袋」</strong>——还记得第 3 章吗？<code>gcc -c</code> 编出来的 .o 叫可重定位目标文件，里面是还没定型的代码和数据。ar 工具（archiver，归档器）把这些 .o 一个个塞进一个 .a 文件里，链接的时候，链接器就像按需取货一样，从袋子里抽出需要的成员，把代码<strong>直接复制并进你的可执行文件</strong>——所以叫「静态」：链接完就固定了，跟库再无关系。</p>
+
+  <p>动手做一个。还是用素材里的老朋友 addvec（对两个整型数组逐元素求和）：</p>
+
+  <pre><code><span class="cmt">// addvec.c —— 待打包的库源码</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">void</span> <span class="fn">addvec</span>(<span class="kw">int</span>* x, <span class="kw">int</span>* y, <span class="kw">int</span>* z, <span class="kw">int</span> n)
+{
+    <span class="kw">int</span> i;
+    <span class="kw">for</span> (i = <span class="num">0</span>; i &lt; n; i++)
+    {
+        z[i] = x[i] + y[i];
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt"># 第一步：把源码编译成目标文件（回顾第 3 章：.o 就是可重定位目标文件）</span>
+gcc -c addvec.c -o addvec.o
+
+<span class="cmt"># 第二步：用 ar 打包。三个字母各有用意：</span>
+<span class="cmt">#   r = replace，插入成员，同名则替换</span>
+<span class="cmt">#   c = create，库不存在就新建（否则会报错）</span>
+<span class="cmt">#   s = 建立符号索引，加快链接时的查找（相当于自动跑了一遍 ranlib）</span>
+ar rcs libvector.a addvec.o
+
+<span class="cmt"># 看看袋子里装了什么（t = table，列成员目录）</span>
+ar t libvector.a
+<span class="cmt"># addvec.o</span></code></pre>
+
+  <p>库的命名有讲究：<strong>必须叫 lib&lt;名字&gt;.a</strong>。链接时你不需要写全名，用 <code>-l&lt;名字&gt;</code>（letter L 的小写）让链接器自己去搜索路径里找 <code>lib&lt;名字&gt;.a</code>，<code>-L.</code> 是告诉它「顺便看看当前目录」。下面两种写法等价，第一种更直白：</p>
+
+  <pre><code><span class="cmt"># 用法一：把 .a 当成一个目标文件直接交给链接器（本机实测输出）</span>
+gcc main.c libvector.a -o app
+./app
+<span class="cmt"># z = [4 6]</span>
+
+<span class="cmt"># 用法二：-L. 指定搜索目录，-lvector 自动匹配 libvector.a</span>
+gcc main.c -L. -lvector -o app</code></pre>
+
+  <p>这里藏着一个第 4 章留下的伏笔——<strong>链接顺序问题</strong>。链接器做符号解析时是<strong>从左到右扫一遍</strong>的，而静态库是「按需提取」：扫到某个引用时，如果这个符号还没被定义，才去库里找；一旦翻过某个库，就再也不会回头。所以铁律是：<strong>被依赖的库，必须放在依赖它的目标文件后面</strong>。顺序一错，立刻翻车：</p>
+
+  <pre><code><span class="cmt"># 错误示范：-lvector 放在了 main.c 前面</span>
+gcc -L. -lvector main.c -o app
+<span class="cmt"># ld: undefined reference to `addvec'    ← 经典报错！</span>
+<span class="cmt"># 原因：扫到 -lvector 时还没人引用 addvec，库被白白翻过；</span>
+<span class="cmt">#       等扫到 main.o 发现 undefined reference，回头找——晚了。</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>记住这个口诀：<strong>「谁用谁在前，被用的靠后站」</strong>。真实工程里库依赖链很长（A 依赖 B，B 依赖 C），顺序就得写成 <code>-lA -lB -lC</code>。这也是为什么大型项目后来都改用 CMake 之类的构建系统——它会自动帮你排好顺序，但理解原理永远不过时，毕竟报错信息还是这一句。</p>
+  </div>
+
+  <table>
+    <tr><th>ar 子命令</th><th>作用</th></tr>
+    <tr><td><code>r</code></td><td>把目标文件插入库中，已有同名成员则替换</td></tr>
+    <tr><td><code>c</code></td><td>创建库（不存在时不报错）</td></tr>
+    <tr><td><code>s</code></td><td>为库建立符号索引（等价于 ranlib），加快链接查找</td></tr>
+    <tr><td><code>t</code></td><td>列出库中的成员（目录）</td></tr>
+    <tr><td><code>x</code></td><td>把成员提取成独立的 .o 文件</td></tr>
+    <tr><td><code>d</code></td><td>从库中删除成员</td></tr>
+  </table>
+
+  <p>静态库的优点和缺点一样明显。优点是<strong>部署省心</strong>：链接完就是一个自包含的可执行文件，拷到任何一台机器都能跑，不担心缺库；缺点是<strong>体积和更新</strong>：每个用它的程序都复制一份完整代码，磁盘和内存都浪费，而且库一更新，所有依赖它的程序都得重新链接一遍。下一节的主角——共享库——就是冲着这两个缺点来的。</p>
+
+  <!-- ========== 5.2 共享库：.so 的编译与动态链接 ========== -->
+  <h2>5.2 共享库：.so 的编译与动态链接</h2>
+
+  <p><strong>共享库（shared library，.so 文件）的思路完全相反：不「复印」，办「借书证」</strong>。链接的时候，链接器只在你可执行文件的某个角落里登记一行：「这程序要用 libaddvec.so」；真正把库代码装进内存，是程序启动时由系统的<strong>动态链接器</strong>（dynamic linker，Linux 上是 ld-linux.so，就是第 3 章提到过的那个家伙）来干的。而且这份代码在内存里只有一份，所有用到它的进程<strong>共享</strong>同一块——这就是「共享」二字的来历。</p>
+
+  <p>这就引出一个关键技术点：库要被「塞」进每个进程不同的内存地址，所以库里的代码<strong>不能写死任何绝对地址</strong>，必须写成相对寻址——这叫<strong>位置无关代码（PIC，Position Independent Code）</strong>。编译时加 <code>-fPIC</code> 就是让编译器按这个规矩生成代码，再用 <code>-shared</code> 把它打包成共享目标文件：</p>
+
+  <pre><code><span class="cmt"># 一条命令生成共享库：</span>
+<span class="cmt">#   -fPIC  = Position Independent Code，位置无关代码（能被塞进任意地址）</span>
+<span class="cmt">#   -shared = 生成共享目标文件（ELF 里的 DSO：Dynamic Shared Object）</span>
+gcc -shared -fPIC -o libaddvec.so addvec.c
+
+<span class="cmt"># 看一眼它的真面目（Linux 上的输出）：</span>
+file libaddvec.so
+<span class="cmt"># libaddvec.so: ELF 64-bit LSB shared object, x86-64, version 1 (SYSV),</span>
+<span class="cmt">#               dynamically linked, not stripped</span></code></pre>
+
+  <p>链接使用的时候，命令和静态库几乎一样，但<strong>链接器做的事完全不同</strong>——它不复制代码，只在可执行文件里登记依赖（ELF 的 DT_NEEDED 条目）。这种链接方式叫<strong>加载时链接</strong>：程序一启动，动态链接器看到登记表，自动把 .so 加载进来，把符号地址填好，程序才开始跑。</p>
+
+  <pre><code><span class="cmt"># 链接：登记依赖（不是复制代码）</span>
+gcc main.c -L. -laddvec -o app_dyn
+
+<span class="cmt"># ldd = List Dynamic Dependencies，列出运行时依赖（Linux）</span>
+ldd ./app_dyn
+<span class="cmt">#         linux-vdso.so.1 =&gt;  (0x00007fff5f5f3000)</span>
+<span class="cmt">#         libaddvec.so =&gt; ./libaddvec.so</span>
+<span class="cmt">#         libc.so.6 =&gt; /lib/x86_64-linux-gnu/libc.so.6</span>
+<span class="cmt">#         /lib64/ld-linux-x86-64.so.2 (0x00007f4a2e0e6000)</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>macOS 上对应的工具是 <code>otool -L</code>（.so 换成了 .dylib），Windows 上是依赖分析工具，但原理完全一样。还有个小细节：如果编译时忘了 <code>-fPIC</code>，链接通常不会立刻报错，等运行时才炸——所以看到 <code>relocation R_X86_64_PC32 ... can not be used when making a shared object; recompile with -fPIC</code> 这种报错，第一反应就是补上 <code>-fPIC</code>。</p>
+  </div>
+
+  <table>
+    <tr><th>维度</th><th>静态库 .a</th><th>共享库 .so</th></tr>
+    <tr><td>链接时机</td><td>编译时（链接器直接把代码并进去）</td><td>加载时（程序启动，动态链接器加载）或运行时（dlopen，下节讲）</td></tr>
+    <tr><td>代码去向</td><td>复制进可执行文件</td><td>留在磁盘，运行时映射进内存，多进程共享一份</td></tr>
+    <tr><td>可执行文件体积</td><td>大（每份都复制）</td><td>小（只登记依赖）</td></tr>
+    <tr><td>更新库</td><td>所有使用者重新链接</td><td>直接替换 .so 文件（注意接口兼容）</td></tr>
+    <tr><td>部署</td><td>单文件，拷走就能跑</td><td>目标机器上必须有对应 .so（这就是传说中的「缺 .so 跑不起来」）</td></tr>
+    <tr><td>链接顺序坑</td><td>有（5.1 刚踩过）</td><td>基本无（只登记，不提取）</td></tr>
+  </table>
+
+  <p>到这里为止，加载 .so 的时机还是「程序启动时」，由动态链接器代劳。但共享库最迷人的用法还在后面：<strong>让程序自己、在运行到一半的时候、按需加载一个库</strong>——这就是 5.3 节的主角，也是「插件化」的地基。</p>
+
+  <!-- ========== 5.3 运行时动态链接：dlopen 全家桶实战 ========== -->
+  <h2>5.3 运行时动态链接：dlopen 全家桶实战</h2>
+
+  <p>想象一个场景：你的程序已经上线跑着，客户突然要一个新功能。常规做法：改代码、重新编译、停服务、重启——客户骂娘。插件化（plugin）的做法：<strong>程序本来就把「加载插件」这个口子留着，你写好一个新 .so 丢进插件目录，程序下次扫描时自动就用了——不重启、不改主程序一行代码</strong>。浏览器装扩展、IDE 装插件、游戏打 Mod，背后全是这套机制。</p>
+
+  <p>Linux 为动态链接器开了一扇后门：<code>&lt;dlfcn.h&gt;</code> 头文件里的四个函数（动态链接家族，dl = dynamic link）。它们管「在运行时加载和链接任意共享库」这件事，签名如下——注意这是标准签名，网上流传的版本经常抄错，以这里为准：</p>
+
+  <pre><code><span class="kw">#include</span> <span class="type">&lt;dlfcn.h&gt;</span>
+
+<span class="kw">void</span>* <span class="fn">dlopen</span>(<span class="kw">const</span> <span class="kw">char</span>* <span class="param">filename</span>, <span class="kw">int</span> <span class="param">flag</span>);   <span class="cmt">// 加载共享库，返回句柄；失败返回 NULL</span>
+<span class="kw">void</span>* <span class="fn">dlsym</span>(<span class="kw">void</span>* <span class="param">handle</span>, <span class="kw">const</span> <span class="kw">char</span>* <span class="param">symbol</span>);  <span class="cmt">// 按符号名查地址；失败返回 NULL</span>
+<span class="kw">int</span>    <span class="fn">dlclose</span>(<span class="kw">void</span>* <span class="param">handle</span>);                     <span class="cmt">// 卸载库；成功返回 0，失败返回 -1</span>
+<span class="kw">char</span>*  <span class="fn">dlerror</span>(<span class="kw">void</span>);                              <span class="cmt">// 取最近一次错误的描述；无错误返回 NULL</span></code></pre>
+
+  <p>逐个说人话。 <code>dlopen</code> 是「开门」：按文件名把共享库加载进内存，返回一个<strong>句柄（handle）</strong>——你可以把它理解成这把锁的钥匙，后面三个函数都得拿它办事；第二个参数 <code>flag</code> 控制解析时机，最常用的三个取值：</p>
+
+  <table>
+    <tr><th>flag 取值</th><th>含义</th></tr>
+    <tr><td><code>RTLD_LAZY</code></td><td>先不解析，等代码真正执行到那个符号时再解析（默认，启动快）</td></tr>
+    <tr><td><code>RTLD_NOW</code></td><td>立即解析库里的所有符号引用，有解析不了的当场报错</td></tr>
+    <tr><td><code>RTLD_GLOBAL</code></td><td>库的符号对之后 dlopen 的库可见（默认 RTLD_LOCAL，只对自己可见）</td></tr>
+  </table>
+
+  <p><code>dlsym</code> 是「点名」：给定句柄和符号名字符串，返回这个符号（函数或全局变量）的地址——拿到地址后转成函数指针就能直接调用。 <code>dlclose</code> 是「关门」：卸载库，系统会等所有引用它的地方都关了才真正卸（引用计数归零才动手）。 <code>dlerror</code> 是「看诊」：返回最近一次调用失败的描述字符串，看完病它还会清空状态，所以<strong>错误信息要立即保存，别等用的时候再调</strong>。</p>
+
+  <p>光说不练假把式。下面这套 addvec 示例我完整跑过——先是库源码（和 5.1 同一个 addvec.c，原样保留）：</p>
+
+  <pre><code><span class="cmt">// addvec.c —— 库源码，原样保留</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">void</span> <span class="fn">addvec</span>(<span class="kw">int</span>* x, <span class="kw">int</span>* y, <span class="kw">int</span>* z, <span class="kw">int</span> n)
+{
+    <span class="kw">int</span> i;
+    <span class="kw">for</span> (i = <span class="num">0</span>; i &lt; n; i++)
+    {
+        z[i] = x[i] + y[i];
+    }
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译成共享库（-shared -fPIC 一条龙，本机实测通过）</span>
+gcc -shared -fPIC -o libaddvec.so addvec.c</code></pre>
+
+  <p>然后是主角 test.c——程序<strong>运行起来之后</strong>才去加载 libaddvec.so、点名要 addvec 函数、调用它、最后卸载。素材原版有几处抄写错误（缺 <code>stdlib.h</code>、<code>dlerror</code> 被调了两次、<code>dlclose</code> 签名被写错），这里给出修正后的正确版本：</p>
+
+  <pre><code><span class="cmt">// test.c —— 在运行时动态加载 libaddvec.so 并调用 addvec()</span>
+<span class="kw">#include</span> <span class="type">&lt;dlfcn.h&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;stdlib.h&gt;</span>      <span class="cmt">// 提供 exit()，原版漏了</span>
+
+<span class="kw">int</span> x[<span class="num">2</span>] = {<span class="num">1</span>, <span class="num">2</span>};
+<span class="kw">int</span> y[<span class="num">2</span>] = {<span class="num">3</span>, <span class="num">4</span>};
+<span class="kw">int</span> z[<span class="num">2</span>];
+
+<span class="kw">int</span> <span class="fn">main</span>()
+{
+    <span class="kw">void</span>* handle;
+    <span class="kw">void</span> (*addvec)(<span class="kw">int</span>*, <span class="kw">int</span>*, <span class="kw">int</span>*, <span class="kw">int</span>);   <span class="cmt">// 函数指针：addvec 的替身</span>
+    <span class="kw">char</span>* error;
+
+    <span class="cmt">// 1. 开门：动态加载共享库。RTLD_LAZY = 用到符号时才解析</span>
+    handle = <span class="fn">dlopen</span>(<span class="str">"./libaddvec.so"</span>, <span class="op">RTLD_LAZY</span>);
+    <span class="kw">if</span> (handle == <span class="kw">NULL</span>)
+    {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"%s\n"</span>, <span class="fn">dlerror</span>());
+        <span class="fn">exit</span>(<span class="num">1</span>);
+    }
+
+    <span class="cmt">// 2. 点名：从库里取出 addvec 函数的地址，转成函数指针</span>
+    addvec = <span class="fn">dlsym</span>(handle, <span class="str">"addvec"</span>);
+    <span class="kw">if</span> ((error = <span class="fn">dlerror</span>()) != <span class="kw">NULL</span>)
+    {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"%s\n"</span>, error);
+        <span class="fn">exit</span>(<span class="num">1</span>);
+    }
+
+    <span class="cmt">// 3. 调用：拿到了地址，addvec 用起来和普通函数一模一样</span>
+    <span class="fn">addvec</span>(x, y, z, <span class="num">2</span>);
+    <span class="fn">printf</span>(<span class="str">"z = [%d %d]\n"</span>, z[<span class="num">0</span>], z[<span class="num">1</span>]);
+
+    <span class="cmt">// 4. 关门：卸载共享库（引用计数归零才真正卸载）</span>
+    <span class="kw">if</span> (<span class="fn">dlclose</span>(handle) != <span class="num">0</span>)
+    {
+        <span class="fn">fprintf</span>(stderr, <span class="str">"%s\n"</span>, <span class="fn">dlerror</span>());
+        <span class="fn">exit</span>(<span class="num">1</span>);
+    }
+
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译：-rdynamic 让可执行文件自己的全局符号对动态链接器可见（插件回调主程序的函数时必需）</span>
+<span class="cmt"># -ldl 链接动态链接器接口；glibc 2.34+ 已并入 libc，老系统需要，macOS 不需要</span>
+gcc -rdynamic -O2 -o test test.c -ldl
+
+<span class="cmt"># 运行 —— 本机实测输出：</span>
+./test
+<span class="cmt"># z = [4 6]</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>插件系统里最常见的两个「魔法属性」（GCC / Clang 都支持），能让库在加载/卸载时自动执行初始化与清理，不用主程序显式调用：</p>
+    <pre><code><span class="cmt">// 插件里写这两个函数，加载/卸载时自动触发</span>
+<span class="ann">__attribute__((constructor))</span> <span class="kw">void</span> <span class="fn">plugin_init</span>(<span class="kw">void</span>) { <span class="cmt">/* 注册自己 */</span> }
+<span class="ann">__attribute__((destructor))</span>  <span class="kw">void</span> <span class="fn">plugin_fini</span>(<span class="kw">void</span>)  { <span class="cmt">/* 注销自己 */</span> }</code></pre>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意两个经典陷阱</strong>：第一，<code>dlsym</code> 返回 <code>NULL</code> 不一定是失败——符号的值可能本来就是 <code>NULL</code>！所以判断必须用 <code>dlerror()</code>（而且先调一次清空旧状态，再 dlsym，再检查），不能只判断返回值。第二，<code>dlclose</code> 之后句柄立即失效，再拿它调 dlsym 是未定义行为，程序可能当场段错误（segfault，访问了非法内存地址导致崩溃）。养成习惯：<strong>关了就忘掉那把钥匙</strong>。</p>
+  </div>
+
+  <!-- ========== 5.4 工具箱：认识 binutils 全家桶 ========== -->
+  <h2>5.4 工具箱：认识 binutils 全家桶</h2>
+
+  <p>看到这里你应该有个感觉：.o、.a、.so、可执行文件，都是些「装二进制的大盒子」，黑乎乎的。接下来的任务就是<strong>把它们打开看个明白</strong>——鲁班造东西讲究「器」，这一节就是发工具。Linux 上有一整套 GNU binutils（binary utilities，二进制工具集），个个都是解剖目标文件的放大镜。第 3 章我们提过一句，这节来认全：</p>
+
+  <table>
+    <tr><th>工具</th><th>一句话用途（说人话）</th><th>真实命令示例</th></tr>
+    <tr><td><code>ar</code></td><td>打包 / 管理静态库（.o 的「压缩袋」）</td><td><code>ar rcs libvector.a addvec.o</code></td></tr>
+    <tr><td><code>strings</code></td><td>列出文件里所有可打印的字符串（找暗藏的文本信息）</td><td><code>strings libaddvec.so</code></td></tr>
+    <tr><td><code>strip</code></td><td>删掉符号表，给可执行文件「瘦身」</td><td><code>strip test</code></td></tr>
+    <tr><td><code>nm</code></td><td>列出符号表：谁定义了哪些符号（函数 / 全局变量）</td><td><code>nm libaddvec.so</code></td></tr>
+    <tr><td><code>size</code></td><td>看各节（text / data / bss）各占多大</td><td><code>size test</code></td></tr>
+    <tr><td><code>readelf</code></td><td>解剖 ELF 完整结构：ELF 头、节、段，最权威（含 size 和 nm 的功能）</td><td><code>readelf -h test</code></td></tr>
+    <tr><td><code>objdump</code></td><td>所有二进制工具之母：能显示一切信息，招牌技能是反汇编</td><td><code>objdump -d test</code></td></tr>
+    <tr><td><code>ldd</code></td><td>列出可执行文件的运行时共享库依赖</td><td><code>ldd ./test</code></td></tr>
+  </table>
+
+  <p>来一次实战解剖——对象就是 5.3 节刚生成的 libaddvec.so 和 test（下面输出是 Linux 上的标准格式）：</p>
+
+  <pre><code><span class="cmt"># file：先看这是什么文件</span>
+file libaddvec.so
+<span class="cmt"># libaddvec.so: ELF 64-bit LSB shared object, x86-64, version 1 (SYSV),</span>
+<span class="cmt">#               dynamically linked, not stripped</span>
+
+<span class="cmt"># nm：符号表。T 表示 Text（代码段）里定义了一个全局函数 addvec</span>
+nm libaddvec.so
+<span class="cmt"># 0000000000001109 T addvec</span>
+
+<span class="cmt"># size：各节大小（text 代码 / data 已初始化数据 / bss 未初始化数据）</span>
+size libaddvec.so
+<span class="cmt">#    text    data     bss     dec     hex filename</span>
+<span class="cmt">#     216       0       0     216      d8 libaddvec.so</span>
+
+<span class="cmt"># objdump -d：反汇编，把 .text 里的机器码翻译回汇编（head 只取前几行）</span>
+objdump -d libaddvec.so | head -20
+<span class="cmt"># 0000000000001109 &lt;addvec&gt;:</span>
+<span class="cmt">#   1109:  f3 0f 1e fa         endbr64</span>
+<span class="cmt">#   110d:  55                  push   %rbp</span>
+<span class="cmt">#   110e:  48 89 e5            mov    %rsp,%rbp</span></code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>两个平台差异值得记在小本本上：第一，macOS 的符号名带前导下划线（本机实测 <code>nm libaddvec.so</code> 输出的是 <code>T _addvec</code>），Linux 的 ELF 不带——这是 Mach-O 与 ELF 的命名约定差异；第二，<code>readelf</code> 是 Linux 专属，macOS 上没有（可用 <code>otool -L</code> 看依赖、<code>nm</code> 看符号）。写跨平台脚本时这些差异全是坑。</p>
+  </div>
+
+  <p>再看两个「小工具大用场」的：<code>strings</code> 是找文本线索的利器——库里的错误消息、版本号、路径，全都能捞出来（做安全分析时它第一个上）；<code>strip</code> 是发布前的最后一步——删掉符号表后文件更小、逆向更难，但调试信息也没了，所以「带 <code>-g</code> 调试的版本」和「strip 过的发布版本」要分开管理：</p>
+
+  <pre><code><span class="cmt"># strings：把文件里所有可打印字符串捞出来（-n 3 只要 3 字符以上的）</span>
+strings -n 3 libaddvec.so
+<span class="cmt"># __cxa_finalize</span>
+<span class="cmt"># _ITM_deregisterTMCloneTable</span>
+<span class="cmt"># ...</span>
+
+<span class="cmt"># strip：删符号表瘦身。之后 nm 就查不到符号了</span>
+strip test
+nm test
+<span class="cmt"># nm: test: no symbols    ← 瘦身成功，也「失忆」了</span></code></pre>
+
+  <!-- ========== 5.5 进程观察工具 ========== -->
+  <h2>5.5 进程观察工具</h2>
+
+  <p>库的事告一段落。程序跑起来之后叫<strong>进程（process）</strong>——一个正在执行的程序实例。这一节认识几件「看进程」的家伙什：程序跑得好不好、卡在哪、谁在偷偷摸鱼，全靠它们。素材里给了五个，一个个来，重点在第一个。</p>
+
+  <p><strong>strace</strong>：系统调用跟踪器——程序每向内核提一个请求（打开文件、读数据、写屏幕、申请内存），它都记一笔。这是满足好奇心的神器，也是排查「程序到底卡在哪」的第一把刀。编译时用 <code>-static</code>（静态链接）能拿到干净的轨迹，不会被一大堆加载共享库的调用淹没。在 Linux 上跟踪 5.3 那个 ./test，节选如下（中间加载 libc 的冗长部分省略了）：</p>
+
+  <pre><code><span class="cmt"># Linux 上：strace ./test（节选，真实输出格式）</span>
+$ strace ./test
+execve(<span class="str">"./test"</span>, [<span class="str">"./test"</span>], 0x7ffd43d1d1e0 <span class="cmt">/* 43 vars */</span>) = <span class="num">0</span>
+brk(NULL)                               = 0x55f0a0c00000
+openat(AT_FDCWD, <span class="str">"./libaddvec.so"</span>, O_RDONLY<span class="op">|</span>O_CLOEXEC) = <span class="num">3</span>
+mmap(NULL, <span class="num">16784</span>, PROT_READ, MAP_PRIVATE, <span class="num">3</span>, <span class="num">0</span>) = 0x7f4a2e0e6000
+<span class="cmt">...（加载 libc、设置线程栈等大量调用，省略）...</span>
+write(<span class="num">1</span>, <span class="str">"z = [4 6]\n"</span>, <span class="num">10</span>)    = <span class="num">10</span>
+exit_group(<span class="num">0</span>)                       = ?
++++ exited with <span class="num">0</span> +++</code></pre>
+
+  <div class="tip">
+    <div class="tip-title">鲁班提示</div>
+    <p>三个亮点请对号入座：<code>openat(..., "./libaddvec.so", ...)</code> 就是 dlopen 在背后的真身——它最终要发起一次打开文件的系统调用；<code>write(1, "z = [4 6]\n", 10)</code> 是 printf 落地的样子（1 是标准输出的文件描述符）；<code>exit_group(0)</code> 是进程退出的方式。strace 是 Linux 专属工具，macOS 上的近亲是 dtruss（需要管理员权限）。</p>
+  </div>
+
+  <p>剩下四件是老朋友了，但值得把「说人话」版记牢。<strong>ps</strong>（process status）：给当前系统里的进程拍一张快照——包括僵尸进程（zombie，已经死了但还没被父进程「收尸」的进程，ps 里显示为 <code>&lt;defunct&gt;</code>）。<strong>top</strong>：动态刷新的资源监视器，CPU、内存、谁在吃资源一目了然，按 <code>q</code> 退出。<strong>kill</strong>：给进程发信号——它不止能「杀」，信号是一套进程间通信的暗号。 <strong>/proc</strong>：一个虚拟文件系统（不占磁盘），把内核的一大堆数据结构以 ASCII 文本形式暴露出来，用户程序可以直接 cat 着读：</p>
+
+  <pre><code><span class="cmt"># ps：全部进程快照（a 所有用户，u 显示用户与资源，x 含无终端的进程）</span>
+ps aux
+<span class="cmt"># USER  PID %CPU %MEM   VSZ  RSS ... COMMAND</span>
+<span class="cmt"># root    1  0.0  0.3 168960 13568 ... /sbin/init</span>
+
+<span class="cmt"># top：动态刷新资源占用，按 q 退出</span>
+top
+
+<span class="cmt"># kill：发信号。先礼貌（TERM），再不听话才强杀（KILL）</span>
+kill -l                  <span class="cmt"># 列出所有信号</span>
+kill -TERM 1234          <span class="cmt"># 请进程自行退出（默认信号，可被程序拦截处理）</span>
+kill -9 1234             <span class="cmt"># SIGKILL：内核直接处决，程序没机会反抗</span></code></pre>
+
+  <pre><code><span class="cmt"># /proc：内核的「裸奔日记」，全是文本，随便读</span>
+cat /proc/cpuinfo        <span class="cmt"># CPU 型号、核心数</span>
+cat /proc/meminfo        <span class="cmt"># 内存总量与使用情况</span>
+cat /proc/self/maps      <span class="cmt"># 当前进程的虚拟内存布局——第 6 章的主角</span>
+ls /proc/1234/           <span class="cmt"># 每个进程一个目录，名字就是 PID</span></code></pre>
+
+  <div class="warning">
+    <p><strong>注意</strong>：<code>kill -9</code> 是最后手段，不是第一选择。SIGKILL 不给进程任何清理机会（文件写到一半、数据库事务没提交，全都会烂尾）。排查问题时先 <code>ps</code> 看进程，再 <code>strace -p &lt;PID&gt;</code> 挂上去看它卡在哪个系统调用，最后才谈得上 kill——而且默认的 <code>kill &lt;PID&gt;</code>（SIGTERM）往往就够了。</p>
+  </div>
+
+  <p>至此，第 4 章的链接器理论，这一章的三种「打包手艺」加上两套观察工具，你已经能完整回答「一个程序从 .c 变成进程，中间每一站都发生了什么」。第 6 章我们就要带着这些工具，钻进进程的内部去看虚拟内存那张地图了。</p>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：链接时机连连看 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>把三种链接时机和对应的场景配对：① 编译时链接；② 加载时链接；③ 运行时链接。场景：A. 程序启动时，动态链接器把 libc.so 装进内存并填好符号地址；B. ar 打包的 libvector.a 被链接器直接并入可执行文件；C. 程序运行到一半，自己调用 dlopen 加载了一个插件 .so。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>回顾三个小节的标题：5.1 静态库（编译时）、5.2 共享库（加载时）、5.3 dlopen（运行时）。关键区分点是「谁在什么时机做这件事」。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① 编译时链接 → B（链接器把 .a 的成员复制并进可执行文件）；② 加载时链接 → A（程序启动时动态链接器干活，程序自己毫不知情）；③ 运行时链接 → C（程序自己调用 dlopen，主动权在程序手里）。一句话记忆：<strong>静态库是「买断」，共享库是「启动时办借书证」，dlopen 是「用的时候才去借」</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：命令一条龙 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>现有源码 addvec.c 和 main.c（main 调用 addvec）。请依次写出四条命令：(a) 把 addvec.c 编译成目标文件 addvec.o；(b) 用 ar 把 addvec.o 打包成静态库 libvector.a；(c) 用 -l 方式（注意搜索目录与顺序）把 main.c 和 libvector.a 链接成可执行文件 app；(d) 把 addvec.c 编译成共享库 libaddvec.so，并写出查看 app 运行时依赖的命令。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>5.1 的创建三步（gcc -c → ar rcs）、链接顺序口诀「谁用谁在前，被用的靠后站」、-L. 与 -lvector 的配合；5.2 的 -shared -fPIC 与 ldd。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) <code>gcc -c addvec.c -o addvec.o</code>；(b) <code>ar rcs libvector.a addvec.o</code>；(c) <code>gcc main.c -L. -lvector -o app</code>（注意 <code>main.c</code> 必须在 <code>-lvector</code> 前面，否则 undefined reference）；(d) <code>gcc -shared -fPIC -o libaddvec.so addvec.c</code>，查看依赖用 <code>ldd ./app</code>（macOS 用 <code>otool -L</code>）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：给代码捉虫 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>有同学从网上抄了一段 dlopen 代码，编译都过不去。请找出至少三处错误并说明后果：<code>void* handle = dlopen("./libaddvec.so", RELD_LAZY);</code>；错误处理里写 <code>fprintf(stderr, "%s\n", dlerror())</code> 前没有 <code>#include &lt;stdlib.h&gt;</code> 就调用 <code>exit(1)</code>；<code>if ((error = dlerror()) != NULL) { fprintf(stderr, "%s\n", dlerror()); }</code>。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 5.3 的四个签名和 test.c 修正版：标志名的正确拼写是什么？exit 需要哪个头文件？dlerror 的返回值为什么必须保存下来用？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① <code>RELD_LAZY</code> 拼写错误，正确是 <code>RTLD_LAZY</code>（素材原版就写错了，本章已修正）；② 缺 <code>#include &lt;stdlib.h&gt;</code> 却调用 <code>exit()</code>，编译会警告/报错；③ <code>dlerror()</code> 被调了两次：第一次调用已经把错误状态清掉了，第二次调用返回的可能是 NULL，打印出来是空的——正确做法是先保存 <code>(error = dlerror()) != NULL</code> 再用 <code>error</code>。这三处正好是 5.3 里「修正版」与素材原版的差异。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：造一个最小插件系统 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>动手造一个「可插拔」的小程序：写两个共享库 plugin_a.so 和 plugin_b.so，各自导出一个 <code>int run(void)</code> 函数（a 返回 1，b 返回 2）；主程序 loader.c 读命令行参数（<code>./loader a</code> 或 <code>./loader b</code>），用 dlopen + dlsym 加载对应的 .so，调用 run() 并打印返回值，最后 dlclose。提示：库名可以拼接成 <code>"./plugin_" + 参数 + ".so"</code>；别忘了 dlerror 的检查套路。跑通后回答：如果新增一个 plugin_c.so，主程序需要重新编译吗？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>骨架：main 里 <code>snprintf(name, sizeof(name), "./plugin_%s.so", argv[1])</code>，然后照 5.3 test.c 的四步走（dlopen → dlsym → 调用 → dlclose）。两个 .so 用 <code>gcc -shared -fPIC -o plugin_a.so plugin_a.c</code> 分别编译。编译 loader 记得 <code>-ldl</code>（老系统）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>核心答案：<strong>不需要重新编译</strong>——这正是插件化的全部意义：主程序只认「接口」（函数名 run），不认「实现」；新增一个实现了同一接口的 .so，丢进目录就能用，主程序一行代码不用动。只要保证：所有插件导出完全相同的符号（这里是 <code>run</code>），签名一致。练习 4 跑通后，试着把 dlopen 的 flag 换成 RTLD_NOW 再跑一遍，体会两者的差别。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>

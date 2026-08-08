@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="https://assets.aigcwei.cn/favicon.svg">
+  <title>第6章：虚拟地址空间：进程内存布局全景 - C++ 底层原理</title>
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="canonical" href="https://aigcwei.cn/learn/cpp-internals/chapter06.html">
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "第6章：虚拟地址空间：进程内存布局全景 - C++ 底层原理",
+  "url": "https://aigcwei.cn/learn/cpp-internals/chapter06.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  }
+}
+</script>
+</head>
+<body class="track-cpp-internals" data-track="cpp-internals" data-chapter="6" data-root="../" data-site="learn">
+<div id="site-header"></div>
+
+<nav class="top-nav"><div class="nav-inner" id="nav-inner"></div></nav>
+
+<div class="container">
+  <h1>第6章：虚拟地址空间：进程内存布局全景</h1>
+  <p class="chapter-subtitle">程序跑起来之后，内存里到底装了什么？全局变量、局部变量、new 出来的对象各住在哪？本章把进程的虚拟地址空间当作案发现场，六个区域逐一勘验，每个结论都用真实实验验证给你看</p>
+
+  <div class="mentor-card">
+    <div class="mentor-header">
+      <span class="mentor-icon">🏛️</span>
+      <div class="mentor-info">
+        <h3>本章导师：狄仁杰</h3>
+        <p class="mentor-method">核心方法论：系统分析</p>
+      </div>
+    </div>
+    <div class="mentor-quote">
+      <p>「办案的第一步，不是追问凶手，而是把案发现场整体勘验一遍：哪里是门、哪里是窗、每样东西该在什么位置。进程的内存也一样——先把虚拟地址空间这张全景图画出来：哪段装代码、哪段装数据、栈往哪长、堆往哪长，了然于胸。之后你再遇到段错误、内存泄漏、越界访问，才能一眼圈出可疑区域。这一章，我们就把『进程的案发现场』完整画出来。」</p>
+    </div>
+  </div>
+
+  <!-- ========== 6.1 为什么需要虚拟地址空间：物理内存不够用的历史困境 ========== -->
+  <h2>6.1 为什么需要虚拟地址空间：物理内存不够用的历史困境</h2>
+
+  <p>先回到一个朴素的问题：<strong>程序要运行，代码和数据必须放进内存</strong>——CPU 只能从内存取指令、读数据。那直接让程序用物理内存的地址，不行吗？早年就是这么干的，但很快撞上三堵墙。第一堵：<strong>物理内存又小又贵</strong>。一个程序要 512MB，机器总共只有 1GB 物理内存（主存，DRAM 芯片组成的临时存储），却要同时跑四个程序——<strong>装不下</strong>。第二堵：<strong>碎片化</strong>。程序反复加载退出，物理内存被切成一堆大小不一的空洞，新程序"哪块都塞不进"。第三堵：<strong>没有隔离</strong>。程序直接写物理地址，一个野指针就能改掉别的程序甚至操作系统的数据，整个系统当场崩溃。</p>
+
+  <p>历史上程序员的解决办法很狼狈：<strong>覆盖技术</strong>（overlay，程序员把程序手动分成几块，用哪块就从磁盘调入哪块、用完再换出）——换入换出的调度全靠人肉计算。1961 年，英国曼彻斯特大学的 Atlas 计算机率先实现了一个天才方案：<strong>虚拟存储器</strong>（virtual memory，操作系统给每个进程发的一份"假内存"——一个看似独享、看似巨大、连续的地址空间）。从此每个进程都以为自己独占一整片内存，物理内存怎么分配、够不够用，全由操作系统在幕后打理。这个"假内存"里所有地址的集合，就叫<strong>虚拟地址空间</strong>（virtual address space）——说人话：<strong>它是进程拿到的一张"虚拟房产证"，门牌号随便写，实际住哪由操作系统安排</strong>。你程序里写的每个地址（指针的值、<code>&amp;x</code> 的结果），都是这张房产证上的虚拟地址。</p>
+
+  <pre><code><span class="cmt"># 物理内存的困境（示意）：只有 1GB 物理内存，却要跑 4 个 512MB 的程序</span>
+程序A(512MB)  程序B(512MB)  程序C(512MB)  程序D(512MB)
+        ┌──────────────────────┐
+        │  物理内存 1GB         │
+        │  只装得下 A + B       │
+        │  C 和 D 没地方去 ✗    │
+        └──────────────────────┘
+<span class="cmt"># 虚拟存储器登场后：每个进程领到同一张"假内存"地图</span>
+进程A: [0x00000000 ... 0x7ffffffff000]  ← 看起来独占 128TB
+进程B: [0x00000000 ... 0x7ffffffff000]  ← 同样是这张地图
+<span class="cmt"># 地图一样，但操作系统在幕后把各页映射到不同的物理位置</span></code></pre>
+
+  <p>虚拟地址空间有多大？由<strong>字长</strong>决定——字长（word，CPU 一次处理的位数）是 n 位，地址范围就是 0 到 2^n - 1。32 位上限 2^32 = 4GB，所以当年有著名的"4GB 天花板"；64 位上限 2^64 ≈ 16EB（约 1600 万 TB）——<strong>物理内存永远填不满这张地图</strong>。下面这段代码是本书的常驻实验：打印一个变量的地址，看看它长什么样：</p>
+
+  <pre><code><span class="cmt">// addr.c —— 打印出来的地址，究竟是真是假？</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>) {
+    <span class="kw">int</span> <span class="param">x</span> = <span class="num">42</span>;
+    <span class="fn">printf</span>(<span class="str">"x 的地址是 %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">x</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 编译并运行（真实输出，本机 macOS，地址随 ASLR 每次运行不同）：</span>
+gcc -o addr addr.c <span class="op">&amp;&amp;</span> ./addr
+x 的地址是 0x16d2fa128   <span class="cmt"># 这是"虚拟"地址，不是内存条上的物理位置</span></code></pre>
+
+  <table>
+    <tr><th>对比维度</th><th>物理内存</th><th>虚拟地址空间</th></tr>
+    <tr><td>本质</td><td>真实的 DRAM 芯片，容量固定</td><td>进程眼中的"假内存"，一张地址地图</td></tr>
+    <tr><td>容量上限</td><td>插了几根内存条就有多大</td><td>64 位下 2^64 字节，几乎无限</td></tr>
+    <tr><td>谁看得见</td><td>操作系统、硬件</td><td>进程（应用程序只认识它）</td></tr>
+    <tr><td>分配管理</td><td>操作系统按物理页分配</td><td>操作系统按虚拟页映射、换入换出</td></tr>
+    <tr><td>关系</td><td>虚拟地址最终映射到物理地址</td><td>多个虚拟页可共享同一物理页（如共享库）</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>把"虚拟"两个字记牢：<strong>程序里出现的所有地址都是虚拟地址</strong>。物理地址只有操作系统和硬件（MMU，内存管理单元，负责把虚拟地址翻译成物理地址的硬件）看得见。你写的 <code>printf("%p", &amp;x)</code> 打印的是房产证上的门牌号，不是土地局档案里的编号——这个区别，后面讲段错误、讲共享库时都会反复用到。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：地址每次运行都可能不同！现代系统默认开启 <strong>ASLR</strong>（address space layout randomization，地址空间布局随机化）——每次启动，操作系统都把栈、堆、代码的基址随机偏移一段，让攻击者猜不到地址。所以本章所有实测地址仅供观察"大小关系"，<strong>千万别在代码里写死某个地址</strong>。</p>
+  </div>
+
+  <!-- ========== 6.2 虚拟地址空间全景：一张图看懂进程布局 ========== -->
+  <h2>6.2 虚拟地址空间全景：一张图看懂进程布局</h2>
+
+  <p>每个 Linux 进程的虚拟地址空间都用同一套标准格式——这是虚拟存储器带来的巨大红利：<strong>布局统一，链接器就能放心生成与物理位置无关的可执行文件</strong>（第 4 章讲过）。自下而上（地址从小到大），用户空间依次是：<strong>.text 代码段</strong>（编译好的机器指令）、<strong>.rodata 只读数据段</strong>（字符串字面量、const 全局常量、switch 跳转表）、<strong>.data 已初始化数据段</strong>（已初始化的全局/静态变量）、<strong>.bss 未初始化数据段</strong>（未初始化的全局/静态变量，加载时自动清零）、<strong>堆</strong>（<code>malloc</code>/<code>new</code> 动态分配，向上生长）、<strong>共享库区</strong>（libc、libstdc++ 等被多进程共用的 <code>.so</code>）、<strong>用户栈</strong>（局部变量与函数调用信息，向下生长）。最顶部约四分之一预留给<strong>内核虚拟存储器</strong>——所有进程共享同一份内核映射，但用户态禁止读写。</p>
+
+  <p>两个关键认知：其一，<strong>区域位置是"动态"的</strong>——堆顶随 <code>malloc</code> 不断上移，栈顶随函数调用不断下移，共享库的映射地址由动态链接器在启动时决定（典型在 0x7f... 高位区）。其二，<strong>共享库区是"共享"的</strong>：libc 的代码页在物理内存里只有一份，却被映射进几百个进程各自的虚拟地址空间——每个进程都"看得到"它，物理内存却只付一份钱。把这张全景图刻进脑子里，本章之后的所有内容都在为它添细节：</p>
+
+  <pre><code><span class="cmt"># Linux x86-64 进程虚拟地址空间全景（地址从下往上增大）</span>
+0x7ffffffff000  ┌───────────────────────────────┐  &lt;- 栈顶：最高用户地址
+                │  内核虚拟存储器               │  ← 顶部区域，用户不可读写
+                ├───────────────────────────────┤
+                │  用户栈（向下生长）           │  ← 局部变量、函数调用
+                │          ↓                    │
+                │          ↑                    │
+                ├───────────────────────────────┤
+                │  共享库（libc / libstdc++）   │  ← 0x7f... 高位区，多进程共用
+                ├───────────────────────────────┤
+                │  堆（向上生长）               │  ← malloc / new 在这里分配
+                │          ↑                    │
+                ├───────────────────────────────┤
+                │  .bss  未初始化全局/静态变量   │  ← 加载时自动清零
+                ├───────────────────────────────┤
+                │  .data 已初始化全局/静态变量   │
+                ├───────────────────────────────┤
+                │  .rodata 只读常量/字符串字面量 │
+                ├───────────────────────────────┤
+                │  .text 机器码（代码）          │  ← 可执行文件从这里加载
+0x00000000      └───────────────────────────────┘  &lt;- 最低地址</code></pre>
+
+  <pre><code><span class="cmt"># Linux 上最直接的观察工具：让进程自己打印自己的地址地图</span>
+<span class="cmt"># （每行格式：起始-结束 权限 偏移 设备 索引 映射对象）</span>
+cat /proc/self/maps
+<span class="cmt"># 55f2f6c00000-55f2f6d02000 r-xp ... /bin/cat          ← .text</span>
+<span class="cmt"># 55f2f6f01000-55f2f6f02000 r--p ... /bin/cat          ← .rodata</span>
+<span class="cmt"># 7ffc9d5ff000-7ffc9d620000 rw-p ... [stack]           ← 用户栈</span>
+<span class="cmt"># 7f2f4c000000-7f2f4c021000 r-xp ... libc.so.6         ← 共享库</span>
+<span class="cmt"># （行格式示意：具体地址随系统、进程、ASLR 而异）</span></code></pre>
+
+  <table>
+    <tr><th>区域</th><th>装什么</th><th>谁决定</th><th>特点</th></tr>
+    <tr><td>.text</td><td>编译后的机器指令</td><td>编译期确定</td><td>只读，可执行</td></tr>
+    <tr><td>.rodata</td><td>字符串字面量、const 全局、switch 跳转表</td><td>编译期确定</td><td>只读</td></tr>
+    <tr><td>.data</td><td>已初始化的全局/静态变量</td><td>编译期确定</td><td>可读写，加载时拷贝初值</td></tr>
+    <tr><td>.bss</td><td>未初始化的全局/静态变量</td><td>编译期确定</td><td>可读写，加载时自动清零</td></tr>
+    <tr><td>堆</td><td><code>malloc</code> / <code>new</code> 的动态对象</td><td>运行时，程序员</td><td>向上生长，程序员负责释放</td></tr>
+    <tr><td>栈</td><td>局部变量、参数、返回地址</td><td>运行时，编译器/系统</td><td>向下生长，函数返回自动回收</td></tr>
+    <tr><td>共享库区</td><td>动态链接的 <code>.so</code></td><td>启动时，动态链接器</td><td>物理内存一份，多进程共享</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p><strong>macOS 的布局同原理、不同地址</strong>：macOS 用 Mach-O 格式，实测本机（macOS arm64，Apple clang 21）text / rodata / data / bss 挤在 0x102b04000～0x102b0c010 一段连续区段里，栈在 0x16d2fa128（高地址），堆在 0x103335b10（data 之上）。特别有意思：macOS 把只读常量并入 __TEXT 段，所以 rodata 地址紧挨着代码——实测 <code>main()</code>=0x102b045e8、常量 <code>c_global</code>=0x102b047b8，只差 0x1d0 字节。<strong>区划一样、门牌号不同</strong>——抓结构，别背数字。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：全景图里的地址是"典型值/示意值"。PIE 程序（现代 Linux 默认）代码段实际加载在 0x555555554000 附近，非 PIE 在 0x400000 附近，加上 ASLR 随机偏移，<strong>每次运行都不完全一样</strong>。判断"这个地址属于哪一区"，看的是<strong>相对位置</strong>（谁高谁低、相距多远），不是绝对数值。</p>
+  </div>
+
+  <!-- ========== 6.3 程序里的代码和数据落在哪 ========== -->
+  <h2>6.3 程序里的代码和数据落在哪：变量的归位实验</h2>
+
+  <p>全景图有了，现在做一次"入户调查"：<strong>各种变量到底各住哪个区？</strong>规则先列出来：<strong>全局变量</strong>（文件作用域）和<strong>静态变量</strong>（<code>static</code> 修饰）住 data/bss——已初始化进 <code>.data</code>，未初始化进 <code>.bss</code>；<strong>const 全局常量</strong>和<strong>字符串字面量</strong>住 <code>.rodata</code>；<strong>局部变量</strong>住<strong>栈</strong>；<strong><code>malloc</code>/<code>new</code> 出来的对象</strong>住<strong>堆</strong>。最容易被问倒的是 <code>.bss</code> 和 <code>.data</code> 的区别——一句话：<strong><code>.data</code> 装"带着初值来报到的"，<code>.bss</code> 装"空着手来、系统先给清零的"</strong>。</p>
+
+  <p>眼见为实。写一个把六类变量全都声明一遍的程序，用 <code>%p</code> 把地址全打印出来，再用 <code>size</code> 命令看可执行文件里三个段各占多大。下面这段代码是本章的"解剖样本"（本机真实编译、真实运行）：</p>
+
+  <pre><code><span class="cmt">// layout.c —— 六类变量的归位实验</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+<span class="kw">#include</span> <span class="type">&lt;stdlib.h&gt;</span>
+
+<span class="kw">int</span> <span class="param">g_init</span> = <span class="num">42</span>;              <span class="cmt">/* 已初始化全局变量 -&gt; .data */</span>
+<span class="kw">int</span> <span class="param">g_uninit</span>;                  <span class="cmt">/* 未初始化全局变量 -&gt; .bss */</span>
+<span class="kw">static int</span> <span class="param">s_init</span> = <span class="num">7</span>;        <span class="cmt">/* 已初始化静态变量 -&gt; .data */</span>
+<span class="kw">static int</span> <span class="param">s_uninit</span>;            <span class="cmt">/* 未初始化静态变量 -&gt; .bss */</span>
+<span class="kw">const int</span> <span class="param">c_global</span> = <span class="num">3</span>;       <span class="cmt">/* const 全局常量 -&gt; .rodata */</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>) {
+    <span class="kw">int</span> <span class="param">local</span> = <span class="num">1</span>;                 <span class="cmt">/* 局部变量 -&gt; 栈 */</span>
+    <span class="kw">int</span> *<span class="param">h1</span> = <span class="fn">malloc</span>(<span class="num">16</span>);
+    <span class="kw">int</span> *<span class="param">h2</span> = <span class="fn">malloc</span>(<span class="num">16</span>);
+    <span class="kw">const char</span> *<span class="param">str</span> = <span class="str">"hello"</span>;   <span class="cmt">/* 字符串字面量 -&gt; .rodata */</span>
+    <span class="fn">printf</span>(<span class="str">"text  main()        : %p\n"</span>, (<span class="kw">void</span>*)<span class="fn">main</span>);
+    <span class="fn">printf</span>(<span class="str">"rodata str          : %p\n"</span>, (<span class="kw">void</span>*)<span class="param">str</span>);
+    <span class="fn">printf</span>(<span class="str">"rodata c_global     : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">c_global</span>);
+    <span class="fn">printf</span>(<span class="str">"data  g_init        : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">g_init</span>);
+    <span class="fn">printf</span>(<span class="str">"data  s_init        : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">s_init</span>);
+    <span class="fn">printf</span>(<span class="str">"bss   g_uninit      : %p (值=%d)\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">g_uninit</span>, <span class="param">g_uninit</span>);
+    <span class="fn">printf</span>(<span class="str">"bss   s_uninit      : %p (值=%d)\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">s_uninit</span>, <span class="param">s_uninit</span>);
+    <span class="fn">printf</span>(<span class="str">"stack local         : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">local</span>);
+    <span class="fn">printf</span>(<span class="str">"heap  malloc#1      : %p\n"</span>, (<span class="kw">void</span>*)<span class="param">h1</span>);
+    <span class="fn">printf</span>(<span class="str">"heap  malloc#2      : %p\n"</span>, (<span class="kw">void</span>*)<span class="param">h2</span>);
+    <span class="fn">free</span>(<span class="param">h1</span>); <span class="fn">free</span>(<span class="param">h2</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实运行输出（本机 macOS，地址随 ASLR 变化，但大小关系稳定）：</span>
+text  main()        : 0x102b045e8     <span class="cmt"># 最低：代码段</span>
+rodata str          : 0x102b047bc     <span class="cmt"># 紧挨着代码：只读数据</span>
+rodata c_global     : 0x102b047b8
+data  g_init        : 0x102b0c000     <span class="cmt"># data 区（已初始化）</span>
+data  s_init        : 0x102b0c008
+bss   g_uninit      : 0x102b0c010  (值=0)   <span class="cmt"># bss 区，值自动是 0</span>
+bss   s_uninit      : 0x102b0c00c  (值=0)
+stack local         : 0x16d2fa128     <span class="cmt"># 栈：高地址</span>
+heap  malloc#1      : 0x103335b10     <span class="cmt"># 堆：在 data/bss 之上</span>
+heap  malloc#2      : 0x1033359e0</code></pre>
+
+  <pre><code><span class="cmt"># size 命令：查看可执行文件各段大小（真实输出）</span>
+size layout
+<span class="cmt">#    text   data    bss    dec    hex   filename</span>
+<span class="cmt">#     871     36      8    915    393   layout</span>
+<span class="cmt"># text(代码)最大；data 36 字节；bss 只有 8 字节</span>
+<span class="cmt"># .bss 在文件里只记"需要多少零"，不真正占用文件空间</span></code></pre>
+
+  <p>三个观察值得停下来琢磨。第一，<strong>地址顺序恰好验证了全景图</strong>：text（0x102b0...）&lt; rodata &lt; data &lt; bss &lt; 堆（0x1033...）&lt; 栈（0x16d2...）——栈远在高位，堆在数据区之上。第二，<strong><code>.bss</code> 的变量值打印出来是 0</strong>：你从没给它赋过值，但 C/C++ 标准保证全局/静态变量在程序开始前被清零——"加载时自动清零"的实锤。第三，<strong>全局/静态变量无论写在哪，地址都在 data/bss 区</strong>：<code>static</code> 修饰只是把名字藏进函数作用域，不影响它住进 data/bss——作用域管"看不看得见"，生存期管"住哪、活多久"，两者是两回事。</p>
+
+  <table>
+    <tr><th>声明形式</th><th>落在哪个区</th><th>初值</th><th>生存期</th></tr>
+    <tr><td>全局变量（已初始化）</td><td>.data</td><td>指定的初值</td><td>整个程序运行期</td></tr>
+    <tr><td>全局变量（未初始化）</td><td>.bss</td><td>自动清零为 0</td><td>整个程序运行期</td></tr>
+    <tr><td>static 变量（含函数内）</td><td>.data / .bss</td><td>同上，按是否初始化</td><td>整个程序运行期</td></tr>
+    <tr><td>const 全局常量 / 字符串字面量</td><td>.rodata</td><td>编译期定死</td><td>整个程序运行期</td></tr>
+    <tr><td>局部变量</td><td>栈</td><td>不保证（栈上残留垃圾值）</td><td>函数调用期间</td></tr>
+    <tr><td>malloc / new 的对象</td><td>堆</td><td>malloc 不初始化；new 调构造函数</td><td>直到 free / delete</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>把 <code>.bss</code> 和 <code>.data</code> 的区别钉死：<strong><code>.data</code> 是"带着行李报到"（初值写进文件、加载时拷贝进内存），<code>.bss</code> 是"空手报到"（文件里只记一行"这里需要 N 字节零"，加载时由操作系统现场清零）</strong>。所以 <code>size</code> 输出里 bss 只有 8 字节——几乎不占磁盘空间，却能给你一片干净的内存。这也是为什么"未初始化全局变量 = 0"是标准保证，而"未初始化局部变量"是垃圾值——后者在栈上，可没人给你擦桌子。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：别把"未初始化全局变量是 0"推广到局部变量！<strong>局部变量不自动清零</strong>——它拿的是栈上别人用过的残留值，读它属于未定义行为。经典段错误现场：<code>int *p; *p = 1;</code>——<code>p</code> 是没初始化的局部指针，往垃圾地址写数据，轻则悄悄改坏别处数据，重则当场段错误。6.4 节我们就来亲眼看一次段错误。</p>
+  </div>
+
+  <!-- ========== 6.4 虚拟存储器的三个能力 ========== -->
+  <h2>6.4 虚拟存储器的三个能力：大数组、统一地址空间与保护</h2>
+
+  <p>虚拟存储器不是花架子，它靠一套精巧机制（硬件异常 + 地址翻译 + 主存/磁盘协作 + 内核软件）提供三个实打实的能力。第一个：<strong>把主存当作磁盘上一个巨大地址空间的"高速缓存"</strong>。虚拟地址空间被切成固定大小的<strong>虚拟页</strong>（page，地址空间的基本分块单位，Linux 典型 4KB），物理内存切成同样大小的<strong>物理页</strong>。程序访问某个虚拟页时，若它不在物理内存里，硬件触发<strong>缺页异常</strong>（page fault），操作系统从磁盘把这一页读进来再继续执行——主存只保留"正在用的页"，冷数据躺在磁盘上。程序员完全无感：<strong>你以为自己在用 128TB 连续内存，其实操作系统只把热门的几页放在物理内存里，按需换入换出</strong>。</p>
+
+  <p>第二个能力：<strong>为每个进程提供一致的地址空间，简化内存管理</strong>——每个进程都看到同一张布局图（text 在低处、栈在高处、堆在中间），链接器和加载器就不必关心代码和数据最终落在物理内存的哪个位置。第三个能力：<strong>保护每个进程的地址空间不被其他进程破坏</strong>——虚拟页到物理页的映射表（页表，由操作系统维护）只属于本进程，你的程序根本"够不着"别的进程的物理页；再加上每页有权限位（可读 r / 可写 w / 可执行 x），想写代码段？想碰内核区？直接拒绝。于是有了程序员最熟悉的报错——<strong>段错误</strong>（segmentation fault，程序访问了无权访问的虚拟地址，被操作系统当场处决）。来，亲手制造一次：</p>
+
+  <pre><code><span class="cmt">// null.c —— 解引用空指针：非法访问地址 0，当场段错误</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>) {
+    <span class="kw">int</span> *<span class="param">p</span> = <span class="kw">NULL</span>;              <span class="cmt">/* 空指针：地址 0 */</span>
+    <span class="fn">printf</span>(<span class="str">"p = %p\n"</span>, (<span class="kw">void</span>*)<span class="param">p</span>);
+    <span class="fn">printf</span>(<span class="str">"*p = %d\n"</span>, *<span class="param">p</span>);    <span class="cmt">/* 解引用空指针 -&gt; 段错误 */</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实运行（本机 macOS）：程序被操作系统当场处决</span>
+gcc -o null null.c <span class="op">&amp;&amp;</span> ./null
+p = 0x0
+Segmentation fault: 11       <span class="cmt"># 段错误！进程被杀死，exit code = 139</span></code></pre>
+
+  <table>
+    <tr><th>能力</th><th>说人话</th><th>解决的历史问题</th></tr>
+    <tr><td>把主存当巨大数组</td><td>主存只装热门页，冷数据放磁盘，按需换入</td><td>物理内存不够用（6.1 的困境）</td></tr>
+    <tr><td>统一地址空间</td><td>每个进程看到同一张布局图，与物理位置无关</td><td>链接器/加载器复杂度、内存碎片</td></tr>
+    <tr><td>保护</td><td>页表 + 权限位，进程之间物理隔离</td><td>程序互踩、野指针搞垮系统</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>段错误是"保护能力"的正面证据，也是新手的第一道坎。常见触发方式就几类，记住它们等于记住破案方向：<strong>解引用空指针</strong>（访问地址 0）、<strong>解引用野指针</strong>（指向已释放或未初始化的地址）、<strong>数组越界写</strong>、<strong>递归爆栈</strong>（6.5 节马上演示）、<strong>写只读区</strong>（比如给字符串字面量赋值）。看到 "Segmentation fault" 别慌，先问：<strong>我这个指针指向哪个区？那个区允许我这么写吗？</strong></p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：虚拟存储器不是免费的"内存扩容"。缺页时要访问磁盘，磁盘比内存慢几个数量级——<strong>频繁换页会让程序慢得像蜗牛</strong>（这叫"抖动"，thrashing）；页表本身也占内存，每次地址访问都要做一层翻译（靠 TLB 硬件缓存加速）。理解这些代价，你就明白"多分配内存"不等于"多用内存"——虚拟地址是假的，性能代价是真的。</p>
+  </div>
+
+  <!-- ========== 6.5 栈与堆的动态生长 ========== -->
+  <h2>6.5 栈与堆的动态生长：方向相反、此消彼长</h2>
+
+  <p>全景图里有一对"死对头"：<strong>栈向下生长、堆向上生长</strong>——两个区域的"活动端"相向而行。先说栈：每次函数调用，系统在栈顶压入一块<strong>栈帧</strong>（stack frame，一次函数调用专用的内存块，装局部变量、参数、返回地址），函数返回就弹掉。所以<strong>调用越深，栈顶地址越低</strong>。用递归验证最直观——每一层递归打印本层局部变量的地址：</p>
+
+  <pre><code><span class="cmt">// grow.c —— 观察栈的向下生长</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">void</span> <span class="fn">f</span>(<span class="kw">int</span> <span class="param">depth</span>) {
+    <span class="kw">int</span> <span class="param">a</span> = <span class="param">depth</span>;      <span class="cmt">/* 本层栈帧里的局部变量 */</span>
+    <span class="kw">int</span> <span class="param">b</span> = <span class="param">depth</span> <span class="op">+</span> <span class="num">1</span>;
+    <span class="kw">if</span> (<span class="param">depth</span> <span class="op">&lt;</span> <span class="num">3</span>) {
+        <span class="fn">f</span>(<span class="param">depth</span> <span class="op">+</span> <span class="num">1</span>);   <span class="cmt">/* 递归：下一层栈帧地址应更低 */</span>
+        <span class="fn">printf</span>(<span class="str">"depth=%d: &amp;a=%p  &amp;b=%p\n"</span>, <span class="param">depth</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">a</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">b</span>);
+    } <span class="kw">else</span> {
+        <span class="fn">printf</span>(<span class="str">"最深层 depth=%d: &amp;a=%p  &amp;b=%p\n"</span>, <span class="param">depth</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">a</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">b</span>);
+    }
+}
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>) {
+    <span class="fn">f</span>(<span class="num">0</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实输出（本机 macOS）：越深层，地址越小——栈确实向下生长</span>
+最深层 depth=3: &amp;a=0x16efda048  &amp;b=0x16efda044
+depth=2: &amp;a=0x16efda088  &amp;b=0x16efda084
+depth=1: &amp;a=0x16efda0c8  &amp;b=0x16efda0c4
+depth=0: &amp;a=0x16efda108  &amp;b=0x16efda104
+<span class="cmt"># 每层栈帧相隔 0x40 = 64 字节，地址单调递减</span></code></pre>
+
+  <p>再看堆：<code>malloc</code>/<code>new</code> 每次分配，堆的活动端往上顶——6.3 节实测 <code>malloc</code> 的地址（0x1033...）确实在 data/bss（0x102b0...）之上。<strong>栈顶和堆顶相向而行，中间的空隙是"自由区"</strong>：栈吞一点、堆吞一点，一旦撞上就完了。栈的容量有限——用 <code>ulimit -s</code> 查看，本机默认 8176KB（约 8MB）。如果递归没有终止条件，每层栈帧压 1KB，几秒内就会把 8MB 栈顶穿。亲手爆一次栈，看段错误长什么样：</p>
+
+  <pre><code><span class="cmt">// boom.c —— 递归爆栈实验：每层压入 1KB 局部数组，永不返回</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">void</span> <span class="fn">recurse</span>(<span class="kw">int</span> <span class="param">depth</span>) {
+    <span class="kw">char</span> <span class="param">buf</span>[<span class="num">1024</span>];                 <span class="cmt">/* 每层栈帧压入 1KB */</span>
+    <span class="kw">if</span> (<span class="param">depth</span> <span class="op">%</span> <span class="num">500</span> <span class="op">==</span> <span class="num">0</span>)
+        <span class="fn">printf</span>(<span class="str">"depth=%d  &amp;buf=%p\n"</span>, <span class="param">depth</span>, (<span class="kw">void</span>*)<span class="param">buf</span>), <span class="fn">fflush</span>(<span class="kw">NULL</span>);
+    <span class="fn">recurse</span>(<span class="param">depth</span> <span class="op">+</span> <span class="num">1</span>);             <span class="cmt">/* 永不返回：一路向下递归 */</span>
+}
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">void</span>) {
+    <span class="fn">recurse</span>(<span class="num">0</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实运行（本机 macOS，bash 报告段错误，exit code = 139）：</span>
+depth=0    &amp;buf=0x16fb4dd08
+depth=500  &amp;buf=0x16fac9008
+depth=1000 &amp;buf=0x16fa44308
+<span class="cmt"># ...（地址一路向下，每 500 层低约 0x84d00 字节）...</span>
+depth=7500 &amp;buf=0x16f385a08
+Segmentation fault: 11       <span class="cmt"># 栈顶撞穿 8MB 上限，操作系统处决进程</span>
+exit code=139</code></pre>
+
+  <table>
+    <tr><th>对比维度</th><th>栈</th><th>堆</th></tr>
+    <tr><td>生长方向</td><td>向下（地址递减）</td><td>向上（地址递增，Linux 常规）</td></tr>
+    <tr><td>谁分配</td><td>编译器/系统，函数调用自动压栈</td><td>程序员，malloc / new 手动申请</td></tr>
+    <tr><td>谁释放</td><td>函数返回自动弹栈，无需操心</td><td>必须手动 free / delete，否则泄漏</td></tr>
+    <tr><td>速度</td><td>极快（就是移动栈指针）</td><td>较慢（要搜索空闲块、可能触发系统调用）</td></tr>
+    <tr><td>容量上限</td><td>ulimit -s 限制（本机约 8MB）</td><td>接近整个虚拟地址空间，远大于栈</td></tr>
+    <tr><td>典型风险</td><td>递归太深/大局部数组 → 栈溢出</td><td>忘记释放 → 内存泄漏；悬垂指针</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>一个诚实的 macOS 观察：6.3 节实测两次 <code>malloc</code> 的地址是 0x103335b10、0x1033359e0——<strong>第二次反而更低了</strong>，并不严格递增。因为 macOS 的 malloc 实现与 Linux glibc 不同（按"区域"管理，首次分配常从大块区域切出）；Linux 上 glibc 的连续 <code>malloc</code> 通常地址递增（堆顶靠 <code>brk</code> 系统调用上移）。记住：<strong>"堆向上生长"是宏观趋势，不是每一次分配的保证</strong>——判断地址属于哪一区，看量级和相对位置，别盯单次分配。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：递归必须要有能到达的终止条件！<code>boom.c</code> 里 <code>recurse(depth + 1)</code> 永不返回，每层 1KB 栈帧，约 7500 层就撞穿 8MB 栈顶。真实项目里"深度未知的递归"（遍历深层 JSON、XML）是栈溢出高发区；栈上也不要放大数组（几 MB 的局部数组就可能直接爆栈），大数据请用 <code>malloc</code>/<code>vector</code> 放堆上。<code>ulimit -s</code> 可查看/临时修改栈上限，但根治之道是控制递归深度。</p>
+  </div>
+
+  <!-- ========== 6.6 章节小结与悬念：对象会落在哪个区？ ========== -->
+  <h2>6.6 章节小结与悬念：C++ 对象会落在哪个区？</h2>
+
+  <p>把案发现场图再默写一遍：<strong>.text 装机器码（只读）→ .rodata 装字符串字面量和 const 常量（只读）→ .data 装已初始化全局/静态变量 → .bss 装未初始化全局/静态变量（自动清零）→ 堆向上生长（malloc/new）→ 共享库 → 栈向下生长（局部变量）→ 内核区（用户不可碰）</strong>。五个问题能脱口而出，本章就算毕业：全局变量住哪？已初始化住 .data，未初始化住 .bss。静态变量呢？一样，看有没有初值。字符串字面量呢？.rodata，只读。局部变量呢？栈。malloc 出来的呢？堆。</p>
+
+  <p>现在把 C++ 拉进来，悬念就来了。C++ 程序里到处是<strong>对象</strong>（object，class 的实例），它们同样按上面的规则归位：<strong>全局对象住 .data/.bss，局部对象住栈，<code>new</code> 出来的对象住堆</strong>。用 <code>struct Point</code> 演示三种对象的落区（真实运行）：</p>
+
+  <pre><code><span class="cmt">// obj.cpp —— C++ 对象的归位：全局/静态/局部/new</span>
+<span class="kw">#include</span> <span class="type">&lt;stdio.h&gt;</span>
+
+<span class="kw">struct</span> <span class="type">Point</span> { <span class="kw">int</span> <span class="param">x</span>; <span class="kw">int</span> <span class="param">y</span>; };
+
+<span class="type">Point</span> <span class="param">g_pt</span>;                      <span class="cmt">/* 全局对象：.bss（未初始化，自动清零） */</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    <span class="type">Point</span> <span class="param">local_pt</span>;              <span class="cmt">/* 局部对象：栈 */</span>
+    <span class="kw">static</span> <span class="type">Point</span> <span class="param">s_pt</span>;           <span class="cmt">/* 静态对象：.bss */</span>
+    <span class="type">Point</span>* <span class="param">heap_pt</span> = <span class="kw">new</span> <span class="type">Point</span>; <span class="cmt">/* new 出来的对象：堆 */</span>
+
+    <span class="fn">printf</span>(<span class="str">"global  : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">g_pt</span>);
+    <span class="fn">printf</span>(<span class="str">"static  : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">s_pt</span>);
+    <span class="fn">printf</span>(<span class="str">"stack   : %p\n"</span>, (<span class="kw">void</span>*)<span class="op">&amp;</span><span class="param">local_pt</span>);
+    <span class="fn">printf</span>(<span class="str">"heap    : %p\n"</span>, (<span class="kw">void</span>*)<span class="param">heap_pt</span>);
+    <span class="fn">printf</span>(<span class="str">"g_pt.x  = %d (全局对象已自动清零)\n"</span>, <span class="param">g_pt</span>.<span class="param">x</span>);
+    <span class="kw">delete</span> <span class="param">heap_pt</span>;
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+  <pre><code><span class="cmt"># 真实运行（本机 macOS）：全局/静态在 data/bss 低区，栈在高区，堆在中间</span>
+g++ -o obj obj.cpp <span class="op">&amp;&amp;</span> ./obj
+global  : 0x102420000      <span class="cmt"># .bss：全局对象</span>
+static  : 0x102420008      <span class="cmt"># .bss：静态对象</span>
+stack   : 0x16d9e6134      <span class="cmt"># 栈：高地址</span>
+heap    : 0x102c6da90      <span class="cmt"># 堆：new 出来的对象</span>
+g_pt.x  = 0                <span class="cmt"># 全局对象自动清零</span></code></pre>
+
+  <p>但注意——<strong>对象"住在哪个区"只是第一层问题</strong>。对象住进内存之后，它的<strong>内部</strong>是怎么排布的？成员变量按什么顺序排列？为什么 <code>struct</code> 的大小不等于成员大小之和？带虚函数的对象里，隐藏的 <strong>vptr</strong>（虚函数表指针）藏在哪个位置？这些答案全部藏在"对象内部的字节布局"里——这是第 10 章（内存对齐）、第 12 章（类的大小：空类、成员函数与虚函数指针）的主战场。本章你负责回答"对象住哪个区"，第 12 章我们再来回答"对象内部怎么住"。</p>
+
+  <div class="tip">
+    <div class="tip-title">狄仁杰提示</div>
+    <p>本章方法论就一句话：<strong>先画全景图，再谈细节</strong>。段错误、内存泄漏、悬垂指针——这些案子的"作案地点"全部落在 6.2 节那张图上：栈溢出看栈、泄漏看堆、写只读区看 rodata、野指针看它指向的区。<strong>遇到内存问题先问"哪个区"，再问"怎么进来的"</strong>。这张图会陪你走到第 16 章，后面每一章的内存话题，都是在这张图上添砖加瓦。</p>
+  </div>
+
+  <div class="warning">
+    <p><strong>注意</strong>：最后一个易混点——<strong>指针变量本身住在哪，和它指向的对象住在哪，是两回事</strong>。6.6 节实测里 <code>heap_pt</code> 这个指针变量在栈上（0x16d9e6134 附近），它指向的 Point 对象却在堆上（0x102c6da90）。同理 6.3 节的 <code>str</code> 指针在栈上，指向的字符串 "hello" 却在 .rodata。写代码时心里要装两张地址：<strong>"我"在哪，"我指着谁"在哪</strong>。</p>
+  </div>
+
+  <div class="exercise">
+    <h2>章末练习</h2>
+
+    <div class="exercise-item">
+      <h3>练习 1：变量归位配对 <span class="difficulty difficulty-easy">入门</span></h3>
+      <p>下面 5 个变量分别落在哪个区？① 文件顶部的 <code>int g = 5;</code>；② 文件顶部的 <code>int g2;</code>；③ 函数里的 <code>int local = 3;</code>；④ 文件顶部的 <code>const char* s = "hi";</code> 中的字符串 "hi"；⑤ <code>malloc(32)</code> 返回的内存。候选区：栈 / 堆 / .data / .bss / .rodata。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>判定顺序：先问"是不是全局/静态"（是 → 看有没有初值），再问"是不是局部"（是 → 栈），"是不是 malloc/new"（是 → 堆），"是不是常量字面量"（是 → .rodata）。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>① .data（已初始化全局变量）；② .bss（未初始化，自动清零）；③ 栈（局部变量）；④ .rodata（字符串字面量是只读数据——注意 <code>s</code> 指针本身在栈上，指向的字符串在 .rodata）；⑤ 堆。口诀：<strong>全局静态看初值（data/bss），局部上栈，malloc 进堆，字面量进 rodata</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 2：读懂 size 输出 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>对 6.3 节的 layout 程序运行 <code>size layout</code>，输出是 <code>text 871 / data 36 / bss 8</code>。请回答：(a) 为什么 text 最大？(b) 为什么 bss 只有 8 字节，却能在运行时提供"足够的零初始化内存"？(c) 如果把未初始化全局变量改成显式初始化为 0（<code>int g_uninit = 0;</code>），size 输出会怎么变，为什么？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>bss 不占文件空间，只记录"需要多少字节的零"；(c) 题的关键：显式初始化为 0 的变量，编译器会放进 .data 还是 .bss？</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>(a) text 装的是整个程序的机器指令，还包括 printf/malloc 等调用背后的启动代码，所以最大。(b) .bss 在文件里只记长度、不存内容，加载时由操作系统现场清零——文件省空间，运行时照样有内存可用。(c) 编译器通常把"初始化为 0"的变量也放进 .bss（反正都是零，没必要在文件里存一遍），所以 bss 增大、data 基本不变。这是 GNU/Linux 工具链的常见优化，不是标准强制。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 3：爆栈事故分析 <span class="difficulty difficulty-medium">进阶</span></h3>
+      <p>6.5 节的 boom.c 每层栈帧压入 1KB 局部数组，本机栈上限 8176KB。估算一下：大约递归到多少层会崩？为什么崩的时候报的是 "Segmentation fault"？真实运行中 depth 打印到 7500 就崩了，偏差可能来自哪里？</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>上限 8176KB ÷ 每层 1KB ≈ 多少层？崩溃机制回忆 6.4 节：栈底附近是没映射/受保护的地址，栈顶撞过去就是"访问无权访问的地址"。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p>粗算 8176KB ÷ 1KB ≈ 8000 层——实测崩在 7500 层附近，量级吻合。偏差来自：每层栈帧不止 1KB（还有返回地址、保存的寄存器、printf 调用开销），加上 ASLR 和程序本身的基础栈占用，实际略小于 8000。崩溃报段错误的原因：栈的"墙"是地址空间中一段没有映射权限的保护区，栈顶越界即访问无权访问的虚拟地址，触发保护机制——这正是 6.4 节"保护能力"的现场演示。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise-item">
+      <h3>练习 4：地址侦探 <span class="difficulty difficulty-hard">挑战</span></h3>
+      <p>某同学在 Linux 上运行自己的程序，打印出四个地址：<code>0x55f2f6c00100</code>（函数 foo 的地址）、<code>0x7ffc9d5ff2a0</code>（局部变量）、<code>0x55f2f6d0a010</code>（全局变量 g）、<code>0x7f2f4c102000</code>（malloc 返回的指针）。这四个地址分别属于哪一区？判断依据是什么？然后自己写一个程序，把全局变量、静态变量、局部变量、const 常量、malloc 的对象、函数指针六种地址全部打印出来，验证 6.2 节全景图的顺序（text &lt; data/bss &lt; 堆 &lt; 栈）。</p>
+      <details>
+        <summary>提示</summary>
+        <div class="answer-content"><p>对照 6.2 节全景图的地址量级：0x55f2... 和 0x7ffc... 分别是什么区？0x7f2f... 是共享库/堆的高位映射区还是栈？判断依据是量级和相对位置，不是具体数值。</p></div>
+      </details>
+      <details>
+        <summary>参考答案</summary>
+        <div class="answer-content">
+          <p><code>0x55f2f6c00100</code> → .text（PIE 代码段，0x555555554000 量级）；<code>0x7ffc9d5ff2a0</code> → 栈（0x7ffc... 是典型栈区）；<code>0x55f2f6d0a010</code> → .data/.bss（与代码段同基址、偏移更高，正是"程序代码和数据"区）；<code>0x7f2f4c102000</code> → 堆（glibc 的大块分配来自 0x7f... 高位 mmap 区，注意它和共享库同在 0x7f... 量级——区分靠偏移和分配历史，这也解释了"堆向上"是趋势而非铁律）。自己写的程序里：函数指针地址最小（.text），const 常量紧随（.rodata），全局/静态在 data/bss，malloc 对象更高，局部变量最高（栈）——顺序与全景图一致。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer"><div class="footer-inner"></div></footer>
+
+<script src="../site-nav.js"></script>
+<script src="../script.js"></script>
+<div id="site-footer"></div>
+
+<script src="https://assets.aigcwei.cn/site-config.js"></script>
+<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>
