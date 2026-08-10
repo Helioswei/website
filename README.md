@@ -1,6 +1,7 @@
 # Helios's AILab — 主站仓库（aigcwei.cn）
 
 纯 HTML 静态主站，公开内容仓库。部署到 `aigcwei.cn`（博客根 + learn 教程模块）。
+**外壳为构建时静态注入（v4）**：页面只保留两个占位符，header/footer 由 `scripts/inject.py` 构建时渲染注入。
 
 ## 目录结构
 
@@ -19,24 +20,31 @@ website/
 │   ├── style.css site-nav.js script.js ← 站内导航/样式（随目录走）
 │   └── CLAUDE.md       ← 章节制作规范
 ├── about/              ← 关于页
+├── scripts/inject.py   ← 外壳静态注入脚本（构建时执行：模板版 → 注入版）
+├── site-config.json    ← 配置真源（品牌/备案号/导航/社交；构建数据源，线上公开）
+├── edgeone.json        ← Makers 构建配置（buildCommand + outputDirectory）
 └── images/             ← 图片资源（110 个）
 ```
 
-## 统一外壳
+## 统一外壳（v4 构建时注入）
 
-所有页面引用 `assets.aigcwei.cn` 三件套（共享资源，本站不复制 CSS）：
+页面只保留两个占位符，**零脚本引用**：
 
 ```html
-<link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+<link rel="stylesheet" href="https://assets.aigcwei.cn/style.css">
 ...
-<div id="site-header"></div>  <!-- body 开头 -->
-<div id="site-footer"></div>  <!-- body 末尾 -->
-<script src="https://assets.aigcwei.cn/site-config.js"></script>
-<script src="https://assets.aigcwei.cn/site-shell.js"></script>
+<body data-site="home">            <!-- home|learn|about：构建注入时决定导航高亮 -->
+  <div id="site-header"></div>     <!-- 构建时注入最终 header HTML -->
+  <main>...本站内容...</main>
+  <div id="site-footer"></div>     <!-- 构建时注入最终 footer HTML（含备案号） -->
+</body>
 ```
 
-- `site-config.js` 是全站配置唯一真源（站名 / 备案号 / 导航 / 社交链接），改一处全站生效
+- 外壳由 Makers 构建时执行 `python3 scripts/inject.py` 注入（产物 `dist/`），**无运行时 JS → 无跨站跳转闪烁**
+- `site-config.json` 是配置真源（品牌/备案号/导航/社交）：改一处 → push → 全站自动重建生效
+- 备案号（`鄂ICP备2026041178号`）为 inject.py 内置默认强制，任何站构建产物 footer 必带
 - learn 页面另有自己的站内导航（`site-nav.js` + `script.js` 渲染），与外壳并存
+- 样式来自 `assets.aigcwei.cn`（website-tools 仓库），本站不复制 CSS
 
 ## 本地预览
 
@@ -45,7 +53,7 @@ cd ~/work/project/web && python3 website-tools/scripts/dev-server.py
 # 浏览器访问 http://localhost:8000/website/
 ```
 
-页面文件永远写线上域名，本地预览由 dev-server 实时重写为本地路径，上线零改动。
+dev-server 动态注入外壳（复用 inject.py 逻辑，单一真源）+ 线上域名实时重写本地路径，本地预览 = 线上效果，页面文件零改动。
 
 ## 校验
 
@@ -63,7 +71,7 @@ python3 ../website-tools/scripts/verify_blog.py  # 博客图片引用 + 标签�
 ## 部署
 
 - EdgeOne Makers → 自定义域名 `aigcwei.cn`
-- 纯静态：构建命令留空，输出目录 `/`
+- **构建命令：`python3 scripts/inject.py`，输出目录：`dist`**（edgeone.json 随仓库走，自动生效）
 - 相关仓库：`website-tools`（assets + 脚本）→ `assets.aigcwei.cn`；`life` → `life.aigcwei.cn`
 
-架构详见 `~/work/project/web/DESIGN.md`。
+架构详见 `~/work/project/web/DESIGN.md`（v4）。
