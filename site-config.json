@@ -11,6 +11,6 @@
   ],
   "social": {
     "github": { "label": "GitHub", "url": "https://github.com/Helioswei" },
-    "wechat": { "label": "公众号 AIGCWorld", "url": "" }
+    "wechat": { "label": "公众号 AIGCWorld", "url": "", "qr": "https://assets.aigcwei.cn/wechat-qr.jpg" }
   }
 }
