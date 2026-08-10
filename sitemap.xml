@@ -2,937 +2,942 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://aigcwei.cn/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>1.0</priority>
   </url>
   <url>
+    <loc>https://aigcwei.cn/about/</loc>
+    <lastmod>2026-08-10</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://aigcwei.cn/notes/cpp/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/centos7常用环境变量的设置.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/devtoolset切换gcc的版本.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/gcc-5-1-0源码安装.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/grpc编译.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/gtest集成Lcov代码覆盖率测试.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/json-cpp处理json.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/pistache源码编译之实现cpp-restful接口.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/poco-源码编译包含mysql.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/使用doxygen-graphviz生成函数调用流程图.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/包管理工具vcpkg使用.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/cpp/日志库LOG的使用.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/AMQPCPP使用问题记录.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/AMQPCPP的编译.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/centos7源码安装mysql8-0.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/libs3源码编译.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/mysql常用命令.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/亚马逊oss客户端源码编译.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/database/关于s3cmd的下载.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/cuda-cuda10-0安装.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/image-libraw相机图片库源码编译.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/image-libvips图片处理库源码编译.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/image-图片处理库总结.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/opencv-源码安装.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/graphics/相机底片的解析.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-163yum源下载.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-epel源下载.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-libreoffice安装和启动.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-openoffice安装和启动.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-yum的使用.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-zsh的使用和配置.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-常用的命令.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/centos7-网络设置.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/linux/系统io状态排查.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/docker-常用命令.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/git-lfs-大文件上传管理.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/git-常用命令.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/git-解决clone慢的问题.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/hexo-gulp压缩.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/hexo-next主题配置.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/hexo-代码块添加复制功能.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/hexo-常用命令.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/mupdf-源码安装.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/spider-centos7安装selenium模拟浏览器请求.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/notes/tools/ssh-生成ssh-key.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.9</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/epub/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/kotlin/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/lvgl/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/sifli/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/graphics/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/cpp-internals/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter01.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter02.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter03.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter04.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter05.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter06.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter07.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter08.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter09.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter10.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter11.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter12.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter13.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter14.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter15.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://aigcwei.cn/learn/ffmpeg/chapter16.html</loc>
-    <lastmod>2026-08-08</lastmod>
+    <lastmod>2026-08-10</lastmod>
     <priority>0.7</priority>
   </url>
 </urlset>
