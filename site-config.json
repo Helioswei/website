@@ -6,7 +6,6 @@
   "nav": [
     { "label": "博客", "href": "https://aigcwei.cn/", "site": "home" },
     { "label": "教程", "href": "https://aigcwei.cn/learn/", "site": "learn" },
-    { "label": "旅行", "href": "https://life.aigcwei.cn/", "site": "life" },
     { "label": "关于", "href": "https://aigcwei.cn/about/", "site": "about" },
     { "label": "GitHub", "href": "https://github.com/Helioswei", "external": true }
   ],
