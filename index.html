@@ -34,9 +34,42 @@
       <h1 class="page-title">Helios's AILab</h1>
       <p class="page-subtitle">一个分享传统编程与 AIGC 应用的科普博客 · 文章流 + 技术笔记库</p>
 
-      <!-- 博客文章流（P3 重写后填充，当前占位） -->
+      <!-- 博客文章流（gen-blog-index.py 构建时注入，按日期倒序取最近 5 篇） -->
       <h2 style="font-family:var(--font-serif);font-size:21px;margin:32px 0 6px;border-left:4px solid var(--accent);padding-left:12px">📝 最新文章</h2>
-      <p style="color:var(--muted);font-size:14px;margin-bottom:16px">文章迁移进行中，即将上线</p>
+      <!-- BLOG-FEED:START -->
+        <div class="card-grid">
+          <a class="card" href="notes/cpp/使用doxygen-graphviz生成函数调用流程图.html">
+            <div class="card-date">2021-05-07</div>
+            <div class="card-title">cpp-使用doxygen+graphviz生成函数调用流程图</div>
+            <div class="card-desc">使用函数调用图可以清晰的帮助自己分析源码。这里介绍一下cpp的函数调用图的生成方式。 工具准备 graphviz GraphViz是什么？GraphViz是一个开源的图片可视化的软…</div>
+            <div class="card-tags"></div>
+          </a>
+          <a class="card" href="notes/database/亚马逊oss客户端源码编译.html">
+            <div class="card-date">2021-04-20</div>
+            <div class="card-title">s3-亚马逊oss客户端源码编译</div>
+            <div class="card-desc">​ cpp关于亚马逊S3的客户端源码编译，aws sdk cpp的记录。因为项目中使用了亚马逊的oss的存储，所以需要客户端去请求，进行一些文件的上传下载等工作。 源码下载 ​ 我…</div>
+            <div class="card-tags"></div>
+          </a>
+          <a class="card" href="notes/tools/ssh-生成ssh-key.html">
+            <div class="card-date">2021-03-04</div>
+            <div class="card-title">linux-生成ssh key</div>
+            <div class="card-desc">​ 我们在使用git的时候经常需要用到ssh的连接，本文记录一下自己在使用的时候怎么生成的ssh key的过程。 平台 ​ 我使用的平台是Ubuntu16，查看的命令 ssh ke…</div>
+            <div class="card-tags"><span class="tag">ssh</span></div>
+          </a>
+          <a class="card" href="notes/cpp/包管理工具vcpkg使用.html">
+            <div class="card-date">2021-03-03</div>
+            <div class="card-title">cpp-包管理工具vcpkg使用</div>
+            <div class="card-desc">​ 体验一下cpp的包管理工具vcpkg的使用，git地址。vcpkg是Microsoft的跨平台开源软件包的管理器，极大的简化了在不同平台上第三方库的安装。如果项目要使用第三方库…</div>
+            <div class="card-tags"><span class="tag">vcpkg</span></div>
+          </a>
+          <a class="card" href="notes/cpp/gtest集成Lcov代码覆盖率测试.html">
+            <div class="card-date">2021-02-08</div>
+            <div class="card-title">cpp-gtest集成Lcov代码覆盖率测试</div>
+            <div class="card-desc">​ 做好了单元测试但是别人并不知道我们的单元测试做的如何，是否覆盖了所有的需要被测试的类方法或者变量等，所以我们需要对单测case做一个覆盖率统计。其实本质就是看代码执行时候运行了…</div>
+            <div class="card-tags"></div>
+          </a>
+        </div>
+        <!-- BLOG-FEED:END -->
 
       <!-- 技术笔记库入口 -->
       <h2 style="font-family:var(--font-serif);font-size:21px;margin:32px 0 6px;border-left:4px solid var(--accent);padding-left:12px">📓 技术笔记库</h2>
