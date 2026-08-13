@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw的安装和部署 - Helios&#x27;s AILab</title>
+  <meta name="description" content="目录 1. 什么是OpenClaw？ 2. 为什么这么火爆？ 3. 名字背后的戏剧性故事 4. 它能做什么？ 5. 10分钟快速部署 6. 免费token选择指南 7. 行业意义：AI时代的超级个体 一、什么是OpenClaw? 在 AI ">
+  <meta name="keywords" content="openClaw">
+  <link rel="canonical" href="https://aigcwei.cn/blog/OpenClaw安装和部署.html">
+  <meta property="og:title" content="OpenClaw的安装和部署">
+  <meta property="og:description" content="目录 1. 什么是OpenClaw？ 2. 为什么这么火爆？ 3. 名字背后的戏剧性故事 4. 它能做什么？ 5. 10分钟快速部署 6. 免费token选择指南 7. 行业意义：AI时代的超级个体 一、什么是OpenClaw? 在 AI ">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://aigcwei.cn/blog/OpenClaw安装和部署.html">
+  <meta property="og:site_name" content="Helios's AILab">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="https://assets.aigcwei.cn/style.css?v=1">
+  <style>
+:root {
+  --paper: #faf8f4; --paper-deep: #f1ede4; --paper-soft: #f6f3ec;
+  --hairline: #e2dccf; --hairline-soft: #ece7db;
+  --ink: #26292f; --ink-secondary: #5b6069; --muted: #8b8f97;
+  --code-bg: #1e1e2e; --code-ink: #cdd6f4; --code-border: #313244;
+  --accent: #b3402f; --accent-strong: #8f2f22; --accent-soft: #f4e5e0;
+  --on-accent: #ffffff;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(70, 60, 40, 0.05);
+  --shadow-md: 0 4px 18px rgba(70, 60, 40, 0.10);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.85;
+  color: var(--ink); background: var(--paper); min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+a { color: var(--accent-strong); }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+main { flex: 1; }
+.container { max-width: 780px; margin: 0 auto; padding: 0 24px; width: 100%; }
+
+/* 外壳占位（assets.aigcwei.cn 渲染） */
+.site-header { position: sticky; top: 0; z-index: 100; }
+
+/* 文章 */
+.article { padding: 40px 0 20px; }
+.article-header { margin-bottom: 28px; }
+.article-header h1 {
+  font-family: var(--font-serif); font-size: 30px; line-height: 1.4;
+  color: var(--ink); margin-bottom: 10px;
+}
+.article-meta {
+  color: var(--muted); font-size: 13.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.article-meta .tag {
+  background: var(--paper-deep); color: var(--ink-secondary);
+  border-radius: 999px; padding: 2px 12px; font-size: 12.5px;
+}
+.article-body h2 {
+  font-family: var(--font-serif); font-size: 24px; margin: 36px 0 14px;
+  padding-left: 12px; border-left: 4px solid var(--accent); color: var(--ink);
+}
+.article-body h3 { font-size: 19px; margin: 26px 0 10px; color: var(--ink-secondary); }
+.article-body h4 { font-size: 16px; margin: 20px 0 8px; color: var(--ink-secondary); }
+.article-body p { margin: 12px 0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 26px; }
+.article-body li { margin: 5px 0; }
+.article-body li::marker { color: var(--accent); }
+.article-body strong { color: var(--ink); font-weight: 600; }
+.article-body img { border-radius: 6px; box-shadow: var(--shadow-md); margin: 12px 0; }
+.article-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--paper-soft); color: var(--accent-strong);
+  padding: 2px 6px; border-radius: 3px; border: 1px solid var(--hairline-soft);
+}
+.article-body pre {
+  background: var(--code-bg); color: var(--code-ink); padding: 16px 18px;
+  border-radius: 6px; overflow-x: auto; margin: 16px 0; font-size: 13.5px;
+  line-height: 1.65; border: 1px solid var(--code-border);
+}
+.article-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 13.5px; }
+.article-body blockquote {
+  margin: 16px 0; padding: 10px 18px; background: var(--accent-soft);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  color: var(--ink-secondary);
+}
+.article-body blockquote p { margin: 4px 0; }
+.article-body table {
+  width: 100%; border-collapse: collapse; margin: 16px 0 20px;
+  font-size: 14.5px; background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+}
+.article-body thead th {
+  background: var(--paper-deep); color: var(--ink); font-weight: 600;
+  text-align: left; padding: 10px 14px; font-size: 13.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.article-body tbody td { padding: 9px 14px; border-bottom: 1px solid var(--hairline-soft); vertical-align: top; }
+.article-body tbody tr:last-child td { border-bottom: none; }
+.article-body hr { border: none; border-top: 1px solid var(--hairline); margin: 32px 0; }
+.article-body .tip, .article-body .warning {
+  margin: 16px 0; padding: 12px 16px; border-radius: 6px;
+  border-left: 3px solid var(--accent); background: var(--paper-deep);
+}
+.article-body .warning { background: #faf3df; border-color: #b98313; }
+.back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding: 0 16px; }
+  .article { padding: 24px 0 16px; }
+  .article-header h1 { font-size: 22px; }
+  .article-body h2 { font-size: 20px; }
+  .article-body h3 { font-size: 17px; }
+  .article-body table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .article-header h1 { font-size: 20px; }
+  .article-body pre, .article-body pre code { font-size: 12px; }
+  .article-body pre { padding: 12px 14px; }
+}
+</style>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "OpenClaw的安装和部署",
+  "url": "https://aigcwei.cn/blog/OpenClaw安装和部署.html",
+  "author": {
+    "@type": "Person",
+    "name": "Helios"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Helios's AILab"
+  },
+  "description": "目录 1. 什么是OpenClaw？ 2. 为什么这么火爆？ 3. 名字背后的戏剧性故事 4. 它能做什么？ 5. 10分钟快速部署 6. 免费token选择指南 7. 行业意义：AI时代的超级个体 一、什么是OpenClaw? 在 AI "
+}
+</script>
+</head>
+<body data-site="home">
+  <div id="site-header"></div>
+  <main>
+    <div class="container">
+      <article class="article">
+        <header class="article-header">
+          <h1>OpenClaw的安装和部署</h1>
+          <div class="article-meta"><span>2026-02-06</span><span class="tag">openClaw</span></div>
+        </header>
+        <div class="article-body">
+<h2>目录</h2>
+<ol><li>什么是OpenClaw？</li><li>为什么这么火爆？</li><li>名字背后的戏剧性故事</li><li>它能做什么？</li><li>10分钟快速部署</li><li>免费token选择指南</li><li>行业意义：AI时代的超级个体</li></ol>
+<hr>
+<h2>一、什么是OpenClaw?</h2>
+<p>在 AI 圈，我们已经习惯了各种大模型的发布，但很少有一个开源项目能像<strong> OpenClaw</strong> 这样，在短短两个月内引发如此疯狂的关注。从最初的一个周末练手项目，到如今 GitHub 上超过 16万 Star、单周访问量突破 200 万，OpenClaw 正在定义什么是真正的“个人 AI 助理”。</p>
+<p>如果你厌倦了只能在网页端聊天的 AI，渴望一个能真正触达你电脑文件、管理你日程、甚至帮你订机票的“数字管家”，那么 OpenClaw 正是你一直在寻找的答案。</p>
+<p><strong>OpenClaw是一个革命性的开源个人AI智能体平台</strong>，其核心理念是"<strong>真正能做事的AI"</strong>（The AI that actually does things）。这个项目让用户能够在自己的任何设备上本地部署AI助手，通过<strong>日常使用的聊天应用程序进行交互</strong>，实现邮件管理、日历安排、航班值机等实际任务。你只需要在手机上发一条消息，它就能在后台调动你电脑上的各种工具去完成任务。</p>
+<table>
+<thead><tr><th>核心特征</th><th>描述</th></tr></thead>
+<tbody>
+<tr><td>真正的私有化部署</td><td>运行在你的电脑、家庭服务器或VPS上，实现"你的助手，你的机器，你的规则"。用户数据完全保留在本地，确保隐私安全。</td></tr>
+<tr><td>多渠道沟通</td><td>无缝接入多种主流聊天应用，包括WhatsApp、Telegram、Discord、Slack、Microsoft Teams等，国内可以通过QQ、飞书、钉钉、企业微信来接入。</td></tr>
+<tr><td>模型无关性</td><td>不绑定任何单一供应商，用户可以自由选择底层大模型，支持云端和本地模型。</td></tr>
+<tr><td>强大执行能力</td><td>拥有记忆、能够使用工具，并能访问真实系统进行操作，包括浏览器自动化、文件系统操作、日历同步等。</td></tr>
+</tbody></table>
+<h2>二、为什么这么火爆？</h2>
+<p>OpenClaw的火爆并非偶然，而是多股技术与情绪叠加后的必然结果。OpenClaw的创建初衷源于对现有AI助手的失望。Peter Steinberger认为，像Siri这样的语音助手只是"语音激活的把戏"，而不是真正的助手。他想要构建一个<strong>能够学习、记忆并实际完成任务的助手</strong>。</p>
+<h3>2.1 痛点精准切入</h3>
+<p>在2024-2025年，开发者社区已经对「只会聊天的AI」产生了明显疲劳。ChatGPT、Claude、DeepSeek很聪明，但它们停留在web端页面里：<strong>不能真正替你完成电脑的实际任务，只能告诉你"应该怎么做"</strong>。与此同时，AutoGPT、BabyAGI这类"自治智能体"项目又显得过于学术化、工程负担重、成功率不稳定。而OpenClaw<strong>精准切入痛点，满足了大家的需求。</strong></p>
+<p>+ <strong>真简单</strong>：一条命令即可本地启动； + <strong>真能用</strong>：不是演示，而是能真的发消息、跑脚本、读写文件，帮你做任务； + <strong>真惊喜</strong>：第一次让大量普通用户意识到——"哇，原来LLM真的可以替我操作电脑，替我工作"；</p>
+<h3>2.2 范式转变：从"云服务租用"到"本地自主拥有"</h3>
+<table>
+<thead><tr><th>维度</th><th>传统AI助手（云端SaaS）</th><th>OpenClaw（本地自部署）</th></tr></thead>
+<tbody>
+<tr><td>数据隐私</td><td>数据存储在第三方云端</td><td>所有数据本地处理，你完全掌控</td></tr>
+<tr><td>平台支持</td><td>通常仅支持1-2个平台</td><td>10+聊天平台统一接入</td></tr>
+<tr><td>模型选择</td><td>绑定单一模型</td><td>自由切换Claude/GPT/Gemini/本地模型</td></tr>
+<tr><td>定制能力</td><td>有限的定制选项</td><td>完全自定义技能、工作流</td></tr>
+<tr><td>费用</td><td>月费订阅制</td><td>开源免费（MIT协议）</td></tr>
+<tr><td>部署门槛</td><td>无需部署，但失去控制</td><td>一键脚本，2GB内存即可跑</td></tr>
+</tbody></table>
+<h3>2.3 真实案例震撼人心</h3>
+<p>真正点燃社区热情的，是大量"第一天就能复现"的体验分享：</p>
+<blockquote>"我让AI监控一个新闻网页，一有新信息就自动总结。"<br></blockquote>
+<blockquote>"我只是连上WhatsApp，它就变成了我的私人助理。"<br></blockquote>
+<blockquote>"我在度假时，有人在Twitter上发了一个bug的截图，我随手把截图发给AI，然后继续享受假期。结果AI自己读懂了推文，找到了对应的Git仓库，定位了bug，写了修复代码，提交了commit，还回复了那个用户说'已经修好了'。整个过程，我甚至没有打开电脑。"<br></blockquote>
+<hr>
+<h2>三、名字背后的戏剧性故事</h2>
+<p>OpenClaw的名字经历了一段<strong>戏剧性的演变历程</strong>，堪称软件史上最离奇的改名事件。</p>
+<h3>3.1 Clawdbot（2025年末）</h3>
+<p>最初的名字是<strong>Clawdbot</strong>，这是一个巧妙的双关语：</p>
+<p>+ <strong>"Claw"（爪子）</strong>：代表AI能够像爪子一样抓住并执行任务； + <strong>"bot"</strong>：表明这是一个机器人； + <strong>谐音梗</strong>："Clawd"与Anthropic的"Claude"读音相近，暗示该项目使用了Claude API；</p>
+<h3>3.1 Moltbot（2026年1月27日）</h3>
+<p>Anthropic公司认为Clawdbot这个名字容易与他们的Claude产品混淆，<strong>发来了律师邮件要求改名</strong>。作者Peter Steinberger配合地将项目更名为<strong>Moltbot</strong>。</p>
+<p><strong>"Molt"来源于龙虾成长需要蜕壳（molt）的生物学特性</strong>，这个比喻非常诗意——象征着项目在成长过程中需要不断蜕变，社区也很喜欢这个名字。</p>
+<h3>3.2 OpenClaw（2026年1月30日）</h3>
+<p>在改名过程中，作者需要释放旧的社交媒体账号并切换到新账号。<strong>就在他释放@clawdbot账号的瞬间，加密货币诈骗团伙抢注了这个账号！</strong>他们立刻开始推广一种叫<strong>$CLAWD的代币</strong>（token），声称这是项目的"官方治理代币"。借着AI代理的巨大热度，<strong>代币市值几小时内飙升至1600万美元</strong>。当真相传开后，<strong>代币价值瞬间归零</strong>，成千上万的投资者损失惨重。这就是后来被称为<strong>"10秒灾难"的事件</strong>。</p>
+<p>为了避免进一步混淆，项目最终定名为<strong>OpenClaw</strong>：</p>
+<p>+ <strong>"Open"</strong>：代表开源和社区驱动； + <strong>"Claw"</strong>：向项目起源的龙虾图标致敬；</p>
+<p>象征项目在开放生态中持续成长。</p>
+<p><strong>一周三次更名，这在软件史上极为罕见。但社区不仅没有散，反而更团结了。</strong></p>
+<h2>四、它能做什么？</h2>
+<p>OpenClaw的核心定位是"<strong>真正能做事的AI</strong>"，它能够通过聊天软件接收指令，在<strong>用户设备</strong>上执行实际任务。因为其能获取整个系统的权限，理论上你能做的任何事情，其都能帮你来实施。包括但是不局限于</p>
+<p>+ 文件系统操作：读取、编辑、创建、删除文件等； + 邮件管理：读取邮件、自动分类邮件、起草回复邮件； + 日程管理：安排日程、日历同步、设置提醒、查看未来2小时的日历事件； + 浏览器自动化：打开网页、搜索、截图等； + 系统命令执行：运行终端命令、检查系统状态、安装软件； + 语音交互：语音转文字（通过Whisper）、文字转语音（通过ElevenLabs）； + 长期记忆：跨对话、跨平台的持久化记忆、记住用户的偏好和历史上下文； + 主动行为：定时任务（如每天早上8点提醒看晨报）； + 自我进化：可以通过自主编写代码来增强自身能力、自动创建新技能、实现主动自动化； + 代码开发：编写、调试、运行、测试代码；</p>
+<h2>五、10分钟快速部署</h2>
+<p>OpenClaw的部署对于非技术同学上手还有有点难度的，这里可以看官方的详细的文档和各种配置。但是对于OpenClaw来说，其本身就是我们的助手，只需要快速的部署，配置模型服务后，后续所有的部署均可以通过对话让其自己安装和配置其他的内容，包括IM通讯channel的配置、Skills技能库的安装等。</p>
+<h3>5.1 本地部署</h3>
+<p>本地部署的方式带火了MacMin的设备，哈哈。</p>
+<pre><code>
+curl -fsSL https://openclaw.ai/install.sh | bash
+</code></pre>
+<p>通过上面的命令下载安装后，之后运行下面命令来开启一个安装引导，会一步步指导你配置的。在本地运行可以不需要配置channel，直接在Tui命令行界面或者web打开通过chat的方式来和其对话。</p>
+<pre><code>
+openclaw onboard
+</code></pre>
+<p>贴图</p>
+<pre><code>
+openclaw gateway
+</code></pre>
+<h3>5.2 云端部署</h3>
+<p>在OpenClaw的爆火后，国内的云服务厂商也紧急的封装了一套OpenClaw的系统镜像，方面新手简单的上手，每个平台都有详细的文档介绍【<strong>官网都有显著宣传</strong>】。目前我自己测试了阿里云，腾讯云、百度智能云三个平台，选择一个普通的2核2G的云服务器，一年的费用价格都不贵，简单测试玩玩可以选择2核2G的，如果使用频繁，建议选择2核4G。（<strong>每家都可以3天或者7天无理由退货）</strong></p>
+<table>
+<thead><tr><th>云服务商</th><th>2核2G活动价格</th><th>国内通讯支持</th></tr></thead>
+<tbody>
+<tr><td>阿里云</td><td>68元/年</td><td>钉钉、飞书、企业微信、web</td></tr>
+<tr><td>腾讯云</td><td>99元/年</td><td>钉钉、飞书、企业微信、QQ</td></tr>
+<tr><td>百度智能云</td><td>0.01元/月</td><td>钉钉、飞书、企业微信、QQ</td></tr>
+</tbody></table>
+<p>+ 钉钉和企业微信均需要企业认证或者加入企业让管理者给权限，个人开发者不要考虑； + 飞书和QQ个人可以使用；</p>
+<h2>六、免费token选择指南</h2>
+<p>因为OpenClaw的模型无关性，可以使用目前市场上所有的大模型。使用OpenClaw之后，爽是真的爽，但是token API的消耗也是大，我自己目前还没有为AI产品付费过，都是白嫖各个平台的免费token，唯独测试这个后，token消耗太快，一天花了我20块，后来找到一个免费平台。下面是我整理的可以白嫖一段时间的API提供商</p>
+<table>
+<thead><tr><th>平台</th><th>免费额度</th><th>重点模型</th><th>备注</th></tr></thead>
+<tbody>
+<tr><td>阿里云百炼</td><td>每个模型100万tokens</td><td>国内基本都支持</td><td>新人有效期90天</td></tr>
+<tr><td>腾讯云</td><td></td><td></td><td></td></tr>
+<tr><td>百度智能云</td><td></td><td></td><td></td></tr>
+<tr><td><a href="https://platform.moonshot.cn/console/account">月之暗面</a></td><td>赠送代金劵15元</td><td>kimi系列模型</td><td>永久代金券</td></tr>
+<tr><td><a href="https://platform.minimaxi.com/">MiniMax</a></td><td>赠送代金券15元</td><td>MiniMax系列</td><td>新人有效期90天</td></tr>
+<tr><td><a href="https://modelscope.cn/aigc/home">魔搭社区</a></td><td>每天2000次调用</td><td>社区全模型</td><td>需要绑定阿里云账号</td></tr>
+<tr><td>硅基流动</td><td>赠送代金劵16元</td><td>DeepSeek、千问等</td><td>新人有效期180天</td></tr>
+<tr><td><a href="https://iflow.cn/">心流AI助手</a></td><td>永久免费</td><td>千问系列、Kimi系列、GLM系列、DeepSeek</td><td>官方说是永久免费，目前我一直在白嫖这个，推荐使用</td></tr>
+</tbody></table>
+<h2>七、行业意义：AI时代的超级个体</h2>
+<p>OpenClaw的故事揭示了一个更深刻的趋势：<strong>在AI时代，一个人真的可以挑战大公司</strong>。大模型不是关键，关键的是<strong>场景的定义，</strong>能够精准的解决用户的痛点。目前的大模型的基础能力已经很强大，其本质是提供AI的基座，而不是去解决特定的问题，真正的落地还是要在垂直领域去生根，摆脱仅仅chat的模式。即让通用的AI能力聚焦于特定问题，按用户设定的流程交付确定性的价值，将各种API的能力缝合进用户的工作流才是真正的技术。</p>
+<p>随着AI工具的成熟，“一人公司”的趋势会越来越明显，目前有点地区已经对“一人公司”提供政策的支持，比如发放tokens等。过去创业需要构建整个组织架构，比如开发软件：需要PM管理、UI/UE设计、前后端开发、测试运维组层最小团队。现在有了OpenClaw这类超级Agent的出现，这些内容可以一个人完成从设计到部署的全流程。当有一个想法，我们可以更快的落地，更快的试错、我们没有任何负担和包袱，而大的公司可能还在会议、流程中。</p>
+<p>但正如Peter Steinberger所说：<strong>"如果你没有一个清晰的愿景，不知道要构建什么，那最终还是会产出垃圾。有了AI，开发者现在可以'构建一切'，但想法和品味才是关键。没有它们，你只是在构建无法推进项目的工具和工作流。"</strong></p>
+<h2>结语</h2>
+<p>OpenClaw代表了个人AI助手领域的重要突破：通过本地优先、自托管的架构，将LLM能力与真实世界的执行能力深度整合。它不仅仅是一个开源项目，更是AI时代超级个体的宣言：一个人，一台电脑，几周时间，就能做出让所有AI巨头感到威胁的产品。这只<strong>🦞</strong><strong> </strong>"龙虾"正在快速成长，每一个AI开发者都不应该错过它。</p>
+        </div>
+        <a class="back-link" href="../">← 返回</a>
+      </article>
+    </div>
+  </main>
+  <div id="site-footer"></div>
+  <script src="https://assets.aigcwei.cn/site-config.js"></script>
+  <script src="https://assets.aigcwei.cn/site-shell.js"></script>
+</body>
+</html>
